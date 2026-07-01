@@ -1,0 +1,338 @@
+% =====================================================================
+%  Origamizer: A Practical Algorithm for Folding Any Polyhedron
+%  Algorithm diagrams (formal pseudocode) for every stage of the method.
+%
+%  Source paper: Erik D. Demaine and Tomohiro Tachi,
+%    "Origamizer: A Practical Algorithm for Folding Any Polyhedron",
+%    33rd Int. Symp. on Computational Geometry (SoCG 2017),
+%    LIPIcs vol. 77, Article 34, pp. 34:1-34:16.
+%    DOI: 10.4230/LIPIcs.SoCG.2017.34
+%
+%  Pseudocode authored from the prose description in the paper (the
+%  paper itself gives no numbered pseudocode); section tags below point
+%  back to the corresponding section of the original.
+% =====================================================================
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage[ruled,vlined,linesnumbered]{algorithm2e}
+\usepackage[hidelinks]{hyperref}
+
+% ---- algorithm2e keyword setup -------------------------------------
+\SetKwInput{KwData}{Input}
+\SetKwInput{KwResult}{Output}
+\SetKwComment{Comment}{$\triangleright$\ }{}
+\SetKwFor{ForEach}{for each}{do}{end}
+\SetKw{KwRet}{return}
+\SetKwFunction{Origamizer}{Origamizer}
+\SetKwFunction{TuckProxy}{ComputeTuckProxy}
+\SetKwFunction{Squash}{SquashWafflePockets}
+\SetKwFunction{Streams}{PlaceStreams}
+\SetKwFunction{Sites}{PlaceSites}
+\SetKwFunction{Fold}{VoronoiFolding}
+\DontPrintSemicolon
+
+% ---- shorthand -----------------------------------------------------
+\newcommand{\eps}{\varepsilon}
+\newcommand{\epsp}{\varepsilon'}
+\newcommand{\dg}{^{\circ}}
+
+\title{\textbf{The Origamizer Algorithm}\\[2pt]
+\large Algorithm Diagrams for Folding Any Polyhedron}
+\author{Pseudocode formalization of\\
+Erik D.\ Demaine \& Tomohiro Tachi, \emph{Origamizer}, SoCG 2017}
+\date{}
+
+\begin{document}
+\maketitle
+
+\noindent
+This document renders each algorithmic stage of the \emph{Origamizer}
+method as explicit pseudocode. The original paper describes the
+algorithm in prose (\S3--\S7); the section tags below cross-reference
+those sections. Symbols follow the paper: $Q$ is the target oriented
+\emph{polyhedral manifold} (disk topology, strictly convex facets, with
+a \emph{clean} side and a \emph{tuck} side); $\eps>0$ is the requested
+tolerance; $T$ is the \emph{tuck proxy} (a polyhedral \emph{waffle}
+within $\eps$ of $Q$); and $\epsp$ with $0<\epsp<\eps$ lower-bounds how
+far $T$ may extend beyond $Q$. The goal is a convex piece of paper $P$
+and a \emph{watertight}, \emph{seamless}, \emph{$\eps$-extra} folding
+$f\colon P\to Q$ with $f(P)\subseteq T$.
+
+\vspace{1em}
+
+% =====================================================================
+\section*{Top-level driver}
+% =====================================================================
+\begin{algorithm}[H]
+\caption[\textsc{Origamizer}]{\textsc{Origamizer}$(Q,\eps)$ --- fold a convex paper polygon into $Q$}
+\KwData{Oriented polyhedral manifold $Q$ (disk, strictly convex facets,
+        clean/tuck sides); tolerance $\eps>0$.}
+\KwResult{Convex polygon $P$ and watertight, seamless, $\eps$-extra
+          folding $f\colon P\to Q$ with $f(P)\subseteq T$.}
+\BlankLine
+$(T,\epsp)\leftarrow$ \TuckProxy{$Q,\eps$}\;
+  \Comment*[r]{\S3: attach $\eps$-thin walls; split reflex curvature}
+$\Sigma \leftarrow$ \Squash{$T,\epsp$}\;
+  \Comment*[r]{\S4: flatten each waffle pocket; emit cells \& perpendiculars}
+$(P',\,\mathcal{S},\,\delta)\leftarrow$ \Streams{$T,\epsp,\Sigma$}\;
+  \Comment*[r]{\S5: Tutte-embed waffle dual; draw rivers \& brooks}
+$(P,\,\mathcal{V})\leftarrow$ \Sites{$T,\epsp,\Sigma,\mathcal{S}$}\;
+  \Comment*[r]{\S6: place point/segment/polygon sites; define $P$}
+$f \leftarrow$ \Fold{$T,P,\mathcal{V}$}\;
+  \Comment*[r]{\S7: fold $P$ into the tuck proxy via an abstract waffle}
+\KwRet $(P,f)$\;
+\end{algorithm}
+
+% =====================================================================
+\section*{\S3\quad Tuck Proxy and Waffles}
+% =====================================================================
+Computes the \emph{tuck proxy} $T$: a polyhedral waffle that contains
+(and lies within $\eps$ of) $Q$. A waffle has \emph{floor} polygons
+(forming a topological disk), \emph{wall quadrangles} glued along floor
+edges, and \emph{wall triangles} glued at floor vertices. Insetting the
+edges of $Q$ on the tuck side bisects every dihedral angle, splitting
+each reflex (negative-curvature) angle into two convex ones, which makes
+every \emph{waffle pocket} intrinsically convex.
+
+\begin{algorithm}[H]
+\caption[\textsc{ComputeTuckProxy}]{\textsc{ComputeTuckProxy}$(Q,\eps)$ --- build the tuck proxy waffle (\S3)}
+\KwData{Polyhedral manifold $Q$; tolerance $\eps>0$.}
+\KwResult{Tuck proxy $T$ with walls of height $\le\eps$; parameter
+          $0<\epsp<\eps$ with no global self-intersection up to $\epsp$.}
+\BlankLine
+Floor polygons of $T \leftarrow$ the facets of $Q$\;
+Choose $\epsp$ small enough that no collision event occurs while insetting\;
+\ForEach{edge $e$ of $Q$ on the tuck side}{
+  Inset $e$ inward by $\epsp$ (start of the 3D straight skeleton)\;
+  \Comment*[r]{bisects the dihedral angle at $e$; a reflex angle splits into two convex angles}
+}
+\ForEach{vertex $v$ of $Q$}{
+  On a small sphere around $v$, connect the incident edge offsets into a
+  cycle\;
+  \Comment*[r]{pocket bounded by floor polygon, two offset edges, one cycle edge; perimeter $\le 360\dg$}
+  Overlay a regular tetrahedron on the cycle and triangulate if needed\;
+  \Comment*[r]{makes the pocket intrinsically convex: edges $\le 109.5\dg$, perimeter $\le 328.5\dg<360\dg$}
+}
+Form wall quadrangles along floor edges and wall triangles at floor
+vertices (height $\le\eps$)\;
+\KwRet $(T,\epsp)$\;
+\end{algorithm}
+
+% =====================================================================
+\section*{\S4\quad Waffle Pocket Squashing}
+% =====================================================================
+Locally ``squashes'' each waffle pocket flat into the plane by adding
+material between polygons, only \emph{increasing} bottom angles and
+preserving convexity, connectivity, and the cyclic order of wall
+polygons. The flattened top edges form a convex \emph{cell}; its outward
+edge normals are the \emph{cell perpendiculars} that will seed streams.
+
+\begin{algorithm}[H]
+\caption[\textsc{SquashWafflePockets}]{\textsc{SquashWafflePockets}$(T,\epsp)$ --- flatten every waffle pocket (\S4)}
+\KwData{Tuck proxy $T$; parameter $\epsp$.}
+\KwResult{For each pocket: a planar squashing (cell $+$ squashed wall
+          polygons) and its cell perpendiculars.}
+\BlankLine
+\ForEach{waffle pocket $\pi$ (a floor vertex or a floor polygon)}{
+  Vertex-unfold the wall polygons of $\pi$ into the plane, spreading the
+  angular gaps evenly between squashed wall polygons\;
+  \ForEach{gap}{
+    Place a ray from the vertex along the angular bisector of the two
+    adjacent squashed wall polygons (rounded to a polygon boundary if
+    needed)\;
+    \Comment*[r]{consecutive rays sandwich each wall polygon at an angle $<180\dg$}
+  }
+  \uIf{$\pi$ is a floor vertex}{
+    Cell $\leftarrow$ a small \emph{circle} surrounding the vertex\;
+  }
+  \Else(\tcp*[h]{$\pi$ is a floor polygon}){
+    Cell $\leftarrow$ offset of the floor polygon, corners smoothed with
+    quadratic B\'ezier arcs\;
+    \Comment*[r]{wall quadrangles then squash into trapezoids}
+  }
+  Clip the rays against the cell to bound the squashed wall polygons
+  (strictly convex; bottom angles only increase)\;
+  \ForEach{cell edge}{
+    Emit a cell perpendicular: outward normal starting at the midpoint of
+    the bottom of the corresponding squashed wall polygon, oriented CCW\;
+  }
+}
+\KwRet the collection of squashings and cell perpendiculars\;
+\end{algorithm}
+
+% =====================================================================
+\section*{\S5\quad Placing Streams}
+% =====================================================================
+Embeds the \emph{waffle dual} in the plane (Tutte embedding) inside a
+convex polygon $P'$, then connects the placed floor vertices/polygons by
+\emph{streams}: thick \emph{rivers} for wall quadrangles and zero-width
+\emph{brooks} for wall triangles. Three nested disks around each node
+re-aim the stream directions to match the embedded dual without
+collisions; filleting makes streams $C^1$ with positive clearance
+$\delta$.
+
+\begin{algorithm}[H]
+\caption[\textsc{PlaceStreams}]{\textsc{PlaceStreams}$(T,\epsp,\Sigma)$ --- route rivers and brooks (\S5)}
+\KwData{Tuck proxy $T$; parameter $\epsp$; squashing $\Sigma$.}
+\KwResult{Convex polygon $P'$; stream placement $\mathcal{S}$; clearance
+          $\delta>0$.}
+\BlankLine
+\textbf{Part 1 --- embed the waffle dual.}\;
+Compute a Tutte embedding of the waffle dual with its outside face, so
+boundary nodes lie on $\partial P'$ ($P'$ convex)\;
+Ensure every river-attached boundary node has room to be thickened
+parallel to its edge of $P'$ without leaving it or hitting another
+boundary node\;
+\BlankLine
+\textbf{Part 2 --- place nodes and connect.}\;
+\ForEach{waffle dual node $x$}{
+  \lIf{$x$ is a floor vertex}{place a point}
+  \lElse{place an isometric copy of the corresponding facet of $Q$}
+}
+\ForEach{waffle dual edge}{
+  \uIf{it is a wall quadrangle}{
+    Draw a \emph{river}: connect two equal-length floor-polygon edges and
+    thicken by that edge length\;
+  }\Else{
+    Draw a \emph{brook}: connect two points with a zero-width $C^1$ curve\;
+  }
+}
+\ForEach{node $x$ of degree $k$}{
+  Build nested disks $R_x\subset S_x\subset T_x$ (radii $r_x<s_x<t_x$):\;
+  \quad $R_x$ separates streams from the floor vertex/polygon\;
+  \quad $S_x$ bends streams to meet $\partial S_x$ orthogonally\;
+  \quad $T_x$ twists streams onto incident dual-edge directions using $k$
+        collision-free tracks\;
+  Rotate the floor polygon so one edge normal needs no twist; cut the
+  $T_x\!\setminus\!S_x$ annulus there\;
+  Route each connection inside$\to$outside in CCW order: outermost free
+  track for leftward (CCW) links, innermost free track for rightward (CW)
+  links\;
+}
+Fillet every sharp corner with a circular arc $\Rightarrow$ streams are
+$C^1$ with positive clearance $\delta$\;
+Scale up the Tutte embedding by a finite factor so all disks stay local\;
+\KwRet $(P',\mathcal{S},\delta)$\;
+\end{algorithm}
+
+% =====================================================================
+\section*{\S6\quad Placing Sites}
+% =====================================================================
+Places point, segment, and polygon \emph{sites} on the paper so that
+their generalized Voronoi diagram --- taken in the \emph{geodesic vertex
+metric} --- contracts to the waffle graph of $T$. Protective regions
+called \emph{squashes} (pumpkins, jack-o'-lanterns, calabashes,
+cucumbers) keep new sites from corrupting earlier structure. The piece
+of paper $P$ is then the convex hull of the resulting paired subcells.
+
+\begin{algorithm}[H]
+\caption[\textsc{PlaceSites}]{\textsc{PlaceSites}$(T,\epsp,\Sigma,\mathcal{S})$ --- site placement (\S6)}
+\KwData{Tuck proxy $T$; parameter $\epsp$; squashing $\Sigma$; streams
+        $\mathcal{S}$.}
+\KwResult{Piece of paper $P$ and a set $\mathcal{V}$ of point/segment/%
+          polygon sites.}
+\BlankLine
+\textbf{(1) Node sites.}\;
+\ForEach{brook node}{place a \emph{pumpkin} (point site cluster)}
+\ForEach{placed floor polygon}{place a \emph{jack-o'-lantern}\;
+  \Comment*[r]{core $=$ cell of the local squashing of that pocket}}
+\BlankLine
+\textbf{(2) Stream sites.}\;
+\ForEach{brook}{
+  Lay point sites along it; insert a \emph{calabash} between consecutive
+  sites with flesh-polygon angle $=$ bottom angle of the brook's wall
+  triangle\;
+}
+\ForEach{river}{
+  Lay segment sites along it; insert a \emph{cucumber} between consecutive
+  sites with flesh-polygon angles $=$ bottom angles of the river's wall
+  quadrangle\;
+}
+\If{a gap between consecutive sites lets another stream hit the squash}{
+  Bisect the gap and add a site; subdivide until every squash point is
+  $\le\tfrac12\epsp$ from the core\;
+}
+\BlankLine
+\textbf{(3) Bank sites.}\;
+\While{some paper point is $>\epsp$ (Euclidean) from its nearest site}{
+  Add a point site there\;
+  \Comment*[r]{squashes $\subseteq$ Minkowski sum of each site with an $\epsp$-disk $\Rightarrow$ terminates off the squashes}
+}
+\BlankLine
+\textbf{(4) Define the paper.}\;
+$P\leftarrow$ convex hull (within $P'$) of the paired subcells\;
+\Comment*[r]{equivalently: convex hull of the sites and the Voronoi diagram, clipped to $P'$}
+\KwRet $(P,\mathcal{V})$\;
+\end{algorithm}
+
+\noindent\emph{Invariants guaranteed by construction.}
+(i) the Voronoi diagram contracts onto the modified dual --- the waffle
+graph of $T$; (ii) each Voronoi edge is straight and mirror-reflects its
+defining site vertices, forming \emph{paired subcells} (quadrangular iff
+the edge realizes a wall quadrangle); (iii) every realizing Voronoi
+edge's subcell angles are $\ge$ the bottom angles of the corresponding
+wall polygon; (iv) every point of $P$ lies within $\epsp$ of a site
+vertex.
+
+% =====================================================================
+\section*{\S7\quad Voronoi Folding}
+% =====================================================================
+Folds $P$ into the tuck proxy $T$ by a sequence of \emph{folding steps},
+each producing an \emph{abstract waffle} (a metric polyhedral complex)
+and never separating layers already brought together. The final abstract
+waffle embeds isometrically onto $T$, giving the desired folding $f$.
+
+\begin{algorithm}[H]
+\caption[\textsc{VoronoiFolding}]{\textsc{VoronoiFolding}$(T,P,\mathcal{V})$ --- fold $P$ onto the tuck proxy (\S7)}
+\KwData{Tuck proxy $T$; paper $P$; sites/Voronoi $\mathcal{V}$.}
+\KwResult{Watertight, seamless, $\eps$-extra folding $f\colon P\to Q$
+          with $f(P)\subseteq T$.}
+\BlankLine
+\textbf{(1) Initial fold into an abstract waffle $A$.}\;
+$G\leftarrow\{$Voronoi edge of each paired subcell$\}\cup\{$boundary edge
+of each unpaired subcell$\}$\;
+\ForEach{Voronoi edge of $G$}{
+  Fold its two (mirror-image) paired subcells onto each other to
+  \emph{doubly} cover the matching wall polygon of $A$\;
+}
+\ForEach{boundary edge of $G$}{
+  Fold the unpaired subcell to \emph{singly} cover its wall polygon\;
+}
+\Comment*[r]{floor of $A$ $=$ placed floor polygons $\Rightarrow$ isometric to $Q$; each Voronoi cell $\to$ a pocket of $A$}
+\BlankLine
+\textbf{(2) Contract \& merge non-realizing edges.}\;
+\ForEach{Voronoi edge not realizing a waffle-graph edge of $T$}{
+  Contract it: fold the wall triangle in half along its bisector and glue
+  it onto an adjacent wall polygon of the same pocket\;
+  \If{several edges join the same two nodes}{
+    Crimp-fold the larger angles down to the smallest, stack the now
+    isometric wall polygons, and collapse to a pocket\;
+  }
+}
+\Comment*[r]{leaves a simplified waffle graph whose dual is just the realizing paths}
+\BlankLine
+\textbf{(3) Merge realizing edges.}\;
+\ForEach{dual path (sequence of wall polygons for one waffle-graph edge)}{
+  Crimp-fold their bottom angles to match the bottom angles of the
+  corresponding wall polygon of $T$\;
+  Stack them as a single wall polygon and embed it isometrically into
+  that wall polygon of $T$\;
+}
+$f\leftarrow$ the resulting folded state $\subseteq T$\;
+\KwRet $f$\;
+\end{algorithm}
+
+\noindent\emph{Correctness of the output.}
+\textbf{Seamless:} the floor polygons are isometric to $Q$ and no other
+paper folds strictly interior to a facet. \textbf{Watertight:} as a point
+$p$ moves CCW along $\partial P$ and $q$ moves CCW along $\partial Q$,
+the correspondence $f(p)=q$ on boundary sites (and $q$ pinned to the
+nearest boundary vertex between sites) stays within Fr\'echet distance
+$\eps$. \textbf{$\eps$-extra:} every added wall feature has height $\le\eps$
+and $f(P)\subseteq T$, so the Hausdorff distance from $Q$ is $\le\eps$.
+
+\end{document}

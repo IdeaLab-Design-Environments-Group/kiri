@@ -1,0 +1,23 @@
+{
+  "name": "kirigamizer",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.20",
+    "@types/three": "^0.169.0",
+    "typescript": "~5.8.3",
+    "vite": "^6.3.5",
+    "vitest": "^3.2.6"
+  },
+  "dependencies": {
+    "@dayangac/fkld": "^0.2.0",
+    "three": "^0.169.0"
+  }
+}

@@ -1,0 +1,39 @@
+# FKLD IO — JSON text transport for FKLD files.
+#
+# FKLD is, syntactically, just JSON; FOLD picked JSON precisely so the
+# file format is a thin layer over JSON.parse/JSON.stringify and any host
+# language can read it. This module deliberately keeps that boundary
+# narrow: it converts between FKLD JS objects and FKLD text, nothing more.
+# Structural validation (lengths, FKLD-key correctness, geometric closure)
+# lives in the per-step modules (cut-types.coffee, molecule.coffee, the
+# eventual Step-17 validate.coffee). Mixing them would tempt callers into
+# round-tripping just to validate, which inflates work and obscures
+# errors.
+#
+# Why 2-space indent by default: FKLD files are diffable design artifacts
+# — architects review them in pull requests, the AKDE undo history (when
+# Step 18 lands) will be a sequence of textual diffs, and a wide-spread
+# indent keeps array entries on their own line. Pass `null` for a single
+# packed line if the file is being embedded in another payload.
+#
+# Why we don't reject unknown `fkld:*` keys here: the FKLD spec
+# (FKLD-SPEC.md) explicitly preserves unknown extensions on round-trip so
+# downstream tools can annotate without forking the spec. The IO layer
+# must round-trip every key it sees; only validators may flag them.
+
+# Serialize an FKLD object to JSON text. The `indent` argument follows
+# `JSON.stringify`'s convention (number of spaces, or null/0 for compact
+# form). A trailing newline is appended so the file ends cleanly when
+# concatenated, viewed in a terminal, or hashed — POSIX text-file rules.
+export serializeFkld = (file, indent = 2) ->
+  throw new TypeError("serializeFkld: file is required") unless file?
+  JSON.stringify(file, null, indent) + "\n"
+
+# Parse an FKLD text payload. Throws SyntaxError on malformed JSON
+# (passed through from JSON.parse) and TypeError when the input isn't a
+# string — that catches accidental "I already have an object" calls
+# instead of returning the input unchanged, which would mask bugs.
+export parseFkld = (text) ->
+  if typeof text isnt "string"
+    throw new TypeError("parseFkld: expected a string, got #{typeof text}")
+  JSON.parse(text)

@@ -1,0 +1,58 @@
+solid octahedron
+  facet normal 0.577350 0.577350 0.577350
+    outer loop
+      vertex 50 0 0
+      vertex 0 50 0
+      vertex 0 0 50
+    endloop
+  endfacet
+  facet normal -0.577350 0.577350 0.577350
+    outer loop
+      vertex 0 50 0
+      vertex -50 0 0
+      vertex 0 0 50
+    endloop
+  endfacet
+  facet normal -0.577350 -0.577350 0.577350
+    outer loop
+      vertex -50 0 0
+      vertex 0 -50 0
+      vertex 0 0 50
+    endloop
+  endfacet
+  facet normal 0.577350 -0.577350 0.577350
+    outer loop
+      vertex 0 -50 0
+      vertex 50 0 0
+      vertex 0 0 50
+    endloop
+  endfacet
+  facet normal 0.577350 0.577350 -0.577350
+    outer loop
+      vertex 0 50 0
+      vertex 50 0 0
+      vertex 0 0 -50
+    endloop
+  endfacet
+  facet normal -0.577350 0.577350 -0.577350
+    outer loop
+      vertex -50 0 0
+      vertex 0 50 0
+      vertex 0 0 -50
+    endloop
+  endfacet
+  facet normal -0.577350 -0.577350 -0.577350
+    outer loop
+      vertex 0 -50 0
+      vertex -50 0 0
+      vertex 0 0 -50
+    endloop
+  endfacet
+  facet normal 0.577350 -0.577350 -0.577350
+    outer loop
+      vertex 50 0 0
+      vertex 0 -50 0
+      vertex 0 0 -50
+    endloop
+  endfacet
+endsolid octahedron

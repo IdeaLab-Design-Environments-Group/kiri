@@ -1,0 +1,72 @@
+solid hexPyramid
+  facet normal 0.736502 0.425220 0.526073
+    outer loop
+      vertex 0 0 70
+      vertex 50 0 0
+      vertex 25.000000000000007 43.30127018922193 0
+    endloop
+  endfacet
+  facet normal 0.000000 0.850439 0.526073
+    outer loop
+      vertex 0 0 70
+      vertex 25.000000000000007 43.30127018922193 0
+      vertex -24.99999999999999 43.30127018922194 0
+    endloop
+  endfacet
+  facet normal -0.736502 0.425220 0.526073
+    outer loop
+      vertex 0 0 70
+      vertex -24.99999999999999 43.30127018922194 0
+      vertex -50 6.123233995736766e-15 0
+    endloop
+  endfacet
+  facet normal -0.736502 -0.425220 0.526073
+    outer loop
+      vertex 0 0 70
+      vertex -50 6.123233995736766e-15 0
+      vertex -25.00000000000002 -43.301270189221924 0
+    endloop
+  endfacet
+  facet normal -0.000000 -0.850439 0.526073
+    outer loop
+      vertex 0 0 70
+      vertex -25.00000000000002 -43.301270189221924 0
+      vertex 25.000000000000007 -43.30127018922193 0
+    endloop
+  endfacet
+  facet normal 0.736502 -0.425220 0.526073
+    outer loop
+      vertex 0 0 70
+      vertex 25.000000000000007 -43.30127018922193 0
+      vertex 50 0 0
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 -1.000000
+    outer loop
+      vertex 50 0 0
+      vertex -24.99999999999999 43.30127018922194 0
+      vertex 25.000000000000007 43.30127018922193 0
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 -1.000000
+    outer loop
+      vertex 50 0 0
+      vertex -50 6.123233995736766e-15 0
+      vertex -24.99999999999999 43.30127018922194 0
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 -1.000000
+    outer loop
+      vertex 50 0 0
+      vertex -25.00000000000002 -43.301270189221924 0
+      vertex -50 6.123233995736766e-15 0
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 -1.000000
+    outer loop
+      vertex 50 0 0
+      vertex 25.000000000000007 -43.30127018922193 0
+      vertex -25.00000000000002 -43.301270189221924 0
+    endloop
+  endfacet
+endsolid hexPyramid

@@ -1,0 +1,103 @@
+# FKLD spec — namespace prefix and key registry.
+#
+# FKLD ("Flexible Kirigami list Datastructure") is a JSON superset of FOLD
+# ("Flexible Origami List Datastructure"). Every FKLD-specific field lives
+# under the reserved `fkld:` prefix, which is FOLD's documented convention
+# for foreign-namespaced extensions (FOLD spec §"Custom Properties"): any
+# tool that doesn't understand `fkld:` simply ignores the key and the file
+# remains a valid FOLD file.
+#
+# This module is the single source of truth for the namespace string and
+# the list of registered keys. Every other FKLD module imports `KEYS` from
+# here rather than spelling raw strings — that way a future rename only
+# touches one place and the test suite catches drift.
+#
+# Citation: FOLD format — Demaine, Ku & Lang (MIT-licensed); see
+# edemaine/fold on GitHub. FKLD reuses FOLD's "M/V/B/U/F/C" edge-assignment
+# alphabet directly so any FOLD-aware viewer can render an FKLD file.
+
+# Reserved namespace prefix. Every FKLD-only property name starts with
+# this string followed by a snake_case suffix matching the FOLD pattern
+# (e.g. `fkld:edges_cutType` parallels FOLD's `edges_assignment`).
+export NAMESPACE = "fkld:"
+
+# Deep-freeze helper. `Object.freeze` is shallow, so a frozen `KEYS`
+# would still let `KEYS.edges.cutType = "x"` succeed silently — exactly
+# the failure mode this registry exists to prevent. Walk the object once
+# and freeze every plain-object subtree.
+#
+# Exported because every FKLD module that ships a static registry
+# (CUT_TYPE_INFO in Step 2, MOLECULE_FIELDS in Step 3, CURVATURE_CLASSES
+# in Step 4, ...) needs the same deep guarantee.
+export deepFreeze = (obj) ->
+  if obj? and typeof obj is "object" and not Object.isFrozen(obj)
+    Object.freeze obj
+    deepFreeze obj[k] for own k of obj
+  obj
+
+# Registered FKLD keys, grouped by the FOLD-style array they parallel.
+# Deep-freezing makes any mutation throw in strict mode (which is the
+# default in CoffeeScript ES modules), so accidental writes are caught
+# immediately rather than silently propagating stale data through the
+# pipeline. The grouping doesn't change semantics — it just keeps the
+# registry readable as it grows past 20 keys in later steps.
+export KEYS = deepFreeze
+  # Per-edge metadata — one parallel array entry per `edges_vertices[i]`.
+  edges:
+    # Step 2: subtype tag for "C" cuts (major/minor/seam/dart/...).
+    cutType:        NAMESPACE + "edges_cutType"
+    # Step 3: per-edge tucking-molecule parameters from Tachi (2010).
+    moleculeTheta:  NAMESPACE + "edges_moleculeTheta"
+    moleculeWidth:  NAMESPACE + "edges_moleculeWidth"
+    moleculeDepth:  NAMESPACE + "edges_moleculeDepth"
+    dihedralTarget: NAMESPACE + "edges_dihedralTarget"
+  # Per-vertex metadata — one parallel array entry per `vertices_coords[i]`.
+  vertices:
+    # Step 4: discrete-curvature classification used by the inverse process
+    # to decide between molecule tucking and a kirigami cut at each vertex.
+    curvatureClass:  NAMESPACE + "vertices_curvatureClass"
+    angleDefect:     NAMESPACE + "vertices_angleDefect"
+    reliefStrategy:  NAMESPACE + "vertices_reliefStrategy"
+  # Per-face metadata — one parallel array entry per `faces_vertices[i]`.
+  faces:
+    # Step 5: material + structural role + fabrication panel grouping.
+    materialId:      NAMESPACE + "faces_materialId"
+    thickness:       NAMESPACE + "faces_thickness"
+    structuralRole:  NAMESPACE + "faces_structuralRole"
+    panelId:         NAMESPACE + "faces_panelId"
+  # Top-level metadata — siblings of FOLD's `file_*` and `frame_*` blocks.
+  meta:
+    # Architecture context block (site, loads, materials, scale, fab method).
+    architecture:    NAMESPACE + "meta_architecture"
+
+# Flat list of every registered key string — used by validators that need
+# to walk a FOLD/FKLD JSON object and find every FKLD field without knowing
+# the group structure. Kept in registration order so diffs read cleanly.
+export KEY_LIST = deepFreeze [
+  KEYS.edges.cutType
+  KEYS.edges.moleculeTheta
+  KEYS.edges.moleculeWidth
+  KEYS.edges.moleculeDepth
+  KEYS.edges.dihedralTarget
+  KEYS.vertices.curvatureClass
+  KEYS.vertices.angleDefect
+  KEYS.vertices.reliefStrategy
+  KEYS.faces.materialId
+  KEYS.faces.thickness
+  KEYS.faces.structuralRole
+  KEYS.faces.panelId
+  KEYS.meta.architecture
+]
+
+# True iff `key` is a registered FKLD field name. Stricter than
+# `isFkldKey` (below): unknown `fkld:` keys are rejected. Use this when
+# validating an incoming file against the current spec version.
+export isRegisteredKey = (key) ->
+  KEY_LIST.indexOf(key) >= 0
+
+# True iff `key` is in the FKLD namespace, registered or not. Use this when
+# walking an arbitrary FOLD/FKLD object to separate FKLD keys from FOLD
+# keys — unknown `fkld:` extensions are still part of FKLD's namespace and
+# we want to round-trip them even if we don't validate them.
+export isFkldKey = (key) ->
+  typeof key is "string" and key.indexOf(NAMESPACE) is 0

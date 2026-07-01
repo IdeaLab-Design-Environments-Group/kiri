@@ -1,0 +1,2913 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>FKLD Viewer</title>
+  <style>
+    :root {
+      --bg: #fafaf6;
+      --panel: #fff;
+      --border: #d8d3c2;
+      --ink: #1d1c19;
+      --muted: #777264;
+      --ok: #2c7a3d;
+      --bad: #b22222;
+      /* Edge classes — FOLD convention, extended for FKLD cut subtypes. */
+      --mountain: #d24545;
+      --valley:   #2666c4;
+      --facet:    #c8c5b8;
+      --boundary: #1d1c19;
+      --unassigned: #aaa5a0;
+      --major:    #b22222;
+      --minor:    #d97c1c;
+      --seam:     #7a3aaa;
+      --dart:     #2c7a3d;
+      --auxetic:  #1d8a8a;
+      --vent:     #c4a01b;
+      --tab:      #cb4f9a;
+      --perforation: #c4321b;
+      --face-top: #e8eef9;   /* CCW-facing side (FOLD cyan) */
+      --face-bot: #fff4cd;   /* CW-facing side  (FOLD yellow) */
+      --body:     #efe7d2;   /* opaque "full sheet of paper" the cuts sit on */
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 13px/1.45 -apple-system, BlinkMacSystemFont, sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      padding: 8px 16px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+      display: flex; align-items: center; gap: 12px;
+      flex: 0 0 auto;
+    }
+    header h1 { font-size: 14px; margin: 0; font-weight: 600; }
+    header h1 small { color: var(--muted); font-weight: 400; margin-left: 6px; }
+    .toolbar {
+      padding: 9px 16px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+      display: flex; flex-wrap: wrap; gap: 8px 16px;
+      align-items: center;
+      font-size: 12px;
+      flex: 0 0 auto;
+    }
+    .toolbar > .group { display: flex; gap: 5px; align-items: center; }
+    .toolbar > .group > .lbl {
+      color: var(--muted); margin-right: 4px;
+      font-size: 10px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    /* Soft rounded controls (buttons / selects / file picker) */
+    .toolbar select, .toolbar input[type=file], .toolbar button {
+      font: inherit;
+      font-size: 12px;
+      padding: 4px 11px;
+      border: 1px solid var(--border);
+      background: #fff;
+      color: var(--ink);
+      border-radius: 7px;
+      cursor: pointer;
+      transition: background 0.13s, border-color 0.13s, box-shadow 0.13s;
+    }
+    .toolbar button:hover, .toolbar select:hover, .toolbar input[type=file]:hover {
+      background: #f6f3ec; border-color: #c9c3b0;
+    }
+    .toolbar button:active { transform: translateY(0.5px); }
+    .toolbar button:focus-visible, .toolbar select:focus-visible {
+      outline: 2px solid rgba(31, 111, 235, 0.45); outline-offset: 1px;
+    }
+    .toolbar input[type=file]::file-selector-button {
+      font: inherit; font-size: 11px; margin-right: 8px;
+      padding: 3px 9px; border: 1px solid var(--border); border-radius: 6px;
+      background: var(--bg); color: var(--ink); cursor: pointer;
+      transition: background 0.13s;
+    }
+    .toolbar input[type=file]::file-selector-button:hover { background: #efe9da; }
+    /* View x/y/z + Zoom +/−/Fit read as compact buttons */
+    .toolbar button[data-view], .toolbar #zoom-in, .toolbar #zoom-out, .toolbar #zoom-fit {
+      min-width: 30px; padding: 4px 8px; text-align: center; font-weight: 600;
+    }
+    /* Toggle chips — pill toggles, blue when on */
+    .toolbar label.toggle {
+      padding: 4px 11px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: #fff;
+      color: var(--muted);
+      font-weight: 500;
+      cursor: pointer;
+      user-select: none;
+      display: inline-flex; align-items: center; gap: 4px;
+      transition: background 0.13s, border-color 0.13s, color 0.13s, box-shadow 0.13s;
+    }
+    .toolbar label.toggle:hover {
+      background: #f6f3ec; border-color: #c9c3b0; color: var(--ink);
+    }
+    .toolbar label.toggle.on {
+      background: #1f6feb; border-color: #1f6feb; color: #fff;
+      box-shadow: 0 1px 2px rgba(31, 111, 235, 0.3);
+    }
+    .toolbar label.toggle input { display: none; }
+    .toolbar #prop-data {
+      max-width: 480px; overflow: hidden; text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    main {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 12px var(--sidebar-w, 320px);
+      flex: 1 1 auto;
+      min-height: 0;  /* fill the space the removed status bar used to take */
+    }
+    main.no-sidebar { grid-template-columns: minmax(0, 1fr) 26px 0; }
+    #pane-resizer {
+      position: relative;
+      align-self: stretch;
+      display: flex; align-items: center; justify-content: center;
+      cursor: col-resize;
+      background: var(--panel);
+      border-left: 1px solid var(--border);
+    }
+    #pane-resizer::before {
+      content: ""; width: 3px; height: 90%;
+      border-radius: 3px; background: transparent;
+      transition: background 0.15s;
+    }
+    #pane-resizer:hover::before, #pane-resizer.dragging::before { background: #c9c3b0; }
+    main.no-sidebar #pane-resizer { cursor: default; }
+    #sidebar-collapse {
+      position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+      width: 22px; height: 22px;
+      display: flex; align-items: center; justify-content: center;
+      padding: 0; font: inherit; font-size: 14px; line-height: 1;
+      color: var(--muted); background: var(--panel);
+      border: 1px solid var(--border); border-radius: 50%;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+      cursor: pointer; z-index: 3;
+      transition: color 0.13s, border-color 0.13s;
+    }
+    #sidebar-collapse:hover { color: #1f6feb; border-color: #c9c3b0; }
+    .canvas-wrap {
+      position: relative;
+      background:
+        linear-gradient(45deg, #f4f1e4 25%, transparent 25%) 0 0 / 16px 16px,
+        linear-gradient(-45deg, #f4f1e4 25%, transparent 25%) 0 8px / 16px 16px,
+        linear-gradient(45deg, transparent 75%, #f4f1e4 75%) 8px -8px / 16px 16px,
+        linear-gradient(-45deg, transparent 75%, #f4f1e4 75%) -8px 0px / 16px 16px,
+        var(--bg);
+      overflow: hidden;
+      cursor: grab;
+    }
+    .canvas-wrap.dragging { cursor: grabbing; }
+    svg { width: 100%; height: 100%; display: block; user-select: none; }
+    aside {
+      background: var(--panel);
+      padding: 14px 18px;
+      overflow-y: auto;
+      font-size: 12px;
+    }
+    main.no-sidebar aside { display: none; }
+    aside h2 {
+      font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+      color: #1741c4; margin: 16px 0 5px; font-weight: 700;
+    }
+    aside h2:first-child { margin-top: 0; }
+    aside .row {
+      display: flex; justify-content: space-between;
+      gap: 16px; align-items: baseline;
+      padding: 4px 0; border-bottom: 1px solid #efece1;
+    }
+    aside .row .label { color: var(--muted); flex: 0 0 auto; white-space: nowrap; }
+    aside .row .value {
+      text-align: right; font-variant-numeric: tabular-nums;
+      overflow-wrap: anywhere; min-width: 0;
+    }
+    aside pre {
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 3px; padding: 6px;
+      font-size: 10px; line-height: 1.4;
+      overflow-x: auto; margin: 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .pill {
+      display: inline-block; padding: 0 5px; border-radius: 8px;
+      font-size: 10px; line-height: 16px;
+      background: var(--bg); border: 1px solid var(--border);
+    }
+    .pill.ok { background: #e3f2e8; border-color: var(--ok); color: var(--ok); }
+    .pill.bad { background: #fbe5e3; border-color: var(--bad); color: var(--bad); }
+    .swatch { display: inline-block; width: 18px; height: 2px; vertical-align: middle; margin-right: 4px; }
+    .swatch.dashed { background: repeating-linear-gradient(90deg, currentColor 0, currentColor 2px, transparent 2px, transparent 4px); }
+    .legend-item { display: flex; align-items: center; padding: 1px 0; font-size: 10px; }
+    /* All SVG primitives use vector-effect: non-scaling-stroke so the
+       stroke widths and dasharrays below are interpreted in CSS pixels,
+       not viewBox user units. Without this the stroke widths balloon to
+       the viewBox scale and a thin "5 2" dashed line becomes a 5-units
+       black blob bigger than the entire viewport. */
+    svg polygon, svg line, svg circle, svg path { vector-effect: non-scaling-stroke; }
+    /* Opaque full-sheet silhouette drawn beneath the (optional) translucent faces, so dart/vent
+       gaps read as slits in a solid body of paper rather than see-through holes. */
+    svg .body-fill { stroke: none; fill: var(--body); fill-opacity: 1; }
+    svg .face { stroke: none; fill-opacity: 0.45; }
+    svg .face.top { fill: var(--face-top); }
+    svg .face.bot { fill: var(--face-bot); }
+    svg .face-text {
+      fill: var(--muted); font-size: 9px; text-anchor: middle;
+      font-family: ui-monospace, monospace;
+      paint-order: stroke; stroke: white; stroke-width: 2;
+    }
+    svg .vert-text {
+      fill: var(--ink); font-size: 9px; text-anchor: middle;
+      font-family: ui-monospace, monospace;
+      paint-order: stroke; stroke: white; stroke-width: 2;
+    }
+    svg .vert { stroke: var(--ink); stroke-width: 0.8; }
+    svg .vert.positive { fill: #d24545; }
+    svg .vert.negative { fill: #2666c4; }
+    svg .vert.flat { fill: #fff; }
+    svg .vert.boundary { fill: #1d1c19; }
+    svg .vert.unset { fill: #c8c5b8; }
+    svg .edge { fill: none; stroke-linecap: round; stroke-width: 1.5; }
+    svg .edge.M { stroke: var(--mountain); stroke-dasharray: 6 3; }
+    svg .edge.V { stroke: var(--valley);   stroke-dasharray: 3 3; }
+    svg .edge.F { stroke: var(--facet); stroke-width: 0.8; }
+    svg .edge.B { stroke: var(--boundary); stroke-width: 2; }
+    svg .edge.U { stroke: var(--unassigned); }
+    svg .edge.C { stroke: var(--bad); stroke-width: 2.5; }
+    svg .edge.C.major       { stroke: var(--major); }
+    svg .edge.C.minor       { stroke: var(--minor); }
+    svg .edge.C.seam        { stroke: var(--seam); stroke-dasharray: 6 3; }
+    svg .edge.C.dart        { stroke: var(--dart); }
+    svg .edge.C.auxetic     { stroke: var(--auxetic); }
+    svg .edge.C.vent        { stroke: var(--vent); }
+    svg .edge.C.tab         { stroke: var(--tab); }
+    svg .edge.C.perforation { stroke: var(--perforation); stroke-dasharray: 3 2; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>FKLD Viewer <small>— SVG renderer for any .fkld / .fold file, with 3D rotation</small></h1>
+  </header>
+
+  <div class="toolbar">
+    <div class="group" id="toggle-group">
+      <span class="lbl">Toggle:</span>
+      <!-- toggles inserted by JS -->
+    </div>
+    <div class="group" id="shape-group" hidden>
+      <span class="lbl">Shape:</span>
+      <button id="shape-toggle" title="Switch between the flat cut pattern and the folded form">Folded</button>
+    </div>
+    <div class="group">
+      <span class="lbl">View:</span>
+      <button data-view="x">x</button>
+      <button data-view="y">y</button>
+      <button data-view="z">z</button>
+    </div>
+    <div class="group">
+      <span class="lbl">Zoom:</span>
+      <button id="zoom-in"  title="Zoom in (+ or =)">+</button>
+      <button id="zoom-out" title="Zoom out (- or _)">−</button>
+      <button id="zoom-fit" title="Fit to view (0)">Fit</button>
+    </div>
+    <div class="group">
+      <span class="lbl">Example:</span>
+      <select id="example-select"></select>
+    </div>
+    <div class="group">
+      <span class="lbl">Import:</span>
+      <input type="file" id="file-input" accept=".fkld,.fold,.json">
+    </div>
+    <div class="group">
+      <span class="lbl">Property:</span>
+      <select id="prop-select"><option>--</option></select>
+      <span id="prop-data"></span>
+    </div>
+    <div class="group" style="margin-left:auto">
+      <button id="toggle-sidebar">Toggle sidebar</button>
+    </div>
+  </div>
+
+  <main>
+    <div class="canvas-wrap" id="canvas-wrap"><svg id="canvas"></svg></div>
+    <div id="pane-resizer"><button id="sidebar-collapse" type="button" title="Hide sidebar">›</button></div>
+    <aside id="sidebar"></aside>
+  </main>
+
+  <script>
+  // ===========================================================================
+  // FKLD Viewer — mirrors FOLD's foldviewer.html UX:
+  //   • Toggle: Faces / Edges / Vertices / Face Text   (+ FKLD: Cuts, Molecules, Curvature)
+  //   • View: x / y / z axis snap buttons
+  //   • Example: dropdown of bundled files
+  //   • Import: pick a local .fkld / .fold / .json
+  //   • Property: explore any key on the loaded file
+  //   • Mouse-drag to rotate the camera (FOLD-style)
+  // ===========================================================================
+
+  const NS = 'http://www.w3.org/2000/svg';
+
+  // The bundled examples are inlined later by examples/scripts/embed-example.coffee
+  // so the viewer is fully usable from a file:// URL.
+  const EMBEDDED = {};
+
+  // ---- linear algebra (mirrors FOLD's geom for what we need) ---------------
+  const sub = (a, b) => [a[0]-b[0], a[1]-b[1], a[2]-b[2]];
+  const add = (a, b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]];
+  const mul = (a, k) => [a[0]*k, a[1]*k, a[2]*k];
+  const dot = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+  const cross = (a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+  const mag = a => Math.hypot(...a);
+  const unit = a => { const m = mag(a); return m ? mul(a, 1/m) : [0,0,0]; };
+  const rotate = (v, axis, angle) => {
+    // Rodrigues' rotation formula. axis is unit.
+    const c = Math.cos(angle), s = Math.sin(angle);
+    return add(add(mul(v, c), mul(cross(axis, v), s)), mul(axis, dot(axis, v) * (1 - c)));
+  };
+
+  // ---- camera ---------------------------------------------------------------
+  const cam = {
+    c: [0,0,0],      // center
+    x: [1,0,0],      // right
+    y: [0,1,0],      // up
+    z: [0,0,1],      // out
+    r: 1,            // half-extent
+    last: null,
+  };
+  function setCamAxes(x, y) { cam.x = x; cam.y = y; cam.z = cross(x, y); }
+  function project(p) {
+    const q = mul(sub(p, cam.c), 1/cam.r);
+    return [dot(q, cam.x), -dot(q, cam.y), 0];   // SVG y points down
+  }
+
+  // ---- state ----------------------------------------------------------------
+  const layers = {
+    'Full body': { on: true },     // opaque paper silhouette so cuts read as slits, not holes
+    Faces:     { on: true },
+    Edges:     { on: true },
+    Vertices:  { on: false },
+    'Face Text': { on: false },
+    Cuts:      { on: true },        // colour C edges by subtype
+    Molecules: { on: false },       // overlay θ labels
+    Curvature: { on: false },       // colour vertices by class
+  };
+  let currentFile = null;
+
+  function setStatus(msg, level = '') {
+    const el = document.getElementById('status-text');
+    if (!el) return;
+    el.textContent = msg;
+    el.style.color = level === 'bad' ? 'var(--bad)' :
+                     level === 'ok'  ? 'var(--ok)'  : 'var(--muted)';
+  }
+
+  // ---- model build: derive vs/es/fs from a parsed FKLD/FOLD file -----------
+  // The folded-form goal coords the kirigamizer emits (a `foldedForm` file_frame), or null.
+  function foldedCoords(file) {
+    const frames = file && file.file_frames;
+    if (!Array.isArray(frames)) return null;
+    for (const fr of frames) {
+      const cls = fr && (fr.frame_classes || fr['frame_classes']);
+      const vc = fr && (fr.vertices_coords || fr['vertices_coords']);
+      if (Array.isArray(cls) && cls.includes('foldedForm') && Array.isArray(vc)) return vc;
+    }
+    return null;
+  }
+  let showFolded = false; // when a foldedForm frame exists, the viewer can show it instead of the flat net
+
+  function buildModel(file) {
+    const folded = showFolded ? foldedCoords(file) : null;
+    // Show the folded GOAL geometry when toggled (same vertex indexing as the flat frame), else the flat net.
+    const coords = (folded && folded.length === (file.vertices_coords || []).length) ? folded : (file.vertices_coords || []);
+    const vs = coords.map((c, i) => ({
+      i, cs: [c[0] || 0, c[1] || 0, c[2] || 0],
+    }));
+    const fs = (file.faces_vertices || []).map((face, i) => ({
+      i, vs: face.map(j => vs[j]),
+    }));
+    // Per-face centroid + normal (for face ordering during 3D rotation).
+    for (const f of fs) {
+      const n = f.vs.length;
+      f.c = [0,0,0];
+      for (const v of f.vs) f.c = add(f.c, v.cs);
+      f.c = mul(f.c, 1/n);
+      if (n >= 3) {
+        // Newell's method gives a stable normal even for non-planar polys.
+        let nrm = [0,0,0];
+        for (let k = 0; k < n; k++) {
+          const a = f.vs[k].cs, b = f.vs[(k+1) % n].cs;
+          nrm = add(nrm, [
+            (a[1]-b[1]) * (a[2]+b[2]),
+            (a[2]-b[2]) * (a[0]+b[0]),
+            (a[0]-b[0]) * (a[1]+b[1]),
+          ]);
+        }
+        f.n = unit(nrm);
+      } else f.n = [0,0,1];
+    }
+    const ev = file.edges_vertices || [];
+    const ea = file.edges_assignment || [];
+    const ec = file['fkld:edges_cutType'] || [];
+    const es = ev.map((e, i) => ({
+      i, v1: vs[e[0]], v2: vs[e[1]],
+      assign: ea[i] || 'U',
+      cutType: ec[i] || null,
+    }));
+    return { vs, fs, es };
+  }
+
+  // ---- bounding-box framing for the camera ---------------------------------
+  function frameModel(model) {
+    if (!model.vs.length) return;
+    let min = [...model.vs[0].cs], max = [...min];
+    for (const v of model.vs) for (let i = 0; i < 3; i++) {
+      min[i] = Math.min(min[i], v.cs[i]);
+      max[i] = Math.max(max[i], v.cs[i]);
+    }
+    cam.c = mul(add(min, max), 0.5);
+    cam.r = Math.max(mag(sub(max, min)) / 2 * 1.05, 1e-3);
+  }
+
+  // ---- rendering ------------------------------------------------------------
+  function render() {
+    if (!currentFile) return;
+    const svg = document.getElementById('canvas');
+    svg.innerHTML = '';
+    svg.setAttribute('viewBox', '-1 -1 2 2');
+    svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+
+    const model = buildModel(currentFile);
+    if (!model.vs.length) {
+      setStatus('No vertices_coords in file.', 'bad');
+      return;
+    }
+    // Project every vertex; face centroids too.
+    for (const v of model.vs) v.p = project(v.cs);
+    for (const f of model.fs) f.p = project(f.c);
+
+    // Sort faces by signed depth (back to front) along the camera's z axis.
+    const faceDepth = f => -dot(sub(f.c, cam.c), cam.z);
+    model.fs.sort((a, b) => faceDepth(a) - faceDepth(b));
+
+    // Full body: every face as one opaque paper silhouette beneath the rest, so the kirigamized
+    // sheet reads as a complete body and dart/vent gaps appear as slits, not see-through holes.
+    if (layers['Full body'].on) {
+      for (const f of model.fs) {
+        if (f.vs.length < 3) continue;
+        const poly = document.createElementNS(NS, 'polygon');
+        poly.setAttribute('points', f.vs.map(v => v.p.slice(0,2).join(',')).join(' '));
+        poly.setAttribute('class', 'body-fill');
+        svg.appendChild(poly);
+      }
+    }
+    // Faces.
+    if (layers.Faces.on) {
+      for (const f of model.fs) {
+        if (f.vs.length < 3) continue;
+        const facing = dot(f.n, cam.z) > 0 ? 'top' : 'bot';
+        const poly = document.createElementNS(NS, 'polygon');
+        poly.setAttribute('points', f.vs.map(v => v.p.slice(0,2).join(',')).join(' '));
+        poly.setAttribute('class', `face ${facing}`);
+        svg.appendChild(poly);
+      }
+    }
+    if (layers['Face Text'].on) {
+      for (const f of model.fs) {
+        const t = document.createElementNS(NS, 'text');
+        t.setAttribute('x', f.p[0]); t.setAttribute('y', f.p[1]);
+        t.setAttribute('class', 'face-text');
+        t.textContent = `f${f.i}`;
+        svg.appendChild(t);
+      }
+    }
+    // Edges. Stroke widths come entirely from CSS — non-scaling-stroke
+    // keeps them in screen pixels regardless of viewBox or rotation. Cuts (C) are drawn LAST
+    // (stable sort) so every performed cut sits on top of the body fill and the other creases.
+    if (layers.Edges.on) {
+      const ordered = [...model.es].sort((a, b) => (a.assign === 'C' ? 1 : 0) - (b.assign === 'C' ? 1 : 0));
+      for (const e of ordered) {
+        const line = document.createElementNS(NS, 'line');
+        line.setAttribute('x1', e.v1.p[0]); line.setAttribute('y1', e.v1.p[1]);
+        line.setAttribute('x2', e.v2.p[0]); line.setAttribute('y2', e.v2.p[1]);
+        let cls = `edge ${e.assign}`;
+        // FKLD: subtype refinement for C edges.
+        if (layers.Cuts.on && e.assign === 'C' && e.cutType) {
+          cls += ` ${e.cutType}`;
+        }
+        line.setAttribute('class', cls);
+        const title = document.createElementNS(NS, 'title');
+        let t = `edge ${e.i}: ${e.assign}`;
+        if (e.cutType) t += ` (${e.cutType})`;
+        const theta = currentFile['fkld:edges_moleculeTheta']?.[e.i];
+        const w = currentFile['fkld:edges_moleculeWidth']?.[e.i];
+        if (theta != null) t += `\nθ = ${theta.toFixed(3)} rad`;
+        if (w != null) t += `\nw = ${w.toFixed(3)}`;
+        const at = currentFile['fkld:edges_actuationType']?.[e.i];
+        if (at) t += `\nactuation: ${at}`;
+        title.textContent = t;
+        line.appendChild(title);
+        svg.appendChild(line);
+      }
+    }
+    // Molecule labels (optional).
+    if (layers.Molecules.on) {
+      const thetas = currentFile['fkld:edges_moleculeTheta'] || [];
+      for (const e of model.es) {
+        const theta = thetas[e.i];
+        if (theta == null) continue;
+        const m = mul(add(e.v1.p, e.v2.p), 0.5);
+        const t = document.createElementNS(NS, 'text');
+        t.setAttribute('x', m[0]); t.setAttribute('y', m[1]);
+        t.setAttribute('class', 'vert-text');
+        t.setAttribute('dy', -0.005);
+        t.textContent = `θ=${theta.toFixed(2)}`;
+        svg.appendChild(t);
+      }
+    }
+    // Vertices.
+    if (layers.Vertices.on) {
+      const cls = currentFile['fkld:vertices_curvatureClass'] || [];
+      for (const v of model.vs) {
+        const c = document.createElementNS(NS, 'circle');
+        c.setAttribute('cx', v.p[0]); c.setAttribute('cy', v.p[1]);
+        c.setAttribute('r', 0.018);
+        const k = layers.Curvature.on ? (cls[v.i] || 'unset') : 'flat';
+        c.setAttribute('class', `vert ${k}`);
+        const title = document.createElementNS(NS, 'title');
+        let t = `vertex ${v.i}`;
+        if (cls[v.i]) t += `\nclass: ${cls[v.i]}`;
+        const def = currentFile['fkld:vertices_angleDefect']?.[v.i];
+        if (def != null) t += `\nangle defect: ${def.toFixed(4)} rad`;
+        title.textContent = t;
+        c.appendChild(title);
+        svg.appendChild(c);
+
+        const tx = document.createElementNS(NS, 'text');
+        tx.setAttribute('x', v.p[0]); tx.setAttribute('y', v.p[1] + 0.005);
+        tx.setAttribute('class', 'vert-text');
+        tx.textContent = `${v.i}`;
+        svg.appendChild(tx);
+      }
+    }
+  }
+
+  // ---- toggles bar ----------------------------------------------------------
+  function buildToggles() {
+    const g = document.getElementById('toggle-group');
+    for (const name of Object.keys(layers)) {
+      const label = document.createElement('label');
+      label.className = 'toggle' + (layers[name].on ? ' on' : '');
+      label.textContent = name;
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = layers[name].on;
+      cb.addEventListener('change', () => {
+        layers[name].on = cb.checked;
+        label.classList.toggle('on', cb.checked);
+        render();
+      });
+      label.prepend(cb);
+      g.appendChild(label);
+    }
+  }
+
+  // ---- sidebar --------------------------------------------------------------
+  function drawSidebar(file) {
+    const a = document.getElementById('sidebar');
+    const v = file.vertices_coords?.length || 0;
+    const f = file.faces_vertices?.length || 0;
+    const e = file.edges_vertices?.length || 0;
+    const ah = {};
+    for (const x of (file.edges_assignment || [])) ah[x] = (ah[x] || 0) + 1;
+    const ch = {};
+    for (const x of (file['fkld:edges_cutType'] || [])) if (x) ch[x] = (ch[x] || 0) + 1;
+    const vh = {};
+    for (const x of (file['fkld:vertices_curvatureClass'] || [])) if (x) vh[x] = (vh[x] || 0) + 1;
+    const thetas = file['fkld:edges_moleculeTheta'] || [];
+    const molCount = thetas.filter(x => x != null).length;
+    const matIds = file['fkld:faces_materialId'] || [];
+    const matSet = [...new Set(matIds.filter(x => x))];
+
+    const kirigami = file['fkld:meta_kirigami'];
+    const arch = file['fkld:meta_architecture'];
+
+    let html = `
+      <h2>File</h2>
+      <div class="row"><span class="label">creator</span><span class="value">${escape(file.file_creator) ?? '—'}</span></div>
+      <div class="row"><span class="label">frame_title</span><span class="value">${escape(file.frame_title) ?? '—'}</span></div>
+      <div class="row"><span class="label">unit</span><span class="value">${file.frame_unit ?? '—'}</span></div>
+      <div class="row"><span class="label">attributes</span><span class="value">${(file.frame_attributes || []).join(', ') || '—'}</span></div>
+      <div class="row"><span class="label">FKLD spec</span><span class="value">${file['fkld:meta_fkldSpec'] || '—'}</span></div>
+
+      <h2>Topology</h2>
+      <div class="row"><span class="label">vertices</span><span class="value">${v}</span></div>
+      <div class="row"><span class="label">faces</span><span class="value">${f}</span></div>
+      <div class="row"><span class="label">edges</span><span class="value">${e}</span></div>
+
+      <h2>Edge assignments</h2>
+      ${Object.entries(ah).map(([k,n]) => `<div class="row"><span class="label">${k}</span><span class="value">${n}</span></div>`).join('') || '<div class="row" style="border:none;color:var(--muted)"><em>none</em></div>'}
+
+      <h2>Cut subtypes</h2>
+      ${Object.keys(ch).length ? Object.entries(ch).map(([k,n]) => `<div class="row"><span class="label">${k}</span><span class="value">${n}</span></div>`).join('') : '<div class="row" style="border:none;color:var(--muted)"><em>none</em></div>'}
+
+      <h2>Vertex curvature</h2>
+      ${Object.keys(vh).length ? Object.entries(vh).map(([k,n]) => `<div class="row"><span class="label">${k}</span><span class="value">${n}</span></div>`).join('') : '<div class="row" style="border:none;color:var(--muted)"><em>not recorded</em></div>'}
+
+      <h2>Molecules</h2>
+      <div class="row"><span class="label">edges with θ + w</span><span class="value">${molCount}</span></div>
+      ${molCount > 0 ? `<div class="row"><span class="label">θ range (rad)</span><span class="value">${(() => { const xs = thetas.filter(x => x != null); return `${Math.min(...xs).toFixed(3)} – ${Math.max(...xs).toFixed(3)}`; })()}</span></div>` : ''}
+
+      <h2>Materials</h2>
+      ${matSet.length ? matSet.map(id => `<div class="row"><span class="label">${id}</span><span class="value">${matIds.filter(x => x === id).length} faces</span></div>`).join('') : '<div class="row" style="border:none;color:var(--muted)"><em>none</em></div>'}
+    `;
+    if (kirigami) {
+      html += `<h2>Universal kirigami</h2><pre>${escape(JSON.stringify(kirigami, null, 2))}</pre>`;
+    }
+    if (arch) {
+      html += `<h2>Architecture extension</h2><pre>${escape(JSON.stringify(arch, null, 2))}</pre>`;
+    }
+    const problems = clientValidate(file);
+    html += `<h2>Validation</h2>`;
+    if (problems.length === 0) {
+      html += `<div class="row" style="border:none"><span class="value"><span class="pill ok">passed</span> <span style="color:var(--muted)">0 problems</span></span></div>`;
+    } else {
+      html += `<div class="row" style="border:none"><span class="value"><span class="pill bad">${problems.length} issues</span></span></div>`;
+      html += `<pre>${escape(problems.slice(0, 15).map(p => '• ' + p).join('\n'))}${problems.length > 15 ? '\n…' : ''}</pre>`;
+    }
+    // Legend.
+    html += `<h2>Legend</h2>`;
+    html += `<div class="legend-item"><span class="swatch" style="height:10px;background:var(--body);border:1px solid var(--border)"></span>full body (paper)</div>`;
+    html += [
+      ['mountain (M)', 'mountain', true, '5 2'],
+      ['valley (V)',   'valley',   true, '2 2'],
+      ['facet (F)',    'facet',    false, ''],
+      ['boundary (B)', 'boundary', false, ''],
+    ].map(([t, k, dash]) => `<div class="legend-item"><span class="swatch ${dash ? 'dashed' : ''}" style="background:${dash ? '' : `var(--${k})`};color:var(--${k})"></span>${t}</div>`).join('');
+    for (const [k, label] of [['major','major'], ['minor','minor'], ['seam','seam (dashed)'], ['dart','dart'], ['auxetic','auxetic'], ['vent','vent'], ['tab','tab'], ['perforation','perforation (dotted)']]) {
+      html += `<div class="legend-item"><span class="swatch" style="background:var(--${k})"></span>${label}</div>`;
+    }
+    a.innerHTML = html;
+  }
+  const escape = (s) => s == null ? s : String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  function clientValidate(file) {
+    const p = [];
+    if (!file) return ['file is null'];
+    const numV = file.vertices_coords?.length;
+    const numE = file.edges_vertices?.length;
+    const numF = file.faces_vertices?.length;
+    const dims = {
+      'fkld:edges_cutType': numE, 'fkld:edges_moleculeTheta': numE,
+      'fkld:edges_moleculeWidth': numE, 'fkld:edges_moleculeDepth': numE,
+      'fkld:edges_dihedralTarget': numE, 'fkld:edges_actuationType': numE,
+      'fkld:edges_actuationParam': numE,
+      'fkld:vertices_curvatureClass': numV, 'fkld:vertices_angleDefect': numV,
+      'fkld:vertices_reliefStrategy': numV,
+      'fkld:faces_materialId': numF, 'fkld:faces_thickness': numF,
+      'fkld:faces_structuralRole': numF, 'fkld:faces_panelId': numF,
+    };
+    for (const [k, expected] of Object.entries(dims)) {
+      const arr = file[k];
+      if (Array.isArray(arr) && expected != null && arr.length > expected) {
+        p.push(`${k}: length ${arr.length} > expected ${expected}`);
+      }
+    }
+    const ea = file.edges_assignment || [];
+    const ec = file['fkld:edges_cutType'] || [];
+    const validSubs = new Set(['major','minor','seam','dart','auxetic','vent','tab','perforation']);
+    for (let i = 0; i < ec.length; i++) {
+      if (ec[i] == null) continue;
+      if (!validSubs.has(ec[i])) p.push(`edge ${i}: unknown cut subtype "${ec[i]}"`);
+      if (ea[i] !== 'C') p.push(`edge ${i}: cutType="${ec[i]}" but assignment="${ea[i] ?? 'undefined'}"`);
+    }
+    const ts = file['fkld:edges_moleculeTheta'] || [];
+    for (let i = 0; i < ts.length; i++) {
+      const t = ts[i];
+      if (t == null) continue;
+      if (!Number.isFinite(t)) { p.push(`edge ${i}: moleculeTheta not finite`); continue; }
+      if (Math.abs(t) >= Math.PI) p.push(`edge ${i}: moleculeTheta=${t} violates −π < θ < π`);
+    }
+    return p;
+  }
+
+  // ---- property explorer ----------------------------------------------------
+  function buildPropertySelect(file) {
+    const sel = document.getElementById('prop-select');
+    sel.innerHTML = '';
+    const opt0 = document.createElement('option'); opt0.textContent = '--'; opt0.value = '';
+    sel.appendChild(opt0);
+    for (const k of Object.keys(file)) {
+      const o = document.createElement('option');
+      o.value = k; o.textContent = k;
+      sel.appendChild(o);
+    }
+  }
+  function updatePropertyData() {
+    const sel = document.getElementById('prop-select');
+    const data = document.getElementById('prop-data');
+    const k = sel.value;
+    if (!k || !currentFile) { data.textContent = ''; return; }
+    const v = currentFile[k];
+    const len = Array.isArray(v) ? `${v.length} elements: ` : '';
+    data.textContent = len + JSON.stringify(v);
+  }
+
+  // ---- file loading ---------------------------------------------------------
+  function loadObject(file, sourceName) {
+    currentFile = file;
+    // Default preview is the FLAT 2D cut/fold pattern for ALL models. When the kirigamizer attached a
+    // folded-form goal, offer a toggle to view the folded 3D shape too (the button label is the action).
+    const hasFolded = !!foldedCoords(file);
+    showFolded = false;
+    const shapeGroup = document.getElementById('shape-group');
+    if (shapeGroup) shapeGroup.hidden = !hasFolded;
+    const shapeBtn = document.getElementById('shape-toggle');
+    if (shapeBtn) shapeBtn.textContent = 'Folded';
+    frameModel(buildModel(file));
+    baseRadius = cam.r;             // record natural framing for the zoom pill
+    setCamAxes([1,0,0], [0,1,0]);   // default z-view
+    render();
+    drawSidebar(file);
+    buildPropertySelect(file);
+    setStatus(`Loaded: ${sourceName}`, 'ok');
+    updateZoomPill();
+    // Report the model now on screen back to the Kirigamizer host, so the 3D Sim folds exactly
+    // what the viewer shows — regardless of how it was loaded (host postMessage, file picker,
+    // example dropdown, or drag-and-drop).
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({ type: 'kirigamizer:viewer-loaded', fkld: file, name: sourceName }, '*');
+    }
+  }
+  function loadJsonString(text, name) {
+    try {
+      loadObject(JSON.parse(text), name);
+    } catch (err) {
+      setStatus(`Parse error in ${name}: ${err.message}`, 'bad');
+    }
+  }
+  function loadFromFile(file) {
+    setStatus(`Reading ${file.name}…`);
+    const r = new FileReader();
+    r.onload = () => loadJsonString(r.result, file.name);
+    r.readAsText(file);
+  }
+  async function loadFromUrl(url) {
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      loadJsonString(await resp.text(), url);
+    } catch (err) {
+      setStatus(`Fetch ${url} failed: ${err.message}. Using embedded copy if available.`, 'bad');
+    }
+  }
+  function loadExample(key) {
+    const inlined = EMBEDDED[key];
+    if (inlined) {
+      try {
+        loadObject(JSON.parse(inlined), key);
+      } catch (err) {
+        setStatus(`Embedded ${key} parse error: ${err.message}`, 'bad');
+      }
+    } else {
+      loadFromUrl(key);
+    }
+  }
+
+  // ---- event wiring ---------------------------------------------------------
+  buildToggles();
+
+  document.getElementById('file-input').addEventListener('change', (e) => {
+    if (e.target.files[0]) loadFromFile(e.target.files[0]);
+  });
+
+  // Flat ⇄ Folded: rebuild from the same file with the other coordinate set, keeping the framing.
+  document.getElementById('shape-toggle').addEventListener('click', () => {
+    if (!currentFile) return;
+    showFolded = !showFolded;
+    document.getElementById('shape-toggle').textContent = showFolded ? 'Flat' : 'Folded'; // label = action
+    frameModel(buildModel(currentFile));
+    render();
+  });
+
+  // ---- Kirigamizer host bridge --------------------------------------------
+  // The Kirigamizer shell embeds this viewer in an <iframe> and hands it a
+  // model with postMessage: { type:'kirigamizer:load', fkld, name } where
+  // `fkld` is either a JSON string or a parsed FKLD/FOLD object.
+  window.addEventListener('message', (e) => {
+    const msg = e.data;
+    if (!msg || msg.type !== 'kirigamizer:load') return;
+    const name = msg.name || 'kirigamizer-model';
+    if (typeof msg.fkld === 'string') loadJsonString(msg.fkld, name);
+    else if (msg.fkld) loadObject(msg.fkld, name);
+  });
+  // Announce readiness so the host can flush any queued model.
+  if (window.parent && window.parent !== window) {
+    window.parent.postMessage({ type: 'kirigamizer:viewer-ready' }, '*');
+  }
+
+  document.body.addEventListener('dragover', (e) => e.preventDefault());
+  document.body.addEventListener('drop', (e) => {
+    e.preventDefault();
+    if (e.dataTransfer.files[0]) loadFromFile(e.dataTransfer.files[0]);
+  });
+  document.querySelectorAll('button[data-view]').forEach(b => {
+    b.addEventListener('click', () => {
+      const v = b.dataset.view;
+      // FOLD convention:  x-view = look along +x → x-axis points right (y world), y-axis points up (z world)
+      if (v === 'x') setCamAxes([0,1,0], [0,0,1]);
+      if (v === 'y') setCamAxes([0,0,1], [1,0,0]);
+      if (v === 'z') setCamAxes([1,0,0], [0,1,0]);
+      render();
+    });
+  });
+  // ---- Sidebar: toolbar toggle + drag-resizer + collapse chevron ----
+  (function () {
+    const mainEl = document.querySelector('main');
+    const chev = document.getElementById('sidebar-collapse');
+    const rez = document.getElementById('pane-resizer');
+    function setSidebar(collapsed) {
+      mainEl.classList.toggle('no-sidebar', collapsed);
+      if (chev) {
+        chev.textContent = collapsed ? '‹' : '›';
+        chev.title = collapsed ? 'Show sidebar' : 'Hide sidebar';
+      }
+    }
+    const toggle = () => setSidebar(!mainEl.classList.contains('no-sidebar'));
+    document.getElementById('toggle-sidebar').addEventListener('click', toggle);
+    if (chev) chev.addEventListener('click', (e) => { e.stopPropagation(); toggle(); });
+    if (rez) {
+      const clamp = (w) => Math.max(180, Math.min(640, w));
+      let startX = 0, startW = 0;
+      const onMove = (e) => mainEl.style.setProperty('--sidebar-w', clamp(startW + (startX - e.clientX)) + 'px');
+      const onUp = () => {
+        rez.classList.remove('dragging');
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+      };
+      rez.addEventListener('mousedown', (e) => {
+        if (e.target === chev || mainEl.classList.contains('no-sidebar')) return;
+        e.preventDefault();
+        startX = e.clientX;
+        startW = document.getElementById('sidebar').offsetWidth || 320;
+        rez.classList.add('dragging');
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup', onUp);
+      });
+      rez.addEventListener('dblclick', () => {
+        if (!mainEl.classList.contains('no-sidebar')) mainEl.style.setProperty('--sidebar-w', '320px');
+      });
+    }
+  })();
+  document.getElementById('prop-select').addEventListener('change', updatePropertyData);
+
+  // ---- mouse rotation + pan + wheel zoom ----------------------------------
+  const wrap = document.getElementById('canvas-wrap');
+  // Track the "natural" framing radius set by frameModel(), so the zoom level
+  // pill in the status bar means something useful (100% = freshly framed).
+  let baseRadius = 1;
+
+  // Convert a mouse event over the canvas into a world-space point on the
+  // camera plane (the plane through cam.c perpendicular to cam.z). Used so
+  // wheel-zoom can keep the point under the cursor fixed.
+  function mouseWorld(e) {
+    const rect = wrap.getBoundingClientRect();
+    const dim = Math.min(rect.width, rect.height);
+    // Normalised device coordinates: −1 … 1 along the viewBox.
+    const ndcX =  (e.clientX - rect.left  - rect.width  / 2) / (dim / 2);
+    const ndcY = -(e.clientY - rect.top   - rect.height / 2) / (dim / 2);
+    // Inverse of project(): world = cam.c + cam.r * (ndcX·cam.x + ndcY·cam.y)
+    return add(cam.c, mul(add(mul(cam.x, ndcX), mul(cam.y, ndcY)), cam.r));
+  }
+  function ndcOf(e) {
+    const rect = wrap.getBoundingClientRect();
+    const dim = Math.min(rect.width, rect.height);
+    return [
+       (e.clientX - rect.left  - rect.width  / 2) / (dim / 2),
+      -(e.clientY - rect.top   - rect.height / 2) / (dim / 2),
+    ];
+  }
+
+  function zoom(factor, anchorEvent) {
+    let anchorWorld = null, ndc = null;
+    if (anchorEvent) {
+      anchorWorld = mouseWorld(anchorEvent);
+      ndc = ndcOf(anchorEvent);
+    }
+    cam.r = Math.max(cam.r * factor, 1e-6);
+    if (anchorWorld) {
+      // Keep `anchorWorld` projecting to the same ndc after the zoom: solve
+      //   anchorWorld = newC + newR · (ndcX·cam.x + ndcY·cam.y)
+      // for newC.
+      const target = mul(add(mul(cam.x, ndc[0]), mul(cam.y, ndc[1])), cam.r);
+      cam.c = sub(anchorWorld, target);
+    }
+    render();
+    updateZoomPill();
+  }
+  function fitToView() {
+    if (!currentFile) return;
+    frameModel(buildModel(currentFile));
+    baseRadius = cam.r;
+    render();
+    updateZoomPill();
+  }
+  function updateZoomPill() {
+    const el = document.getElementById('zoom-pill');
+    if (!el) return;
+    const pct = baseRadius ? Math.round((baseRadius / cam.r) * 100) : 100;
+    el.textContent = `${pct}%`;
+  }
+
+  // Mouse drag: left button rotates (FOLD-style); shift-drag (or middle / right
+  // button) pans. We use `e.buttons` so the gesture is unambiguous on mousemove.
+  let dragMode = null;     // 'rotate' | 'pan' | null
+  wrap.addEventListener('mousedown', (e) => {
+    cam.last = [e.clientX, e.clientY];
+    dragMode = (e.shiftKey || e.button === 1 || e.button === 2) ? 'pan' : 'rotate';
+    wrap.classList.add('dragging');
+  });
+  wrap.addEventListener('contextmenu', (e) => e.preventDefault());
+  window.addEventListener('mousemove', (e) => {
+    if (!cam.last) return;
+    const p = [e.clientX, e.clientY];
+    const d = sub([...p, 0], [...cam.last, 0]);
+    cam.last = p;
+    if (mag(d) === 0) return;
+    if (dragMode === 'pan') {
+      // Mouse delta in pixels → world delta along cam.x / cam.y.
+      const rect = wrap.getBoundingClientRect();
+      const dim = Math.min(rect.width, rect.height);
+      const scale = (2 * cam.r) / dim;
+      // Drag right → world moves right → camera moves left (subtract).
+      cam.c = sub(cam.c, add(mul(cam.x, d[0] * scale), mul(cam.y, -d[1] * scale)));
+    } else {
+      const axis = unit(add(mul(cam.x, -d[1]), mul(cam.y, -d[0])));
+      if (mag(axis) === 0) return;
+      const angle = mag(d) * 0.008;
+      setCamAxes(rotate(cam.x, axis, angle), rotate(cam.y, axis, angle));
+    }
+    render();
+  });
+  window.addEventListener('mouseup', () => {
+    cam.last = null;
+    dragMode = null;
+    wrap.classList.remove('dragging');
+  });
+
+  // Wheel zoom anchored on the cursor (Cmd/Ctrl/Alt+wheel falls through to
+  // the browser, in case the user wants to scroll the page).
+  wrap.addEventListener('wheel', (e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    e.preventDefault();
+    const factor = e.deltaY > 0 ? 1.15 : 1 / 1.15;
+    zoom(factor, e);
+  }, { passive: false });
+
+  // Toolbar zoom buttons.
+  document.getElementById('zoom-in').addEventListener('click',  () => zoom(1 / 1.25));
+  document.getElementById('zoom-out').addEventListener('click', () => zoom(1.25));
+  document.getElementById('zoom-fit').addEventListener('click', fitToView);
+
+  // Keyboard shortcuts: + / − / 0 (ignored while typing in a form field).
+  window.addEventListener('keydown', (e) => {
+    if (e.target.matches('input, select, textarea')) return;
+    if (e.key === '+' || e.key === '=') { zoom(1 / 1.25); e.preventDefault(); }
+    if (e.key === '-' || e.key === '_') { zoom(1.25);     e.preventDefault(); }
+    if (e.key === '0')                  { fitToView();    e.preventDefault(); }
+  });
+
+  // ---- example dropdown ----------------------------------------------------
+  function populateExamples() {
+    const sel = document.getElementById('example-select');
+    const examples = [
+      ['House — kirigamized gable box (FKLD)',  '../examples/house.fkld'],
+    ];
+    for (const [label, key] of examples) {
+      const o = document.createElement('option');
+      o.value = key; o.textContent = label;
+      sel.appendChild(o);
+    }
+    sel.addEventListener('change', () => loadExample(sel.value));
+    // Auto-load the first example.
+    loadExample(examples[0][1]);
+  }
+
+  // Bootstrap.
+  populateExamples();
+  </script>
+
+  <!-- Bundled examples are inlined here by examples/scripts/embed-example.coffee.
+       Each script element's id is its dropdown key. -->
+  <script id="example-akde-square-pyramid" type="application/json">
+{
+  "file_spec": 1,
+  "file_creator": "AKDE/buildFoldNet → FKLD/bridge.foldNetToFkld",
+  "frame_title": "AKDE square-pyramid kirigami (N=4, L=50mm, H=30mm, T=0.31mm)",
+  "frame_classes": [
+    "creasePattern"
+  ],
+  "frame_attributes": [
+    "2D"
+  ],
+  "frame_unit": "mm",
+  "vertices_coords": [
+    [
+      1.1102230246251565e-16,
+      -1.2184191122532078
+    ],
+    [
+      -24.999999999999996,
+      -39.05124837953328
+    ],
+    [
+      25.000000000000004,
+      -39.05124837953328
+    ],
+    [
+      39.05124837953328,
+      -24.999999999999996
+    ],
+    [
+      31.002646851400357,
+      -31.002646851400357
+    ],
+    [
+      0.9992160100853781,
+      -0.999216010085378
+    ],
+    [
+      0.7800129079175484,
+      -1.2184191122532078
+    ],
+    [
+      1.2184191122532078,
+      -0.7800129079175482
+    ],
+    [
+      1.2184191122532078,
+      0
+    ],
+    [
+      39.05124837953328,
+      24.999999999999996
+    ],
+    [
+      25.000000000000004,
+      39.05124837953328
+    ],
+    [
+      31.002646851400385,
+      31.002646851400385
+    ],
+    [
+      0.9992160100853781,
+      0.999216010085378
+    ],
+    [
+      1.2184191122532078,
+      0.7800129079175482
+    ],
+    [
+      0.7800129079175484,
+      1.2184191122532078
+    ],
+    [
+      1.1102230246251565e-16,
+      1.2184191122532078
+    ],
+    [
+      -24.999999999999996,
+      39.05124837953328
+    ],
+    [
+      -39.05124837953328,
+      25.000000000000004
+    ],
+    [
+      -31.002646851400385,
+      31.002646851400385
+    ],
+    [
+      -0.999216010085378,
+      0.9992160100853781
+    ],
+    [
+      -0.7800129079175482,
+      1.2184191122532078
+    ],
+    [
+      -1.2184191122532078,
+      0.7800129079175484
+    ],
+    [
+      -1.218419112253208,
+      1.6653345369377348e-16
+    ],
+    [
+      -39.05124837953328,
+      -24.999999999999993
+    ],
+    [
+      -31.002646851400375,
+      -31.002646851400367
+    ],
+    [
+      -0.9992160100853781,
+      -0.999216010085378
+    ],
+    [
+      -1.218419112253208,
+      -0.7800129079175481
+    ],
+    [
+      -0.7800129079175482,
+      -1.2184191122532078
+    ]
+  ],
+  "faces_vertices": [
+    [
+      0,
+      1,
+      2
+    ],
+    [
+      5,
+      4,
+      2
+    ],
+    [
+      5,
+      2,
+      0
+    ],
+    [
+      5,
+      0,
+      6
+    ],
+    [
+      5,
+      7,
+      8
+    ],
+    [
+      5,
+      8,
+      3
+    ],
+    [
+      5,
+      3,
+      4
+    ],
+    [
+      8,
+      3,
+      9
+    ],
+    [
+      12,
+      11,
+      9
+    ],
+    [
+      12,
+      9,
+      8
+    ],
+    [
+      12,
+      8,
+      13
+    ],
+    [
+      12,
+      14,
+      15
+    ],
+    [
+      12,
+      15,
+      10
+    ],
+    [
+      12,
+      10,
+      11
+    ],
+    [
+      15,
+      10,
+      16
+    ],
+    [
+      19,
+      18,
+      16
+    ],
+    [
+      19,
+      16,
+      15
+    ],
+    [
+      19,
+      15,
+      20
+    ],
+    [
+      19,
+      21,
+      22
+    ],
+    [
+      19,
+      22,
+      17
+    ],
+    [
+      19,
+      17,
+      18
+    ],
+    [
+      22,
+      17,
+      23
+    ],
+    [
+      25,
+      24,
+      23
+    ],
+    [
+      25,
+      23,
+      22
+    ],
+    [
+      25,
+      22,
+      26
+    ],
+    [
+      25,
+      27,
+      0
+    ],
+    [
+      25,
+      0,
+      1
+    ],
+    [
+      25,
+      1,
+      24
+    ]
+  ],
+  "edges_vertices": [
+    [
+      0,
+      1
+    ],
+    [
+      1,
+      2
+    ],
+    [
+      0,
+      2
+    ],
+    [
+      4,
+      5
+    ],
+    [
+      2,
+      4
+    ],
+    [
+      2,
+      5
+    ],
+    [
+      0,
+      5
+    ],
+    [
+      0,
+      6
+    ],
+    [
+      5,
+      6
+    ],
+    [
+      5,
+      7
+    ],
+    [
+      7,
+      8
+    ],
+    [
+      5,
+      8
+    ],
+    [
+      3,
+      8
+    ],
+    [
+      3,
+      5
+    ],
+    [
+      3,
+      4
+    ],
+    [
+      3,
+      9
+    ],
+    [
+      8,
+      9
+    ],
+    [
+      11,
+      12
+    ],
+    [
+      9,
+      11
+    ],
+    [
+      9,
+      12
+    ],
+    [
+      8,
+      12
+    ],
+    [
+      8,
+      13
+    ],
+    [
+      12,
+      13
+    ],
+    [
+      12,
+      14
+    ],
+    [
+      14,
+      15
+    ],
+    [
+      12,
+      15
+    ],
+    [
+      10,
+      15
+    ],
+    [
+      10,
+      12
+    ],
+    [
+      10,
+      11
+    ],
+    [
+      10,
+      16
+    ],
+    [
+      15,
+      16
+    ],
+    [
+      18,
+      19
+    ],
+    [
+      16,
+      18
+    ],
+    [
+      16,
+      19
+    ],
+    [
+      15,
+      19
+    ],
+    [
+      15,
+      20
+    ],
+    [
+      19,
+      20
+    ],
+    [
+      19,
+      21
+    ],
+    [
+      21,
+      22
+    ],
+    [
+      19,
+      22
+    ],
+    [
+      17,
+      22
+    ],
+    [
+      17,
+      19
+    ],
+    [
+      17,
+      18
+    ],
+    [
+      17,
+      23
+    ],
+    [
+      22,
+      23
+    ],
+    [
+      24,
+      25
+    ],
+    [
+      23,
+      24
+    ],
+    [
+      23,
+      25
+    ],
+    [
+      22,
+      25
+    ],
+    [
+      22,
+      26
+    ],
+    [
+      25,
+      26
+    ],
+    [
+      25,
+      27
+    ],
+    [
+      0,
+      27
+    ],
+    [
+      0,
+      25
+    ],
+    [
+      1,
+      25
+    ],
+    [
+      1,
+      24
+    ]
+  ],
+  "edges_assignment": [
+    "M",
+    "B",
+    "M",
+    "V",
+    "C",
+    "F",
+    "F",
+    "C",
+    "C",
+    "C",
+    "C",
+    "F",
+    "M",
+    "F",
+    "C",
+    "B",
+    "M",
+    "V",
+    "C",
+    "F",
+    "F",
+    "C",
+    "C",
+    "C",
+    "C",
+    "F",
+    "M",
+    "F",
+    "C",
+    "B",
+    "M",
+    "V",
+    "C",
+    "F",
+    "F",
+    "C",
+    "C",
+    "C",
+    "C",
+    "F",
+    "M",
+    "F",
+    "C",
+    "B",
+    "M",
+    "V",
+    "C",
+    "F",
+    "F",
+    "C",
+    "C",
+    "C",
+    "C",
+    "F",
+    "F",
+    "C"
+  ],
+  "edges_length": [
+    45.34669745821809,
+    50,
+    45.3466974582181,
+    42.43125881351085,
+    10.04050575326214,
+    44.98882972000998,
+    1.0229773383662721,
+    0.7800129079175483,
+    0.31,
+    0.31,
+    0.7800129079175482,
+    1.0229773383662721,
+    45.34669745821809,
+    44.988829720009974,
+    10.040505753262146,
+    49.99999999999999,
+    45.34669745821809,
+    42.43125881351089,
+    10.04050575326214,
+    44.988829720009974,
+    1.0229773383662721,
+    0.7800129079175482,
+    0.31,
+    0.31,
+    0.7800129079175483,
+    1.0229773383662721,
+    45.3466974582181,
+    44.98882972000998,
+    10.040505753262135,
+    50,
+    45.34669745821809,
+    42.43125881351089,
+    10.04050575326214,
+    44.988829720009974,
+    1.0229773383662721,
+    0.7800129079175483,
+    0.31,
+    0.31,
+    0.7800129079175482,
+    1.0229773383662721,
+    45.3466974582181,
+    44.98882972000998,
+    10.040505753262135,
+    50,
+    45.34669745821809,
+    42.431258813510865,
+    10.04050575326214,
+    44.988829720009974,
+    1.0229773383662724,
+    0.7800129079175482,
+    0.3100000000000003,
+    0.31000000000000016,
+    0.7800129079175483,
+    1.0229773383662724,
+    44.988829720009974,
+    10.04050575326215
+  ],
+  "fkld:edges_cutType": [
+    null,
+    null,
+    null,
+    null,
+    "minor",
+    null,
+    null,
+    "major",
+    "major",
+    "major",
+    "major",
+    null,
+    null,
+    null,
+    "minor",
+    null,
+    null,
+    null,
+    "minor",
+    null,
+    null,
+    "major",
+    "major",
+    "major",
+    "major",
+    null,
+    null,
+    null,
+    "minor",
+    null,
+    null,
+    null,
+    "minor",
+    null,
+    null,
+    "major",
+    "major",
+    "major",
+    "major",
+    null,
+    null,
+    null,
+    "minor",
+    null,
+    null,
+    null,
+    "minor",
+    null,
+    null,
+    "major",
+    "major",
+    "major",
+    "major",
+    null,
+    null,
+    "minor"
+  ],
+  "fkld:edges_moleculeTheta": [
+    0.4319083324677955,
+    null,
+    0.4319083324677955,
+    0.4319083324677955,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    0.4319083324677955,
+    null,
+    null,
+    null,
+    0.4319083324677955,
+    0.4319083324677955,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    0.4319083324677955,
+    null,
+    null,
+    null,
+    0.4319083324677955,
+    0.4319083324677955,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    0.4319083324677955,
+    null,
+    null,
+    null,
+    0.4319083324677955,
+    0.4319083324677955,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "fkld:edges_moleculeWidth": [
+    19.871466026608932,
+    null,
+    19.871466026608932,
+    19.871466026608932,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    19.871466026608932,
+    null,
+    null,
+    null,
+    19.871466026608932,
+    19.871466026608932,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    19.871466026608932,
+    null,
+    null,
+    null,
+    19.871466026608932,
+    19.871466026608932,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    19.871466026608932,
+    null,
+    null,
+    null,
+    19.871466026608932,
+    19.871466026608932,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "fkld:edges_moleculeDepth": [
+    1.4467084259179126,
+    null,
+    1.4467084259179126,
+    1.4467084259179126,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    1.4467084259179126,
+    null,
+    null,
+    null,
+    1.4467084259179126,
+    1.4467084259179126,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    1.4467084259179126,
+    null,
+    null,
+    null,
+    1.4467084259179126,
+    1.4467084259179126,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    1.4467084259179126,
+    null,
+    null,
+    null,
+    1.4467084259179126,
+    1.4467084259179126,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "fkld:edges_dihedralTarget": [
+    1.4072779026094704,
+    null,
+    1.4072779026094704,
+    -2.8415926535897933,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    1.4072779026094704,
+    null,
+    null,
+    null,
+    1.4072779026094704,
+    -2.8415926535897933,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    1.4072779026094704,
+    null,
+    null,
+    null,
+    1.4072779026094704,
+    -2.8415926535897933,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    1.4072779026094704,
+    null,
+    null,
+    null,
+    1.4072779026094704,
+    -2.8415926535897933,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "fkld:vertices_curvatureClass": [
+    "boundary",
+    "flat",
+    "flat",
+    "flat",
+    "flat",
+    "boundary",
+    "boundary",
+    "boundary",
+    "boundary",
+    "flat",
+    "flat",
+    "flat",
+    "boundary",
+    "boundary",
+    "boundary",
+    "boundary",
+    "flat",
+    "flat",
+    "flat",
+    "boundary",
+    "boundary",
+    "boundary",
+    "boundary",
+    "flat",
+    "flat",
+    "boundary",
+    "boundary",
+    "boundary"
+  ],
+  "fkld:vertices_angleDefect": [
+    2.277775988654202,
+    4.071581308468214,
+    4.071581308468211,
+    4.0715813084682155,
+    2.8524116706278333,
+    0.8638166649355941,
+    3.9269908169872405,
+    3.9269908169872414,
+    2.2777759886541937,
+    4.071581308468212,
+    4.071581308468208,
+    2.8524116706278404,
+    0.863816664935595,
+    3.9269908169872414,
+    3.9269908169872405,
+    2.2777759886542017,
+    4.071581308468212,
+    4.071581308468208,
+    2.8524116706278404,
+    0.8638166649355958,
+    3.9269908169872405,
+    3.9269908169872405,
+    2.2777759886542017,
+    4.071581308468214,
+    2.8524116706278377,
+    0.8638166649356023,
+    3.9269908169872405,
+    3.9269908169872405
+  ],
+  "fkld:vertices_reliefStrategy": [
+    "cut",
+    "none",
+    "none",
+    "none",
+    "none",
+    "cut",
+    "cut",
+    "cut",
+    "cut",
+    "none",
+    "none",
+    "none",
+    "cut",
+    "cut",
+    "cut",
+    "cut",
+    "none",
+    "none",
+    "none",
+    "cut",
+    "cut",
+    "cut",
+    "cut",
+    "none",
+    "none",
+    "cut",
+    "cut",
+    "cut"
+  ],
+  "fkld:faces_materialId": [
+    "bristol-250",
+    "bristol-250",
+    "bristol-250",
+    "bristol-250",
+    "bristol-250",
+    "bristol-250",
+    "bristol-250",
+    "bristol-250",
+    "bristol-250",
+    "bristol-250",
+    "bristol-250",
+    "bristol-250",
+    "bristol-250",
+    "bristol-250",
+    "bristol-250",
+    "bristol-250",
+    "bristol-250",
+    "bristol-250",
+    "bristol-250",
+    "bristol-250",
+    "bristol-250",
+    "bristol-250",
+    "bristol-250",
+    "bristol-250",
+    "bristol-250",
+    "bristol-250",
+    "bristol-250",
+    "bristol-250"
+  ],
+  "fkld:faces_thickness": [
+    0.31,
+    0.31,
+    0.31,
+    0.31,
+    0.31,
+    0.31,
+    0.31,
+    0.31,
+    0.31,
+    0.31,
+    0.31,
+    0.31,
+    0.31,
+    0.31,
+    0.31,
+    0.31,
+    0.31,
+    0.31,
+    0.31,
+    0.31,
+    0.31,
+    0.31,
+    0.31,
+    0.31,
+    0.31,
+    0.31,
+    0.31,
+    0.31
+  ],
+  "fkld:faces_structuralRole": [
+    "skin",
+    "skin",
+    "skin",
+    "skin",
+    "skin",
+    "skin",
+    "skin",
+    "skin",
+    "skin",
+    "skin",
+    "skin",
+    "skin",
+    "skin",
+    "skin",
+    "skin",
+    "skin",
+    "skin",
+    "skin",
+    "skin",
+    "skin",
+    "skin",
+    "skin",
+    "skin",
+    "skin",
+    "skin",
+    "skin",
+    "skin",
+    "skin"
+  ],
+  "fkld:faces_panelId": [
+    "P-1",
+    "P-1",
+    "P-1",
+    "P-1",
+    "P-1",
+    "P-1",
+    "P-1",
+    "P-1",
+    "P-1",
+    "P-1",
+    "P-1",
+    "P-1",
+    "P-1",
+    "P-1",
+    "P-1",
+    "P-1",
+    "P-1",
+    "P-1",
+    "P-1",
+    "P-1",
+    "P-1",
+    "P-1",
+    "P-1",
+    "P-1",
+    "P-1",
+    "P-1",
+    "P-1",
+    "P-1"
+  ],
+  "fkld:meta_fkldSpec": "0.1.0",
+  "fkld:meta_kirigami": {
+    "scale": "meso",
+    "scaleMeters": 0.001,
+    "application": "AKDE regular-N-gon pyramid kirigami",
+    "actuation": [
+      "manual"
+    ],
+    "fabrication": {
+      "method": "cricut",
+      "kerf": 0.1,
+      "minFeature": 0.5,
+      "maxSheetSize": [
+        305,
+        305
+      ]
+    },
+    "materialLibrary": [
+      {
+        "id": "bristol-250",
+        "name": "Bristol Board 250 gsm",
+        "E": 4500,
+        "sigmaY": 35,
+        "thickness": 0.31,
+        "density": 800,
+        "bendRadius": 1.5
+      }
+    ]
+  },
+  "file_description": "Generated by FKLD examples/scripts/build-akde-pyramid.coffee.\nMirrors AKDE/kirigami/sim/foldnet.ts buildFoldNet for the inputs above.\nNumerical values:\n  R (base radius) = 35.3553 mm\n  s (slant)       = 46.3681 mm\n  η (face angle)  = 1.1389 rad = 65.25°\n  θ (molecule)    = 0.4319 rad = 24.75°\n  w (mol. width)  = 19.8715 mm\n  γ (dihedral)    = 1.7343 rad = 99.37°\n  rApex           = 1.4467 mm\n  minorCutLength  = 10.0405 mm\n  vertices/faces/edges = 28/28/56"
+}
+</script>
+  <script id="example-simple"              type="application/json">
+{
+  "file_spec": 1,
+  "file_creator": "A text editor",
+  "file_author": "Jason Ku",
+  "file_classes": ["singleModel"],
+  "frame_title": "Three-fold 3D example",
+  "frame_classes": ["foldedForm"],
+  "frame_attributes": ["3D"],
+  "vertices_coords": [
+    [0,1,0],
+    [0,0,1],
+    [0,-1,0],
+    [1,0,0],
+    [0,0,-1],
+    [0,0,-1]
+  ],
+  "faces_vertices": [
+    [0,1,2],
+    [0,2,3],
+    [0,4,1],
+    [1,5,2]
+  ],
+  "edges_vertices": [
+    [0,2],
+    [0,1],
+    [1,2],
+    [2,3],
+    [0,3],
+    [1,4],
+    [1,5],
+    [0,4],
+    [2,5]
+  ],
+  "edges_assignment": [
+    "V",
+    "M",
+    "M",
+    "B",
+    "B",
+    "B",
+    "B",
+    "B",
+    "B"
+  ],
+  "faceOrders": [
+    [2,0,-1],
+    [3,0,-1]
+  ]
+}
+</script>
+  <script id="example-box"                 type="application/json">
+{
+  "file_spec": 1,
+  "file_creator": "A text editor",
+  "file_author": "Jason Ku",
+  "file_classes": ["singleModel"],
+  "frame_title": "3D box folding with wing",
+  "frame_classes": ["foldedForm"],
+  "frame_attributes": ["3D"],
+  "vertices_coords": [
+    [-1,-1,-1],
+    [-1, 1,-1],
+    [ 1, 1,-1],
+    [ 1,-1,-1],
+    [-1,-1, 1],
+    [-1,-1, 1],
+    [-1, 1, 1],
+    [-1, 1, 1],
+    [ 1, 1, 1],
+    [ 1, 1, 1],
+    [ 1,-1, 1],
+    [ 1,-1, 1],
+    [-1,-1,-1],
+    [-1, 1,-1],
+    [ 1,-1,-1],
+    [ 1,-1, 1],
+    [-1,-1, 1],
+    [ 1,-1, 1],
+    [-1,-1, 1],
+    [ 1,-1, 1],
+    [1,0,0],
+    [-0.292893218813453,-0.292893218813453,0],
+    [0,1,0],
+    [ 1, 1, 1],
+    [ 1, 1, 1],
+    [1.707106781186547, 0, 1.707106781186547],
+    [1.707106781186547, 0, 1.707106781186547],
+    [1.707106781186547, 0, 1.707106781186547],
+    [1,0.5,1],
+    [1.530330085889911,-0.25,1.530330085889911],
+    [1,0.5,1],
+    [1.353553390593274, 0.5,1.353553390593274],
+    [1.707106781186547,   0,1.707106781186547],
+    [1.353553390593274, 0.5,1.353553390593274],
+    [1.353553390593274,-0.5,1.353553390593274],
+    [-1,-0.414213562373095,0.414213562373095],
+    [-1,-1,-0.171572875253810],
+    [-0.414213562373095,-1,0.414213562373095],
+    [-1,-1,-0.171572875253810]
+  ],
+  "faces_vertices": [
+    [0,1,2,3],
+    [0,3,11,4],
+    [0,5,6,1],
+    [1,7,8,2],
+    [2,9,10,3],
+    [7,16,17,8],
+    [9,18,10],
+    [9,19,18],
+    [10,18,38,14],
+    [14,38,37],
+    [7,13,36,16],
+    [13,35,36],
+    [2,15,9],
+    [2,8,15],
+    [3,10,20],
+    [10,14,20],
+    [11,20,14],
+    [3,20,11],
+    [0,4,21],
+    [4,12,21],
+    [5,21,12],
+    [0,21,5],
+    [1,22,7],
+    [1,6,22],
+    [6,13,22],
+    [7,22,13],
+    [8,26,15],
+    [8,17,26],
+    [17,24,26],
+    [15,26,24],
+    [9,15,25],
+    [15,23,25],
+    [19,25,23],
+    [9,25,19],
+    [15,24,27],
+    [15,27,23],
+    [24,28,29,27],
+    [23,27,29,30],
+    [28,31,32,29],
+    [29,32,33,30],
+    [31,34,32],
+    [32,34,33]
+  ], 
+  "faceOrders": [
+    [ 8, 1,-1],
+    [ 9, 8,-1],
+    [10, 2,-1],
+    [11,10,-1],
+    [22, 3,-1],
+    [23,22, 1],
+    [24,23,-1],
+    [25,24, 1],
+    [14, 4,-1],
+    [17,14, 1],
+    [16,17,-1],
+    [15,16, 1],
+    [21,18, 1],
+    [20,21,-1],
+    [19,20, 1],
+    [ 7, 5,-1],
+    [ 6, 7, 1],
+    [12,13,-1],
+    [ 4,12, 1],
+    [27,41, 1],
+    [33,27,-1],
+    [30,33, 1],
+    [26,30,-1],
+    [29,26, 1],
+    [31,29,-1],
+    [32,31, 1],
+    [28,32,-1],
+    [35,28, 1],
+    [37,35,-1],
+    [39,37, 1],
+    [38,39,-1],
+    [36,38, 1],
+    [34,36,-1],
+    [40,34, 1]
+  ],
+  "edges_vertices": [
+    [ 5,12],
+    [ 5, 6],
+    [ 6,13],
+    [13,35],
+    [35,36],
+    [16,36],
+    [16,17],
+    [17,24],
+    [24,28],
+    [28,31],
+    [31,34],
+    [33,34],
+    [30,33],
+    [23,30],
+    [19,23],
+    [18,19],
+    [18,38],
+    [37,38],
+    [14,37],
+    [11,14],
+    [ 4,11],
+    [ 4,12],
+    [ 0, 1],
+    [ 1, 2],
+    [ 2, 3],
+    [ 0, 3],
+    [ 0, 4],
+    [ 0, 5],
+    [ 1, 6],
+    [ 1, 7],
+    [ 2, 8],
+    [ 2, 9],
+    [ 3,10],
+    [ 3,11],
+    [ 7,13],
+    [ 7, 8],
+    [ 7,16],
+    [13,36],
+    [10,14],
+    [ 9,10],
+    [10,18],
+    [14,38],
+    [ 0,21],
+    [ 4,21],
+    [12,21],
+    [ 5,21],
+    [ 3,20],
+    [10,20],
+    [14,20],
+    [11,20],
+    [13,22],
+    [ 7,22],
+    [ 1,22],
+    [ 6,22],
+    [ 2,15],
+    [ 9,18],
+    [ 8,17],
+    [ 9,19],
+    [ 8,15],
+    [ 9,15],
+    [ 8,26],
+    [17,26],
+    [24,26],
+    [15,26],
+    [ 9,25],
+    [19,25],
+    [23,25],
+    [15,25],
+    [15,24],
+    [15,23],
+    [15,27],
+    [24,27],
+    [23,27],
+    [27,29],
+    [29,30],
+    [28,29],
+    [29,32],
+    [32,33],
+    [31,32],
+    [32,34]
+  ],
+  "edges_assignment": [
+    "B",
+    "B",
+    "B",
+    "B",
+    "B",
+    "B",
+    "B",
+    "B",
+    "B",
+    "B",
+    "B",
+    "B",
+    "B",
+    "B",
+    "B",
+    "B",
+    "B",
+    "B",
+    "B",
+    "B",
+    "B",
+    "B",
+    "V",
+    "V",
+    "V",
+    "V",
+    "V",
+    "V",
+    "V",
+    "V",
+    "V",
+    "M",
+    "V",
+    "V",
+    "V",
+    "V",
+    "V",
+    "V",
+    "V",
+    "V",
+    "V",
+    "V",
+    "M",
+    "M",
+    "M",
+    "V",
+    "M",
+    "M",
+    "M",
+    "V",
+    "M",
+    "M",
+    "M",
+    "V",
+    "V",
+    "M",
+    "M",
+    "V",
+    "M",
+    "V",
+    "V",
+    "V",
+    "V",
+    "M",
+    "M",
+    "M",
+    "M",
+    "V",
+    "V",
+    "M",
+    "V",
+    "V",
+    "V",
+    "M",
+    "M",
+    "M",
+    "V",
+    "M",
+    "M",
+    "M"
+  ]
+}
+</script>
+  <script id="example-squaretwist"         type="application/json">
+{
+    "file_spec": 1,
+    "file_creator": "Mathematica",
+    "file_author": "Thomas Hull",
+    "file_classes": ["singleModel"],
+    "frame_title": "Rigidly folded square twist",
+    "frame_classes": ["foldedForm"],
+    "frame_attributes": ["3D"],
+    "vertices_coords": [
+        [
+            0,
+            0,
+            0
+        ],
+        [
+            0.25,
+            0,
+            0
+        ],
+        [
+            0.25,
+            0.5,
+            0
+        ],
+        [
+            0,
+            0.5,
+            0
+        ],
+        [
+            0.466968,
+            0,
+            -0.124197
+        ],
+        [
+            0.966968,
+            0,
+            -0.124197
+        ],
+        [
+            0.966968,
+            0.25,
+            -0.124197
+        ],
+        [
+            0.466968,
+            0.25,
+            -0.124197
+        ],
+        [
+            0.716968,
+            0.354037,
+            0.103128
+        ],
+        [
+            0.966968,
+            0.354037,
+            0.103128
+        ],
+        [
+            0.966968,
+            0.854037,
+            0.103128
+        ],
+        [
+            0.716968,
+            0.854037,
+            0.103128
+        ],
+        [
+            0,
+            0.854037,
+            0.227324
+        ],
+        [
+            0,
+            0.604037,
+            0.227324
+        ],
+        [
+            0.5,
+            0.604037,
+            0.227324
+        ],
+        [
+            0.5,
+            0.854037,
+            0.227324
+        ]
+    ],
+    "faces_vertices": [
+        [
+            0,
+            1,
+            2,
+            3
+        ],
+        [
+            1,
+            4,
+            7,
+            2
+        ],
+        [
+            4,
+            5,
+            6,
+            7
+        ],
+        [
+            7,
+            6,
+            9,
+            8
+        ],
+        [
+            8,
+            9,
+            10,
+            11
+        ],
+        [
+            15,
+            14,
+            8,
+            11
+        ],
+        [
+            12,
+            13,
+            14,
+            15
+        ],
+        [
+            3,
+            2,
+            14,
+            13
+        ],
+        [
+            2,
+            7,
+            8,
+            14
+        ]
+    ],
+    "edges_vertices": [
+        [
+            0,
+            1
+        ],
+        [
+            1,
+            2
+        ],
+        [
+            2,
+            3
+        ],
+        [
+            3,
+            0
+        ],
+        [
+            4,
+            5
+        ],
+        [
+            5,
+            6
+        ],
+        [
+            6,
+            7
+        ],
+        [
+            7,
+            4
+        ],
+        [
+            8,
+            9
+        ],
+        [
+            9,
+            10
+        ],
+        [
+            10,
+            11
+        ],
+        [
+            11,
+            8
+        ],
+        [
+            12,
+            13
+        ],
+        [
+            13,
+            14
+        ],
+        [
+            14,
+            15
+        ],
+        [
+            15,
+            12
+        ],
+        [
+            2,
+            7
+        ],
+        [
+            7,
+            8
+        ],
+        [
+            8,
+            14
+        ],
+        [
+            14,
+            2
+        ],
+        [
+            3,
+            13
+        ],
+        [
+            1,
+            4
+        ],
+        [
+            6,
+            9
+        ],
+        [
+            11,
+            15
+        ]
+    ],
+    "edges_assignment": [
+        "B",
+        "M",
+        "V",
+        "B",
+        "B",
+        "B",
+        "V",
+        "V",
+        "M",
+        "B",
+        "B",
+        "V",
+        "B",
+        "M",
+        "M",
+        "B",
+        "V",
+        "M",
+        "M",
+        "V",
+	"B",
+	"B",
+	"B",
+	"B"
+    ]
+}
+</script>
+  <script id="example-diagonal-cp"         type="application/json">
+{
+  "file_spec": 1.1,
+  "file_creator": "Crease Pattern Editor",
+  "file_classes": [
+    "singleModel"
+  ],
+  "frame_classes": [
+    "creasePattern"
+  ],
+  "vertices_coords": [
+    [0,0],
+    [1,0],
+    [1,1],
+    [0,1]
+  ],
+  "edges_vertices": [
+    [0,1],
+    [1,2],
+    [2,3],
+    [3,0],
+    [3,1]
+  ],
+  "edges_assignment": [
+    "B",
+    "B",
+    "B",
+    "B",
+    "V"
+  ],
+  "edges_foldAngle": [
+    0,
+    0,
+    0,
+    0,
+    180
+  ],
+  "cpedit:page": {"xMin":0,"yMin":0,"xMax":1,"yMax":1},
+  "file_title": "diagonal",
+  "vertices_edges": [
+    [0,3],
+    [1,4,0],
+    [1,2],
+    [3,4,2]
+  ],
+  "faces_vertices": [
+    [0,1,3],
+    [1,2,3]
+  ],
+  "faces_edges": [
+    [0,4,3],
+    [1,2,4]
+  ]
+}
+</script>
+  <script id="example-diagonal-folded"     type="application/json">
+{
+  "file_spec": 1.1,
+  "file_creator": "fold-convert --flat-fold",
+  "file_classes": [
+    "singleModel"
+  ],
+  "frame_classes": [
+    "foldedForm"
+  ],
+  "vertices_coords": [
+    [0,0],
+    [1,0],
+    [0,0],
+    [0,1]
+  ],
+  "edges_vertices": [
+    [0,1],
+    [1,2],
+    [2,3],
+    [3,0],
+    [3,1]
+  ],
+  "edges_assignment": [
+    "B",
+    "B",
+    "B",
+    "B",
+    "V"
+  ],
+  "edges_foldAngle": [
+    0,
+    0,
+    0,
+    0,
+    180
+  ],
+  "cpedit:page": {"xMin":0,"yMin":0,"xMax":1,"yMax":1},
+  "file_title": "diagonal",
+  "vertices_edges": [
+    [0,3],
+    [1,4,0],
+    [1,2],
+    [3,4,2]
+  ],
+  "faces_vertices": [
+    [0,1,3],
+    [1,2,3]
+  ],
+  "faces_edges": [
+    [0,4,3],
+    [1,2,4]
+  ],
+  "edges_faces": [
+    [0,null],
+    [1,null],
+    [1,null],
+    [0,null],
+    [1,0]
+  ],
+  "faces_flatFoldTransform": [
+    [[1,0,0],[0,1,0]],
+    [[0,-1,1],[-1,0,1]]
+  ],
+  "faces_flatFoldOrientation": [
+    1,
+    -1
+  ],
+  "vertices_flatUnfoldCoords": [
+    [0,0],
+    [1,0],
+    [1,1],
+    [0,1]
+  ]
+}
+</script>
+  <script>
+    // Pull the embedded JSON into EMBEDDED so loadExample can find them.
+    for (const tag of document.querySelectorAll('script[id^="example-"]')) {
+      const key = tag.id.replace(/^example-/, '');
+      const body = tag.textContent.trim();
+      if (body) EMBEDDED[key] = body;
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,862 @@
+/* Kirigamizer shell — soft neutral backdrop, white rounded "card" panels,
+ * a single blue accent (#1f6feb / #1741c4), system font.
+ * Layout: Convert (inputs + derived) · FKLD viewer preview — two cards. */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+:root {
+  --bg: #eef0f3;
+  --card: #fff;
+  --border: #e4e7ec;
+  --ink: #1f2328;
+  --muted: #667085;
+  --accent: #1f6feb;
+  --accent-strong: #1741c4;
+  --accent-soft: #eef3ff;
+  --surface-soft: #f3f5f9;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.05);
+  --shadow-md: 0 6px 20px rgba(16, 24, 40, 0.1);
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---- Header ---- */
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.7rem 1.15rem;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.app-subtitle {
+  font-weight: 400;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+/* ---- Grid (resizable cards: Convert · gutter · Viewer) ---- */
+.app-grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: var(--app-col1, 330px) 14px minmax(0, 1fr);
+  gap: 0;
+  padding: 14px;
+}
+
+.app-grid.left-collapsed {
+  grid-template-columns: 0 26px minmax(0, 1fr);
+}
+
+.app-grid.left-collapsed .convert-column {
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* Draggable gutter between the two cards (it is the column gap) + collapse chevron. */
+.col-resizer {
+  position: relative;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: col-resize;
+}
+
+.col-resizer::before {
+  content: "";
+  width: 3px;
+  height: 90%;
+  border-radius: 3px;
+  background: transparent;
+  transition: background 0.15s;
+}
+
+.col-resizer:hover::before,
+.col-resizer.dragging::before {
+  background: #c4cad6;
+}
+
+.app-grid.left-collapsed .col-resizer {
+  cursor: default;
+}
+
+.col-collapse {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--muted);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  z-index: 3;
+  transition: color 0.13s, border-color 0.13s, background 0.13s;
+}
+
+.col-collapse:hover {
+  color: var(--accent-strong);
+  border-color: #c4cad6;
+}
+
+.column {
+  min-height: 0;
+}
+
+.panel {
+  padding: 1.15rem 1.2rem;
+  height: 100%;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow-y: auto;
+}
+
+.panel h2 {
+  margin: 0 0 0.85rem;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* ---- Dropzone ---- */
+.dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  text-align: center;
+  padding: 1.8rem 1rem;
+  border: 1.5px dashed #c2c8d4;
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+
+.dropzone:hover,
+.dropzone.dragover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 4px rgba(31, 111, 235, 0.08);
+}
+
+.dropzone-main {
+  font-weight: 600;
+  color: var(--accent-strong);
+}
+
+.hint {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.75rem;
+  color: #555;
+}
+
+.hint code,
+.app-legend code {
+  background: #f1f1f4;
+  padding: 0 0.25rem;
+  border-radius: 3px;
+  font-size: 0.92em;
+}
+
+/* ---- Status ---- */
+.status {
+  margin: 0.75rem 0 0;
+  font-size: 0.8rem;
+  color: #555;
+  min-height: 1.2em;
+}
+
+.status.ok {
+  color: #166534;
+}
+
+.status.bad {
+  color: #b00020;
+}
+
+/* ---- Derived (left column) ---- */
+.derived {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #ddd;
+}
+
+.derived h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+}
+
+.derived-list {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.75rem;
+  font-size: 0.8rem;
+}
+
+.derived-list:empty {
+  display: none;
+}
+
+.derived-list dt {
+  font-weight: 500;
+  color: #333;
+}
+
+.derived-list dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Empty-state hint (shared: Convert "Derived" list + dropzone) ---- */
+.fkld-meta-empty {
+  margin: 0;
+  font-size: 0.75rem;
+  font-style: italic;
+  color: #888;
+}
+
+/* ---- Viewer (right card — central FKLD preview) ---- */
+.viewer-column {
+  height: 100%;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.viewer-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+/* ---- Header buttons: soft secondary (.sim-trigger) + blue primary (.export-trigger) ---- */
+.sim-trigger {
+  font: inherit;
+  font-weight: 500;
+  padding: 0.45rem 0.85rem;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: #344054;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.sim-trigger:hover {
+  background: var(--surface-soft);
+  border-color: #cdd3df;
+  color: var(--accent-strong);
+}
+
+.sim-trigger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ---- 3D sim modal ---- */
+.sim-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.sim-overlay[hidden] {
+  display: none;
+}
+
+.sim-modal {
+  width: min(880px, 94vw);
+  background: #fff;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+}
+
+.sim-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid #e2e2e2;
+}
+
+.sim-modal-title {
+  font-weight: 600;
+}
+
+.sim-modal-close {
+  font: inherit;
+  font-size: 1.2rem;
+  line-height: 1;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: #555;
+}
+
+.sim-modal-body {
+  padding: 0;
+  background: #f4f6fb;
+}
+
+.sim-tabs {
+  display: flex;
+  gap: 0;
+  padding: 0.5rem 1rem 0;
+  background: #f4f6fb;
+  border-bottom: 1px solid #e2e2e2;
+}
+
+.sim-tab {
+  font: inherit;
+  font-size: 0.82rem;
+  padding: 0.45rem 1rem;
+  border: 1px solid transparent;
+  border-bottom: none;
+  background: transparent;
+  color: #555;
+  cursor: pointer;
+  border-radius: 5px 5px 0 0;
+}
+
+.sim-tab:hover {
+  color: #1741c4;
+}
+
+.sim-tab.is-active {
+  background: #fff;
+  border-color: #e2e2e2;
+  color: #1741c4;
+  font-weight: 600;
+  margin-bottom: -1px;
+}
+
+.sim-canvas-mount {
+  width: 100%;
+  height: min(62vh, 560px);
+  display: block;
+}
+
+.sim-canvas-mount canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.sim-modal-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem 0.75rem;
+  padding: 0.6rem 1rem;
+  border-top: 1px solid #e2e2e2;
+}
+
+/* Status takes its own full-width line so the Detail/Gap/Fold sliders never
+ * collide with it (the footer wraps the controls onto the next row instead). */
+.sim-status {
+  flex: 1 1 100%;
+  min-width: 0;
+  font-size: 0.8rem;
+  color: #555;
+}
+
+.export-stl-height-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  color: #333;
+  white-space: nowrap;
+}
+
+.export-stl-height {
+  width: 4.5rem;
+  padding: 0.2rem 0.3rem;
+  font-size: 0.8rem;
+}
+
+.sim-detail-control[hidden],
+.sim-gap-control[hidden] {
+  display: none;
+}
+
+.sim-fold-control {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: #333;
+  white-space: nowrap;
+}
+
+.sim-fold-value,
+.sim-detail-value,
+.sim-gap-value {
+  display: inline-block;
+  min-width: 2.8em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: #1741c4;
+}
+
+.sim-fold-slider {
+  /* Three sliders now share the row — keep each narrow enough that Detail +
+   * Gap + Fold + Reset fit one line on a typical modal width. */
+  width: clamp(92px, 12vw, 160px);
+  cursor: pointer;
+  accent-color: #1f6feb;
+}
+
+.sim-reset-btn {
+  font: inherit;
+  font-weight: 500;
+  padding: 0.45rem 0.9rem;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: #344054;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.sim-reset-btn:hover {
+  background: var(--surface-soft);
+  border-color: #cdd3df;
+}
+
+.export-trigger {
+  font: inherit;
+  font-weight: 600;
+  padding: 0.45rem 1.05rem;
+  border: 1px solid transparent;
+  background: var(--accent);
+  color: #fff;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.12);
+  transition: background 0.15s, box-shadow 0.15s;
+}
+
+.export-trigger:hover {
+  background: var(--accent-strong);
+  box-shadow: var(--shadow-md);
+}
+
+.export-trigger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+/* ---- Footer legend ---- */
+.app-legend {
+  flex: 0 0 auto;
+  padding: 0.5rem 1.15rem;
+  background: var(--card);
+  border-top: 1px solid var(--border);
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.app-legend .lg {
+  margin: 0 0.4rem;
+}
+
+.lg-m { color: #d11; }
+.lg-v { color: #1741c4; }
+.lg-b { color: #111; }
+.lg-c { color: #8b0000; }
+
+/* ---- Responsive ---- */
+@media (max-width: 980px) {
+  .app-grid,
+  .app-grid.left-collapsed {
+    grid-template-columns: 1fr;
+    grid-auto-rows: minmax(0, auto);
+  }
+
+  .col-resizer {
+    display: none;
+  }
+
+  .app-grid.left-collapsed .convert-column {
+    overflow: visible;
+    pointer-events: auto;
+  }
+
+  .viewer-column {
+    height: 60vh;
+  }
+}
+
+/* ---- Export-SVG modal previews (cut / score / both) ---------------------- */
+.export-previews {
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.export-previews figure {
+  margin: 0;
+  text-align: center;
+}
+.export-previews figcaption {
+  font-size: 12px;
+  color: #555;
+  margin-bottom: 4px;
+}
+.export-preview {
+  width: 150px;
+  height: 150px;
+  border: 1px solid #ddd;
+  background: #fff;
+}
+.export-preview svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ---- Pattern editor modal (secondary design path) ---- */
+.pe-modal {
+  width: min(980px, 96vw);
+}
+.pe-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem 0.9rem;
+}
+.pe-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  align-items: center;
+}
+.pe-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.pe-label {
+  font-size: 0.8rem;
+  color: #777;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.pe-tool {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+  border-left-width: 4px;
+}
+.pe-tool-M { border-left-color: #d24545; }
+.pe-tool-V { border-left-color: #2666c4; }
+.pe-tool-B { border-left-color: #1d1c19; }
+.pe-tool-C { border-left-color: #1a9e4b; }
+.pe-tool-F { border-left-color: #c8c5b8; }
+.pe-tool-E { border-left-color: #bbb; }
+.pe-tool:hover { background: #f2f5fb; }
+.pe-tool.is-active {
+  background: #1f6feb;
+  color: #fff;
+  border-color: #1741c4;
+}
+.pe-num {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+  color: #555;
+}
+.pe-num input {
+  width: 3.2rem;
+  font: inherit;
+  padding: 0.15rem 0.3rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+.pe-preset {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.2rem 0.3rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+.pe-clear {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+}
+.pe-canvas-wrap {
+  display: flex;
+  justify-content: center;
+  background: #fff;
+  border: 1px solid #e2e2e2;
+  border-radius: 4px;
+  padding: 0.5rem;
+}
+.pe-svg {
+  width: 100%;
+  max-height: 60vh;
+  touch-action: none;
+}
+.pe-dot { fill: #cfcfcf; }
+.pe-hit { stroke: transparent; stroke-width: 14; pointer-events: stroke; cursor: crosshair; }
+.pe-line { pointer-events: none; stroke-linecap: round; }
+.pe-line.pe-none.pe-kind-h,
+.pe-line.pe-none.pe-kind-v { stroke: #e6e6e6; stroke-width: 1.5; }
+.pe-line.pe-none.pe-kind-d,
+.pe-line.pe-none.pe-kind-a { stroke: #efefef; stroke-width: 1; stroke-dasharray: 3 4; }
+.pe-line.pe-M { stroke: #d24545; stroke-width: 2.6; stroke-dasharray: 7 4; }
+.pe-line.pe-V { stroke: #2666c4; stroke-width: 2.6; stroke-dasharray: 3 4; }
+.pe-line.pe-B { stroke: #1d1c19; stroke-width: 3; }
+.pe-line.pe-C { stroke: #1a9e4b; stroke-width: 3; }
+.pe-line.pe-F { stroke: #c8c5b8; stroke-width: 1.6; }
+.pe-legend {
+  margin: 0;
+  font-size: 0.8rem;
+  color: #777;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 0.9rem;
+}
+.pe-key::before {
+  content: "";
+  display: inline-block;
+  width: 1.1rem;
+  height: 0;
+  margin-right: 0.3rem;
+  vertical-align: middle;
+  border-top-width: 3px;
+  border-top-style: solid;
+}
+.pe-key-M::before { border-top-color: #d24545; border-top-style: dashed; }
+.pe-key-V::before { border-top-color: #2666c4; border-top-style: dashed; }
+.pe-key-B::before { border-top-color: #1d1c19; }
+.pe-key-C::before { border-top-color: #1a9e4b; }
+.pe-key-F::before { border-top-color: #c8c5b8; }
+.pe-download {
+  font: inherit;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+}
+
+/* ---- Electronics modal (LED copper-tape routing) ------------------------- */
+.el-modal {
+  width: min(980px, 96vw);
+}
+.el-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem 0.9rem;
+}
+/* Calm, low-clutter toolbar: groups separated by a hairline divider, soft neutral buttons,
+   a gentle (not loud) active state. */
+.el-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  padding: 0.9rem 1.1rem 1rem;
+  background: #fff;
+}
+.el-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+.el-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.el-group + .el-group {
+  margin-left: 0.6rem;
+  padding-left: 0.85rem;
+  border-left: 1px solid var(--border, #e4e7ec);
+}
+.el-tool,
+.el-route,
+.el-clear,
+.el-zoom-in,
+.el-zoom-out,
+.el-fit {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--border, #e4e7ec);
+  border-radius: var(--radius-sm, 8px);
+  background: #fff;
+  color: #344054;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.el-zoom-in,
+.el-zoom-out {
+  min-width: 1.9rem;
+  font-weight: 600;
+  line-height: 1;
+}
+.el-tool:hover,
+.el-route:hover,
+.el-clear:hover,
+.el-zoom-in:hover,
+.el-zoom-out:hover,
+.el-fit:hover { background: var(--surface-soft, #f3f5f9); border-color: #cdd3df; }
+.el-tool.is-active,
+.el-route.is-active {
+  background: var(--accent-soft, #eef3ff);
+  color: var(--accent-strong, #1741c4);
+  border-color: var(--accent, #1f6feb);
+  font-weight: 600;
+}
+.el-canvas-wrap {
+  display: flex;
+  justify-content: center;
+  align-items: stretch;
+  background: #fff;
+  border: 1px solid #e2e2e2;
+  border-radius: 4px;
+  padding: 0.5rem;
+}
+.el-svg {
+  width: 100%;
+  height: 62vh; /* fixed frame so the pattern always fits the same on-screen size (preserveAspectRatio) */
+  touch-action: none;
+  cursor: crosshair;
+}
+.el-svg:active { cursor: grabbing; }
+/* Strokes are non-scaling (constant screen px) so they don't blow up on small-coordinate models,
+   where 0.4 mm would be a huge fraction of a ~3 mm-wide kirigamized pattern. */
+.el-cloth { fill: #e4e8ee; stroke: #cdd3dc; stroke-width: 0.6; vector-effect: non-scaling-stroke; }
+/* Tiles are fill-only so coplanar (F-edge) triangles merge into clean rigid panels — no internal
+   triangulation lines. The pinched gaps read as the lighter cloth showing through between tiles. */
+.el-tile { fill: #b3b8c1; stroke: none; }
+.el-tape { fill-rule: nonzero; fill-opacity: 0.85; stroke: none; }
+.el-tape-pwr { fill: #ff0000; }
+.el-tape-gnd { fill: #222222; }
+/* Each LED = two distinct pads (PWR red +, GND dark −) bridged by an amber chip body. */
+.el-led-body { stroke: #d8b24a; stroke-linecap: round; }
+.el-led-pwr { fill: #ee3b30; stroke: #fff; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.el-led-gnd { fill: #2b2f36; stroke: #fff; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.el-led-body.el-led-orphan { stroke: #e6a3a3; }
+.el-led-pwr.el-led-orphan,
+.el-led-gnd.el-led-orphan { stroke: #d24545; stroke-width: 1.6; }
+/* Battery = two terminal squares: a red PWR (+) and a dark GND (−), matching the tape colours. */
+.el-batt { stroke: #fff; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.el-batt-pwr { fill: #ee3b30; }
+.el-batt-gnd { fill: #2b2f36; }
+.el-batt-sign {
+  fill: #fff;
+  font-weight: 700;
+  font-family: system-ui, sans-serif;
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+}
+/* One quiet bottom row: a compact swatch legend on the left, the live status on the right. */
+.el-footer-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem 1rem;
+}
+.el-legend {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--muted, #667085);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 0.85rem;
+}
+.el-footer-row .el-status {
+  flex: 0 1 auto;
+  font-size: 0.78rem;
+  color: var(--muted, #667085);
+}
+.el-key-led { color: #b5860a; }
+.el-key-pwr { color: #ff0000; }
+.el-key-gnd { color: #222222; }

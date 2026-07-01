@@ -1,0 +1,142 @@
+solid church
+facet normal 0 0 -1
+outer loop
+vertex 0 0 0
+vertex 1.45 1.4 0
+vertex 1.45 0 0
+endloop
+endfacet
+facet normal 0 0 -1
+outer loop
+vertex 0 0 0
+vertex 0 1.4 0
+vertex 1.45 1.4 0
+endloop
+endfacet
+facet normal -1 0 0
+outer loop
+vertex 0 0 0
+vertex 0 0 0.78
+vertex 0 1.4 0.78
+endloop
+endfacet
+facet normal -1 0 0
+outer loop
+vertex 0 0 0
+vertex 0 1.4 0.78
+vertex 0 1.4 0
+endloop
+endfacet
+facet normal 1 0 0
+outer loop
+vertex 1.45 0 0
+vertex 1.45 1.4 0
+vertex 1.45 1.4 0.78
+endloop
+endfacet
+facet normal 1 0 0
+outer loop
+vertex 1.45 0 0
+vertex 1.45 1.4 0.78
+vertex 1.45 0 0.78
+endloop
+endfacet
+facet normal 0 -1 0
+outer loop
+vertex 0 0 0.78
+vertex 0 0 0
+vertex 1.45 0 0
+endloop
+endfacet
+facet normal 0 -1 0
+outer loop
+vertex 0 0 0.78
+vertex 1.45 0 0
+vertex 1.45 0 0.78
+endloop
+endfacet
+facet normal 0 -1 0
+outer loop
+vertex 0 0 0.78
+vertex 1.45 0 0.78
+vertex 1.055 0 1.4
+endloop
+endfacet
+facet normal 0 -1 0
+outer loop
+vertex 1.055 0 1.4
+vertex 0.39499999999999996 0 1.4
+vertex 0 0 0.78
+endloop
+endfacet
+facet normal 0 1 0
+outer loop
+vertex 0 1.4 0.78
+vertex 1.45 1.4 0
+vertex 0 1.4 0
+endloop
+endfacet
+facet normal 0 1 0
+outer loop
+vertex 0 1.4 0.78
+vertex 1.45 1.4 0.78
+vertex 1.45 1.4 0
+endloop
+endfacet
+facet normal 0 1 0
+outer loop
+vertex 0 1.4 0.78
+vertex 1.055 1.4 1.4
+vertex 1.45 1.4 0.78
+endloop
+endfacet
+facet normal 0 1 0
+outer loop
+vertex 1.055 1.4 1.4
+vertex 0 1.4 0.78
+vertex 0.39499999999999996 1.4 1.4
+endloop
+endfacet
+facet normal -0.8433813127365737 0 0.5373155137595914
+outer loop
+vertex 0 0 0.78
+vertex 0.39499999999999996 0 1.4
+vertex 0.39499999999999996 1.4 1.4
+endloop
+endfacet
+facet normal -0.8433813127365737 0 0.5373155137595914
+outer loop
+vertex 0 0 0.78
+vertex 0.39499999999999996 1.4 1.4
+vertex 0 1.4 0.78
+endloop
+endfacet
+facet normal 0.8433813127365737 0 0.5373155137595914
+outer loop
+vertex 1.055 0 1.4
+vertex 1.45 0 0.78
+vertex 1.45 1.4 0.78
+endloop
+endfacet
+facet normal 0.8433813127365737 0 0.5373155137595914
+outer loop
+vertex 1.055 0 1.4
+vertex 1.45 1.4 0.78
+vertex 1.055 1.4 1.4
+endloop
+endfacet
+facet normal 0 0 1
+outer loop
+vertex 0.39499999999999996 0 1.4
+vertex 1.055 0 1.4
+vertex 1.055 1.4 1.4
+endloop
+endfacet
+facet normal 0 0 1
+outer loop
+vertex 0.39499999999999996 0 1.4
+vertex 1.055 1.4 1.4
+vertex 0.39499999999999996 1.4 1.4
+endloop
+endfacet
+endsolid church

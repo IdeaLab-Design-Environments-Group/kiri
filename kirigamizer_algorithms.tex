@@ -1,0 +1,667 @@
+% =====================================================================
+%  Kirigamizer: An Algorithm Proposal
+%  Designing kirigami (cut + fold) patterns for any surface.
+%
+%  Author: Emre Dayangac
+%
+%  Companion to origamizer_algorithms.tex. Kirigamizer mirrors the
+%  Origamizer pipeline but is allowed to CUT: wherever Origamizer hides
+%  surplus curvature by tucking, Kirigamizer may instead cut. This file
+%  states (i) how cut locations are determined and (ii) which parts of
+%  Origamizer are reused, then gives pseudocode for every stage.
+%
+%  Building blocks: E. D. Demaine & T. Tachi, "Origamizer", SoCG 2017;
+%  A. Ghassaei, E. D. Demaine, N. Gershenfeld, GPU origami simulation,
+%  7OSME 2018. The pseudocode and the cut-placement criterion are the
+%  proposal's own contribution.
+% =====================================================================
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage[ruled,vlined,linesnumbered]{algorithm2e}
+\usepackage[hidelinks]{hyperref}
+
+% ---- algorithm2e keyword setup (matches origamizer_algorithms.tex) ---
+\SetKwInput{KwData}{Input}
+\SetKwInput{KwResult}{Output}
+\SetKwComment{Comment}{$\triangleright$\ }{}
+\SetKwFor{ForEach}{for each}{do}{end}
+\SetKw{KwRet}{return}
+\SetKwFunction{Kirigamizer}{Kirigamizer}
+\SetKwFunction{PlanCuts}{PlanCuts}
+\SetKwFunction{Unfold}{SeamedUnfold}
+\SetKwFunction{Route}{RouteSeams}
+\SetKwFunction{Emit}{EmitPattern}
+\SetKwFunction{Verify}{SimulateVerifyOptimize}
+\SetKwFunction{Tuck}{OrigamizerTuck}
+\SetKwFunction{Import}{ImportAndCondition}
+\DontPrintSemicolon
+
+% ---- shorthand ------------------------------------------------------
+\newcommand{\eps}{\varepsilon}
+\newcommand{\defect}{\delta}
+\newcommand{\cut}{\mathcal{C}}
+\newcommand{\crease}{\mathcal{K}}
+\newcommand{\tuckset}{\Theta}
+\newcommand{\Off}{\mathcal{O}_{\eps}}
+
+\title{\textbf{Kirigamizer: An Algorithm Proposal}\\[2pt]
+\large Designing Kirigami (Cut\,+\,Fold) Patterns for Any Surface}
+\author{Emre Dayangac}
+\date{}
+
+\begin{document}
+\maketitle
+
+\noindent
+\textbf{Proposal.} A paper fold is an isometry, so it preserves intrinsic
+curvature: every interior point of a flat sheet keeps exactly $2\pi$ of
+material around it, and folding can only \emph{redistribute} that angle,
+never change the total at a point. This single fact bounds what origami can
+do. At a convex vertex the target subtends \emph{less} than $2\pi$, leaving
+a surplus that a fold can hide, precisely Origamizer's \emph{tuck}. At a
+saddle vertex the target subtends \emph{more} than $2\pi$, which no interior
+point of a flat sheet can supply, so the fold is impossible and
+Origamizer can only \emph{approximate} it (split the vertex, $\eps$-extra).
+Negative curvature is therefore not an incidental weakness but the
+\emph{single, structural} place where origami's ``isometry on a disk''
+assumption fails.
+
+A \emph{cut} lifts exactly that assumption. Where the sheet is cut, a point
+lies on the \emph{boundary}, not the interior, so it is no longer pinned to
+$2\pi$: its two lips may overlap (a cone, $<2\pi$, for free) or splay open
+with a gusset (a saddle, $>2\pi$). Cuts thus realize \emph{both} signs of
+curvature, exactly and locally, supplying the one operation origami
+lacks, and only there. I therefore propose \emph{Kirigamizer}: keep
+Origamizer's pipeline unchanged, it is already strong everywhere except
+this obstruction, and introduce cuts precisely where curvature is
+negative or where tucking would be wasteful. The proposal contributes
+(i) a criterion that \emph{determines where cuts must go}, derived from the
+intrinsic curvature of $Q$, and (ii) a construction that \emph{reuses
+Origamizer's modules} for everything cutting does not handle. Origamizer is
+the special case $\cut=\varnothing$.
+Symbols: $Q$ is the target (any genus $g$, any curvature, clean/tuck
+sides); $\eps>0$ the tolerance; output is a flat sheet $P$ with cut set
+$\cut$ and crease set $\crease$, and a folding $f\colon P\to\mathbb{R}^3$.
+
+% =====================================================================
+\section{Math}
+% =====================================================================
+Angle defect (discrete Gaussian curvature) and the curvature budget
+(Gauss-Bonnet):
+\begin{equation}
+\defect(v)=2\pi-\sum_i\alpha_i(v),
+\qquad
+\sum_{v}\defect(v)=2\pi\,\chi(Q)=2\pi(2-2g).
+\label{eq:gb}
+\end{equation}
+Flat paper carries exactly $2\pi$ at every interior point, so the local
+action at a vertex is forced by the \emph{sign} of $\defect(v)$:
+\begin{equation}
+\text{at } v:\quad
+\begin{cases}
+\defect(v)>0 & \text{remove } \defect(v) \;\Rightarrow\; \textbf{dart (cut+overlap)} \text{ \emph{or} tuck},\\[2pt]
+\defect(v)=0 & \text{nothing},\\[2pt]
+\defect(v)<0 & \text{add } |\defect(v)| \;\Rightarrow\; \textbf{open slit \emph{or} gusset}.
+\end{cases}
+\label{eq:rule}
+\end{equation}
+% Implementation note (src/pipeline, K1 "vents"): the discrete realization of
+% the open-slit branch removes a sliver of TARGET COVERAGE of angle |delta|
+% from a face adjacent to the slit (dynamic target = live excess over 2*pi,
+% since neighbouring vents interact), so the flat pattern carries exactly
+% 2*pi at every interior point, the slit is zero-width in the flat sheet, and
+% it opens into the deliberate hole when folded. The dart branch is the same
+% cutout taken BETWEEN faces (no coverage loss). One unified rule: cut out a
+% wedge of |delta| at every defect vertex.
+Correctness target (Origamizer's containment, cuts allowed):
+\begin{equation}
+Q\subseteq f(P)\subseteq Q\cup\Off(Q)
+\;\Longrightarrow\;
+d_H\!\big(Q,f(P)\big)\le\eps,
+\label{eq:target}
+\end{equation}
+with $\Off(Q)$ the tuck-side $\eps$-offset. A cut is \emph{sealed} when its
+lips $c_1,c_2$ fold together, $d_F(f(c_1),f(c_2))\le\eps$; else it is left
+\emph{open} (a deliberate hole).
+
+% =====================================================================
+\section{Why kirigami, not origami?}\label{sec:why}
+% =====================================================================
+The case for cutting is not aesthetic; it is forced by geometry, efficiency,
+and topology.
+
+\paragraph{(a) Origami can only \emph{subtract} angle; kirigami can also
+\emph{add} it.} Rule \eqref{eq:rule} is asymmetric for a single uncut
+sheet. At a convex vertex ($\defect>0$) the paper has surplus angle, which a
+fold can hide (tuck). At a saddle vertex ($\defect<0$) the surface needs
+\emph{more} than the $2\pi$ a flat interior point can supply, no fold can
+create it. So origami covers only \emph{half} the curvature range; the
+deficit half is reachable only by a cut (open slit or gusset). This is the
+root reason, and it is exactly the operation Origamizer lacks.
+
+\paragraph{(b) Negative curvature is the common case, not a corner case.}
+Any target with a neck, a saddle, a handle, or genus $g>0$ has
+$\defect<0$ vertices, and by \eqref{eq:gb} a genus-$g$ surface carries
+total curvature $2\pi(2-2g)$, so for $g\ge 2$ the surface is \emph{net
+negatively curved}. For all of these, an origami-only Origamizer must fall
+back on its $\eps$-extra construction, which \emph{never folds the surface
+exactly}: it splits each saddle vertex and approximates it within $\eps$.
+Kirigami realizes those vertices \emph{exactly} with a cut.
+
+\paragraph{(c) Cutting is dramatically more material-efficient.} On the
+Stanford bunny ($374$ triangles) Origamizer puts only $\approx\!22.3\%$ of
+the paper onto the visible surface, nearly $78\%$ is hidden tuck, a
+$\sim\!2{:}1$ scale penalty per dimension. The tuck behind a convex vertex
+grows with its surplus $\defect(v)$ and the size of the surrounding facets.
+A \emph{dart} discards the same surplus through a thin slit whose lips
+merely overlap by angle $\defect(v)$, no deep buried pleat. The saved
+area scales with the total positive curvature $\sum_v\max(\defect(v),0)$,
+which is large for any spiky or detailed model.
+
+\paragraph{(d) Fewer layers $\Rightarrow$ actually foldable.} Tucks stack
+many paper layers at each vertex; the bunny's pattern took a $\sim\!10$-hour
+hand fold and is, in the authors' words, likely impossible to design by
+hand. Cuts collapse those layer stacks, so the result is thinner and
+foldable from stiff stock (cardstock, sheet metal, composites) where a
+thick origami tuck simply cannot close.
+
+\paragraph{(e) Topology and function come free with cuts.} A single uncut
+sheet is a disk: holes, handles, and non-orientable targets must first be
+\emph{cut} into a disk before Origamizer even starts. Kirigami takes those
+cuts as part of the design. Moreover, whole classes of useful structures,
+auxetic / negative-Poisson metamaterials, stretchable electronics,
+deployable kirigami honeycombs, are \emph{defined} by their cuts and have
+no origami-only realization at all.
+
+\paragraph{Summary.} Origami is the special case $\cut=\varnothing$, optimal
+only when the target is (nearly) developable and convex. The moment the
+target has saddles, handles, fine detail, or a functional cut pattern,
+i.e.\ most real targets, kirigami is not a stylistic choice but the
+\emph{exact, efficient, manufacturable} one. The rest of this proposal makes
+that switch precise: \S\ref{sec:where} decides where to cut, and
+\S\ref{sec:reuse} keeps everything origami still does best.
+
+% =====================================================================
+\section{Input: conditioning and file format}\label{sec:input}
+% =====================================================================
+The whole method rests on the angle defect $\defect(v)=2\pi-\sum_i\alpha_i(v)$,
+which is only well defined on a \emph{manifold, flat-faceted, coarse} mesh
+with shared vertices. So the raw 3D model must first be conditioned, and the
+choice of file format matters.
+
+\paragraph{STL vs.\ STEP.} \emph{Prefer STEP (or a topological mesh: OBJ /
+PLY / OFF); avoid raw STL.}
+\begin{itemize}[leftmargin=1.4em,itemsep=2pt]
+  \item \textbf{Connectivity.} $\defect(v)$ needs vertices \emph{shared}
+  between faces. STL is triangle soup: duplicated vertices, no adjacency, so
+  $\defect$ is undefined until the mesh is welded and its topology rebuilt.
+  STEP is a B-rep: exact faces, edges, and adjacency are already present.
+  \item \textbf{Feature edges.} Cut routing \eqref{eq:opt} wants to follow
+  real edges (to stay seamless). STEP carries them; STL does not.
+  \item \textbf{Units / scale.} The tolerance $\eps$ and any fabrication need
+  true units. STEP stores units; STL is unitless and often inconsistent.
+  \item \textbf{Curvature placement.} STEP surfaces are smooth (NURBS), so
+  curvature is continuous; you must \emph{facet} them, which is exactly the
+  step that decides where curvature concentrates (the cone vertices). On a
+  dense STL the opposite problem bites: almost every vertex has
+  $\defect\neq0$, so \eqref{eq:necessity} would cut \emph{everywhere} unless
+  the mesh is first decimated to a coarse flat-faceted target.
+\end{itemize}
+\textbf{Decision: STEP is the input format.} It carries exact topology,
+feature edges, and units, and lets us choose the faceting (hence the cone
+vertices) ourselves, which is precisely what the cut planner needs. The
+fixed pipeline is
+\[
+\textbf{STEP} \;\rightarrow\; \text{condition to coarse manifold mesh } Q
+\;\rightarrow\; \text{half-edge internally}
+\;\rightarrow\; \textbf{FKLD} \;+\; \textbf{SVG/DXF},
+\]
+where FKLD (a FOLD superset: folds, cuts, molecules, and material together,
+\S\ref{sec:fold}) runs directly in the bar-and-hinge simulator and SVG/DXF
+(cut vs.\ crease on separate layers) drives a cutter/plotter. A mesh (OBJ/PLY/OFF) is accepted as a fallback, and
+raw STL only after weld $+$ manifold repair $+$ decimation.
+
+\begin{algorithm}[H]
+\caption[\textsc{ImportAndCondition}]{\textsc{ImportAndCondition}$(M)$: STEP model $\to$ usable target $Q$ (Stage 0)}
+\KwData{STEP B-rep model $M$ (fallback: a mesh OBJ/PLY/OFF/STL).}
+\KwResult{Coarse, manifold, flat-faceted target $Q$ with consistent units
+          and clean/tuck sides.}
+\BlankLine
+\uIf{$M$ is STEP (B-rep)}{ read units and feature edges; tessellate each face into planar facets at the desired coarseness\;}
+\Else(\Comment*[h]{fallback: $M$ is a mesh}){ weld coincident vertices; rebuild edge/face adjacency\;}
+Repair to a 2-manifold (fill/zip cracks, fix orientation, remove degenerates)\;
+Decimate / remesh to a \emph{coarse} flat-faceted model so curvature
+  concentrates at a chosen vertex set (cone vertices)\;
+  \Comment*[r]{otherwise $\defect\neq0$ almost everywhere $\Rightarrow$ \eqref{eq:necessity} cuts everywhere}
+Record units; assign the clean side (visible) and tuck side (hidden)\;
+\KwRet $Q$\;
+\end{algorithm}
+
+% =====================================================================
+\section{Where the cuts go (the determination)}\label{sec:where}
+% =====================================================================
+Cut placement is \emph{derived}, not guessed, in three steps:
+\emph{necessity}, \emph{connection}, \emph{routing}.
+
+\paragraph{(1) Necessity: which vertices force a cut.}
+A surface flattens isometrically to the plane iff it is a simply connected
+\emph{developable disk}: no interior vertex with nonzero defect, and genus
+$0$. Cutting moves curvature from the interior to a boundary, where it is
+realized as an overlap (dart) or a gap (slit). Hence the hard constraint
+\begin{equation}
+v \in \cut \quad\Longleftrightarrow\quad \defect(v)\neq 0,
+\label{eq:necessity}
+\end{equation}
+i.e.\ \emph{every defect vertex must become a boundary vertex of some
+patch}. By \eqref{eq:gb} the \emph{total} signed curvature is fixed by
+topology, so the amount of cutting is topologically forced, the proposal
+only chooses \emph{how} to realize it. In addition, for genus $g>0$ a set
+of $2g$ non-contractible loops $H$ must be cut to reduce the genus to $0$.
+
+\paragraph{(2) Connection: making patches developable.}
+Isolated punctures do not flatten; the cut set must be a \emph{graph}
+$\cut$ such that every component of $Q\setminus\cut$ is a disk whose
+interior is flat. Equivalently, $\cut$ must connect every defect vertex
+(\ref{eq:necessity}) to a patch boundary, and include the handle loops
+$H$. This is a Steiner-forest / cut-tree condition on the mesh:
+\begin{equation}
+\text{required terminals } \;=\; \{\,v : \defect(v)\neq 0\,\}\ \cup\ \partial Q,
+\qquad \cut \supseteq H.
+\end{equation}
+
+\paragraph{(3) Routing: the exact location, by optimization.}
+Among all $\cut$ satisfying (1)-(2), pick one minimizing a cost that
+trades cut length against \emph{visibility} (cuts on the clean side are
+penalized; cuts on edges of $Q$ or on the tuck side are cheap):
+\begin{equation}
+\min_{\cut}\ \sum_{e\in\cut}\Big(\ \mathrm{len}(e)\ +\ \lambda\,\mathrm{vis}(e)\ \Big)
+\quad\text{s.t. \eqref{eq:necessity}, patches developable, } \cut\supseteq H,
+\label{eq:opt}
+\end{equation}
+with $\lambda$ the seam-visibility weight. Practically: route $\cut$ along
+\emph{mesh edges of $Q$} (so the clean side stays seamless), connect defect
+vertices by \emph{shortest paths / geodesics} (minimizing length), and push
+unavoidable interior cuts onto the \emph{tuck side}. Finally, the action at
+each cut vertex follows the sign rule \eqref{eq:rule}; for $\defect(v)>0$
+there is a free choice \emph{dart vs.\ tuck} (\S\ref{sec:reuse}), resolved
+inside the optimization \eqref{eq:opt} by comparing a dart's seam cost
+against an Origamizer tuck.
+
+\begin{algorithm}[H]
+\caption[\textsc{PlanCuts}]{\textsc{PlanCuts}$(Q,\lambda)$: decide where the cuts go (\S\ref{sec:where})}
+\KwData{Surface $Q$; seam-visibility weight $\lambda$.}
+\KwResult{Cut set $\cut$ (each cut tagged dart/slit/gusset) and tuck set
+          $\tuckset$ of vertices to be handled by Origamizer.}
+\BlankLine
+\ForEach{vertex $v$ of $Q$}{ $\defect(v)\leftarrow 2\pi-\sum_i\alpha_i(v)$ }
+$D\leftarrow\{v:\defect(v)\neq 0\}$\;
+  \Comment*[r]{necessity \eqref{eq:necessity}: only these vertices force a cut}
+$H\leftarrow$ $2g$ non-contractible loops of $Q$\;
+  \Comment*[r]{cut handles so each patch has genus $0$}
+$\cut\leftarrow$ min-cost graph on mesh edges linking $D\cup\partial Q$, plus $H$,
+            minimizing \eqref{eq:opt}\;
+  \Comment*[r]{prefer edges of $Q$; shortest paths; hide on the tuck side}
+$\tuckset\leftarrow\varnothing$\;
+\ForEach{$v\in D$}{
+  \uIf{$\defect(v)<0$}{ tag $v$'s cut \emph{slit} (open) or \emph{gusset} of angle $|\defect(v)|$ }
+  \uElseIf{$\defect(v)>0$ \textbf{and} darting is cheaper than tucking}{ tag $v$'s cut \emph{dart} of angle $\defect(v)$ }
+  \Else(\Comment*[h]{$\defect(v)>0$, seamlessness preferred}){ move $v$ from $\cut$ to $\tuckset$ }
+}
+\KwRet $(\cut,\tuckset)$\;
+\end{algorithm}
+
+% =====================================================================
+\section{What it reuses from Origamizer}\label{sec:reuse}
+% =====================================================================
+Kirigamizer is not a rewrite: every step that cutting does not handle is an
+Origamizer module, invoked unchanged. Cutting is a \emph{front-end} that
+removes exactly the curvature Origamizer struggles with; Origamizer then
+does the rest.
+
+\begin{center}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{@{}p{0.30\linewidth}p{0.62\linewidth}@{}}
+\toprule
+\textbf{Origamizer part} & \textbf{How Kirigamizer uses it} \\
+\midrule
+Angle-defect / curvature analysis (\S3) & drives cut placement \eqref{eq:necessity}-\eqref{eq:rule} instead of the tuck-proxy inset \\
+Vertex-unfolding (\S4) & flattens each developable patch in \textsc{SeamedUnfold} \\
+Tutte embedding (\S5) & packs the unfolded patches into one sheet $P$ \\
+Streams: rivers \& brooks (\S5) & become \emph{seams/tabs} that rejoin lips, the same channels, run in reverse to \emph{deliver} material to $\defect<0$ vertices \\
+Tuck proxy / tucking molecules (\S3,\S7) & invoked \emph{locally} for the $\defect>0$ vertices in $\tuckset$ we choose to tuck (keeps the clean side seamless there) \\
+Site placement + Voronoi folding (\S6-\S7) & generates the actual crease pattern for each tucked region \\
+Guarantees: watertight / seamless / $\eps$-extra & generalized to \emph{seam}-watertight / \emph{seam}-seamless / $\eps$-extra \eqref{eq:target} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent The division of labor: \textbf{cuts} take the cases Origamizer
+cannot do exactly ($\defect<0$, genus, nonorientable); \textbf{Origamizer's
+tucking} takes the cases it already does well ($\defect>0$ where a seamless
+single sheet is wanted). The \emph{dart-vs-tuck} switch in \textsc{PlanCuts}
+is exactly the dial between the two regimes.
+
+% =====================================================================
+\section{Top-level driver}
+% =====================================================================
+\begin{algorithm}[H]
+\caption[\textsc{Kirigamizer}]{\textsc{Kirigamizer}$(M,\eps,\lambda)$: design a cut$+$fold pattern for model $M$}
+\KwData{STEP model $M$ (B-rep); tolerance $\eps>0$; seam-visibility weight
+        $\lambda$.}
+\KwResult{Sheet $P$ with cuts $\cut$, creases $\crease$, folding $f$ with
+          $f(P)\subseteq Q\cup\Off(Q)$.}
+\BlankLine
+$Q\leftarrow$ \Import{$M$}\;
+  \Comment*[r]{Stage 0 (\S\ref{sec:input}): weld/repair/coarsen to a flat-faceted manifold}
+$(\cut,\tuckset)\leftarrow$ \PlanCuts{$Q,\lambda$}\;
+  \Comment*[r]{\S\ref{sec:where}: where the cuts go; what stays tucked}
+$(\{U_k\},\crease)\leftarrow$ \Unfold{$Q,\cut$}\;
+  \Comment*[r]{cut into developable patches, flatten isometrically}
+$(P,\cut,\crease)\leftarrow$ \Route{$\{U_k\},\cut,\crease$}\;
+  \Comment*[r]{pack to one sheet; route seams/tabs}
+\Emit{$P,\crease,\cut,\tuckset$}\;
+  \Comment*[r]{write crease$+$cut pattern; tuck $\tuckset$ via Origamizer}
+$f\leftarrow$ \Verify{$P,\crease,\cut,Q,\eps$}\;
+  \Comment*[r]{GPU-fold, check $d_H\le\eps$, refine}
+\KwRet $(P,\cut,\crease,f)$\;
+\end{algorithm}
+
+% =====================================================================
+\section{Stage algorithms}
+% =====================================================================
+
+\noindent\textbf{Stage 1: Plan cuts.} Given in \textsc{PlanCuts}
+(\S\ref{sec:where}); replaces Origamizer's tuck proxy.
+
+\BlankLine
+\noindent\textbf{Stage 2: Seamed unfolding} (reuses vertex-unfolding).
+With the cuts in place, $Q$ separates into developable patches that flatten
+\emph{isometrically}, no $\eps$-approximation is needed for saddle
+vertices, since their excess has been absorbed by a cut.
+
+\begin{algorithm}[H]
+\caption[\textsc{SeamedUnfold}]{\textsc{SeamedUnfold}$(Q,\cut)$: cut into patches and flatten}
+\KwData{Surface $Q$; cut set $\cut$.}
+\KwResult{Planar patches $\{U_k\}$; crease set $\crease$.}
+\BlankLine
+$\{Q_k\}\leftarrow$ connected components of $Q$ after cutting along $\cut$\;
+$\crease\leftarrow\varnothing$\;
+\ForEach{patch $Q_k$}{
+  $U_k\leftarrow$ vertex-unfold $Q_k$ isometrically into the plane\;
+    \Comment*[r]{developable $\Rightarrow$ isometric immersion exists}
+  \While{$U_k$ self-overlaps}{
+    Add a relief cut across $Q_k$ and re-split; re-unfold\;
+    \Comment*[r]{an immersion need not embed; relief cuts restore an embedding}
+  }
+  Add the interior fold edges of $U_k$ (with M/V assignment) to $\crease$\;
+}
+\KwRet $(\{U_k\},\crease)$\;
+\end{algorithm}
+
+\noindent\textbf{Stage 3: Seam \& tab routing} (reuses streams). Pack the
+patches into one sheet and connect the lips that must rejoin: a zero-width
+\emph{seam} (brook) for sealed cuts, or a thickened \emph{tab/gusset strip}
+(river) that carries extra material to $\defect<0$ vertices; open cuts stay
+as boundaries of $P$.
+
+\begin{algorithm}[H]
+\caption[\textsc{RouteSeams}]{\textsc{RouteSeams}$(\{U_k\},\cut,\crease)$: pack and connect}
+\KwData{Patches $\{U_k\}$; cut set $\cut$; crease set $\crease$.}
+\KwResult{Sheet $P$; updated $\cut,\crease$.}
+\BlankLine
+$P\leftarrow$ pack $\{U_k\}$ into one sheet (Tutte-embed patch-adjacency graph)\;
+\ForEach{cut $c\in\cut$ marked \emph{sealed}}{
+  \uIf{$c$ adds angle (a $\defect<0$ vertex)}{ route a \emph{tab/gusset strip} (river) between the lips; add folds to $\crease$ }
+  \Else{ route a zero-width \emph{seam} (brook) matching the lips }
+}
+Leave every \emph{open} cut as a free boundary of $P$\;
+\KwRet $(P,\cut,\crease)$\;
+\end{algorithm}
+
+\noindent\textbf{Stage 4: Emit pattern} (reuses site placement \&
+Voronoi folding). Write mountain/valley creases plus cut edges in the
+\textbf{FKLD} format (\S\ref{sec:fold}); for each tucked vertex, generate its
+Origamizer tuck locally and merge.
+
+\begin{algorithm}[H]
+\caption[\textsc{EmitPattern}]{\textsc{EmitPattern}$(P,\crease,\cut,\tuckset)$: write the crease$+$cut pattern}
+\KwData{Sheet $P$; crease set $\crease$; cut set $\cut$; tuck set $\tuckset$.}
+\KwResult{An FKLD file over $P$ (\S\ref{sec:fold}).}
+\BlankLine
+\ForEach{edge $k\in\crease$}{ mark $k$ mountain/valley/facet with target fold angle }
+\ForEach{edge $c\in\cut$}{ mark $c$ as a cut (boundary) edge }
+\ForEach{vertex $v\in\tuckset$}{
+  $\crease\leftarrow\crease\ \cup\ $\Tuck{$v$}\;
+    \Comment*[r]{Origamizer \S6-\S7: local Voronoi tuck (geodesic-vertex sites)}
+}
+Export $(P,\crease,\cut)$\;
+\end{algorithm}
+
+\noindent\textbf{Stage 5: Simulate, verify, optimize} (replaces the
+constructive proof). The GPU bar-and-hinge solver treats cuts as
+first-class edges (\S\ref{sec:sim}: full cuts split the mesh, partial cuts
+soften the hinge by $(1-\mathrm{cutRatio})$), and a driven-boundary forward
+process steers it to the goal mesh $M_0$; iterate until the folded state lies
+within $\eps$ of $Q$.
+
+\begin{algorithm}[H]
+\caption[\textsc{SimulateVerifyOptimize}]{\textsc{SimulateVerifyOptimize}$(P,\crease,\cut,Q,\eps)$}
+\KwData{Pattern $(P,\crease,\cut)$; target $Q$; tolerance $\eps$.}
+\KwResult{Folding $f\colon P\to\mathbb{R}^3$ with $d_H(Q,f(P))\le\eps$.}
+\BlankLine
+\Repeat{$r\le\eps$}{
+  $f\leftarrow$ \textsc{FoldSolver.solve}$(P,M_0,1,\mathrm{iters})$\;
+    \Comment*[r]{AKDE explicit solver; driven boundary to $M_0$ (\S\ref{sec:sim})}
+  $r\leftarrow d_H\!\big(Q,f(P)\big)$\;
+  \If{$r>\eps$ \textbf{or} strain/self-intersection too high}{
+    Adjust: cut routing $\lambda$, dart-vs-tuck in $\tuckset$, fold angles, scale\;
+  }
+}
+\KwRet $f$\;
+\end{algorithm}
+
+\noindent\emph{Correctness target.}
+\textbf{Seam-seamless:} each facet of $Q$ is one uncut face on the clean
+side (cuts on edges / tuck side). \textbf{Seam-watertight:} every cut is
+lip-matched ($d_F\le\eps$) or tuck-hidden, so the clean side is gap-free.
+\textbf{$\eps$-extra:} $f(P)\subseteq Q\cup\Off(Q)$, hence $d_H\le\eps$
+\eqref{eq:target}.
+
+% =====================================================================
+\section{Simulation: AKDE bar-and-hinge with driven boundary}\label{sec:sim}
+% =====================================================================
+Stage 5 uses the simulator from \textbf{AKDE} (\texttt{kirigami/sim}): the
+explicit \emph{bar-and-hinge} solver of Ghassaei, Demaine, and Gershenfeld,
+extended for kirigami. Its CPU force math (\texttt{forces.ts}) is the
+unit-testable twin of the GPU GLSL passes; the mesh is stored struct-of-arrays
+(one texel per node/edge/face). Masses are unit ($m\equiv1$). AKDE defaults:
+$EA=20$, $k_{\text{fold}}=k_{\text{facet}}=0.7$, $k_{\text{face}}=0.2$,
+damping $\zeta\approx0.45$ (AKDE runs overdamped, $\zeta\!\approx\!1$, to settle
+the flat$\to$cone buckling), design angles $\theta_M\!\approx\!1.2$,
+$\theta_V\!\approx\!2.9$ (valley near $\pi$ so each molecule tucks nearly flat,
+collapsing the flat-net perimeter radius $s$ onto the base radius $R$).
+
+\paragraph{Signed dihedral fold angle (branch-safe).} With $\hat e$ the unit
+crease-edge vector and $n_1,n_2$ the adjacent face normals,
+\begin{equation}
+\theta=\operatorname{atan2}\!\big((n_1\times\hat e)\cdot n_2,\ n_1\cdot n_2\big),
+\qquad \gamma=\pi-\theta,
+\label{eq:theta}
+\end{equation}
+unwrapped against the previous step so it tracks continuously through $\pm\pi$
+($\gamma$ is the geometric dihedral). This signed \texttt{atan2} form (DETC2019
+Eq.\ 5) stays valid through the full fold range, unlike a $\sin\gamma$ closed form.
+
+\paragraph{Axial bar $+$ neighbour damping (per edge).} With $\hat d$ the unit
+edge vector, length $l$, rest $l_0$, $k_a=EA/l_0$:
+\begin{equation}
+F_{\text{ax}}=k_a\,(l-l_0)\,\hat d,\qquad
+F_{\text{damp}}=c\,(v_b-v_a),\quad c=2\zeta\sqrt{k_a\,m_{\min}},
+\end{equation}
+i.e.\ damping is \emph{relative} between the two endpoints, not a global drag.
+
+\paragraph{Crease torque on four nodes.} For the two wing vertices $w\in\{1,2\}$
+(opposite the crease, with face normal $\hat n_w$ and moment arm $h_w$ to the
+crease line) and the two crease nodes split by along-crease fractions
+$\mathrm{coef}_w$, scaled by the fold slider $\mathrm{fp}\in[0,1]$:
+\begin{equation}
+\Phi=k_c\,(\mathrm{fp}\cdot\theta_{\text{tgt}}-\theta),\qquad
+F_{\text{wing }w}=\frac{\Phi}{h_w}\,\hat n_w,
+\end{equation}
+with momentum-conserving reactions on the crease nodes weighted by
+$(1-\mathrm{coef}_w)$ and $\mathrm{coef}_w$.
+
+\paragraph{Kirigami coupling (DETC2019-97557, Eq.\ 6: $Kd=Fx$).} A cut softens
+the hinge in proportion to lost ligament:
+\begin{equation}
+k_c=(1-\mathrm{cutRatio})\,l_0\,k,\qquad k\in\{k_{\text{fold}},k_{\text{facet}}\},
+\label{eq:cut}
+\end{equation}
+so $\mathrm{cutRatio}=0$ is exactly Gershenfeld and $\mathrm{cutRatio}=1$ is a
+free flap. Fully cut (major/minor) edges are simply \emph{absent as creases}:
+their lips are independent nodes carrying only a boundary bar, which is what
+lets holes and darts open. (This is AKDE's actual mechanism, replacing the
+earlier ``seam spring'' sketch.)
+
+\paragraph{Face interior-angle spring.} For each triangle angle $\alpha$ with
+flat value $\alpha_0$, a torque from $k_{\text{face}}(\alpha_0-\alpha)$ applied
+via the gradient $\operatorname{cross}(n,e)/|e|^2$ on the three nodes, resisting
+in-plane shear.
+
+\paragraph{Explicit integration.} Forward Euler at unit mass, with the stable
+step bounded by the stiffest (axial) mode:
+\begin{equation}
+v \leftarrow v+\tfrac{F}{m}\,\Delta t,\qquad p \leftarrow p+v\,\Delta t,\qquad
+\Delta t=\frac{0.9}{2\pi\,\omega_{\max}},\ \ \omega_{\max}=\max\sqrt{k_a/m_{\min}}.
+\label{eq:euler}
+\end{equation}
+State lives in GPU textures; one thread per element, so per-step cost is roughly
+constant until node count exceeds core count, then linear.
+
+\paragraph{Driven-boundary forward process (the design coupling, DETC \S3.2).}
+This is how the simulator is \emph{steered} to the designed shape, not merely
+checked against it. Boundary nodes are driven kinematically toward the goal mesh
+$M_0$ (the folded target $Q$) and pinned, so the force passes leave them in place
+while the interior relaxes:
+\begin{equation}
+p_i=\mathrm{rest}_i+(\mathrm{goal}_i-\mathrm{rest}_i)\cdot\mathrm{fp},
+\qquad i\in\text{driven}.
+\label{eq:drive}
+\end{equation}
+The slider $\mathrm{fp}$ is eased \emph{quasi-statically},
+$\mathrm{fp}\leftarrow\mathrm{fp}+(\mathrm{target}-\mathrm{fp})\cdot0.004$ per
+step, because a fast ramp injects energy the explicit integrator cannot
+dissipate.
+
+\begin{algorithm}[H]
+\caption[\textsc{FoldSolver}]{\textsc{FoldSolver.solve}$(P,M_0,\mathrm{target},\mathrm{iters})$: AKDE explicit kirigami solver (\S\ref{sec:sim})}
+\KwData{Bar-hinge model of $P$ (beams, creases with $\theta_{\text{tgt}}$ and $\mathrm{cutRatio}$, faces); goal mesh $M_0$; target fold fraction; step count.}
+\KwResult{Folded positions $f$ (boundary driven to $M_0$, interior relaxed).}
+\BlankLine
+Build model: split mesh at major/minor cuts; set $k_c$ by \eqref{eq:cut}; mark driven boundary nodes\;
+$\Delta t\leftarrow 0.9/(2\pi\,\omega_{\max})$; $\ \mathrm{fp}\leftarrow 0$; $\ v\leftarrow 0$\;
+\For{$\mathrm{iters}$ steps}{
+  $\mathrm{fp}\leftarrow \mathrm{fp}+(\mathrm{target}-\mathrm{fp})\cdot 0.004$ \Comment*[r]{quasi-static ease}
+  drive boundary by \eqref{eq:drive} for $i\in\text{driven}$\;
+  pass 1: face normals $n_t$\;
+  pass 2: fold angles $\theta_e$ \eqref{eq:theta} (unwrapped)\;
+  pass 3: $F\leftarrow F_{\text{ax}}+F_{\text{damp}}+F_{\text{crease}}+F_{\text{face}}$\;
+  pass 4: integrate \eqref{eq:euler}; skip fixed/driven nodes\;
+}
+\KwRet $f\leftarrow p$\;
+\end{algorithm}
+
+% =====================================================================
+\section{FKLD output format}\label{sec:fold}
+% =====================================================================
+\textsc{EmitPattern} writes \textbf{FKLD} (Flexible Kirigami list
+Datastructure), AKDE's format: a strict \emph{superset} of FOLD 1.2 (Demaine,
+Ku, Lang). Every FKLD file is a valid FOLD file, so any FOLD tool renders the
+crease pattern and ignores the kirigami extensions, which live under the
+reserved \texttt{fkld:} namespace. The standard FOLD arrays carry the geometry:
+\texttt{vertices\_coords}, \texttt{edges\_vertices}, \texttt{edges\_assignment}
+(\texttt{M}/\texttt{V}/\texttt{B}/\texttt{U}/\texttt{F} plus \texttt{C} = cut),
+\texttt{edges\_foldAngle}, \texttt{faces\_vertices}, \texttt{faceOrders} (tuck
+stacking), and \texttt{file\_frames} (flat / target / folded states).
+
+The kirigami extensions (FKLD v0.1 registry):
+\begin{itemize}[leftmargin=1.4em,itemsep=1pt]
+  \item \texttt{fkld:edges\_cutType}: subtype of each \texttt{C} edge, one of
+  \texttt{major}, \texttt{minor}, \texttt{seam}, \texttt{dart},
+  \texttt{auxetic}, \texttt{vent}, \texttt{tab}.
+  \item \texttt{fkld:edges\_moleculeTheta} / \texttt{\_moleculeWidth} /
+  \texttt{\_moleculeDepth}: tucking-molecule angle $\theta(i,j)$, chord width
+  $w(i,j)$, and tuck depth behind the face (Tachi 2010).
+  \item \texttt{fkld:edges\_dihedralTarget}: folded dihedral target (rad), i.e.\
+  the $\theta_{\text{tgt}}$ consumed by the solver \eqref{eq:theta}.
+  \item \texttt{fkld:vertices\_curvatureClass}
+  (\texttt{positive}/\texttt{negative}/\texttt{flat}/\texttt{boundary}),
+  \texttt{fkld:vertices\_angleDefect} $G_v=2\pi-\sum\theta$ \eqref{eq:gb}, and
+  \texttt{fkld:vertices\_reliefStrategy}
+  (\texttt{molecule}/\texttt{cut}/\texttt{hybrid}/\texttt{none}).
+  \item \texttt{fkld:faces\_materialId} / \texttt{\_thickness} /
+  \texttt{\_structuralRole} / \texttt{\_panelId} for fabrication.
+\end{itemize}
+The correspondences close the loop: \texttt{vertices\_reliefStrategy} \emph{is}
+the dart-vs-tuck dial of \textsc{PlanCuts} (\S\ref{sec:where});
+\texttt{vertices\_angleDefect} is \eqref{eq:gb}; the molecule keys carry the
+Origamizer tuck (\S\ref{sec:reuse}); \texttt{edges\_dihedralTarget} feeds the
+solver. For plain-FOLD tools, \texttt{filter.splitCuts} downgrades \texttt{C} to
+\texttt{B} (lossy but legal; the \texttt{fkld:} annotations are preserved). A
+schematic FKLD for one darted positive-curvature vertex:
+\begin{verbatim}
+{ "file_spec":1.2, "file_creator":"AKDE/Kirigamizer", "unit":"mm",
+  "file_classes":["creasePattern"],
+  "vertices_coords":[[0,0],[10,0],[10,10],[0,10],[5,5]],
+  "edges_vertices":[[0,1],[1,2],[2,3],[3,0],[4,1],[4,3]],
+  "edges_assignment":["B","B","B","B","V","C"],
+  "edges_foldAngle":[0,0,0,0,150,0],
+  "faces_vertices":[[0,1,4],[1,2,3,4],[3,0,4]],
+  "fkld:edges_cutType":[null,null,null,null,null,"dart"],
+  "fkld:vertices_curvatureClass":
+       ["boundary","boundary","boundary","boundary","positive"],
+  "fkld:vertices_angleDefect":[0,0,0,0,1.05],
+  "fkld:vertices_reliefStrategy":
+       ["none","none","none","none","hybrid"] }
+\end{verbatim}
+
+% =====================================================================
+\section{Preconditions and limitations (honest scope)}\label{sec:limits}
+% =====================================================================
+What the pipeline does and does not guarantee:
+\begin{itemize}[leftmargin=1.4em,itemsep=2pt]
+  \item \textbf{Coarse flat-faceted input required.} The defect rule
+  \eqref{eq:necessity} assumes curvature lives at vertices. The STEP model is
+  faceted and conditioned to a coarse mesh in Stage 0 (\S\ref{sec:input});
+  the faceting coarseness sets where curvature concentrates, and the output
+  quality inherits that choice.
+  \item \textbf{Open kirigami is fully general; sealed kirigami is not (yet).}
+  Negative-curvature vertices are always realizable as \emph{open} slits
+  (deliberate holes). The \emph{sealed} route (a gusset that delivers
+  material while staying watertight) has no proof of a valid, non-crossing
+  layer ordering in general; it is heuristic, checked in Stage 5.
+  \item \textbf{Unfolding may need extra cuts.} A developable patch immerses
+  isometrically but need not embed; the relief loop in \textsc{SeamedUnfold}
+  adds cuts until it embeds, so the final cut count can exceed the curvature
+  minimum.
+  \item \textbf{No constructive flat-foldability guarantee.} Mountain/valley
+  assignment and a collision-free layer order are produced heuristically and
+  validated by the simulator, not proven (unlike Origamizer \S7).
+  \item \textbf{Stage 5 is a search, not a solver.} The verify/refine loop
+  has no convergence guarantee; it terminates when $d_H\le\eps$ or on a
+  budget.
+  \item \textbf{Zero-thickness model.} Material thickness, laser kerf, fold
+  allowance/score lines, and joining tabs for sealed seams are out of scope
+  here and must be added for real fabrication.
+\end{itemize}
+\noindent\textbf{Bottom line.} As written, the method reliably turns a
+conditioned, coarse 3D model into an \emph{open}-kirigami pattern; the
+watertight \emph{sealed} variant and guaranteed flat-foldability are the open
+parts, deferred to the simulator and to future work.
+
+\end{document}
