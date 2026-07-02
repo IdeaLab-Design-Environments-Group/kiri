@@ -160,7 +160,7 @@ describe("pipeline/kirigamize", () => {
     mocks.planCuts.mockReturnValue(makePlan(1));
     mocks.seamedUnfold.mockReturnValue(makeUnfold(3));
     mocks.placeSheet.mockReturnValue(makeSheet(3));
-    mocks.emitFkld.mockReturnValue({ file_creator: "Kiro" });
+    mocks.emitFkld.mockReturnValue({ file_creator: "Kiri" });
     mocks.parseMesh.mockReturnValue(mesh);
     mocks.verifyFold.mockReturnValue(makeReport({ dH: 0.5, converged: true, worstSourceVertex: 3 }));
   });
@@ -219,8 +219,8 @@ describe("pipeline/kirigamize", () => {
       .mockReturnValueOnce(makeSheet(3))
       .mockReturnValueOnce(makeSheet(8));
     mocks.emitFkld
-      .mockReturnValueOnce({ file_creator: "Kiro", frame_title: "first" })
-      .mockReturnValueOnce({ file_creator: "Kiro", frame_title: "retry" });
+      .mockReturnValueOnce({ file_creator: "Kiri", frame_title: "first" })
+      .mockReturnValueOnce({ file_creator: "Kiri", frame_title: "retry" });
     mocks.verifyFold
       .mockReturnValueOnce(makeReport({ dH: 5, converged: false, worstSourceVertex: 42 }))
       .mockReturnValueOnce(makeReport({ dH: 6, converged: false, worstSourceVertex: 42 }))
@@ -245,6 +245,6 @@ describe("pipeline/kirigamize", () => {
     const result = kirigamizeText("solid test", "stl", { verify: false });
 
     expect(mocks.parseMesh).toHaveBeenCalledWith("solid test", "stl");
-    expect(result.fkld.file_creator).toBe("Kiro");
+    expect(result.fkld.file_creator).toBe("Kiri");
   });
 });

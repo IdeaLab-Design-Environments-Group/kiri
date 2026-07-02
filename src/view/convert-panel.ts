@@ -17,7 +17,7 @@ export class ConvertPanel {
   constructor() {
     this.element = el("section", "column convert-column");
     const panel = el("div", "panel");
-    panel.append(heading("h2", "Convert via Kiro"));
+    panel.append(heading("h2", "Convert via Kiri"));
 
     const dropzone = el("label", "dropzone") as HTMLLabelElement;
     const fileInput = el("input", "") as HTMLInputElement;

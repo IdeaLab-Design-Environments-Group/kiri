@@ -122,7 +122,7 @@ export function emitFkld(sheet: Sheet, opts: EmitOptions): FoldFile {
 
   const file: FoldFile = {
     file_spec: 1.2,
-    file_creator: opts.creator ?? "Kiro",
+    file_creator: opts.creator ?? "Kiri",
     file_classes: ["creasePattern"],
     frame_title: "Kirigamize output",
     frame_classes: ["creasePattern"],

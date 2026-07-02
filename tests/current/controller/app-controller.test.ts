@@ -139,26 +139,6 @@ class PatternEditorModalMock {
   }
 }
 
-class ElectronicsModalMock {
-  editHandler: ((circuit: unknown) => void) | null = null;
-  enabledCalls: boolean[] = [];
-  patternCalls: unknown[] = [];
-  previewCalls: unknown[] = [];
-
-  onEdit(handler: (circuit: unknown) => void): void {
-    this.editHandler = handler;
-  }
-  setEnabled(enabled: boolean): void {
-    this.enabledCalls.push(enabled);
-  }
-  setPattern(fold: unknown): void {
-    this.patternCalls.push(fold);
-  }
-  setPreview(routed: unknown): void {
-    this.previewCalls.push(routed);
-  }
-}
-
 function makeFold(overrides: Partial<FoldFile> = {}): FoldFile {
   return {
     vertices_coords: [
@@ -184,7 +164,6 @@ function setup() {
   const sim = new SimModalMock();
   const exporter = new ExportModalMock();
   const patternEditor = new PatternEditorModalMock();
-  const electronics = new ElectronicsModalMock();
   const controller = new AppController(
     store,
     convert as never,
@@ -193,9 +172,8 @@ function setup() {
     sim as never,
     exporter as never,
     patternEditor as never,
-    electronics as never,
   );
-  return { controller, store, convert, viewer, header, sim, exporter, patternEditor, electronics };
+  return { controller, store, convert, viewer, header, sim, exporter, patternEditor };
 }
 
 describe("controller/app-controller", () => {

@@ -113,7 +113,7 @@ function patternDraftToFkld(
 ): FoldFile {
   const out: FoldFile = {
     file_spec: 1.2,
-    file_creator: "Kiro pattern editor",
+    file_creator: "Kiri pattern editor",
     file_classes: ["singleModel"],
     frame_title: title,
     frame_classes: ["creasePattern"],

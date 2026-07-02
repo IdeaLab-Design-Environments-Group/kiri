@@ -14,12 +14,9 @@
  */
 import { createZip } from "@kirigami/model/zip.js";
 import type { FoldFile } from "./fold-file.js";
-import { TAPE_W, type Trace2D, tapeQuads } from "./electronics.js";
 
 const CUT_COLOR = "#000000";
 const SCORE_COLOR = "#0000ff";
-const COPPER_PWR = "#ff0000"; // PWR rail
-const COPPER_GND = "#222222"; // GND rail (dark, conventional ground)
 const STROKE_W = 0.25; // mm
 const SCORE_END_GAP = 1.5; // mm — pull each score line in from both ends
 const MARGIN = 8; // mm border around the pattern
@@ -49,13 +46,10 @@ const fmt = (n: number): string => (Number.isFinite(n) ? String(Math.round(n * 1
 
 /**
  * Build the full SVG export payload from a flat FKLD/FOLD pattern, or null if there's nothing to cut.
- * `copper` (optional) adds a third red trace layer (LED copper-tape routes) in the same mm space —
- * its points are already in the flat `vertices_coords` frame, so they register with cut/score.
  */
 export function buildFkldSvgExport(
   fold: FoldFile,
   baseName = "kirigami",
-  copper: Trace2D[] = [],
 ): SvgExportPayload | null {
   const coords = fold.vertices_coords;
   const edges = fold.edges_vertices;
@@ -78,8 +72,6 @@ export function buildFkldSvgExport(
   const w = maxX - minX + 2 * MARGIN;
   const h = maxY - minY + 2 * MARGIN;
   const T = (i: number): P => ({ x: pts[i]!.x - minX + MARGIN, y: maxY - pts[i]!.y + MARGIN });
-  // Same map for arbitrary flat-mm points (copper routes live in the vertex frame, not on vertices).
-  const TP = (p: P): P => ({ x: p.x - minX + MARGIN, y: maxY - p.y + MARGIN });
 
   // Classify edges into the cut layer (boundary B = full-sheet silhouette; cut C = interior
   // slits/darts/vents) and the score layer (M,V); F is excluded. B and C are kept SEPARATE so the
@@ -109,23 +101,20 @@ export function buildFkldSvgExport(
   const scoreBody = scoreSegs.length
     ? `<path d="${scoreSegs.join(" ")}" fill="none" stroke="${SCORE_COLOR}" stroke-width="${STROKE_W}" />`
     : "";
-  const copperBody = copperMarkup(copper, TP);
 
   const files: SvgFile[] = [];
   if (cutBody) files.push({ filename: `${baseName}-cut.svg`, svg: svgWrap(w, h, cutBody) });
   if (scoreBody) files.push({ filename: `${baseName}-score.svg`, svg: svgWrap(w, h, scoreBody) });
-  if (copperBody) files.push({ filename: `${baseName}-copper.svg`, svg: svgWrap(w, h, copperBody) });
 
   const combined: SvgFile = {
     filename: `${baseName}-combined.svg`,
-    svg: svgWrap(w, h, cutBody + scoreBody + copperBody),
+    svg: svgWrap(w, h, cutBody + scoreBody),
   };
 
   const previews = {
     cut: previewWrap(w, h, cutBody),
     score: previewWrap(w, h, scoreBody),
-    // "both" is the all-layers preview, so it also shows the copper routes when present.
-    both: previewWrap(w, h, cutBody + scoreBody + copperBody),
+    both: previewWrap(w, h, cutBody + scoreBody),
   };
 
   const enc = new TextEncoder();
@@ -198,33 +187,6 @@ function assembleLoops(bEdges: [number, number][]): number[][] | null {
     loops.push(loop);
   }
   return loops;
-}
-
-/**
- * Copper layer markup: each route becomes filled **copper-tape rectangles** (`tapeQuads`, one quad
- * per straight run, `TAPE_W` wide), grouped into one filled `<path>` per net colour (PWR = red,
- * GND = dark). Routes are flat-mm polylines already in the vertex frame; `TP` shifts them into SVG
- * space alongside the cut/score layers. PWR and GND tape may overlap where routes cross — fine, the
- * tape underside is insulated. A slight fill-opacity keeps crossings legible.
- */
-function copperMarkup(copper: Trace2D[], TP: (p: P) => P): string {
-  if (!copper || copper.length === 0) return "";
-  const byColor = new Map<string, string[]>();
-  for (const seg of copper) {
-    const pts = seg.points;
-    if (!Array.isArray(pts) || pts.length < 2) continue;
-    const color = seg.net === "gnd" ? COPPER_GND : COPPER_PWR;
-    const ds = byColor.get(color) ?? byColor.set(color, []).get(color)!;
-    for (const quad of tapeQuads(pts, TAPE_W)) {
-      ds.push("M " + quad.map((p, k) => (k === 0 ? "" : "L ") + ptStr(TP(p))).join(" ") + " Z");
-    }
-  }
-  let out = "";
-  for (const [color, ds] of byColor) {
-    if (ds.length === 0) continue;
-    out += `<path d="${ds.join(" ")}" fill="${color}" fill-opacity="0.85" stroke="none" />`;
-  }
-  return out;
 }
 
 /** A two-point line `M…L…` pulled in by `gap` at both ends; null if it would collapse. */

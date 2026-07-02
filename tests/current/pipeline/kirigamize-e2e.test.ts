@@ -116,7 +116,7 @@ describe("kirigamize end-to-end (proper kirigami, fold-from-flat as oracle)", ()
   it("verify:false emits the pattern without a report", () => {
     const result = kirigamize(makeCube(), { verify: false });
     expect(result.report).toBeNull();
-    expect(result.fkld.file_creator).toBe("Kiro");
+    expect(result.fkld.file_creator).toBe("Kiri");
     expect(result.plan.cutEdges.length).toBe(7);
   });
 });

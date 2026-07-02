@@ -990,24 +990,7 @@
   function populateExamples() {
     const sel = document.getElementById('example-select');
     const examples = [
-      ['Kirigami flap — cut-out tab (FKLD)',  '../examples/kirigami-flap.fkld'],
-      ['AKDE hexagonal kirigami N=6 (FKLD)',  '../examples/akde-hex.fkld'],
-      ['AKDE decagon kirigami N=10 (FKLD)',  '../examples/akde-decagon-pyramid.fkld'],
-      ['AKDE square pyramid (FKLD)',    'akde-square-pyramid'],
-      ['RES Square Tower — Miyamoto, faithful OS import (FKLD)',  '../examples/res-square-tower.fkld'],
-      ['RES Square Tower — Miyamoto, line-only erecting (FKLD)',  '../examples/res-square-tower-erect.fkld'],
-      ['House + door — kirigamized solid, hinge joints (FKLD)',  '../examples/house-door.fkld'],
       ['House — kirigamized gable box (FKLD)',  '../examples/house.fkld'],
-      ['Barn — monitor-roof, kirigamized (FKLD)',  '../examples/barn.fkld'],
-      ['Hotel — false-front + balcony porch (FKLD)',  '../examples/hotel.fkld'],
-      ['General store — arched false front (FKLD)',  '../examples/general-store.fkld'],
-      ['Saloon — false front + balcony, double-bay doors (FKLD)',  '../examples/saloon.fkld'],
-      ['Corner saloon — chamfered corner, wraparound balcony (FKLD)',  '../examples/corner-saloon.fkld'],
-      ['Simple 3D fold (FOLD)',         'simple'],
-      ['Box folding (FOLD)',            'box'],
-      ['Square twist crease (FOLD)',    'squaretwist'],
-      ['Diagonal CP (FOLD)',            'diagonal-cp'],
-      ['Diagonal folded (FOLD)',        'diagonal-folded'],
     ];
     for (const [label, key] of examples) {
       const o = document.createElement('option');
