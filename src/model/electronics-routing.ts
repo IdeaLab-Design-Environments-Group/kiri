@@ -548,8 +548,22 @@ function offsetPolyline(ptsIn: Vec2[], off: number, opts: OffsetOpts = {}): Vec2
     const mx = sx / sl, my = sy / sl;
     const c = mx * nCur.x + my * nCur.y; // cos(θ/2)
     const L = c > 1e-9 ? off / c : Infinity;
-    if (Math.abs(L) <= miterLimit * Math.abs(off)) {
-      out.push({ x: pts[i]!.x + mx * L, y: pts[i]!.y + my * L });
+    // Which side of the turn is this rail on? The left normal points left, so offsetting by +off lands
+    // on the inside of a left turn and the outside of a right turn.
+    const turn = u[i - 1]!.x * u[i]!.y - u[i - 1]!.y * u[i]!.x;
+    const inner = turn !== 0 && (turn > 0) === (off > 0);
+    // On the INSIDE of a turn the two offset segments overlap, and their intersection is the correctly
+    // trimmed corner — so always miter there, however sharp. Bevelling an inner corner instead emits a
+    // point on each segment, which doubles back and makes the tape hook across itself. The miter limit
+    // exists to stop a spike shooting off the *outside* of a sharp turn, so it only applies there.
+    if (inner || Math.abs(L) <= miterLimit * Math.abs(off)) {
+      // On a very tight inner corner `L` diverges (cos(θ/2) → 0); keep the joint from shooting past the
+      // neighbouring vertices, which is as far as a trimmed corner can meaningfully reach.
+      const segPrev = Math.hypot(pts[i]!.x - pts[i - 1]!.x, pts[i]!.y - pts[i - 1]!.y);
+      const segCur = Math.hypot(pts[i + 1]!.x - pts[i]!.x, pts[i + 1]!.y - pts[i]!.y);
+      const cap = Math.max(Math.abs(off), Math.min(segPrev, segCur));
+      const Lc = Math.sign(L) * Math.min(Math.abs(L), cap);
+      out.push({ x: pts[i]!.x + mx * Lc, y: pts[i]!.y + my * Lc });
     } else {
       out.push(at(pts[i]!, nPrev, off)); // bevel: still contiguous, just chamfered
       out.push(at(pts[i]!, nCur, off));
