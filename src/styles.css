@@ -720,3 +720,143 @@ body {
   background: #fff;
   cursor: pointer;
 }
+
+/* ---- Electronics modal (LED copper-tape routing) ------------------------- */
+.el-modal {
+  width: min(980px, 96vw);
+}
+.el-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem 0.9rem;
+}
+/* Calm, low-clutter toolbar: groups separated by a hairline divider, soft neutral buttons,
+   a gentle (not loud) active state. */
+.el-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  padding: 0.9rem 1.1rem 1rem;
+  background: #fff;
+}
+.el-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+.el-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.el-group + .el-group {
+  margin-left: 0.6rem;
+  padding-left: 0.85rem;
+  border-left: 1px solid var(--border, #e4e7ec);
+}
+.el-tool,
+.el-route,
+.el-clear,
+.el-zoom-in,
+.el-zoom-out,
+.el-fit {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--border, #e4e7ec);
+  border-radius: var(--radius-sm, 8px);
+  background: #fff;
+  color: #344054;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.el-zoom-in,
+.el-zoom-out {
+  min-width: 1.9rem;
+  font-weight: 600;
+  line-height: 1;
+}
+.el-tool:hover,
+.el-route:hover,
+.el-clear:hover,
+.el-zoom-in:hover,
+.el-zoom-out:hover,
+.el-fit:hover { background: var(--surface-soft, #f3f5f9); border-color: #cdd3df; }
+.el-tool.is-active,
+.el-route.is-active {
+  background: var(--accent-soft, #eef3ff);
+  color: var(--accent-strong, #1741c4);
+  border-color: var(--accent, #1f6feb);
+  font-weight: 600;
+}
+.el-canvas-wrap {
+  display: flex;
+  justify-content: center;
+  align-items: stretch;
+  background: #fff;
+  border: 1px solid #e2e2e2;
+  border-radius: 4px;
+  padding: 0.5rem;
+}
+.el-svg {
+  width: 100%;
+  height: 62vh; /* fixed frame so the pattern always fits the same on-screen size (preserveAspectRatio) */
+  touch-action: none;
+  cursor: crosshair;
+}
+.el-svg:active { cursor: grabbing; }
+/* Strokes are non-scaling (constant screen px) so they don't blow up on small-coordinate models,
+   where 0.4 mm would be a huge fraction of a ~3 mm-wide kirigamized pattern. */
+.el-cloth { fill: #e4e8ee; stroke: #cdd3dc; stroke-width: 0.6; vector-effect: non-scaling-stroke; }
+/* Tiles are fill-only so coplanar (F-edge) triangles merge into clean rigid panels — no internal
+   triangulation lines. The pinched gaps read as the lighter cloth showing through between tiles. */
+.el-tile { fill: #b3b8c1; stroke: none; }
+.el-tape { fill-rule: nonzero; fill-opacity: 0.85; stroke: none; }
+.el-tape-pwr { fill: #ff0000; }
+.el-tape-gnd { fill: #222222; }
+/* Each LED = two distinct pads (PWR red +, GND dark −) bridged by an amber chip body. */
+.el-led-body { stroke: #d8b24a; stroke-linecap: round; }
+.el-led-pwr { fill: #ee3b30; stroke: #fff; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.el-led-gnd { fill: #2b2f36; stroke: #fff; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.el-led-body.el-led-orphan { stroke: #e6a3a3; }
+.el-led-pwr.el-led-orphan,
+.el-led-gnd.el-led-orphan { stroke: #d24545; stroke-width: 1.6; }
+/* Battery = two terminal squares: a red PWR (+) and a dark GND (−), matching the tape colours. */
+.el-batt { stroke: #fff; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.el-batt-pwr { fill: #ee3b30; }
+.el-batt-gnd { fill: #2b2f36; }
+.el-batt-sign {
+  fill: #fff;
+  font-weight: 700;
+  font-family: system-ui, sans-serif;
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+}
+/* One quiet bottom row: a compact swatch legend on the left, the live status on the right. */
+.el-footer-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem 1rem;
+}
+.el-legend {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--muted, #667085);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 0.85rem;
+}
+.el-footer-row .el-status {
+  flex: 0 1 auto;
+  font-size: 0.78rem;
+  color: var(--muted, #667085);
+}
+.el-key-led { color: #b5860a; }
+.el-key-pwr { color: #ff0000; }
+.el-key-gnd { color: #222222; }

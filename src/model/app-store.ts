@@ -8,6 +8,7 @@
  * app/UI state that the three panels and the action buttons read.
  */
 import type { FoldFile, LoadedModel } from "./fold-file.js";
+import type { Circuit } from "./electronics.js";
 import { DEFAULT_MAX_SUBDIV, TILE_INSET_FRAC } from "./tile-subdiv.js";
 
 /**
@@ -40,6 +41,12 @@ export interface AppState {
   simDetail: number;
   /** Inter-tile gap (shrink-toward-centroid fraction), shared by the 3D-printed sim render and the STL export. */
   simTileGap: number;
+  /**
+   * The LED electronics authored in the Electronics tool for the displayed pattern.
+   * Transient (not persisted into the FKLD); the SVG export reads it for the copper
+   * layer. Reset to null whenever a different model is loaded.
+   */
+  circuit: Circuit | null;
 }
 
 export type StateListener = (state: Readonly<AppState>) => void;
@@ -52,6 +59,7 @@ export class AppStore {
     simMaterial: "vinyl",
     simDetail: DEFAULT_MAX_SUBDIV,
     simTileGap: TILE_INSET_FRAC,
+    circuit: null,
   };
   private readonly listeners = new Set<StateListener>();
 

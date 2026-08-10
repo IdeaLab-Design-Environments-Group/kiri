@@ -62,6 +62,16 @@ vi.mock("../../src/view/pattern-editor-modal.js", () => ({
   },
 }));
 
+vi.mock("../../src/view/electronics-modal.js", () => ({
+  ElectronicsModal: class ElectronicsModal {
+    mountTrigger = vi.fn(() => state.viewCalls.push("electronics.mountTrigger"));
+    onEdit = vi.fn();
+    setEnabled = vi.fn();
+    setPattern = vi.fn();
+    setPreview = vi.fn();
+  },
+}));
+
 vi.mock("../../src/view/header-actions.js", () => ({
   HeaderActions: class HeaderActions {
     element = { id: "header-actions" };
@@ -109,12 +119,13 @@ describe("main.ts", () => {
     expect(state.appChildren.map((x) => x.id)).toEqual(["convert", "viewer"]);
     expect(state.headerChildren.map((x) => x.id)).toEqual(["header-actions"]);
     expect(state.controllerArgs).toHaveLength(1);
-    expect(state.controllerArgs[0]).toHaveLength(7);
+    expect(state.controllerArgs[0]).toHaveLength(8);
     expect(state.loadSampleCalls).toEqual([false]);
     expect(state.viewCalls).toEqual([
       "sim.mountTrigger",
       "export.mountTrigger",
       "patternEditor.mountTrigger",
+      "electronics.mountTrigger",
       "header.appendActionButtons",
     ]);
   });

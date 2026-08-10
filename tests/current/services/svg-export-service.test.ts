@@ -14,7 +14,8 @@ describe("services/svg-export-service", () => {
 
     const out = resolveSvgExport(model, shown);
 
-    expect(buildFkldSvgExport).toHaveBeenCalledWith(shown.object, "viewer");
+    // Third arg is the copper layer: no circuit authored here, so an empty trace list.
+    expect(buildFkldSvgExport).toHaveBeenCalledWith(shown.object, "viewer", []);
     expect(out).toEqual({ object: shown.object, name: "viewer" });
   });
 
@@ -25,7 +26,7 @@ describe("services/svg-export-service", () => {
 
     const out = resolveSvgExport(model, null);
 
-    expect(buildFkldSvgExport).toHaveBeenCalledWith(model.object, "loaded");
+    expect(buildFkldSvgExport).toHaveBeenCalledWith(model.object, "loaded", []);
     expect(out).toEqual({ object: model.object, name: "loaded" });
   });
 
