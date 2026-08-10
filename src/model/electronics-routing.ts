@@ -111,15 +111,22 @@ export function planRoutes(fold: FoldFile, circuit: Circuit): RoutedCircuit {
     return { ledPoints, batteryPoint, terminals: null, traces, unreachable };
   }
 
-  // A virtual battery source wired to the battery tile's corners — the bus leaves the pack along
-  // panel corners just like every other tile.
+  // A virtual battery source wired to **every** waypoint on its own tile's ring — corners *and* edge
+  // midpoints. Tile-to-tile hops still happen only at shared corners, but the battery sits on this tile
+  // already, and a pinched ring is star-shaped about its centroid, so a straight run from the pack to
+  // any of its own ring nodes stays on the gray.
+  //
+  // Linking only the corners (as this did) forced a detour whenever the waypoint nearest a pad was an
+  // edge midpoint of the battery's own tile: the route went out to a corner and doubled back, sweeping
+  // across the other net's lead. On house.fkld that turned a 0.238 straight run into a 0.727 path and
+  // produced the criss-cross beside the battery.
   const batteryNode = graph.pos.length;
   graph.pos.push(batteryPoint!);
   graph.adj.push([]);
-  for (const cn of graph.cornerNodes[batteryFace] ?? []) {
-    const w = dist2(batteryPoint!, graph.pos[cn]!);
-    graph.adj[batteryNode]!.push({ to: cn, w });
-    graph.adj[cn]!.push({ to: batteryNode, w });
+  for (const rn of graph.ringNodes[batteryFace] ?? []) {
+    const w = dist2(batteryPoint!, graph.pos[rn]!);
+    graph.adj[batteryNode]!.push({ to: rn, w });
+    graph.adj[rn]!.push({ to: batteryNode, w });
   }
 
   const terminals = batteryTerminals(batteryPoint!, placed, graph, batteryFace, diag);

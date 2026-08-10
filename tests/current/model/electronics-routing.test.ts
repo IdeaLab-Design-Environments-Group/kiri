@@ -201,6 +201,32 @@ describe("model/electronics-routing: continuous, straightened traces", () => {
     expect(Math.abs(one - ten) / one).toBeLessThan(0.25);
   });
 
+  it("reaches a pad on the battery's own tile directly, without detouring via a corner", () => {
+    // The battery is wired to every waypoint on its own tile's ring, not just the corners. With corners
+    // only, a pad whose nearest waypoint was an edge midpoint of that same tile forced the route out to
+    // a corner and back — a doubling-back that swept across the other net's lead and produced a
+    // criss-cross beside the battery.
+    const fold = strip();
+    const r = planRoutes(fold, circuit({ battery: { face: 0 }, leds: [{ a: 0, b: 1 }] }));
+    const gap = gapGraph(fold).gaps.find((g) => g.faceA === 0 && g.faceB === 1)!;
+    // The PWR leg sits on face 0 — the battery's tile. Its whole route must stay short: no excursion
+    // further from the battery than the pad itself is.
+    const b = r.batteryPoint!;
+    const padDist = Math.hypot(gap.legA.x - b.x, gap.legA.y - b.y);
+    const pwr = r.traces.filter((t) => t.net === "pwr");
+    const routeLen = pwr.reduce((sum, t) => {
+      let l = 0;
+      for (let i = 1; i < t.points.length; i++) {
+        l += Math.hypot(t.points[i]!.x - t.points[i - 1]!.x, t.points[i]!.y - t.points[i - 1]!.y);
+      }
+      return sum + l;
+    }, 0);
+    // Route length, not distance-from-battery: the detour is roughly tangential, so it barely changes
+    // how far the tape gets from the pack but nearly doubles how much of it there is. Measured on this
+    // fixture against a 3.40 straight line — 4.19 wired to the whole ring, 8.05 wired to corners only.
+    expect(routeLen).toBeLessThan(padDist * 1.6);
+  });
+
   it("does not route across a cut (C) edge — the tape would be severed", () => {
     // An `M` hinge is joinable, so the LED routes…
     expect(planRoutes(pair("M"), circuit({ battery: { face: 0 }, leds: [{ a: 0, b: 1 }] })).unreachable)
