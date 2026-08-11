@@ -1,6 +1,7 @@
 /**
  * **View** — the "Electronics" trigger + modal: a 2D flat-pattern interface for
- * laying out LEDs and auto-routing their copper-tape traces.
+ * laying out LEDs and the battery. There is no auto-router: it records where the
+ * components go, and the conductors between them are laid by hand.
  *
  * The user clicks a gap to drop an LED bridging two tiles (or a tile to place the battery), and the modal
  * emits the authored {@link Circuit} via `onEdit`. It draws where the components go — tiles, gaps, LED
