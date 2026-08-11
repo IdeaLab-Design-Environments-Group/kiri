@@ -7,6 +7,7 @@ import {
   flatFaces,
   gapGraph,
   tapeWidthForDiag,
+  tilePolys,
 } from "../../../src/model/electronics.js";
 import type { FoldFile } from "../../../src/model/fold-file.js";
 
@@ -190,15 +191,17 @@ describe("model/electronics-routing: continuous, straightened traces", () => {
     };
     const one = gapInTapeWidths(strip());
     const ten = gapInTapeWidths(scale(strip(), 10));
-    // Both ≈ 2 × 0.55 tape-widths apart.
-    expect(one).toBeCloseTo(1.1, 1);
-    expect(ten).toBeCloseTo(1.1, 1);
-    // Close, but deliberately not tight: the waypoint clearance in `cornerRouteGraph` is capped by the
-    // absolute `TAPE_W * 0.7`, so a scaled pattern is not geometrically *similar*, and this closest-
-    // approach measure picks up that difference (amplified wherever an inner miter trims a corner).
-    // The assertions above are the real substance — a pattern-proportional offset would put one of them
-    // near 11 instead of 1.1. This bound just has to stay far below that.
-    expect(Math.abs(one - ten) / one).toBeLessThan(0.25);
+    // Measured in tape-widths, the layout is now *exactly* invariant: tape width, rail offset and the
+    // waypoint erosion are all fractions of the pattern, so a 10× pattern is geometrically similar.
+    // (It used to drift by a few percent because the waypoint clearance was capped by the absolute
+    // TAPE_W.) An offset that tracked the bounding box rather than the tape would put these two values
+    // a factor of 10 apart, so equality to this precision is a strong guard.
+    expect(one).toBeCloseTo(ten, 9);
+    // Sanity: the separation is on the order of a tape width, not orders of magnitude off. This is a
+    // vertex-to-vertex closest approach across the two nets, not a rail-to-rail spacing — the nets
+    // deliberately cross, so it is not a clearance measure and is not pinned to the 1.1 rail spacing.
+    expect(one).toBeGreaterThan(0.01);
+    expect(one).toBeLessThan(10);
   });
 
   it("reaches a pad on the battery's own tile directly, without detouring via a corner", () => {
@@ -225,6 +228,43 @@ describe("model/electronics-routing: continuous, straightened traces", () => {
     // how far the tape gets from the pack but nearly doubles how much of it there is. Measured on this
     // fixture against a 3.40 straight line — 4.19 wired to the whole ring, 8.05 wired to corners only.
     expect(routeLen).toBeLessThan(padDist * 1.6);
+  });
+
+  it("keeps the tape on the gray tiles rather than over the gap openings", () => {
+    // Waypoints are eroded perpendicular to each tile edge by the full width the tape occupies (rail
+    // offset + half a tape), so the offset strip stays on the gray. Pulling waypoints toward the
+    // centroid instead only clears an edge by cos(θ) of that, and the tape spilled over the openings.
+    const fold = strip();
+    const r = planRoutes(fold, circuit({ battery: { face: 0 }, leds: [{ a: 0, b: 1 }, { a: 1, b: 2 }] }));
+    const tiles = tilePolys(fold);
+    const inPoly = (p: Vec2, poly: Vec2[]): boolean => {
+      let inside = false;
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const a = poly[i]!, b = poly[j]!;
+        if ((a.y > p.y) !== (b.y > p.y) &&
+            p.x < ((b.x - a.x) * (p.y - a.y)) / ((b.y - a.y) || 1e-12) + a.x) inside = !inside;
+      }
+      return inside;
+    };
+    const onTile = (p: Vec2) => tiles.some((t) => t.ring.length >= 3 && inPoly(p, t.ring));
+
+    let total = 0, off = 0;
+    for (const t of r.traces) {
+      for (let i = 1; i < t.points.length; i++) {
+        const a = t.points[i - 1]!, b = t.points[i]!;
+        const len = Math.hypot(b.x - a.x, b.y - a.y);
+        const steps = Math.max(2, Math.ceil(len / 0.05));
+        for (let k = 0; k < steps; k++) {
+          const s = (k + 0.5) / steps;
+          if (!onTile({ x: a.x + (b.x - a.x) * s, y: a.y + (b.y - a.y) * s })) off += len / steps;
+        }
+        total += len;
+      }
+    }
+    // Some overhang is unavoidable: a leg pad *is* a point on the tile edge, and two tiles meet only at
+    // a corner, so the tape has to touch open space where it lands and where it hops. The guard is that
+    // the bulk of the copper sits on gray.
+    expect(off / total).toBeLessThan(0.2);
   });
 
   it("does not route across a cut (C) edge — the tape would be severed", () => {

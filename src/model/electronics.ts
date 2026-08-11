@@ -468,6 +468,61 @@ export interface CornerRouteGraph {
   ringNodes: number[][];
 }
 
+/**
+ * Shrink a simple ring by `t` **perpendicular to each edge** (a true inward offset): every edge slides
+ * inward along its own normal and consecutive shifted edges are re-intersected.
+ *
+ * This is what a waypoint's clearance has to be measured against. Pulling points toward the centroid
+ * instead ({@link insetToward}) only clears an edge by `t·cos θ`, where θ is the angle between the
+ * centroid direction and the edge normal — about 0.7·t at a right-angled corner and worse at an acute
+ * one. That shortfall is why the offset rail ended up outside the tile and the tape ran over the gaps.
+ *
+ * Returns null when the ring is too small to erode by `t` (the result would fold through itself), so
+ * callers can fall back to the radial pull.
+ */
+function erodedRing(ring: Vec2[], t: number): Vec2[] | null {
+  const n = ring.length;
+  if (n < 3 || t <= 0) return null;
+  let area2 = 0;
+  for (let i = 0; i < n; i++) {
+    const a = ring[i]!, b = ring[(i + 1) % n]!;
+    area2 += a.x * b.y - b.x * a.y;
+  }
+  if (Math.abs(area2) < 1e-12) return null;
+  const inward = area2 > 0 ? 1 : -1; // CCW ⇒ interior is left of each directed edge
+  // Each edge shifted inward: a point on it plus its direction.
+  const base: Vec2[] = [], dir: Vec2[] = [];
+  for (let i = 0; i < n; i++) {
+    const a = ring[i]!, b = ring[(i + 1) % n]!;
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const l = Math.hypot(dx, dy);
+    if (l < 1e-12) return null;
+    const ux = dx / l, uy = dy / l;
+    base.push({ x: a.x + -uy * inward * t, y: a.y + ux * inward * t });
+    dir.push({ x: ux, y: uy });
+  }
+  const out: Vec2[] = [];
+  for (let i = 0; i < n; i++) {
+    const j = (i - 1 + n) % n; // vertex i joins edge j and edge i
+    const p = base[j]!, u = dir[j]!, q = base[i]!, v = dir[i]!;
+    const den = u.x * v.y - u.y * v.x;
+    if (Math.abs(den) < 1e-9) {
+      out.push({ x: q.x, y: q.y }); // near-collinear: the shifted edges coincide
+      continue;
+    }
+    const s = ((q.x - p.x) * v.y - (q.y - p.y) * v.x) / den;
+    out.push({ x: p.x + u.x * s, y: p.y + u.y * s });
+  }
+  // Reject a collapsed/inverted result: the eroded ring must keep the same orientation and be smaller.
+  let a2 = 0;
+  for (let i = 0; i < n; i++) {
+    const a = out[i]!, b = out[(i + 1) % n]!;
+    a2 += a.x * b.y - b.x * a.y;
+  }
+  if (a2 * area2 <= 0 || Math.abs(a2) > Math.abs(area2)) return null;
+  return out;
+}
+
 /** Move `p` toward `g`, but never past ~halfway — keeps the waypoint on the gray near the boundary. */
 function insetToward(p: Vec2, g: Vec2, d: number): Vec2 {
   const dx = g.x - p.x, dy = g.y - p.y;
@@ -500,6 +555,15 @@ export function cornerRouteGraph(
     adj[v]!.push({ to: u, w });
   };
 
+  // Perpendicular clearance a waypoint needs: the centreline is displaced sideways by the rail offset
+  // (0.55 tape-widths) and the tape then spreads another half-width — so exactly 1.05 tape-widths.
+  //
+  // Measured off-tile centreline on house.fkld against this multiplier: 0.9→15.6 %, 1.05→10.5 %,
+  // 1.15→11.0 %, 1.3→11.7 %, 1.5→12.5 %, 1.8→13.1 %. The break-even value is also the best one; eroding
+  // further just pushes waypoints toward the tile centres and lengthens every route (total copper grows
+  // from 14.0 to 15.8) without putting more of it on the gray.
+  const routeClearance = tapeWidthForDiag(boundsDiagonal(faces.flatMap((f) => f.poly))) * 1.05;
+
   const shared = sharedEdges(faces);
   const assignOf = assignmentMap(fold);
   const edgeIsGap = (a: number, b: number): boolean => {
@@ -520,16 +584,30 @@ export function cornerRouteGraph(
     const d = tilePinch(f.poly, gap);
     const clear = Math.min(TAPE_W * 0.7, d);
     const v = f.verts;
+    // The gray tile this face's copper must stay on, then that ring eroded perpendicular by the tape
+    // clearance. Erosion returns null on a tile too small to take it; there we fall back to the radial
+    // pull, which under-clears but at least keeps the waypoints ordered and inside.
+    const tileRing: Vec2[] = [];
+    for (let k = 0; k < v.length; k++) {
+      const Pa = f.poly[k]!, Pb = f.poly[(k + 1) % v.length]!;
+      tileRing.push(Pa);
+      tileRing.push(edgeIsGap(v[k]!, v[(k + 1) % v.length]!) ? pinchMid(Pa, Pb, g, d) : mid2(Pa, Pb));
+    }
+    let eroded = erodedRing(tileRing, routeClearance);
+    // Too tight at the full clearance? Take whatever the tile can give rather than nothing.
+    for (let t = routeClearance / 2; !eroded && t > routeClearance / 16; t /= 2) {
+      eroded = erodedRing(tileRing, t);
+    }
     const corners: number[] = [];
     const ring: number[] = [];
     for (let k = 0; k < v.length; k++) {
       const Pa = f.poly[k]!, Pb = f.poly[(k + 1) % v.length]!;
-      const cNode = addNode(insetToward(Pa, g, clear));
+      const cNode = addNode(eroded ? eroded[2 * k]! : insetToward(Pa, g, clear));
       cornerAt.set(`${fi}_${v[k]}`, cNode);
       corners.push(cNode);
       ring.push(cNode);
       const m = edgeIsGap(v[k]!, v[(k + 1) % v.length]!) ? pinchMid(Pa, Pb, g, d) : mid2(Pa, Pb);
-      ring.push(addNode(insetToward(m, g, clear)));
+      ring.push(addNode(eroded ? eroded[2 * k + 1]! : insetToward(m, g, clear)));
     }
     for (let k = 0; k < ring.length; k++) link(ring[k]!, ring[(k + 1) % ring.length]!);
     cornerNodes.push(corners);
