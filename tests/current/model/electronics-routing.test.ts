@@ -6,6 +6,7 @@ import {
   flatFaces,
   gapGraph,
   ledOf,
+  pointInFace,
 } from "../../../src/model/electronics.js";
 import {
   batteryTerminals,
@@ -118,12 +119,42 @@ describe("model/electronics-routing", () => {
   it("keeps crossings far below the graph-search router it replaces", () => {
     // Pins the measured improvement so a regression is visible. The old router scored 78 here and 36 on
     // puffin, on these same configurations, while also running over chips.
-    const cases: [string, number][] = [["akde-hex.fkld", 13], ["puffin.fkld", 5], ["church.fkld", 3]];
+    const cases: [string, number][] = [["akde-hex.fkld", 3], ["puffin.fkld", 5], ["church.fkld", 8]];
     for (const [name, budget] of cases) {
       const { faces, gaps } = load(name);
       const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 12), battery: { face: 0 } });
       expect(countNetCrossings(r.traces), name).toBeLessThanOrEqual(budget);
     }
+  });
+
+  it("keeps every trace inside the body", () => {
+    // Copper must lie on material. Sampling along each segment catches a span that leaves the silhouette
+    // between its endpoints -- which endpoint-only checks miss, and which is exactly what straight
+    // pad-to-pad hops used to do.
+    for (const name of ["house.fkld", "church.fkld", "puffin.fkld", "akde-hex.fkld"]) {
+      const { faces, gaps } = load(name);
+      const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 12), battery: { face: 0 } });
+      let off = 0;
+      for (const t of r.traces) {
+        for (let i = 1; i < t.pts.length; i++) {
+          const a = t.pts[i - 1]!, b = t.pts[i]!;
+          for (let k = 1; k <= 9; k++) {
+            const u = k / 10;
+            const p = { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u };
+            if (pointInFace(faces, p) < 0) off++;
+          }
+        }
+      }
+      expect(off, `${name} has copper off the body`).toBe(0);
+    }
+  });
+
+  it("routes every LED on a connected pattern rather than reporting it unreachable", () => {
+    // Guards the corridor's adjacency: building it from hinged edges alone makes the two triangles of one
+    // flat panel look disconnected, and 10 of 12 LEDs then get dropped as unreachable.
+    const { faces, gaps } = load("akde-hex.fkld");
+    const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 12), battery: { face: 0 } });
+    expect(r.unreachable).toEqual([]);
   });
 
   it("scales with the pattern: geometry scaled by k gives copper scaled by k", () => {

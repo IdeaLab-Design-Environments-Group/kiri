@@ -373,10 +373,16 @@ export class ElectronicsModal {
     }
     // Copper tape, under the components so the pads and terminals stay readable on top of it.
     for (const t of this.routed.traces) {
-      if (t.pts.length < 2) continue;
-      const d = "M " + t.pts.map((p, k) => (k === 0 ? "" : "L ") + ptStr(this.tp(p))).join(" ");
       const cls = t.net === "pwr" ? "el-tape el-tape-pwr" : "el-tape el-tape-gnd";
-      parts.push(`<path d="${d}" class="${cls}" stroke-width="${fmt(this.tapeW())}" />`);
+      // Segment by segment rather than one polyline: butt caps then give each run square ends, so it reads
+      // as a rectangle of tape at its real width instead of a rounded line.
+      for (let k = 1; k < t.pts.length; k++) {
+        const a = this.tp(t.pts[k - 1]!);
+        const b = this.tp(t.pts[k]!);
+        parts.push(
+          `<path d="M ${ptStr(a)} L ${ptStr(b)}" class="${cls}" stroke-width="${fmt(this.tapeW())}" />`,
+        );
+      }
     }
     // Each LED is two distinct pads straddling its hinge — a PWR (+) pad toward face `a` and a GND (−)
     // pad toward face `b` — bridged by the LED chip. An LED whose gap no longer exists has nowhere to
@@ -445,9 +451,10 @@ export class ElectronicsModal {
     return batteryTerminals(c, this.diag());
   }
 
-  /** Tape width, scaled to the pattern like every other marker here. */
+  /** Tape width, scaled to the pattern like every other marker here. Real copper tape is wide relative to
+   *  these features, so this is deliberately chunky rather than a hairline. */
   private tapeW(): number {
-    return this.diag() * 0.005;
+    return this.diag() * 0.011;
   }
 
   private diag(): number {
