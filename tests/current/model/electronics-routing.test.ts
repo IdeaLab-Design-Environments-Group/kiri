@@ -238,6 +238,35 @@ describe("model/electronics-routing: continuous, straightened traces", () => {
     expect(routeLen).toBeLessThan(padDist * 1.6);
   });
 
+  it("lays few long strips rather than a piece per junction", () => {
+    // Tape bends, so a strip carries straight through a junction and only the *other* branches there
+    // need a fresh piece. This needs a net that actually branches: a 4-tile row with an LED on every
+    // hinge and the battery in the middle, so each net serves three pads off a shared trunk.
+    // Measured: 6 strips carrying through, 7 when every junction splits.
+    const fold: FoldFile = {
+      vertices_coords: [[0, 0], [10, 0], [10, 10], [0, 10], [20, 0], [20, 10],
+                        [30, 0], [30, 10], [40, 0], [40, 10]],
+      faces_vertices: [[0, 1, 2, 3], [1, 4, 5, 2], [4, 6, 7, 5], [6, 8, 9, 7]],
+      edges_vertices: [[1, 2], [4, 5], [6, 7]],
+      edges_assignment: ["M", "M", "M"],
+    };
+    const r = planRoutes(fold, circuit({
+      battery: { face: 1 },
+      leds: [{ a: 0, b: 1 }, { a: 1, b: 2 }, { a: 2, b: 3 }],
+    }));
+    expect(r.unreachable).toEqual([]);
+    expect(r.traces.length).toBeLessThanOrEqual(6);
+    // No sliver pieces: every strip should be a real run, not a stub left over from a split.
+    const lengths = r.traces.map((t) => {
+      let l = 0;
+      for (let i = 1; i < t.points.length; i++) {
+        l += Math.hypot(t.points[i]!.x - t.points[i - 1]!.x, t.points[i]!.y - t.points[i - 1]!.y);
+      }
+      return l;
+    });
+    expect(Math.min(...lengths)).toBeGreaterThan(0.5);
+  });
+
   it("reports each LED's pads as its two real legs, one per net", () => {
     // The router may reverse an LED to save a crossing, so `ledPads` — not `led.a` — is the source of
     // truth for which pad is +. Whatever it picks must still be the gap's own two legs, one each.

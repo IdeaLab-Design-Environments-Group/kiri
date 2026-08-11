@@ -15,10 +15,13 @@
  * common trunks. Crossings between the two nets are allowed (insulated tape underside); the enforced
  * rule is the LED keep-out, not net-vs-net.
  *
- * **Each trace is one continuous polyline.** The tree is decomposed into *chains* that split only at
- * junctions, and every chain is emitted as a single {@link Trace2D} running from the battery terminal
- * (or its parent junction) all the way onto the LED's leg pad — the leg stub is the chain's last
- * segment, not a separate trace. Chains are then **straightened** inside each tile (a greedy
+ * **Each trace is one continuous strip of tape, and there are as few as possible.** Copper tape bends,
+ * so a strip runs *through* a junction — only the other branches there need a fresh piece laid over it,
+ * and a strip ends only on a leg pad. Every strip is one {@link Trace2D}, with the leg stub as its last
+ * segment rather than a separate trace. Breaking at every junction instead turns one continuous run into
+ * a pile of short pieces to lay end to end (20 strips instead of 12 on the bundled house). A strip is
+ * never carried into a branch that would fold it back across its own tape. Strips are **straightened**
+ * inside each tile (a greedy
  * line-of-sight pull bounded by the tile's pinched ring, so copper never strays onto the cloth or over
  * a gap opening) and **offset as whole polylines** with mitered joins, so consecutive segments share
  * exact endpoints. Junctions carry a normal keyed on the incoming edge, so a branch leaves its parent
@@ -350,19 +353,20 @@ function emitNet(
 
   const chains = chainsFromPaths(paths);
 
-  // A chain that stops at a junction publishes the normal of its final segment; every child chain
-  // starts with that same normal, so parent-end and child-start offset to the identical point.
-  const junctionNormal = new Map<string, Vec2>();
+  // Every point a strip runs *through* publishes the normal of the segment arriving there. A branch
+  // that starts at such a point adopts it, so the branch leaves its parent exactly where the parent's
+  // edge is rather than a rail-width off it.
+  const normalAt = new Map<string, Vec2>();
   for (const c of chains) {
-    if (c.endsOnPad || c.points.length < 2) continue;
-    const last = c.points[c.points.length - 1]!;
-    const n = leftNormal(c.points[c.points.length - 2]!, last);
-    if (n) junctionNormal.set(ptKey(last), n);
+    for (let i = 1; i < c.points.length; i++) {
+      const n = leftNormal(c.points[i - 1]!, c.points[i]!);
+      if (n) normalAt.set(ptKey(c.points[i]!), n);
+    }
   }
 
   for (const c of chains) {
     const startsAtAnchor = Math.hypot(c.points[0]!.x - anchor.x, c.points[0]!.y - anchor.y) < 1e-9;
-    const startNormal = startsAtAnchor ? null : junctionNormal.get(ptKey(c.points[0]!)) ?? null;
+    const startNormal = startsAtAnchor ? null : normalAt.get(ptKey(c.points[0]!)) ?? null;
     const points = offsetPolyline(c.points, off, {
       startNormal,
       taperStart: startsAtAnchor,
@@ -392,9 +396,29 @@ function ptKey(p: Vec2): string {
 }
 
 /**
- * Merge straightened paths into chains that break only where the paths diverge, so a shared trunk is
- * emitted once (no doubled tape) and every chain stays contiguous.
+ * Merge the straightened paths into as few strips as possible.
+ *
+ * Copper tape bends, so one strip can carry straight on through a junction — only the *other* branches
+ * need a new piece laid over it. At each junction the strip therefore continues into whichever child
+ * best keeps its heading, and the remaining children start their own strips. Breaking every strip at
+ * every junction (as this first did) chopped a single continuous run into a pile of short pieces that
+ * had to be laid end to end.
+ *
+ * A shared trunk is still emitted once, so no tape is doubled.
  */
+/** Cosine of the sharpest heading change a single strip is carried through. */
+const MERGE_MIN_COS = 0.6; // ~70 degrees
+
+/** Would extending `points` to `next` make the strip cross a part of itself already laid? */
+function crossesOwn(points: Vec2[], next: Vec2): boolean {
+  const from = points[points.length - 1]!;
+  // Skip the immediately preceding segment: it shares an endpoint, which is a touch, not a crossing.
+  for (let i = 1; i < points.length - 1; i++) {
+    if (segsProperlyIntersect(from, next, points[i - 1]!, points[i]!)) return true;
+  }
+  return false;
+}
+
 function chainsFromPaths(paths: Vec2[][]): Chain[] {
   interface Branch { pt: Vec2; kids: Map<string, Branch>; isLeaf: boolean }
   const root: Branch = { pt: paths[0]![0]!, kids: new Map(), isLeaf: false };
@@ -416,22 +440,44 @@ function chainsFromPaths(paths: Vec2[][]): Chain[] {
   const chains: Chain[] = [];
   const stack: Branch[] = [root];
   while (stack.length > 0) {
-    const start = stack.pop()!;
-    let node = start;
+    let node = stack.pop()!;
     const points = [node.pt];
-    // Extend while the branch continues in exactly one direction.
-    while (node.kids.size === 1) {
-      node = node.kids.values().next().value!;
+    for (;;) {
+      const kids = [...node.kids.values()];
+      if (kids.length === 0) break;
+      // Keep going in the straightest direction; hand the rest off as their own strips.
+      // With a single continuation there is no choice — it is the same run, so carry on.
+      // At a junction, prefer the straightest branch, but never one that would fold the strip back
+      // across itself: a strip that crosses its own tape is wasted copper, so start a new piece instead.
+      let go = 0;
+      if (kids.length > 1) {
+        const inDir = points.length >= 2 ? leftNormal(points[points.length - 2]!, node.pt) : null;
+        // `leftNormal` is the perpendicular, so comparing perpendiculars compares headings.
+        const ranked = kids
+          .map((k, i) => {
+            const d = leftNormal(node.pt, k.pt);
+            const dot = inDir && d ? d.x * inDir.x + d.y * inDir.y : 0;
+            return { i, dot };
+          })
+          .sort((a, b) => b.dot - a.dot);
+        const pick = ranked.find((r) => !crossesOwn(points, kids[r.i]!.pt));
+        if (!pick) {
+          for (const k of kids) {
+            stack.push({ pt: node.pt, kids: new Map([[ptKey(k.pt), k]]), isLeaf: false });
+          }
+          break;
+        }
+        go = pick.i;
+      }
+      kids.forEach((k, i) => {
+        if (i !== go) stack.push({ pt: node.pt, kids: new Map([[ptKey(k.pt), k]]), isLeaf: false });
+      });
+      node = kids[go]!;
       points.push(node.pt);
     }
-    if (points.length >= 2 || node.kids.size > 0) {
-      chains.push({ points, endsOnPad: node.isLeaf && node.kids.size === 0 });
-    }
-    for (const kid of node.kids.values()) {
-      stack.push({ pt: node.pt, kids: new Map([[ptKey(kid.pt), kid]]), isLeaf: false });
-    }
+    if (points.length >= 2) chains.push({ points, endsOnPad: node.isLeaf });
   }
-  return chains.filter((c) => c.points.length >= 2);
+  return chains;
 }
 
 /** Which face each route node belongs to (`-1` for the virtual battery node). */
