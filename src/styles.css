@@ -810,6 +810,11 @@ body {
 /* Tiles are fill-only so coplanar (F-edge) triangles merge into clean rigid panels — no internal
    triangulation lines. The pinched gaps read as the lighter cloth showing through between tiles. */
 .el-tile { fill: #b3b8c1; stroke: none; }
+/* Copper tape, in the same PWR red / GND dark as the pads and the battery terminals it joins. Drawn as a
+   stroked centreline (the router plans centrelines), so the width is the tape width. */
+.el-tape { fill: none; stroke-linecap: round; stroke-linejoin: round; opacity: 0.85; }
+.el-tape-pwr { stroke: #ff0000; }
+.el-tape-gnd { stroke: #222222; }
 /* Each LED = two distinct pads (PWR red +, GND dark −) bridged by an amber chip body. */
 .el-led-body { stroke: #d8b24a; stroke-linecap: round; }
 .el-led-pwr { fill: #ee3b30; stroke: #fff; stroke-width: 1; vector-effect: non-scaling-stroke; }
@@ -852,3 +857,5 @@ body {
   color: var(--muted, #667085);
 }
 .el-key-led { color: #b5860a; }
+.el-key-pwr { color: #ff0000; }
+.el-key-gnd { color: #222222; }

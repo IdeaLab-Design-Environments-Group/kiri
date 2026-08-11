@@ -1,12 +1,13 @@
 /**
  * **View** — the "Electronics" trigger + modal: a 2D flat-pattern interface for
- * laying out LEDs and the battery. There is no auto-router: it records where the
- * components go, and the conductors between them are laid by hand.
+ * laying out LEDs and the battery, with their copper tape auto-routed live.
  *
  * The user clicks a gap to drop an LED bridging two tiles (or a tile to place the battery), and the modal
- * emits the authored {@link Circuit} via `onEdit`. It draws where the components go — tiles, gaps, LED
- * pads, the battery terminals — and nothing else: there is no auto-router, so no copper is planned or
- * shown. Conductors are the user's to lay.
+ * emits the authored {@link Circuit} via `onEdit`. Copper is re-planned on every edit — there is no
+ * "route" button to press — so the tape follows the components as they are placed.
+ *
+ * Polarity is the router's to decide, not the author's: it reports which pad it landed PWR on, and the
+ * preview draws that, so the pad colours say which way round to fit each component.
  *
  * All geometry is the flat pattern's 2D mm coords (the SVG export frame).
  */
@@ -25,6 +26,7 @@ import {
   pointInFace,
   tilePolys,
 } from "../model/electronics.js";
+import { type RoutedCircuit, EMPTY_ROUTE, batteryTerminals, planRoutes } from "../model/electronics-routing.js";
 import type { FoldFile } from "../model/fold-file.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -47,6 +49,7 @@ export class ElectronicsModal {
   private points: Vec2[] = [];
   private bounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
   private circuit: Circuit = { leds: [], battery: null };
+  private routed: RoutedCircuit = EMPTY_ROUTE;
 
   // Pan/zoom: `content` is the full pattern box (mm + margin); `view` is the visible window into it.
   private content = { w: 1, h: 1 };
@@ -93,6 +96,8 @@ export class ElectronicsModal {
           <div class="el-footer-row">
             <p class="el-legend">
               <span class="el-key el-key-led">● LED</span>
+              <span class="el-key el-key-pwr">▬ PWR</span>
+              <span class="el-key el-key-gnd">▬ GND</span>
               <span class="el-key el-key-batt">▮ Battery</span>
             </p>
             <span class="sim-status el-status"></span>
@@ -343,7 +348,13 @@ export class ElectronicsModal {
 
   // ---- rendering -----------------------------------------------------------
 
+  /** Re-plan copper for the current circuit. Cheap enough to do on every edit. */
+  private replan(): void {
+    this.routed = this.fold ? planRoutes(this.faces, this.gaps, this.circuit) : EMPTY_ROUTE;
+  }
+
   private render(): void {
+    this.replan();
     this.applyViewBox(); // keep the current pan/zoom window across re-renders
 
     const parts: string[] = [];
@@ -360,18 +371,25 @@ export class ElectronicsModal {
       const d = "M " + t.ring.map((p, k) => (k === 0 ? "" : "L ") + ptStr(this.tp(p))).join(" ") + " Z";
       parts.push(`<path d="${d}" class="el-tile" />`);
     }
+    // Copper tape, under the components so the pads and terminals stay readable on top of it.
+    for (const t of this.routed.traces) {
+      if (t.pts.length < 2) continue;
+      const d = "M " + t.pts.map((p, k) => (k === 0 ? "" : "L ") + ptStr(this.tp(p))).join(" ");
+      const cls = t.net === "pwr" ? "el-tape el-tape-pwr" : "el-tape el-tape-gnd";
+      parts.push(`<path d="${d}" class="${cls}" stroke-width="${fmt(this.tapeW())}" />`);
+    }
     // Each LED is two distinct pads straddling its hinge — a PWR (+) pad toward face `a` and a GND (−)
     // pad toward face `b` — bridged by the LED chip. An LED whose gap no longer exists has nowhere to
     // sit and is drawn as an orphan.
-    this.circuit.leds.forEach((led) => {
+    this.circuit.leds.forEach((led, i) => {
       const gap = gapForLed(this.gaps, led);
       if (!gap) return;
-      const orphan = false;
+      const orphan = this.routed.unreachable.includes(i);
       const mid = gap.point;
-      // Polarity follows the LED's own `a` face. Nothing re-decides it: with no router, which pad is `+`
-      // is the author's to pick by how they place the component.
-      const pwrLeg = gap.faceA === led.a ? gap.legA : gap.legB;
-      const gndLeg = gap.faceA === led.a ? gap.legB : gap.legA;
+      // Polarity is whatever the router landed on, so the drawn `+`/`−` is the orientation to build.
+      const planned = this.routed.pads[i];
+      const pwrLeg = planned && !isZero(planned.pwr) ? planned.pwr : gap.legA;
+      const gndLeg = planned && !isZero(planned.gnd) ? planned.gnd : gap.legB;
       const r = this.markerR();
       const rPad = r * 0.62;
       // Pads sit on the pinched leg positions — where a conductor would have to land. Degenerate pinch →
@@ -422,10 +440,14 @@ export class ElectronicsModal {
     return this.diag() * 0.012;
   }
 
-  /** The battery's two terminals: side-by-side either side of its centre. */
+  /** The battery's two terminals. Shared with the router so the copper lands on the drawn squares. */
   private defaultTerminals(c: Vec2): { pwr: Vec2; gnd: Vec2 } {
-    const h = this.markerR() * 1.5;
-    return { pwr: { x: c.x + h, y: c.y }, gnd: { x: c.x - h, y: c.y } };
+    return batteryTerminals(c, this.diag());
+  }
+
+  /** Tape width, scaled to the pattern like every other marker here. */
+  private tapeW(): number {
+    return this.diag() * 0.005;
   }
 
   private diag(): number {
@@ -437,6 +459,8 @@ export class ElectronicsModal {
     const batt = this.circuit.battery ? "battery set" : "no battery";
     let msg = `${n} LED${n === 1 ? "" : "s"} · ${batt}`;
     if (!this.circuit.battery && n > 0) msg += " · add a battery";
+    const un = this.routed.unreachable.length;
+    if (un > 0 && this.circuit.battery) msg += ` · ${un} unreachable`;
     this.statusEl.textContent = msg;
   }
 }
@@ -448,5 +472,6 @@ function cloneCircuit(c: Circuit): Circuit {
   };
 }
 
+const isZero = (p: Vec2): boolean => p.x === 0 && p.y === 0;
 const fmt = (n: number): string => (Number.isFinite(n) ? String(Math.round(n * 1000) / 1000) : "0");
 const ptStr = (p: Vec2): string => `${fmt(p.x)} ${fmt(p.y)}`;
