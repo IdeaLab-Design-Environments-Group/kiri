@@ -2,21 +2,17 @@
  * **View** — the "Electronics" trigger + modal: a 2D flat-pattern interface for
  * laying out LEDs and auto-routing their copper-tape traces.
  *
- * The user clicks a gap to drop an LED bridging two tiles (or a tile to place the battery).
- * There are only two nets — PWR and GND. The modal is a *dumb* view: it renders the flat pattern +
- * the {@link RoutedCircuit} it is handed (copper drawn as filled tape rectangles), and emits the
- * authored {@link Circuit} via `onEdit`. Route planning happens in the service/controller (the view
- * never calls the router) — the controller plans and pushes the result back via
- * {@link ElectronicsModal.setPreview}, keeping the single-render path.
+ * The user clicks a gap to drop an LED bridging two tiles (or a tile to place the battery), and the modal
+ * emits the authored {@link Circuit} via `onEdit`. It draws where the components go — tiles, gaps, LED
+ * pads, the battery terminals — and nothing else: there is no auto-router, so no copper is planned or
+ * shown. Conductors are the user's to lay.
  *
- * All geometry is the flat pattern's 2D mm coords (the SVG export frame), so the
- * on-screen routes match the exported copper layer exactly.
+ * All geometry is the flat pattern's 2D mm coords (the SVG export frame).
  */
 import {
   type Circuit,
   type FlatFace,
   type GapEdge,
-  type RoutedCircuit,
   type TilePoly,
   type Vec2,
   flatFaces,
@@ -26,8 +22,6 @@ import {
   ledOf,
   nearestGap,
   pointInFace,
-  tapeRibbon,
-  tapeWidthForDiag,
   tilePolys,
 } from "../model/electronics.js";
 import type { FoldFile } from "../model/fold-file.js";
@@ -52,11 +46,6 @@ export class ElectronicsModal {
   private points: Vec2[] = [];
   private bounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
   private circuit: Circuit = { leds: [], battery: null };
-  private routed: RoutedCircuit | null = null;
-  // Copper is drawn as soon as there is something to route. The controller re-plans on every change and
-  // pushes a fresh preview, so the tape follows each placement live; "Auto-route" is now a manual
-  // re-plan for when you want to force one, not a gate that hides the result.
-  private showRoutes = true;
 
   // Pan/zoom: `content` is the full pattern box (mm + margin); `view` is the visible window into it.
   private content = { w: 1, h: 1 };
@@ -89,7 +78,6 @@ export class ElectronicsModal {
               <button type="button" class="el-tool" data-tool="battery" title="Place the battery — click a tile">Battery</button>
             </span>
             <span class="el-group">
-              <button type="button" class="el-route" title="Auto-route copper tape from the battery to every LED">Auto-route</button>
               <button type="button" class="el-clear" title="Remove all LEDs, the battery and routes">Clear</button>
             </span>
             <span class="el-group el-view-group">
@@ -105,8 +93,6 @@ export class ElectronicsModal {
             <p class="el-legend">
               <span class="el-key el-key-led">● LED</span>
               <span class="el-key el-key-batt">▮ Battery</span>
-              <span class="el-key el-key-pwr">▬ PWR</span>
-              <span class="el-key el-key-gnd">▬ GND</span>
             </p>
             <span class="sim-status el-status"></span>
           </div>
@@ -123,7 +109,6 @@ export class ElectronicsModal {
       btn.addEventListener("click", () => this.selectTool(tool));
       this.toolButtons.set(tool, btn);
     }
-    this.overlay.querySelector(".el-route")!.addEventListener("click", () => this.autoRoute());
     this.overlay.querySelector(".el-clear")!.addEventListener("click", () => this.clear());
     this.overlay.querySelector(".el-zoom-in")!.addEventListener("click", () => this.zoomBy(1.25));
     this.overlay.querySelector(".el-zoom-out")!.addEventListener("click", () => this.zoomBy(0.8));
@@ -168,16 +153,9 @@ export class ElectronicsModal {
     this.gaps = fold ? gapGraph(fold, this.faces).gaps : [];
     this.points = fold ? flatPoints(fold) : [];
     this.circuit = { leds: [], battery: null };
-    this.routed = null;
     this.computeBounds();
     this.fitView();
     this.syncButtons();
-    if (!this.overlay.hidden) this.render();
-  }
-
-  /** Receive the planned routes from the controller and redraw. */
-  setPreview(routed: RoutedCircuit | null): void {
-    this.routed = routed;
     if (!this.overlay.hidden) this.render();
   }
 
@@ -202,21 +180,13 @@ export class ElectronicsModal {
 
   private clear(): void {
     this.circuit = { leds: [], battery: null };
-    this.routed = null;
     this.syncButtons();
-    this.emit();
-  }
-
-  /** "Auto-route": force a re-plan. The tape already updates on every placement. */
-  private autoRoute(): void {
     this.emit();
   }
 
   /** Reflect active state on the toggle-ish toolbar buttons. */
   private syncButtons(): void {
-    // Routing is live, so the button reads as available whenever there is a circuit to route.
-    const live = this.circuit.battery != null && this.circuit.leds.length > 0;
-    this.overlay.querySelector(".el-route")!.classList.toggle("is-active", live);
+    for (const [t, btn] of this.toolButtons) btn.classList.toggle("is-active", t === this.tool);
   }
 
   private onCanvasClick(e: MouseEvent): void {
@@ -386,45 +356,22 @@ export class ElectronicsModal {
       const d = "M " + t.ring.map((p, k) => (k === 0 ? "" : "L ") + ptStr(this.tp(p))).join(" ") + " Z";
       parts.push(`<path d="${d}" class="el-tile" />`);
     }
-    // Copper-tape routes: each run thickened into a filled ribbon (tapeRibbon — quads plus a wedge at
-    // every bend, so a corner has no notch). PWR/GND tape may cross/overlap freely (insulated
-    // underside). Drawn under the markers, only once auto-routed.
-    //
-    // All of one net's runs go into a SINGLE <path>: `.el-tape` is semi-transparent, so a path per run
-    // would double-darken wherever two runs of the same net meet — every branch junction.
-    const tapeByNet = new Map<string, string[]>();
-    for (const tr of this.showRoutes ? this.routed?.traces ?? [] : []) {
-      const polys = tapeRibbon(tr.points, this.tapeW());
-      if (polys.length === 0) continue;
-      const ds = tapeByNet.get(tr.net) ?? [];
-      for (const q of polys) {
-        ds.push("M " + q.map((p, k) => (k === 0 ? "" : "L ") + ptStr(this.tp(p))).join(" ") + " Z");
-      }
-      tapeByNet.set(tr.net, ds);
-    }
-    for (const [net, ds] of tapeByNet) {
-      parts.push(`<path d="${ds.join(" ")}" class="el-tape el-tape-${net}" />`);
-    }
     // Each LED is two distinct pads straddling its hinge — a PWR (+) pad toward face `a` and a GND (−)
-    // pad toward face `b` — set a controlled, noticeable distance apart and bridged by the LED chip.
-    // The router reports unreachable LEDs by their index in circuit.leds.
-    const unreachable = new Set(this.routed?.unreachable ?? []);
-    this.circuit.leds.forEach((led, i) => {
+    // pad toward face `b` — bridged by the LED chip. An LED whose gap no longer exists has nowhere to
+    // sit and is drawn as an orphan.
+    this.circuit.leds.forEach((led) => {
       const gap = gapForLed(this.gaps, led);
       if (!gap) return;
-      const orphan = unreachable.has(i);
+      const orphan = false;
       const mid = gap.point;
-      // Polarity is the router's call — it reverses an LED where that saves a crossing — so take the
-      // pads from its result. Falling back to the LED's own `a` face is only for the un-routed state;
-      // using it once a route exists would draw a `+` on the pad the GND tape lands on.
-      const pads = this.routed?.ledPads?.[i];
-      const pwrLeg = pads ? pads.pwr : gap.faceA === led.a ? gap.legA : gap.legB;
-      const gndLeg = pads ? pads.gnd : gap.faceA === led.a ? gap.legB : gap.legA;
+      // Polarity follows the LED's own `a` face. Nothing re-decides it: with no router, which pad is `+`
+      // is the author's to pick by how they place the component.
+      const pwrLeg = gap.faceA === led.a ? gap.legA : gap.legB;
+      const gndLeg = gap.faceA === led.a ? gap.legB : gap.legA;
       const r = this.markerR();
       const rPad = r * 0.62;
-      // Draw each pad exactly where the router lands its copper — the pinched leg pad. (Placing them a
-      // fixed distance either side of the hinge midpoint instead, as this used to, left the tape
-      // visibly ending short of its own pad.) Degenerate pinch → straddle the hinge perpendicular.
+      // Pads sit on the pinched leg positions — where a conductor would have to land. Degenerate pinch →
+      // straddle the hinge perpendicular so the two are still distinguishable.
       let pwrPt = pwrLeg, gndPt = gndLeg;
       if (Math.hypot(pwrLeg.x - gndLeg.x, pwrLeg.y - gndLeg.y) < 1e-6) {
         const [e0, e1] = gap.ends; // perpendicular to the shared edge
@@ -449,7 +396,7 @@ export class ElectronicsModal {
     if (this.circuit.battery) {
       const f = this.faces[this.circuit.battery.face];
       if (f) {
-        const term = this.routed?.terminals ?? this.defaultTerminals(f.centroid);
+        const term = this.defaultTerminals(f.centroid);
         const rSq = this.markerR() * 0.95;
         const sq = (p: Vec2, cls: string, sign: string): void => {
           const c = this.tp(p);
@@ -471,15 +418,7 @@ export class ElectronicsModal {
     return this.diag() * 0.012;
   }
 
-  /**
-   * Copper-tape width. Shared with the SVG copper layer via {@link tapeWidthForDiag}, so the preview is
-   * the same width as what gets cut — the flat pattern has no real size of its own (see TAPE_W_FRAC).
-   */
-  private tapeW(): number {
-    return tapeWidthForDiag(this.diag());
-  }
-
-  /** Battery terminals before any LED is routed: side-by-side either side of the battery centre. */
+  /** The battery's two terminals: side-by-side either side of its centre. */
   private defaultTerminals(c: Vec2): { pwr: Vec2; gnd: Vec2 } {
     const h = this.markerR() * 1.5;
     return { pwr: { x: c.x + h, y: c.y }, gnd: { x: c.x - h, y: c.y } };
@@ -492,10 +431,8 @@ export class ElectronicsModal {
   private renderStatus(): void {
     const n = this.circuit.leds.length;
     const batt = this.circuit.battery ? "battery set" : "no battery";
-    const orphans = this.routed?.unreachable?.length ?? 0;
     let msg = `${n} LED${n === 1 ? "" : "s"} · ${batt}`;
-    if (!this.circuit.battery && n > 0) msg += " · add a battery to route";
-    else if (orphans > 0) msg += ` · ${orphans} unreachable`;
+    if (!this.circuit.battery && n > 0) msg += " · add a battery";
     this.statusEl.textContent = msg;
   }
 }

@@ -21,7 +21,6 @@ import {
 import { resolveSimScene } from "../services/sim-scene-service.js";
 import { resolveSvgExport } from "../services/svg-export-service.js";
 import { resolveStlExport } from "../services/stl-export-service.js";
-import { resolveRoutedCircuit } from "../services/electronics-service.js";
 import { DEFAULT_PRINT_SIZE } from "../model/stl-export.js";
 import { EMPTY_CIRCUIT, type Circuit } from "../model/electronics.js";
 import type { ConvertPanel } from "../view/convert-panel.js";
@@ -62,11 +61,10 @@ export class AppController {
     // Likewise the sim's Gap slider: store it so the STL export uses the same inter-tile gap.
     this.sim.onGapChange((gap) => this.store.update({ simTileGap: gap }));
 
-    // SVG export targets the same source — "what you see is what you cut" (black=cut, blue=score),
-    // plus the LED copper layer (red) when a circuit is authored in the Electronics tool.
+    // SVG export targets the same source — "what you see is what you cut" (black=cut, blue=score).
     this.exporter.setProvider(() => {
-      const { model, viewerShown, circuit } = this.store.getState();
-      return resolveSvgExport(model, viewerShown, circuit);
+      const { model, viewerShown } = this.store.getState();
+      return resolveSvgExport(model, viewerShown);
     });
     // STL export of the printed tiles (pinched hexagons, matched to the sim render). Height from the
     // menu; gap from the sim's shared `simTileGap` so export and sim match; `DEFAULT_PRINT_SIZE`
@@ -112,15 +110,13 @@ export class AppController {
     this.sim.setEnabled(!!simObject && canSimulate(simObject));
     // Export is available for any displayed FKLD/FOLD pattern (even non-simulable ones).
     this.exporter.setEnabled(!!simObject);
-    // Electronics: lay LEDs on any displayed flat pattern; feed the planned routes to the modal.
+    // Electronics: lay LEDs and the battery on any displayed flat pattern. There is no auto-router, so
+    // the modal has nothing pushed back to it — it draws the placement it was given.
     this.electronics.setEnabled(!!simObject);
     this.electronics.setPattern(simObject);
-    this.electronics.setPreview(
-      simObject ? resolveRoutedCircuit(m, state.viewerShown, state.circuit ?? EMPTY_CIRCUIT) : null,
-    );
   }
 
-  /** Store the authored LED circuit; the render subscription re-plans + previews it. */
+  /** Store the authored LED circuit; the render subscription redraws it. */
   updateCircuit(circuit: Circuit): void {
     this.store.update({ circuit });
   }

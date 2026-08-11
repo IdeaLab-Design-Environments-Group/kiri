@@ -757,7 +757,6 @@ body {
   border-left: 1px solid var(--border, #e4e7ec);
 }
 .el-tool,
-.el-route,
 .el-clear,
 .el-zoom-in,
 .el-zoom-out,
@@ -779,13 +778,11 @@ body {
   line-height: 1;
 }
 .el-tool:hover,
-.el-route:hover,
 .el-clear:hover,
 .el-zoom-in:hover,
 .el-zoom-out:hover,
 .el-fit:hover { background: var(--surface-soft, #f3f5f9); border-color: #cdd3df; }
-.el-tool.is-active,
-.el-route.is-active {
+.el-tool.is-active {
   background: var(--accent-soft, #eef3ff);
   color: var(--accent-strong, #1741c4);
   border-color: var(--accent, #1f6feb);
@@ -813,9 +810,6 @@ body {
 /* Tiles are fill-only so coplanar (F-edge) triangles merge into clean rigid panels — no internal
    triangulation lines. The pinched gaps read as the lighter cloth showing through between tiles. */
 .el-tile { fill: #b3b8c1; stroke: none; }
-.el-tape { fill-rule: nonzero; fill-opacity: 0.85; stroke: none; }
-.el-tape-pwr { fill: #ff0000; }
-.el-tape-gnd { fill: #222222; }
 /* Each LED = two distinct pads (PWR red +, GND dark −) bridged by an amber chip body. */
 .el-led-body { stroke: #d8b24a; stroke-linecap: round; }
 .el-led-pwr { fill: #ee3b30; stroke: #fff; stroke-width: 1; vector-effect: non-scaling-stroke; }
@@ -858,5 +852,3 @@ body {
   color: var(--muted, #667085);
 }
 .el-key-led { color: #b5860a; }
-.el-key-pwr { color: #ff0000; }
-.el-key-gnd { color: #222222; }
