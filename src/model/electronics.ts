@@ -135,6 +135,14 @@ export interface GapEdge {
   point: Vec2;
   /** The shared edge's two endpoints (flat mm), for lateral rail offsetting. */
   ends: [Vec2, Vec2];
+  /**
+   * The shared edge's two **vertex ids** (into `vertices_coords`).
+   *
+   * Lets a caller find this hinge's slot in a face's ring by index rather than by distance — the ring is
+   * `[corner(verts[k]), midpoint(verts[k],verts[k+1]), …]`, so matching vertex ids gives the hinge's dent
+   * node *and* its two end corners exactly. Distances would be a second, scale-sensitive source of truth.
+   */
+  verts: [number, number];
   /** Pinched edge-midpoint on `faceA`'s tile — the leg landing pad on that gray tile. */
   legA: Vec2;
   /** Pinched edge-midpoint on `faceB`'s tile — the leg landing pad on that gray tile. */
@@ -414,7 +422,9 @@ export function gapGraph(
     };
     link(fA);
     link(fB);
-    gaps.push({ mid: midNode, faceA: fA, faceB: fB, point, ends: [pa, pb], legA, legB });
+    gaps.push({
+      mid: midNode, faceA: fA, faceB: fB, point, ends: [pa, pb], verts: [rec.a, rec.b], legA, legB,
+    });
   }
 
   return { faceCount, pos, adj, gaps };

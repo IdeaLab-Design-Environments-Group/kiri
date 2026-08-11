@@ -6,6 +6,7 @@ import {
   boundsDiagonal,
   flatFaces,
   gapGraph,
+  segsProperlyIntersect,
   tapeWidthForDiag,
   tilePolys,
 } from "../../../src/model/electronics.js";
@@ -265,6 +266,83 @@ describe("model/electronics-routing: continuous, straightened traces", () => {
       return l;
     });
     expect(Math.min(...lengths)).toBeGreaterThan(0.5);
+  });
+
+  /** A 2×2 block of unit tiles: four hinges meeting at the centre vertex. */
+  function block2x2(): FoldFile {
+    return {
+      vertices_coords: [[0, 0], [10, 0], [20, 0], [0, 10], [10, 10], [20, 10], [0, 20], [10, 20], [20, 20]],
+      faces_vertices: [[0, 1, 4, 3], [1, 2, 5, 4], [3, 4, 7, 6], [4, 5, 8, 7]],
+      edges_vertices: [[1, 4], [4, 5], [3, 4], [4, 7]],
+      edges_assignment: ["M", "M", "M", "M"],
+    };
+  }
+  const allGapLeds = (fold: FoldFile) =>
+    gapGraph(fold).gaps.map((g) => ({ a: Math.min(g.faceA, g.faceB), b: Math.max(g.faceA, g.faceB) }));
+
+  const countCrossings = (r: ReturnType<typeof planRoutes>): number => {
+    const segs: { a: Vec2; b: Vec2; net: string }[] = [];
+    for (const t of r.traces) {
+      for (let i = 1; i < t.points.length; i++) segs.push({ a: t.points[i - 1]!, b: t.points[i]!, net: t.net });
+    }
+    let n = 0;
+    for (const p of segs.filter((s) => s.net === "pwr")) {
+      for (const g of segs.filter((s) => s.net === "gnd")) {
+        if (segsProperlyIntersect(p.a, p.b, g.a, g.b)) n++;
+      }
+    }
+    return n;
+  };
+
+  it("uses the far corner of a hinge to get under the other net's rail", () => {
+    // Each net can now reach a leg pad through the hinge's own dent node *or* around either of its end
+    // corners. A corner approach makes the shared tree enter that tile with the opposite rotational
+    // sense, which flips which side of the rail pair the pad lands on — the one thing reversing the LED
+    // cannot do. Measured on this fixture: 4 crossings when only the dent is offered, 3 with the corners.
+    const fold = block2x2();
+    const r = planRoutes(fold, circuit({ battery: { face: 1 }, leds: allGapLeds(fold) }));
+    expect(r.unreachable).toEqual([]);
+    expect(countCrossings(r)).toBeLessThanOrEqual(3);
+  });
+
+  it("beats the dent-only routing from either authored polarity", () => {
+    // `ledOf` normalises an LED to `a < b`, so the authored polarity is an artefact of face numbering and
+    // must not decide the quality of the result. It does still influence it — this is a greedy descent, so
+    // the two seeds stop at different local optima (measured: 3 from the authored seed, 2 from the
+    // reversed one). What must hold from *either* seed is that we end up better than the 4 crossings the
+    // dent-only routing is stuck with.
+    const fold = block2x2();
+    const asIs = allGapLeds(fold);
+    const flipped = asIs.map((l) => ({ a: l.b, b: l.a }));
+    for (const leds of [asIs, flipped]) {
+      const r = planRoutes(fold, circuit({ battery: { face: 1 }, leds }));
+      expect(r.unreachable).toEqual([]);
+      expect(countCrossings(r)).toBeLessThanOrEqual(3);
+    }
+  });
+
+  it("is deterministic — the preview and the exported copper are planned independently", () => {
+    // `resolveSvgExport` runs `planRoutes` a second time on the same circuit. If the search were not
+    // deterministic the cut file would not match what the modal drew.
+    const fold = block2x2();
+    const leds = allGapLeds(fold);
+    const a = planRoutes(fold, circuit({ battery: { face: 1 }, leds }));
+    const b = planRoutes(fold, circuit({ battery: { face: 1 }, leds }));
+    expect(b.traces).toEqual(a.traces);
+    expect(b.ledPads).toEqual(a.ledPads);
+    expect(b.terminals).toEqual(a.terminals);
+  });
+
+  it("still strands only the LEDs that are genuinely cut off", () => {
+    // The far pair in `strip()` shares a real gap but no path to the battery. The search must not rescue
+    // it, and must not strand the reachable one while trying.
+    const r = planRoutes(strip(), circuit({
+      battery: { face: 0 },
+      leds: [{ a: 1, b: 2 }, { a: 3, b: 4 }],
+    }));
+    expect(r.unreachable).toEqual([1]);
+    expect(r.traces.some((t) => t.net === "pwr")).toBe(true);
+    expect(r.traces.some((t) => t.net === "gnd")).toBe(true);
   });
 
   it("reports each LED's pads as its two real legs, one per net", () => {

@@ -10,10 +10,13 @@
  * **Corner-hugging bus routing (LED keep-out).** Routes run on the {@link cornerRouteGraph}: copper
  * waypoints inset onto each gray tile near its corners, linked around every tile and crossing each
  * hinge **at its corner ends**. So the bus (a) stays strictly inside the body, (b) crosses every gap at
- * its *ends*, leaving the hinge midpoint — where the LED body and legs sit — clear. From the battery we
- * grow a shortest-path **tree** per net (PWR to every `a` leg, GND to every `b` leg) so branches share
- * common trunks. Crossings between the two nets are allowed (insulated tape underside); the enforced
- * rule is the LED keep-out, not net-vs-net.
+ * its *ends*, leaving the hinge midpoint — where the LED body and legs sit — clear. **One** shortest-path
+ * tree is grown from the battery and both nets ride it (PWR to one leg of each LED, GND to the other), so
+ * branches share common trunks and the two rails sit at ±`off` about one common centreline.
+ *
+ * Crossings between the two nets are electrically free (the tape's underside is insulated), so they are a
+ * legibility cost rather than a constraint — but a real one, and the router searches per-LED polarity and
+ * per-net approach to reduce them. The enforced rules are the LED keep-out and staying on the gray.
  *
  * **Each trace is one continuous strip of tape, and there are as few as possible.** Copper tape bends,
  * so a strip runs *through* a junction — only the other branches there need a fresh piece laid over it,
@@ -31,6 +34,7 @@
 import {
   type Circuit,
   type CornerRouteGraph,
+  type FlatFace,
   type GapEdge,
   type GapGraph,
   type Led,
@@ -90,93 +94,123 @@ function placeLeds(graph: GapGraph, leds: Led[], faceCount: number, unreachable:
 /**
  * Plan the copper routes for `circuit` over the flat pattern in `fold`.
  *
- * Which leg of an LED carries PWR is the router's to choose — the authored `Led` only records *which
- * two tiles* the LED bridges, and `ledOf` normalises the pair to `a < b`, so the polarity that falls out
- * of it is an artefact of face numbering rather than anything the author asked for. Reversing an LED is
- * free in the build (mount it the other way round) and can save a crossing, because the two nets fan out
- * of the battery in an angular order that interleaves or does not depending on those choices. So: route
- * once, then try reversing each LED in turn and keep whichever reversals reduce crossings.
+ * Two things about each LED are the router's to choose, not the author's, and both are searched (see
+ * {@link searchDecisions}):
  *
- * One pass, so N+1 routings for N LEDs — greedy, not exhaustive. It never accepts a reversal that
- * strands an LED.
+ * - **Which leg carries PWR.** A `Led` records only *which two tiles* it bridges, and `ledOf` normalises
+ *   the pair to `a < b`, so the polarity falling out of it is an artefact of face numbering. Reversing an
+ *   LED is free in the build — mount it the other way round.
+ * - **Which waypoint each net arrives through.** Either the hinge's own dent node, or around one of its
+ *   end corners.
+ *
+ * The second is the one that matters, because the first cannot fix the common case on its own. Both nets
+ * ride one shared shortest-path tree, so they enter a tile through the same corner; where that makes both
+ * pads of a hinge sit on the same side of the rail pair, one net has to cross the other, and reversing the
+ * LED merely swaps which one does. Coming round the *other* corner enters the tile with the opposite
+ * rotational sense, which is the only way to change the side. (Measured on house.fkld: the best result over
+ * all 2⁶ polarity assignments is 3 crossings; adding the approach choice reaches 2.)
  */
 export function planRoutes(fold: FoldFile, circuit: Circuit): RoutedCircuit {
-  let bestLeds = circuit.leds;
-  let best = planWith(fold, circuit.battery, bestLeds);
-  if (circuit.battery == null || bestLeds.length === 0) return best;
-
-  let bestCross = countNetCrossings(best.traces);
-  let bestStranded = best.unreachable.length;
-  for (let i = 0; i < bestLeds.length; i++) {
-    const trial = bestLeds.map((l, k) => (k === i ? { a: l.b, b: l.a } : l));
-    const cand = planWith(fold, circuit.battery, trial);
-    const cross = countNetCrossings(cand.traces);
-    if (cand.unreachable.length <= bestStranded && cross < bestCross) {
-      best = cand;
-      bestLeds = trial;
-      bestCross = cross;
-      bestStranded = cand.unreachable.length;
-    }
-  }
-  return best;
-}
-
-/** How many times the PWR tape crosses the GND tape — the cost the polarity search minimises. */
-function countNetCrossings(traces: Trace2D[]): number {
-  const segs = (net: "pwr" | "gnd"): [Vec2, Vec2][] => {
-    const out: [Vec2, Vec2][] = [];
-    for (const t of traces) {
-      if (t.net !== net) continue;
-      for (let i = 1; i < t.points.length; i++) out.push([t.points[i - 1]!, t.points[i]!]);
-    }
-    return out;
-  };
-  const pwr = segs("pwr"), gnd = segs("gnd");
-  let n = 0;
-  for (const [a, b] of pwr) {
-    for (const [c, d] of gnd) if (segsProperlyIntersect(a, b, c, d)) n++;
-  }
-  return n;
-}
-
-/** One routing pass for a fixed set of LED orientations. */
-function planWith(fold: FoldFile, battery: Circuit["battery"], leds: Led[]): RoutedCircuit {
-  const circuit: Circuit = { leds, battery };
   const faces = flatFaces(fold);
   const gaps = gapGraph(fold, faces);
+
+  const ledPoints = circuit.leds.map((led) => {
+    const gap = gapForLed(gaps.gaps, led);
+    return gap ? gap.point : { x: 0, y: 0 };
+  });
+  const batteryFace = circuit.battery && circuit.battery.face >= 0 && circuit.battery.face < faces.length
+    ? circuit.battery.face
+    : null;
+  const batteryPoint = batteryFace != null ? faces[batteryFace]?.centroid ?? { x: 0, y: 0 } : null;
+
+  const unreachable: number[] = [];
+  const placed = placeLeds(gaps, circuit.leds, faces.length, unreachable);
+  if (batteryFace == null || placed.length === 0) {
+    const seed = placed.map(() => SEED_DECISION);
+    return {
+      ledPoints,
+      ledPads: padsForLeds(circuit.leds.length, placed, seed),
+      batteryPoint,
+      terminals: null,
+      traces: [],
+      unreachable,
+    };
+  }
+
+  const ctx = buildCtx(fold, faces, gaps, batteryFace, batteryPoint!, placed, unreachable);
+  const dec = searchDecisions(ctx);
+  return {
+    ledPoints,
+    ledPads: padsForLeds(circuit.leds.length, placed, dec),
+    batteryPoint,
+    terminals: ctx.terminals,
+    traces: emitAll(ctx, dec),
+    unreachable,
+  };
+}
+
+/** Everything invariant across the crossing search: geometry, the one shared tree, and the terminals. */
+interface RouteCtx {
+  graph: CornerRouteGraph;
+  tiles: TilePoly[];
+  /** The virtual battery node, already spliced into `graph`. */
+  battery: number;
+  terminals: { pwr: Vec2; gnd: Vec2 };
+  dj: Dijkstra;
+  faceOf: number[];
+  off: number;
+  /** One slot per gap-having LED, aligned with `placed`. */
+  slots: Slot[];
+  paths: PathCache;
+}
+
+/** One LED's routing options: the pads, and the ring nodes each net may arrive through. */
+interface Slot {
+  led: PlacedLed;
+  /** False when a leg's tile is cut off from the battery — reported unreachable, never emitted. */
+  routable: boolean;
+  a: Approach;
+  b: Approach;
+}
+
+/** The ways copper can arrive at one leg pad, and the pad itself. */
+interface Approach {
+  /** Ring nodes on the pad's own tile: `[dent, cornerStart, cornerEnd]`, deduped. */
+  nodes: number[];
+  pad: Vec2;
+}
+
+type PathCache = Map<string, number[] | null>;
+
+/**
+ * Build everything the search holds still: the flat geometry, the route graph with the battery spliced
+ * in, the single shortest-path tree, and the battery terminals.
+ *
+ * This used to be rebuilt from scratch for every candidate the polarity search tried — `flatFaces`,
+ * `gapGraph`, `cornerRouteGraph`, `tilePolys` *and* `dijkstra`, N+1 times per plan. Hoisting it is what
+ * makes a real search affordable, and the router runs twice per state change (once for the preview, once
+ * for the SVG export), so the saving lands twice.
+ *
+ * The terminals belong here because they are search-invariant: `batteryTerminals` averages
+ * `(aLeg + bLeg)/2` over the placed LEDs, which is symmetric in the two legs and blind to the approach
+ * nodes. So the PWR/GND sides — and with them the `±off` rail convention — are fixed before the search
+ * starts and cannot be perturbed by it.
+ */
+function buildCtx(
+  fold: FoldFile,
+  faces: FlatFace[],
+  gaps: GapGraph,
+  batteryFace: number,
+  batteryPoint: Vec2,
+  placed: PlacedLed[],
+  unreachable: number[],
+): RouteCtx {
   const graph = cornerRouteGraph(fold, faces);
   // The real gray tiles — the containment polygons the straightener pulls chords against.
   const tiles = tilePolys(fold, faces);
   // Scale reference for the rail offset. Taken from the flat faces (not the inset route graph) so it
   // matches the diagonal the modal and the SVG export derive the tape width from.
   const diag = boundsDiagonal(faces.flatMap((f) => f.poly));
-  const centroid = (face: number): Vec2 => faces[face]?.centroid ?? { x: 0, y: 0 };
-
-  const ledPoints = circuit.leds.map((led) => {
-    const gap = gapForLed(gaps.gaps, led);
-    return gap ? gap.point : { x: 0, y: 0 };
-  });
-  // The pads under this orientation, so the view draws the same +/− the copper actually lands on.
-  const ledPads = circuit.leds.map((led) => {
-    const gap = gapForLed(gaps.gaps, led);
-    if (!gap) return { pwr: { x: 0, y: 0 }, gnd: { x: 0, y: 0 } };
-    const aIsFaceA = gap.faceA === led.a;
-    return {
-      pwr: aIsFaceA ? gap.legA : gap.legB,
-      gnd: aIsFaceA ? gap.legB : gap.legA,
-    };
-  });
-  const batteryFace = circuit.battery && circuit.battery.face >= 0 && circuit.battery.face < faces.length
-    ? circuit.battery.face
-    : null;
-  const batteryPoint = batteryFace != null ? centroid(batteryFace) : null;
-
-  const traces: Trace2D[] = [];
-  const unreachable: number[] = [];
-  const placed = placeLeds(gaps, circuit.leds, faces.length, unreachable);
-  if (batteryFace == null || placed.length === 0) {
-    return { ledPoints, ledPads, batteryPoint, terminals: null, traces, unreachable };
-  }
 
   // A virtual battery source wired to **every** waypoint on its own tile's ring — corners *and* edge
   // midpoints. Tile-to-tile hops still happen only at shared corners, but the battery sits on this tile
@@ -187,18 +221,288 @@ function planWith(fold: FoldFile, battery: Circuit["battery"], leds: Led[]): Rou
   // edge midpoint of the battery's own tile: the route went out to a corner and doubled back, sweeping
   // across the other net's lead. On house.fkld that turned a 0.238 straight run into a 0.727 path and
   // produced the criss-cross beside the battery.
-  const batteryNode = graph.pos.length;
-  graph.pos.push(batteryPoint!);
+  const battery = graph.pos.length;
+  graph.pos.push(batteryPoint);
   graph.adj.push([]);
   for (const rn of graph.ringNodes[batteryFace] ?? []) {
-    const w = dist2(batteryPoint!, graph.pos[rn]!);
-    graph.adj[batteryNode]!.push({ to: rn, w });
-    graph.adj[rn]!.push({ to: batteryNode, w });
+    const w = dist2(batteryPoint, graph.pos[rn]!);
+    graph.adj[battery]!.push({ to: rn, w });
+    graph.adj[rn]!.push({ to: battery, w });
   }
 
-  const terminals = batteryTerminals(batteryPoint!, placed, graph, batteryFace, diag);
-  planTwoNet(graph, batteryNode, terminals, placed, tiles, diag, traces, unreachable);
-  return { ledPoints, ledPads, batteryPoint, terminals, traces, unreachable };
+  const dj = dijkstra(graph, battery);
+  const slots: Slot[] = placed.map((led) => {
+    const a = approachFor(graph, faces, tiles, led.gap, led.aFace, led.aLeg, dj);
+    const b = approachFor(graph, faces, tiles, led.gap, led.bFace, led.bLeg, dj);
+    const routable = a.nodes.length > 0 && b.nodes.length > 0;
+    if (!routable) unreachable.push(led.index); // a leg tile is cut off from the battery within the body
+    return { led, routable, a, b };
+  });
+
+  return {
+    graph,
+    tiles,
+    battery,
+    terminals: batteryTerminals(batteryPoint, placed, graph, batteryFace, diag),
+    dj,
+    faceOf: faceOfNode(graph),
+    off: railOffsetFor(diag),
+    slots,
+    paths: new Map(),
+  };
+}
+
+/**
+ * The ring nodes through which copper may arrive at one leg pad: the hinge's own **dent** node, or around
+ * either of its two **end corners**.
+ *
+ * This is the lever that removes crossings. A face's ring is `[corner(v0), mid(v0,v1), corner(v1), …]`
+ * (see `cornerRouteGraph`), and tiles are joined *only* at those corners — so targeting a corner instead
+ * of the dent makes the shared tree enter this tile having come round the other end of the hinge, i.e.
+ * with the opposite rotational sense. That sense is what decides which side of the rail pair each pad
+ * ends up on, and it is the one thing LED polarity cannot change: where both pads are entered in the
+ * same sense, one net must cross the other whichever way the LED is turned round.
+ *
+ * Candidates are located by matching `gap.verts` against the face's vertex list, so they are index-derived
+ * — no distances, hence nothing for a change of model scale to perturb. Falls back to the nearest
+ * reachable ring node (the old behaviour) if the hinge isn't found in this face, and returns no nodes at
+ * all when the tile is cut off from the battery.
+ */
+function approachFor(
+  graph: CornerRouteGraph,
+  faces: FlatFace[],
+  tiles: TilePoly[],
+  gap: GapEdge,
+  face: number,
+  pad: Vec2,
+  dj: Dijkstra,
+): Approach {
+  const ring = graph.ringNodes[face] ?? [];
+  const verts = faces[face]?.verts ?? [];
+  const reachable = (n: number): boolean => dj.dist[n] !== Infinity;
+  const nodes: number[] = [];
+  const push = (n: number | undefined): void => {
+    if (n != null && reachable(n) && !nodes.includes(n)) nodes.push(n);
+  };
+  // An alternative approach is only worth offering if its stub to the pad stays on the gray. A corner
+  // sits further round the tile than the dent does, so its stub is longer and can cut the corner across
+  // the gap opening — which would trade a crossing for copper hanging off the tile. Same 90 % test
+  // `straightenTail` uses, and for the same reason: the pad itself is the ring's dent tip, so the last
+  // stretch necessarily touches the boundary.
+  const stubStaysOnTile = (n: number | undefined): boolean => {
+    if (n == null) return false;
+    const ringPoly = tileRing(tiles, face);
+    if (ringPoly.length < 3) return true; // no tile to test against — leave it to the router
+    const a = graph.pos[n]!;
+    const near = { x: a.x + (pad.x - a.x) * 0.9, y: a.y + (pad.y - a.y) * 0.9 };
+    return segInsidePolygon(a, near, ringPoly);
+  };
+
+  const n = verts.length;
+  for (let k = 0; k < n; k++) {
+    const va = verts[k]!, vb = verts[(k + 1) % n]!;
+    const hit = (va === gap.verts[0] && vb === gap.verts[1]) || (va === gap.verts[1] && vb === gap.verts[0]);
+    if (!hit) continue;
+    push(ring[2 * k + 1]); // the dent — today's only option, always offered so the seed is unchanged
+    for (const corner of [ring[2 * k], ring[(2 * k + 2) % ring.length]]) {
+      if (stubStaysOnTile(corner)) push(corner);
+    }
+    break;
+  }
+  if (nodes.length === 0) {
+    // Degenerate face, or the hinge isn't one of its edges: fall back to nearest-reachable, as before.
+    let best: number | null = null, bestD = Infinity;
+    for (const r of ring) {
+      if (!reachable(r)) continue;
+      const d = dist2(graph.pos[r]!, pad);
+      if (d < bestD) { bestD = d; best = r; }
+    }
+    if (best != null) nodes.push(best);
+  }
+  return { nodes, pad };
+}
+
+/** Per-LED routing choice: which leg carries PWR, and which approach each net uses. */
+interface Decision {
+  /** Reverse the LED — mount it the other way round, so the `b` leg carries PWR. */
+  rev: boolean;
+  /** Index into the `a`-leg approach's `nodes`. */
+  iA: number;
+  /** Index into the `b`-leg approach's `nodes`. */
+  iB: number;
+}
+
+/** Today's behaviour: authored polarity, arriving through the hinge's own dent node. */
+const SEED_DECISION: Decision = { rev: false, iA: 0, iB: 0 };
+
+/**
+ * Each LED's pads as the router assigned them, index-aligned with `circuit.leds` (zeroes for an LED whose
+ * gap no longer exists). Derived from the same `PlacedLed` + `Decision` the copper was emitted from, so
+ * the drawn `+`/`−` cannot drift from where the tape actually lands.
+ */
+function padsForLeds(
+  ledCount: number,
+  placed: PlacedLed[],
+  dec: Decision[],
+): { pwr: Vec2; gnd: Vec2 }[] {
+  const pads = Array.from({ length: ledCount }, () => ({ pwr: { x: 0, y: 0 }, gnd: { x: 0, y: 0 } }));
+  placed.forEach((p, s) => {
+    pads[p.index] = (dec[s] ?? SEED_DECISION).rev
+      ? { pwr: p.bLeg, gnd: p.aLeg }
+      : { pwr: p.aLeg, gnd: p.bLeg };
+  });
+  return pads;
+}
+
+/** Emit both nets for one decision vector. */
+function emitAll(ctx: RouteCtx, dec: Decision[]): Trace2D[] {
+  const traces: Trace2D[] = [];
+  const pwrPaths: number[][] = [], pwrPads: Vec2[] = [];
+  const gndPaths: number[][] = [], gndPads: Vec2[] = [];
+  ctx.slots.forEach((slot, s) => {
+    if (!slot.routable) return;
+    const d = dec[s] ?? SEED_DECISION;
+    // `rev` swaps which net serves which leg; the approach indices stay attached to their own leg.
+    const forPwr = d.rev ? slot.b : slot.a;
+    const forGnd = d.rev ? slot.a : slot.b;
+    const iPwr = d.rev ? d.iB : d.iA;
+    const iGnd = d.rev ? d.iA : d.iB;
+    const pPath = straightPath(ctx, forPwr.nodes[iPwr % forPwr.nodes.length]!, forPwr.pad);
+    const gPath = straightPath(ctx, forGnd.nodes[iGnd % forGnd.nodes.length]!, forGnd.pad);
+    if (pPath) { pwrPaths.push(pPath); pwrPads.push(forPwr.pad); }
+    if (gPath) { gndPaths.push(gPath); gndPads.push(forGnd.pad); }
+  });
+  emitFromPaths(ctx, pwrPaths, pwrPads, ctx.terminals.pwr, "pwr", +ctx.off, traces);
+  emitFromPaths(ctx, gndPaths, gndPads, ctx.terminals.gnd, "gnd", -ctx.off, traces);
+  return traces;
+}
+
+/**
+ * How many times the PWR tape crosses the GND tape — the cost the search minimises.
+ *
+ * `cap` lets a candidate abort as soon as it can no longer beat the incumbent, and a bounding-box reject
+ * skips the exact test for the overwhelming majority of segment pairs. Same shape as `overlapsFor`'s
+ * bound in the unfolder's descent.
+ */
+function countNetCrossings(traces: Trace2D[], cap = Infinity): number {
+  const segs = (net: "pwr" | "gnd"): { a: Vec2; b: Vec2; lo: Vec2; hi: Vec2 }[] => {
+    const out: { a: Vec2; b: Vec2; lo: Vec2; hi: Vec2 }[] = [];
+    for (const t of traces) {
+      if (t.net !== net) continue;
+      for (let i = 1; i < t.points.length; i++) {
+        const a = t.points[i - 1]!, b = t.points[i]!;
+        out.push({
+          a, b,
+          lo: { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y) },
+          hi: { x: Math.max(a.x, b.x), y: Math.max(a.y, b.y) },
+        });
+      }
+    }
+    return out;
+  };
+  const pwr = segs("pwr"), gnd = segs("gnd");
+  let n = 0;
+  for (const p of pwr) {
+    for (const g of gnd) {
+      if (p.hi.x < g.lo.x || g.hi.x < p.lo.x || p.hi.y < g.lo.y || g.hi.y < p.lo.y) continue;
+      if (segsProperlyIntersect(p.a, p.b, g.a, g.b)) {
+        n++;
+        if (n >= cap) return n;
+      }
+    }
+  }
+  return n;
+}
+
+/** Total polyline length over all traces — the last tie-break, so an escape stays as cheap as it can. */
+function totalLength(traces: Trace2D[]): number {
+  let l = 0;
+  for (const t of traces) {
+    for (let i = 1; i < t.points.length; i++) {
+      l += Math.hypot(t.points[i]!.x - t.points[i - 1]!.x, t.points[i]!.y - t.points[i - 1]!.y);
+    }
+  }
+  return l;
+}
+
+/** Per-plan search budget. The router runs on every edit *and* again for the SVG export, so it is bounded
+ *  rather than run to a fixed point. */
+const MAX_SWEEPS = 6;
+const MAX_EVALS = 128;
+
+/**
+ * Choose each LED's polarity and each net's approach so the two nets cross as little as possible.
+ *
+ * Best-improvement strict descent: evaluate every move in the neighbourhood, apply the single best, repeat.
+ * A move is accepted **only** if it strictly reduces the crossing count; ties among accepted moves prefer
+ * fewer strips, then less copper. That acceptance rule is what makes this safe to add — on a circuit that
+ * already has no crossings nothing is ever accepted, so the emitted geometry is bit-identical to not
+ * searching at all, and the strip-economy and straightness work cannot regress.
+ *
+ * After the first sweep only LEDs *incident to a surviving crossing* are reconsidered: an LED that is not
+ * in one cannot remove one. That collapses the neighbourhood from every LED to a handful and is the main
+ * reason the search fits inside the per-edit budget.
+ */
+function searchDecisions(ctx: RouteCtx): Decision[] {
+  const dec: Decision[] = ctx.slots.map(() => ({ ...SEED_DECISION }));
+  const routable = ctx.slots.flatMap((s, i) => (s.routable ? [i] : []));
+  if (routable.length === 0) return dec;
+
+  let bestCross = countNetCrossings(emitAll(ctx, dec));
+  let evals = 1;
+
+  // **First**-improvement, sweeping LEDs in order and keeping each win as it is found — the direct
+  // generalisation of the reversal-only search this replaces, which was exactly this loop over a
+  // one-move neighbourhood. Best-improvement was tried and is badly budget-inefficient here: it scans the
+  // whole neighbourhood (~17 moves × every LED) before committing a single change, so under a per-edit
+  // budget it lands *fewer* improvements than the old search did and can finish worse than its own seed.
+  for (let sweep = 0; sweep < MAX_SWEEPS && bestCross > 0 && evals < MAX_EVALS; sweep++) {
+    let improved = false;
+    for (const slot of routable) {
+      if (evals >= MAX_EVALS) break;
+      for (const move of movesFor(ctx.slots[slot]!, dec[slot]!)) {
+        if (evals >= MAX_EVALS) break;
+        const saved = dec[slot]!;
+        dec[slot] = move;
+        const traces = emitAll(ctx, dec);
+        evals++;
+        const cross = countNetCrossings(traces, bestCross);
+        if (cross < bestCross) { // strict descent — never accept a sideways move
+          bestCross = cross;
+          improved = true;
+          break; // keep it: `dec[slot]` already holds `move`
+        }
+        dec[slot] = saved;
+      }
+    }
+    if (!improved) break; // local optimum
+  }
+  return dec;
+}
+
+/**
+ * Every alternative decision for one LED: the full `{rev} × {approach} × {approach}` product — but
+ * **reversal first**.
+ *
+ * Order matters because the search runs on a budget. Reversing the LED is the cheap, long-standing lever
+ * and often enough on its own; trying it before the approach changes means a tight budget still captures
+ * everything the old reversal-only search captured, and spends whatever is left on the approach escapes
+ * that reversal cannot express. With the approaches tried first, a small budget got *worse* results than
+ * reversal alone — measured, on church and akde-hex.
+ */
+function movesFor(slot: Slot, cur: Decision): Decision[] {
+  const out: Decision[] = [];
+  const add = (rev: boolean, iA: number, iB: number): void => {
+    if (rev === cur.rev && iA === cur.iA && iB === cur.iB) return;
+    out.push({ rev, iA, iB });
+  };
+  add(!cur.rev, cur.iA, cur.iB); // the old lever, on its own
+  for (const rev of [cur.rev, !cur.rev]) {
+    for (let iA = 0; iA < slot.a.nodes.length; iA++) {
+      for (let iB = 0; iB < slot.b.nodes.length; iB++) add(rev, iA, iB);
+    }
+  }
+  return out;
 }
 
 /**
@@ -241,56 +545,6 @@ function batteryTerminals(
 }
 
 /**
- * Grow a shortest-path tree from the battery on the in-body graph and emit it as offset bus strips:
- * PWR to every `a` leg (offset +), GND to every `b` leg (offset −). Shared trunks appear once, so
- * branches that share a run read as a single strip, and each chain runs unbroken onto its LED leg pad.
- * LEDs whose leg-tile can't be reached in the body are reported unreachable.
- */
-function planTwoNet(
-  graph: CornerRouteGraph,
-  battery: number,
-  terminals: { pwr: Vec2; gnd: Vec2 },
-  placed: PlacedLed[],
-  tiles: TilePoly[],
-  diag: number,
-  traces: Trace2D[],
-  unreachable: number[],
-): void {
-  const dj = dijkstra(graph, battery);
-  const off = railOffsetFor(diag);
-  const faceOf = faceOfNode(graph);
-
-
-  // The reachable gray-ring node of `face` nearest the LED's leg pad — copper meets the tile on its
-  // gray boundary, then takes one short stub onto the pad. Null when the tile isn't wired to the battery.
-  const reachNode = (face: number, leg: Vec2): number | null => {
-    let best: number | null = null;
-    let bestD = Infinity;
-    for (const n of graph.ringNodes[face] ?? []) {
-      if (dj.dist[n] === Infinity) continue;
-      const d = dist2(graph.pos[n]!, leg);
-      if (d < bestD) { bestD = d; best = n; }
-    }
-    return best;
-  };
-
-  const pwrTargets: { node: number; leg: Vec2 }[] = [];
-  const gndTargets: { node: number; leg: Vec2 }[] = [];
-  for (const p of placed) {
-    const aNode = reachNode(p.aFace, p.aLeg);
-    const bNode = reachNode(p.bFace, p.bLeg);
-    if (aNode == null || bNode == null) {
-      unreachable.push(p.index); // a leg tile is cut off from the battery within the body
-      continue;
-    }
-    pwrTargets.push({ node: aNode, leg: p.aLeg });
-    gndTargets.push({ node: bNode, leg: p.bLeg });
-  }
-  emitNet(graph, dj, battery, terminals.pwr, pwrTargets, "pwr", +off, faceOf, tiles, traces);
-  emitNet(graph, dj, battery, terminals.gnd, gndTargets, "gnd", -off, faceOf, tiles, traces);
-}
-
-/**
  * Lateral offset separating the PWR and GND strips: **a fixed fraction of the drawn tape width**, so
  * their centrelines sit `2 × 0.55 = 1.1` tape-widths apart — adjacent, with a hairline seam, and never
  * overlapping — at every model scale.
@@ -310,6 +564,28 @@ interface Chain {
 }
 
 /**
+ * The straightened **node** path from the battery to `node`, string-pulled toward `pad`.
+ *
+ * Net-independent — both nets walk the same shared tree — so it is computed at most once per
+ * `(node, pad)` pair and reused across every candidate the search tries. Node ids, not points: the
+ * virtual battery node has to resolve to each net's *own* terminal anchor at emit time.
+ */
+function straightPath(ctx: RouteCtx, node: number, pad: Vec2): number[] | null {
+  const key = `${node}|${ptKey(pad)}`;
+  const hit = ctx.paths.get(key);
+  if (hit !== undefined) return hit;
+  const nodes = pathFromBattery(ctx.dj, ctx.battery, node);
+  const out = nodes
+    ? straightenTail(
+        straightenChain(nodes, ctx.graph, ctx.faceOf, ctx.tiles),
+        pad, ctx.graph, ctx.faceOf, ctx.tiles,
+      )
+    : null;
+  ctx.paths.set(key, out);
+  return out;
+}
+
+/**
  * Emit a net as continuous mitered polylines.
  *
  * **Straighten whole battery→pad paths first, then merge them into chains by common prefix** — never
@@ -322,34 +598,24 @@ interface Chain {
  * different junctions, so each pulled it to a slightly different chord — the rails wove across each
  * other and visibly swapped sides several times along one run.
  */
-function emitNet(
-  graph: CornerRouteGraph,
-  dj: Dijkstra,
-  battery: number,
+function emitFromPaths(
+  ctx: RouteCtx,
+  nodePaths: number[][],
+  pads: Vec2[],
   anchor: Vec2,
-  targets: { node: number; leg: Vec2 }[],
   net: "pwr" | "gnd",
   off: number,
-  faceOf: number[],
-  tiles: TilePoly[],
   traces: Trace2D[],
 ): void {
-  if (targets.length === 0) return;
-  const posOf = (node: number): Vec2 => (node === battery ? anchor : graph.pos[node]!);
+  if (nodePaths.length === 0) return;
+  // The shared virtual battery node materialises at *this* net's own terminal pad.
+  const posOf = (node: number): Vec2 => (node === ctx.battery ? anchor : ctx.graph.pos[node]!);
 
-  const paths: Vec2[][] = [];
-  for (const t of targets) {
-    const nodes = pathFromBattery(dj, battery, t.node);
-    if (!nodes) continue;
-    const straight = straightenTail(
-      straightenChain(nodes, graph, faceOf, tiles),
-      t.leg, graph, faceOf, tiles,
-    );
-    const pts = straight.map(posOf);
-    pts.push(t.leg); // the leg stub is the path's last segment, not a separate trace
-    paths.push(pts);
-  }
-  if (paths.length === 0) return;
+  const paths: Vec2[][] = nodePaths.map((nodes, i) => {
+    const pts = nodes.map(posOf);
+    pts.push(pads[i]!); // the leg stub is the path's last segment, not a separate trace
+    return pts;
+  });
 
   const chains = chainsFromPaths(paths);
 
@@ -406,9 +672,6 @@ function ptKey(p: Vec2): string {
  *
  * A shared trunk is still emitted once, so no tape is doubled.
  */
-/** Cosine of the sharpest heading change a single strip is carried through. */
-const MERGE_MIN_COS = 0.6; // ~70 degrees
-
 /** Would extending `points` to `next` make the strip cross a part of itself already laid? */
 function crossesOwn(points: Vec2[], next: Vec2): boolean {
   const from = points[points.length - 1]!;
