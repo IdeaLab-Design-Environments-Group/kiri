@@ -342,9 +342,17 @@ export function planRoutes(
     // finding a different polarity, not the rerouting. Removed rather than left in as a costly no-op.
     const pwr = railPts("pwr", dirPwr, new Map());
     const gnd = railPts("gnd", dirGnd, pwr.used);
+    /** The pads this net must reach — the only points a branch may legitimately end at. */
+    const padsOf = (fl: boolean[], net: "pwr" | "gnd"): Vec2[] =>
+      order.map((oi, i) => {
+        const t = targets[oi]!;
+        const swap = net === "pwr" ? fl[i]! : !fl[i]!;
+        return swap ? t.legs[1] : t.legs[0];
+      });
+
     const finish = (): Trace2D[] => [
-      ...asTree(dedupe(dodgeChips(pwr.pts, targets, onBody)), "pwr", term.pwr),
-      ...asTree(dedupe(dodgeChips(gnd.pts, targets, onBody)), "gnd", term.gnd),
+      ...asTree(dedupe(dodgeChips(pwr.pts, targets, onBody)), "pwr", term.pwr, padsOf(f, "pwr")),
+      ...asTree(dedupe(dodgeChips(gnd.pts, targets, onBody)), "gnd", term.gnd, padsOf(f, "gnd")),
     ];
     return finish();
   };
@@ -440,28 +448,60 @@ export function planRoutes(
  * Duplicate segments are dropped, then what is left is broken into the longest chains that can be laid in one
  * pass, so this trades strip count for tape length and legibility.
  */
-function asTree(pts: Vec2[], net: "pwr" | "gnd", first: Vec2): Trace2D[] {
+function asTree(pts: Vec2[], net: "pwr" | "gnd", first: Vec2, required: Vec2[]): Trace2D[] {
   if (pts.length < 2) return [{ pts, net }];
 
   const nodes = new Map<string, Vec2>();
-  const adj = new Map<string, Set<string>>();
-  const link = (a: Vec2, b: Vec2): void => {
+  const edges = new Map<string, { a: string; b: string; w: number }>();
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1]!, b = pts[i]!;
     const ka = ptKey(a), kb = ptKey(b);
-    if (ka === kb) return;
+    if (ka === kb) continue;
     nodes.set(ka, a);
     nodes.set(kb, b);
-    if (!adj.has(ka)) adj.set(ka, new Set());
-    if (!adj.has(kb)) adj.set(kb, new Set());
-    adj.get(ka)!.add(kb); // a Set, so a segment walked twice is stored once
-    adj.get(kb)!.add(ka);
-  };
-  for (let i = 1; i < pts.length; i++) link(pts[i - 1]!, pts[i]!);
+    // Keyed, so a segment walked twice is stored once.
+    edges.set(chordKey(a, b), { a: ka, b: kb, w: Math.sqrt(dist2(a, b)) });
+  }
+  if (!edges.size) return [{ pts, net }];
 
-  // Walk out the remaining edges as long chains, starting from the ends (degree 1) so a chain runs the full
-  // length of a branch rather than stopping in the middle of one.
+  // Spanning tree, shortest edges first. Deduplicating segments was not enough: where the walk went out one
+  // way and came back another, the union of the two contains a *cycle*, and every point on it is reached
+  // twice over. One net needs exactly one path to each of its pads, so cycle-closing edges are dropped.
+  const parent = new Map<string, string>();
+  const find = (k: string): string => {
+    let r = k;
+    while (parent.get(r) !== r) r = parent.get(r)!;
+    while (parent.get(k) !== r) { const nxt = parent.get(k)!; parent.set(k, r); k = nxt; }
+    return r;
+  };
+  for (const k of nodes.keys()) parent.set(k, k);
+
+  const adj = new Map<string, Set<string>>();
+  for (const k of nodes.keys()) adj.set(k, new Set());
+  const sorted = [...edges.values()].sort((x, y) => x.w - y.w || (x.a < y.a ? -1 : 1));
+  for (const e of sorted) {
+    const ra = find(e.a), rb = find(e.b);
+    if (ra === rb) continue; // would close a loop: that is the double connection
+    parent.set(ra, rb);
+    adj.get(e.a)!.add(e.b);
+    adj.get(e.b)!.add(e.a);
+  }
+
+  // Prune dead ends. The tree still holds waypoints the walk merely passed through on a detour it no longer
+  // needs; a branch ending anywhere that is not a pad or a terminal carries no current.
+  const keep = new Set(required.map(ptKey));
+  keep.add(ptKey(first));
+  for (;;) {
+    const dead = [...adj.keys()].filter((k) => adj.get(k)!.size === 1 && !keep.has(k));
+    if (!dead.length) break;
+    for (const k of dead) {
+      for (const n of adj.get(k)!) adj.get(n)!.delete(k);
+      adj.get(k)!.clear();
+    }
+  }
+
+  // Lay it out as the longest runs that can be taped in one pass, starting at this net's own terminal.
   const out: Trace2D[] = [];
-  // The battery terminal goes first, so the strip that carries the supply is one continuous run from it --
-  // that is the piece you lay first, and it should not start in the middle of the pattern.
   const firstKey = ptKey(first);
   const starts = [...adj.keys()].sort((a, b) => {
     if (a === firstKey) return -1;

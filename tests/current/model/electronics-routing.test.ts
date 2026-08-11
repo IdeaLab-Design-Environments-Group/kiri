@@ -188,6 +188,78 @@ describe("model/electronics-routing", () => {
     }
   });
 
+  it("gives each net exactly one path to every pad — no double connections", () => {
+    // A net that reaches a point two ways has both routes taped for no gain. The walk through the pads makes
+    // that easy to produce: go out one way, come back another, and the union contains a cycle. Each net is
+    // reduced to a spanning tree, so its cyclomatic number must be zero.
+    for (const name of ["house.fkld", "church.fkld", "puffin.fkld", "akde-hex.fkld"]) {
+      const { faces, gaps } = load(name);
+      const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 12), battery: { face: 0 } });
+      for (const net of ["pwr", "gnd"] as const) {
+        const verts = new Set<string>();
+        const edges = new Set<string>();
+        for (const t of r.traces.filter((x) => x.net === net)) {
+          for (let i = 1; i < t.pts.length; i++) {
+            const a = t.pts[i - 1]!, b = t.pts[i]!;
+            const ka = `${a.x}_${a.y}`, kb = `${b.x}_${b.y}`;
+            verts.add(ka);
+            verts.add(kb);
+            edges.add(ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`);
+          }
+        }
+        // components, by union-find
+        const parent = new Map([...verts].map((v) => [v, v]));
+        const find = (k: string): string => {
+          while (parent.get(k) !== k) { parent.set(k, parent.get(parent.get(k)!)!); k = parent.get(k)!; }
+          return k;
+        };
+        for (const e of edges) {
+          const [a, b] = e.split("|") as [string, string];
+          const ra = find(a), rb = find(b);
+          if (ra !== rb) parent.set(ra, rb);
+        }
+        const comps = new Set([...verts].map(find)).size;
+        expect(edges.size - verts.size + comps, `${name} ${net} has a loop`).toBe(0);
+      }
+    }
+  });
+
+  it("keeps every pad connected to its own terminal", () => {
+    // The guard on the tree pruning: dropping a cycle edge or a dead-end branch must never cut a pad off.
+    for (const name of ["house.fkld", "puffin.fkld", "akde-hex.fkld"]) {
+      const { faces, gaps } = load(name);
+      const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 12), battery: { face: 0 } });
+      const term = batteryTerminals(faces[0]!.centroid, patternDiag(faces));
+      for (const net of ["pwr", "gnd"] as const) {
+        const adj = new Map<string, Set<string>>();
+        const add = (a: string, b: string): void => {
+          if (!adj.has(a)) adj.set(a, new Set());
+          adj.get(a)!.add(b);
+        };
+        for (const t of r.traces.filter((x) => x.net === net)) {
+          for (let i = 1; i < t.pts.length; i++) {
+            const ka = `${t.pts[i - 1]!.x}_${t.pts[i - 1]!.y}`;
+            const kb = `${t.pts[i]!.x}_${t.pts[i]!.y}`;
+            add(ka, kb);
+            add(kb, ka);
+          }
+        }
+        const start = net === "pwr" ? term.pwr : term.gnd;
+        const seen = new Set([`${start.x}_${start.y}`]);
+        const queue = [`${start.x}_${start.y}`];
+        while (queue.length) {
+          const at = queue.shift()!;
+          for (const n of adj.get(at) ?? []) if (!seen.has(n)) { seen.add(n); queue.push(n); }
+        }
+        for (const pad of r.pads) {
+          const p = net === "pwr" ? pad.pwr : pad.gnd;
+          if (p.x === 0 && p.y === 0) continue;
+          expect(seen.has(`${p.x}_${p.y}`), `${name} ${net} pad is orphaned`).toBe(true);
+        }
+      }
+    }
+  });
+
   it("keeps the two nets off each other", () => {
     // Overlap was 11-41% of copper when both nets were forced through the same face centres and the same
     // edge midpoints. akde-decagon is included deliberately: it is the pattern where the shared-route toll
