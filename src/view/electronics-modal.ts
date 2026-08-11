@@ -223,8 +223,11 @@ export class ElectronicsModal {
     return Math.max(2, diag * 0.06);
   }
 
-  /** Notify the controller; it stores the circuit and pushes a fresh preview back. */
+  /** Draw the edit, then notify the controller so it stores the circuit.
+   *  The redraw must happen here: the controller does not push anything back, so an edit that only
+   *  emitted would update `this.circuit` and never appear on screen. */
   private emit(): void {
+    this.render();
     this.editHandler(cloneCircuit(this.circuit));
   }
 

@@ -19,6 +19,13 @@ class MockClassList {
     return this.names.has(name);
   }
 
+  toggle(name: string, force?: boolean): boolean {
+    const on = force ?? !this.names.has(name);
+    if (on) this.names.add(name);
+    else this.names.delete(name);
+    return on;
+  }
+
   toString(): string {
     return Array.from(this.names).join(" ");
   }
@@ -46,6 +53,37 @@ export class MockElement {
   contentWindow?: { postMessage: (payload: unknown, target: string) => void };
 
   constructor(readonly tagName: string) {}
+
+  readonly attributes: Record<string, string> = {};
+
+  setAttribute(name: string, value: string): void {
+    this.attributes[name] = value;
+  }
+
+  getAttribute(name: string): string | null {
+    return this.attributes[name] ?? null;
+  }
+
+  // ---- minimal SVG geometry so views that map pointer coords can be driven in tests.
+  // The CTM is the identity, so client coords pass through as world (viewBox) coords.
+  getScreenCTM(): { inverse: () => { a: number } } | null {
+    return { inverse: () => ({ a: 1 }) };
+  }
+
+  createSVGPoint(): { x: number; y: number; matrixTransform: (m: unknown) => { x: number; y: number } } {
+    const pt = {
+      x: 0,
+      y: 0,
+      matrixTransform: () => ({ x: pt.x, y: pt.y }),
+    };
+    return pt;
+  }
+
+  setPointerCapture(): void {}
+  releasePointerCapture(): void {}
+  hasPointerCapture(): boolean {
+    return false;
+  }
 
   set className(value: string) {
     this._className = value;
