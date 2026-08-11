@@ -599,6 +599,62 @@ export function countOverLed(traces: Trace2D[], pads: PadPair[]): number {
   return n;
 }
 
+/**
+ * Chips with copper physically under them.
+ *
+ * {@link countOverLed} tests zero-width centrelines for a *proper crossing*, which real tape does not
+ * honour: a strip whose centreline merely passes close to a chip still sits under it, because the tape is
+ * wide. This measures what actually matters -- centreline within `clear` of the chip body -- while allowing
+ * the one contact that must exist, the tape landing on its own pad.
+ *
+ * **This is currently violated: 6-12 chips per model.** `countOverLed` reads zero throughout, which is why
+ * it went unnoticed; the zero was an artefact of ignoring tape width. Routing around it is unsolved. One
+ * attempt is recorded: approach each pad from beyond it along the chip's own axis, with a width-aware
+ * dodge. That measured *worse* (akde-square 0 -> 15 zero-width crossings) because the stand-off point falls
+ * outside the tile and its approach segment clips the body. The fix wants the spine to run *along* each
+ * hinge so both pads flank the direction of travel -- the same missing property that blocks zero crossings
+ * and the lane-sharing that would cut overlap.
+ */
+export function countUnderLed(
+  traces: Trace2D[],
+  pads: PadPair[],
+  clear: number,
+  padR: number,
+): number {
+  let n = 0;
+  for (const pad of pads) {
+    if (isOrigin(pad.pwr) && isOrigin(pad.gnd)) continue;
+    let bad = false;
+    for (const t of traces) {
+      const own = t.net === "pwr" ? pad.pwr : pad.gnd;
+      for (let i = 1; i < t.pts.length && !bad; i++) {
+        const a = t.pts[i - 1]!, b = t.pts[i]!;
+        const L = len(sub(b, a));
+        const steps = Math.max(2, Math.ceil(L / (clear * 0.5)));
+        for (let k = 0; k <= steps; k++) {
+          const u = k / steps;
+          const m = { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u };
+          if (len(sub(m, own)) <= padR) continue; // landing on its own pad is the point
+          if (segPointDist(pad.pwr, pad.gnd, m) < clear) { bad = true; break; }
+        }
+      }
+      if (bad) break;
+    }
+    if (bad) n++;
+  }
+  return n;
+}
+
+const isOrigin = (p: Vec2): boolean => p.x === 0 && p.y === 0;
+
+/** Distance from point `p` to segment ab. */
+function segPointDist(a: Vec2, b: Vec2, p: Vec2): number {
+  const ab = sub(b, a);
+  const L2 = ab.x * ab.x + ab.y * ab.y;
+  const t = L2 < 1e-18 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * ab.x + (p.y - a.y) * ab.y) / L2));
+  return len(sub(p, { x: a.x + ab.x * t, y: a.y + ab.y * t }));
+}
+
 /** Length over which PWR and GND run on top of each other. Same-net overlap is free -- one potential, and
  *  single-sided tape may touch itself -- but the two nets shadowing each other is unbuildable: you cannot
  *  lay the second strip where the first already is. Sampled, so partial overlap counts too.

@@ -12,6 +12,7 @@ import {
   batteryTerminals,
   countNetCrossings,
   countOverLed,
+  countUnderLed,
   overlapLength,
   patternDiag,
   planRoutes,
@@ -156,6 +157,27 @@ describe("model/electronics-routing", () => {
     const { faces, gaps } = load("akde-hex.fkld");
     const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 12), battery: { face: 0 } });
     expect(r.unreachable).toEqual([]);
+  });
+
+  it("KNOWN FAILING PROPERTY: copper still sits under chips once tape width is counted", () => {
+    // Documents a real defect rather than hiding it. countOverLed reads 0 because it tests zero-width
+    // centrelines for a proper crossing; with the drawn tape width, 6-12 chips per model have copper under
+    // them. The numbers are pinned so a fix shows up as this test failing high -> low.
+    const expected: Record<string, number> = {
+      "house.fkld": 6,
+      "church.fkld": 7,
+      "puffin.fkld": 9,
+      "akde-hex.fkld": 10,
+    };
+    for (const [name, want] of Object.entries(expected)) {
+      const { faces, gaps } = load(name);
+      const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 12), battery: { face: 0 } });
+      const diag = patternDiag(faces);
+      const tapeW = diag * 0.011; // the width the modal draws
+      expect(countUnderLed(r.traces, r.pads, tapeW * 0.5, tapeW * 0.6), name).toBe(want);
+      // The zero-width check passes, which is exactly why this went unnoticed.
+      expect(countOverLed(r.traces, r.pads), name).toBe(0);
+    }
   });
 
   it("keeps PWR/GND overlap from getting worse", () => {
