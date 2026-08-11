@@ -258,8 +258,12 @@ export function planRoutes(
   // over the part. Those crossings are made expensive rather than impossible, so a tile that can only be
   // reached past an occupied hinge is still reachable.
   const occupied = new Set(targets.map((t) => ptKey(t.hinge)));
+  let dirPwr = false, dirGnd = false;
   const build = (f: boolean[]): Trace2D[] => {
-    const railPts = (net: "pwr" | "gnd"): Vec2[] => {
+    const railPts = (net: "pwr" | "gnd", rev: boolean): Vec2[] => {
+      // Each net may work the tour from either end. Going round the other way is the one lever that gets a
+      // net off the spine the other is using, since the pattern rarely offers a second route.
+      const seq = rev ? order.map((_, k) => order.length - 1 - k) : order.map((_, k) => k);
       const pick = (i: number): { pad: Vec2; face: number } => {
         const t = targets[order[i]!]!;
         const swap = net === "pwr" ? f[i]! : !f[i]!;
@@ -269,7 +273,7 @@ export function planRoutes(
       };
       const out: Vec2[] = [net === "pwr" ? term.pwr : term.gnd];
       let fromFace = battery.face;
-      for (let i = 0; i < order.length; i++) {
+      for (const i of seq) {
         const { pad, face } = pick(i);
         // The LED being landed on is allowed: the rail approaches its pad, not through its chip.
         const t = targets[order[i]!]!;
@@ -285,8 +289,8 @@ export function planRoutes(
     // chip's own axis. Sliding that waypoint to the hinge's end corner clears the part and stays both
     // inside the body and on the tiling.
     return [
-      { pts: dedupe(dodgeChips(railPts("pwr"), targets)), net: "pwr" },
-      { pts: dedupe(dodgeChips(railPts("gnd"), targets)), net: "gnd" },
+      { pts: dedupe(dodgeChips(railPts("pwr", dirPwr), targets)), net: "pwr" },
+      { pts: dedupe(dodgeChips(railPts("gnd", dirGnd), targets)), net: "gnd" },
     ];
   };
 
@@ -303,8 +307,13 @@ export function planRoutes(
   // Running over a chip is destructive -- it shorts the part -- while a PWR/GND crossing is a short in the
   // layout. Both must go, so score them lexicographically with over-LED dominant and never trade one for
   // the other.
+  // Over-LED destroys the part, a crossing shorts the layout, and overlap only makes it hard to build, so
+  // they rank in that order and overlap can never be bought with either of the others.
+  const overlapTol = diag * 0.008; // about a tape width: closer than this and the strips are on each other
   const score = (tr: Trace2D[], f: boolean[]): number =>
-    countOverLed(tr, padsFor(f)) * 1000 + countNetCrossings(tr);
+    countOverLed(tr, padsFor(f)) * 1e9 +
+    countNetCrossings(tr) * 1e6 +
+    overlapLength(tr, overlapTol);
 
   // Descend from each seed by single flips, first improvement, and keep the best arrangement found. No one
   // seed wins everywhere -- the geometric seed beats all-false on akde-decagon and loses on puffin -- and
@@ -336,6 +345,23 @@ export function planRoutes(
       bestS = sc;
       best = tr;
       flip = f.slice();
+    }
+  }
+
+  // With polarity settled, try each net working the tour from either end and keep the best. Four builds.
+  for (const [dp, dg] of [[false, false], [true, false], [false, true], [true, true]] as [boolean, boolean][]) {
+    const keepP: boolean = dirPwr;
+    const keepG: boolean = dirGnd;
+    dirPwr = dp;
+    dirGnd = dg;
+    const cand = build(flip);
+    const sc = score(cand, flip);
+    if (sc < bestS) {
+      bestS = sc;
+      best = cand;
+    } else {
+      dirPwr = keepP;
+      dirGnd = keepG;
     }
   }
 
@@ -571,6 +597,52 @@ export function countOverLed(traces: Trace2D[], pads: PadPair[]): number {
     }
   }
   return n;
+}
+
+/** Length over which PWR and GND run on top of each other. Same-net overlap is free -- one potential, and
+ *  single-sided tape may touch itself -- but the two nets shadowing each other is unbuildable: you cannot
+ *  lay the second strip where the first already is. Sampled, so partial overlap counts too.
+ *
+ *  Currently 11-41% of copper length. It is NOT solved: both nets have to traverse the same spine of the
+ *  pattern, and there is no second way through -- tolling a waypoint the other net already used diverts
+ *  almost nothing even at 400x. Shifting each net sideways into its own half of the lane cuts overlap
+ *  (akde-hex 17% -> 4%) but needs a *shared* centreline to offset from; offsetting each net's own path
+ *  instead lets the two lanes swap sides, which measured 5 -> 44 crossings on puffin and put copper back
+ *  over chips, so it is not shipped. */
+export function overlapLength(traces: Trace2D[], tol: number): number {
+  const pwr = traces.filter((t) => t.net === "pwr");
+  const gnd = traces.filter((t) => t.net === "gnd");
+  let shared = 0;
+  for (const a of pwr) {
+    for (let i = 1; i < a.pts.length; i++) {
+      const p = a.pts[i - 1]!, q = a.pts[i]!;
+      const L = len(sub(q, p));
+      if (L < 1e-12) continue;
+      const steps = Math.max(2, Math.ceil(L / tol));
+      let hits = 0;
+      for (let k = 0; k < steps; k++) {
+        const u = (k + 0.5) / steps;
+        const m = { x: p.x + (q.x - p.x) * u, y: p.y + (q.y - p.y) * u };
+        if (gnd.some((b) => nearPolyline(b.pts, m) <= tol)) hits++;
+      }
+      shared += (L * hits) / steps;
+    }
+  }
+  return shared;
+}
+
+/** Distance from `p` to the nearest point of polyline `pts`. */
+function nearPolyline(pts: Vec2[], p: Vec2): number {
+  let best = Infinity;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1]!, b = pts[i]!;
+    const ab = sub(b, a);
+    const L2 = ab.x * ab.x + ab.y * ab.y;
+    const t = L2 < 1e-18 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * ab.x + (p.y - a.y) * ab.y) / L2));
+    const d = len(sub(p, { x: a.x + ab.x * t, y: a.y + ab.y * t }));
+    if (d < best) best = d;
+  }
+  return best;
 }
 
 /** Total copper length. */

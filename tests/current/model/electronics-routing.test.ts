@@ -12,6 +12,7 @@ import {
   batteryTerminals,
   countNetCrossings,
   countOverLed,
+  overlapLength,
   patternDiag,
   planRoutes,
   segsCross,
@@ -119,7 +120,7 @@ describe("model/electronics-routing", () => {
   it("keeps crossings far below the graph-search router it replaces", () => {
     // Pins the measured improvement so a regression is visible. The old router scored 78 here and 36 on
     // puffin, on these same configurations, while also running over chips.
-    const cases: [string, number][] = [["akde-hex.fkld", 3], ["puffin.fkld", 5], ["church.fkld", 8]];
+    const cases: [string, number][] = [["akde-hex.fkld", 1], ["puffin.fkld", 5], ["church.fkld", 8]];
     for (const [name, budget] of cases) {
       const { faces, gaps } = load(name);
       const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 12), battery: { face: 0 } });
@@ -155,6 +156,15 @@ describe("model/electronics-routing", () => {
     const { faces, gaps } = load("akde-hex.fkld");
     const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 12), battery: { face: 0 } });
     expect(r.unreachable).toEqual([]);
+  });
+
+  it("keeps PWR/GND overlap from getting worse", () => {
+    // Overlap is NOT solved -- both nets share the pattern's only spine -- but it is measured, so pin it.
+    const { faces, gaps } = load("akde-hex.fkld");
+    const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 12), battery: { face: 0 } });
+    const diag = patternDiag(faces);
+    const share = overlapLength(r.traces, diag * 0.008) / totalLength(r.traces);
+    expect(share).toBeLessThanOrEqual(0.2);
   });
 
   it("scales with the pattern: geometry scaled by k gives copper scaled by k", () => {
