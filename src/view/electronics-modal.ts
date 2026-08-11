@@ -413,9 +413,12 @@ export class ElectronicsModal {
       if (!gap) return;
       const orphan = unreachable.has(i);
       const mid = gap.point;
-      // PWR follows the LED's `a` face, GND its `b` face.
-      const pwrLeg = gap.faceA === led.a ? gap.legA : gap.legB;
-      const gndLeg = gap.faceA === led.a ? gap.legB : gap.legA;
+      // Polarity is the router's call — it reverses an LED where that saves a crossing — so take the
+      // pads from its result. Falling back to the LED's own `a` face is only for the un-routed state;
+      // using it once a route exists would draw a `+` on the pad the GND tape lands on.
+      const pads = this.routed?.ledPads?.[i];
+      const pwrLeg = pads ? pads.pwr : gap.faceA === led.a ? gap.legA : gap.legB;
+      const gndLeg = pads ? pads.gnd : gap.faceA === led.a ? gap.legB : gap.legA;
       const r = this.markerR();
       const rPad = r * 0.62;
       // Draw each pad exactly where the router lands its copper — the pinched leg pad. (Placing them a

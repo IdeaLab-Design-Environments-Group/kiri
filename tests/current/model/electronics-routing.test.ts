@@ -54,17 +54,25 @@ describe("model/electronics-routing: two-net PWR/GND", () => {
     expect(pwr.length).toBeGreaterThan(0);
     expect(gnd.length).toBeGreaterThan(0);
 
-    // Each net TERMINATES exactly on the LED's leg pad — the leg stub is the last segment of a
-    // continuous chain, and the offset is tapered to zero there, so the tape lands on the pad rather
-    // than beside it.
+    // Each net TERMINATES exactly on one of the LED's two leg pads — the leg stub is the last segment
+    // of a continuous chain, and the offset is tapered to zero there, so the tape lands on the pad
+    // rather than beside it. *Which* pad is PWR is the router's choice (it reverses an LED where that
+    // saves a crossing), so the invariant is that the two nets take opposite legs and so bridge the LED.
     const gap = gapGraph(fold).gaps.find((g) => g.faceA === 1 && g.faceB === 2)!;
     const endsOn = (net: typeof pwr, leg: Vec2) =>
       net.some((t) => {
         const e = t.points[t.points.length - 1]!;
         return Math.hypot(e.x - leg.x, e.y - leg.y) < 1e-9;
       });
-    expect(endsOn(pwr, gap.legA)).toBe(true);
-    expect(endsOn(gnd, gap.legB)).toBe(true);
+    const pwrOnA = endsOn(pwr, gap.legA), pwrOnB = endsOn(pwr, gap.legB);
+    const gndOnA = endsOn(gnd, gap.legA), gndOnB = endsOn(gnd, gap.legB);
+    expect(pwrOnA || pwrOnB).toBe(true);
+    expect(gndOnA || gndOnB).toBe(true);
+    expect(pwrOnA).toBe(!gndOnA); // opposite legs — the LED is bridged, not shorted
+    expect(pwrOnB).toBe(!gndOnB);
+    // And the reported pads agree with where the copper actually went.
+    expect(endsOn(pwr, r.ledPads[0]!.pwr)).toBe(true);
+    expect(endsOn(gnd, r.ledPads[0]!.gnd)).toBe(true);
     expect(r.unreachable).toEqual([]);
   });
 
@@ -228,6 +236,26 @@ describe("model/electronics-routing: continuous, straightened traces", () => {
     // how far the tape gets from the pack but nearly doubles how much of it there is. Measured on this
     // fixture against a 3.40 straight line — 4.19 wired to the whole ring, 8.05 wired to corners only.
     expect(routeLen).toBeLessThan(padDist * 1.6);
+  });
+
+  it("reports each LED's pads as its two real legs, one per net", () => {
+    // The router may reverse an LED to save a crossing, so `ledPads` — not `led.a` — is the source of
+    // truth for which pad is +. Whatever it picks must still be the gap's own two legs, one each.
+    const fold = strip();
+    const r = planRoutes(fold, circuit({ battery: { face: 0 }, leds: [{ a: 0, b: 1 }, { a: 1, b: 2 }] }));
+    const same = (p: Vec2, q: Vec2) => Math.hypot(p.x - q.x, p.y - q.y) < 1e-9;
+    expect(r.ledPads).toHaveLength(2);
+    [{ a: 0, b: 1 }, { a: 1, b: 2 }].forEach((led, i) => {
+      const gap = gapGraph(fold).gaps.find(
+        (g) => (g.faceA === led.a && g.faceB === led.b) || (g.faceA === led.b && g.faceB === led.a),
+      )!;
+      const pads = r.ledPads[i]!;
+      // One pad on each leg, in either assignment, and never both on the same leg.
+      const straddles =
+        (same(pads.pwr, gap.legA) && same(pads.gnd, gap.legB)) ||
+        (same(pads.pwr, gap.legB) && same(pads.gnd, gap.legA));
+      expect(straddles).toBe(true);
+    });
   });
 
   it("keeps the tape on the gray tiles rather than over the gap openings", () => {

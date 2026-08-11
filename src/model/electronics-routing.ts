@@ -42,6 +42,7 @@ import {
   gapForLed,
   gapGraph,
   segInsidePolygon,
+  segsProperlyIntersect,
   tapeWidthForDiag,
   tilePolys,
 } from "./electronics.js";
@@ -83,8 +84,61 @@ function placeLeds(graph: GapGraph, leds: Led[], faceCount: number, unreachable:
   return placed;
 }
 
-/** Plan the copper routes for `circuit` over the flat pattern in `fold`. */
+/**
+ * Plan the copper routes for `circuit` over the flat pattern in `fold`.
+ *
+ * Which leg of an LED carries PWR is the router's to choose — the authored `Led` only records *which
+ * two tiles* the LED bridges, and `ledOf` normalises the pair to `a < b`, so the polarity that falls out
+ * of it is an artefact of face numbering rather than anything the author asked for. Reversing an LED is
+ * free in the build (mount it the other way round) and can save a crossing, because the two nets fan out
+ * of the battery in an angular order that interleaves or does not depending on those choices. So: route
+ * once, then try reversing each LED in turn and keep whichever reversals reduce crossings.
+ *
+ * One pass, so N+1 routings for N LEDs — greedy, not exhaustive. It never accepts a reversal that
+ * strands an LED.
+ */
 export function planRoutes(fold: FoldFile, circuit: Circuit): RoutedCircuit {
+  let bestLeds = circuit.leds;
+  let best = planWith(fold, circuit.battery, bestLeds);
+  if (circuit.battery == null || bestLeds.length === 0) return best;
+
+  let bestCross = countNetCrossings(best.traces);
+  let bestStranded = best.unreachable.length;
+  for (let i = 0; i < bestLeds.length; i++) {
+    const trial = bestLeds.map((l, k) => (k === i ? { a: l.b, b: l.a } : l));
+    const cand = planWith(fold, circuit.battery, trial);
+    const cross = countNetCrossings(cand.traces);
+    if (cand.unreachable.length <= bestStranded && cross < bestCross) {
+      best = cand;
+      bestLeds = trial;
+      bestCross = cross;
+      bestStranded = cand.unreachable.length;
+    }
+  }
+  return best;
+}
+
+/** How many times the PWR tape crosses the GND tape — the cost the polarity search minimises. */
+function countNetCrossings(traces: Trace2D[]): number {
+  const segs = (net: "pwr" | "gnd"): [Vec2, Vec2][] => {
+    const out: [Vec2, Vec2][] = [];
+    for (const t of traces) {
+      if (t.net !== net) continue;
+      for (let i = 1; i < t.points.length; i++) out.push([t.points[i - 1]!, t.points[i]!]);
+    }
+    return out;
+  };
+  const pwr = segs("pwr"), gnd = segs("gnd");
+  let n = 0;
+  for (const [a, b] of pwr) {
+    for (const [c, d] of gnd) if (segsProperlyIntersect(a, b, c, d)) n++;
+  }
+  return n;
+}
+
+/** One routing pass for a fixed set of LED orientations. */
+function planWith(fold: FoldFile, battery: Circuit["battery"], leds: Led[]): RoutedCircuit {
+  const circuit: Circuit = { leds, battery };
   const faces = flatFaces(fold);
   const gaps = gapGraph(fold, faces);
   const graph = cornerRouteGraph(fold, faces);
@@ -99,6 +153,16 @@ export function planRoutes(fold: FoldFile, circuit: Circuit): RoutedCircuit {
     const gap = gapForLed(gaps.gaps, led);
     return gap ? gap.point : { x: 0, y: 0 };
   });
+  // The pads under this orientation, so the view draws the same +/− the copper actually lands on.
+  const ledPads = circuit.leds.map((led) => {
+    const gap = gapForLed(gaps.gaps, led);
+    if (!gap) return { pwr: { x: 0, y: 0 }, gnd: { x: 0, y: 0 } };
+    const aIsFaceA = gap.faceA === led.a;
+    return {
+      pwr: aIsFaceA ? gap.legA : gap.legB,
+      gnd: aIsFaceA ? gap.legB : gap.legA,
+    };
+  });
   const batteryFace = circuit.battery && circuit.battery.face >= 0 && circuit.battery.face < faces.length
     ? circuit.battery.face
     : null;
@@ -108,7 +172,7 @@ export function planRoutes(fold: FoldFile, circuit: Circuit): RoutedCircuit {
   const unreachable: number[] = [];
   const placed = placeLeds(gaps, circuit.leds, faces.length, unreachable);
   if (batteryFace == null || placed.length === 0) {
-    return { ledPoints, batteryPoint, terminals: null, traces, unreachable };
+    return { ledPoints, ledPads, batteryPoint, terminals: null, traces, unreachable };
   }
 
   // A virtual battery source wired to **every** waypoint on its own tile's ring — corners *and* edge
@@ -131,7 +195,7 @@ export function planRoutes(fold: FoldFile, circuit: Circuit): RoutedCircuit {
 
   const terminals = batteryTerminals(batteryPoint!, placed, graph, batteryFace, diag);
   planTwoNet(graph, batteryNode, terminals, placed, tiles, diag, traces, unreachable);
-  return { ledPoints, batteryPoint, terminals, traces, unreachable };
+  return { ledPoints, ledPads, batteryPoint, terminals, traces, unreachable };
 }
 
 /**

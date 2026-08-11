@@ -100,6 +100,15 @@ export interface RoutedCircuit {
   batteryPoint: Vec2 | null;
   /** The battery's two terminal pads (flat mm): PWR (+) and GND (−) — each net's tape leaves its own. */
   terminals: { pwr: Vec2; gnd: Vec2 } | null;
+  /**
+   * Each LED's two pads as the **router** assigned them, aligned with `circuit.leds`.
+   *
+   * Which leg carries PWR is the router's choice, not the author's: it picks the orientation that makes
+   * the two nets cross less, which physically just means mounting that LED the other way round. Views
+   * must read the pads from here rather than deriving them from `led.a`, or the drawn `+`/`−` will
+   * contradict the tape.
+   */
+  ledPads: { pwr: Vec2; gnd: Vec2 }[];
   traces: Trace2D[];
   /** Indices into `circuit.leds` the planner could not connect to the battery. */
   unreachable: number[];
