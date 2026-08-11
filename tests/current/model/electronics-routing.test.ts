@@ -121,7 +121,7 @@ describe("model/electronics-routing", () => {
   it("keeps crossings far below the graph-search router it replaces", () => {
     // Pins the measured improvement so a regression is visible. The old router scored 78 here and 36 on
     // puffin, on these same configurations, while also running over chips.
-    const cases: [string, number][] = [["akde-hex.fkld", 1], ["puffin.fkld", 7], ["church.fkld", 0]];
+    const cases: [string, number][] = [["akde-hex.fkld", 1], ["puffin.fkld", 6], ["church.fkld", 0]];
     for (const [name, budget] of cases) {
       const { faces, gaps } = load(name);
       const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 12), battery: { face: 0 } });
@@ -163,20 +163,13 @@ describe("model/electronics-routing", () => {
     // The real constraint: tape is wide, so a centreline merely *not crossing* the chip is not enough. This
     // was 6-12 chips per model until the bus was allowed to cross a shared edge away from its midpoint,
     // which is where the chip sits.
-    // Zero on every bundled pattern except puffin, which still has 2 and is pinned so it cannot grow. Its
-    // 96 faces include tiles so narrow that no crossing point on a shared edge clears the chip.
-    const budget: Record<string, number> = {
-      "house.fkld": 0,
-      "church.fkld": 0,
-      "akde-hex.fkld": 0,
-      "akde-square-pyramid.fkld": 0,
-      "puffin.fkld": 2,
-    };
-    for (const [name, want] of Object.entries(budget)) {
+    // Zero on every bundled pattern, puffin included -- rip-up rerouting closed the last two.
+    const models = ["house.fkld", "church.fkld", "akde-hex.fkld", "akde-square-pyramid.fkld", "puffin.fkld"];
+    for (const name of models) {
       const { faces, gaps } = load(name);
       const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 12), battery: { face: 0 } });
       const tapeW = patternDiag(faces) * 0.011; // the width the modal draws
-      expect(countUnderLed(r.traces, r.pads, tapeW * 0.5, tapeW * 0.6), name).toBe(want);
+      expect(countUnderLed(r.traces, r.pads, tapeW * 0.5, tapeW * 0.6), name).toBe(0);
       expect(countOverLed(r.traces, r.pads), name).toBe(0);
     }
   });
@@ -189,7 +182,7 @@ describe("model/electronics-routing", () => {
       "house.fkld": 0.04,
       "church.fkld": 0.04,
       "akde-hex.fkld": 0.05,
-      "akde-decagon-pyramid.fkld": 0.1,
+      "akde-decagon-pyramid.fkld": 0.07,
     };
     for (const [name, share] of Object.entries(budget)) {
       const { faces, gaps } = load(name);

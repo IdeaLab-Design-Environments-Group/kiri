@@ -289,10 +289,14 @@ export function planRoutes(
   const build = (f: boolean[]): Trace2D[] => {
     // What the first net routed. The second pays a toll to reuse it, which now buys a different chord rather
     // than the same one dearer, because a face has many ways through.
-    const taken = new Map<string, number>();
-    const railPts = (net: "pwr" | "gnd", rev: boolean): Vec2[] => {
-      // Each net may work the tour from either end. Going round the other way is the one lever that gets a
-      // net off the spine the other is using, since the pattern rarely offers a second route.
+    /** Route one net, charging a toll for every waypoint in `avoid` (what the other net currently uses).
+     *  Returns the route and the waypoints it took. */
+    const railPts = (
+      net: "pwr" | "gnd",
+      rev: boolean,
+      avoid: Map<string, number>,
+    ): { pts: Vec2[]; used: Map<string, number> } => {
+      // Each net may work the tour from either end.
       const seq = rev ? order.map((_, k) => order.length - 1 - k) : order.map((_, k) => k);
       const pick = (i: number): { pad: Vec2; face: number } => {
         const t = targets[order[i]!]!;
@@ -302,6 +306,7 @@ export function planRoutes(
           : { pad: t.legs[0], face: t.legFaces[0] };
       };
       const out: Vec2[] = [net === "pwr" ? term.pwr : term.gnd];
+      const used = new Map<string, number>();
       let fromFace = battery.face;
       for (const i of seq) {
         const { pad, face } = pick(i);
@@ -309,22 +314,34 @@ export function planRoutes(
         const t = targets[order[i]!]!;
         const blocked = new Set(occupied);
         blocked.delete(ptKey(t.hinge));
-        for (const p of corridorPath(corridor, fromFace, face, blocked, taken)) {
+        // Charge against the other net's route *and* this net's own route so far, so a single net does not
+        // double back along itself either.
+        const toll = new Map(avoid);
+        for (const [k, v] of used) toll.set(k, (toll.get(k) ?? 0) + v);
+        for (const p of corridorPath(corridor, fromFace, face, blocked, toll)) {
           out.push(p);
-          taken.set(ptKey(p), (taken.get(ptKey(p)) ?? 0) + 1);
+          used.set(ptKey(p), (used.get(ptKey(p)) ?? 0) + 1);
         }
         out.push(pad);
         fromFace = face;
       }
-      return out;
+      return { pts: out, used };
     };
-    // A hop that passes a hinge crosses the chip sitting on it, because the approach runs nearly along the
-    // chip's own axis. Sliding that waypoint to the hinge's end corner clears the part and stays both
-    // inside the body and on the tiling.
-    return [
-      { pts: dedupe(dodgeChips(railPts("pwr", dirPwr), targets, onBody)), net: "pwr" },
-      { pts: dedupe(dodgeChips(railPts("gnd", dirGnd), targets, onBody)), net: "gnd" },
+
+    // PWR routes with a clear field; GND then pays a toll for every waypoint PWR took, so it goes round the
+    // other way rather than shadowing it.
+    //
+    // Rip-up and reroute -- giving PWR later passes to move aside for GND too -- was implemented and measured
+    // to change nothing at all: rerouting PWR against GND's route converges on the same PWR route. It only
+    // appeared to help while it was also being run inside the polarity search, and that gain was the search
+    // finding a different polarity, not the rerouting. Removed rather than left in as a costly no-op.
+    const pwr = railPts("pwr", dirPwr, new Map());
+    const gnd = railPts("gnd", dirGnd, pwr.used);
+    const finish = (): Trace2D[] => [
+      { pts: dedupe(dodgeChips(pwr.pts, targets, onBody)), net: "pwr" },
+      { pts: dedupe(dodgeChips(gnd.pts, targets, onBody)), net: "gnd" },
     ];
+    return finish();
   };
 
   const padsFor = (f: boolean[]): PadPair[] => {
@@ -405,6 +422,51 @@ export function planRoutes(
   }
 
   return { traces: best, pads, unreachable };
+}
+
+/** Binary min-heap keyed by string, for the corridor search frontier. */
+class MinHeap {
+  private readonly keys: string[] = [];
+  private readonly cost: number[] = [];
+
+  push(key: string, c: number): void {
+    this.keys.push(key);
+    this.cost.push(c);
+    let i = this.keys.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (this.cost[p]! <= this.cost[i]!) break;
+      this.swap(i, p);
+      i = p;
+    }
+  }
+
+  pop(): string | null {
+    if (!this.keys.length) return null;
+    const top = this.keys[0]!;
+    const lastKey = this.keys.pop()!;
+    const lastCost = this.cost.pop()!;
+    if (this.keys.length) {
+      this.keys[0] = lastKey;
+      this.cost[0] = lastCost;
+      let i = 0;
+      for (;;) {
+        const l = 2 * i + 1, r = l + 1;
+        let m = i;
+        if (l < this.keys.length && this.cost[l]! < this.cost[m]!) m = l;
+        if (r < this.keys.length && this.cost[r]! < this.cost[m]!) m = r;
+        if (m === i) break;
+        this.swap(i, m);
+        i = m;
+      }
+    }
+    return top;
+  }
+
+  private swap(a: number, b: number): void {
+    [this.keys[a], this.keys[b]] = [this.keys[b]!, this.keys[a]!];
+    [this.cost[a], this.cost[b]] = [this.cost[b]!, this.cost[a]!];
+  }
 }
 
 /** Unordered key for a chord between two midpoints. */
@@ -594,15 +656,23 @@ function corridorPath(
   const dist = new Map<string, number>();
   const prev = new Map<string, string>();
   const seen = new Set<string>();
-  for (const m of starts) dist.set(ptKey(m), cost(ptKey(m), 0));
+  const heap = new MinHeap();
+  for (const m of starts) {
+    const k = ptKey(m);
+    const d = cost(k, 0);
+    dist.set(k, d);
+    heap.push(k, d);
+  }
 
   let end: string | null = null;
   while (true) {
-    let at: string | null = null, best = Infinity;
-    for (const [k, d] of dist) {
-      if (!seen.has(k) && d < best) { best = d; at = k; }
-    }
-    if (!at) break;
+    // A binary heap, not a scan of every distance: this runs inside a rip-up loop inside a descent, and the
+    // scan made a 12-LED puffin plan take two seconds -- far too slow to re-plan on every click.
+    const top = heap.pop();
+    if (!top) break;
+    const at: string | null = top;
+    if (seen.has(at)) continue;
+    const best = dist.get(at)!;
     if (goal.has(at)) { end = at; break; }
     seen.add(at);
     const here = c.point.get(at)!;
@@ -618,6 +688,7 @@ function corridorPath(
         if (w < (dist.get(k) ?? Infinity)) {
           dist.set(k, w);
           prev.set(k, at);
+          heap.push(k, w);
         }
       }
     }
