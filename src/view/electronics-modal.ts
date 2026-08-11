@@ -53,7 +53,10 @@ export class ElectronicsModal {
   private bounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
   private circuit: Circuit = { leds: [], battery: null };
   private routed: RoutedCircuit | null = null;
-  private showRoutes = false; // copper tape is drawn only after the user hits "Auto-route"
+  // Copper is drawn as soon as there is something to route. The controller re-plans on every change and
+  // pushes a fresh preview, so the tape follows each placement live; "Auto-route" is now a manual
+  // re-plan for when you want to force one, not a gate that hides the result.
+  private showRoutes = true;
 
   // Pan/zoom: `content` is the full pattern box (mm + margin); `view` is the visible window into it.
   private content = { w: 1, h: 1 };
@@ -166,7 +169,6 @@ export class ElectronicsModal {
     this.points = fold ? flatPoints(fold) : [];
     this.circuit = { leds: [], battery: null };
     this.routed = null;
-    this.showRoutes = false;
     this.computeBounds();
     this.fitView();
     this.syncButtons();
@@ -201,21 +203,20 @@ export class ElectronicsModal {
   private clear(): void {
     this.circuit = { leds: [], battery: null };
     this.routed = null;
-    this.showRoutes = false;
     this.syncButtons();
     this.emit();
   }
 
-  /** "Auto-route": generate (show) the copper tape for the current battery + LEDs. */
+  /** "Auto-route": force a re-plan. The tape already updates on every placement. */
   private autoRoute(): void {
-    this.showRoutes = true;
-    this.syncButtons();
-    this.emit(); // controller re-plans and pushes a fresh preview, which we now draw
+    this.emit();
   }
 
   /** Reflect active state on the toggle-ish toolbar buttons. */
   private syncButtons(): void {
-    this.overlay.querySelector(".el-route")!.classList.toggle("is-active", this.showRoutes);
+    // Routing is live, so the button reads as available whenever there is a circuit to route.
+    const live = this.circuit.battery != null && this.circuit.leds.length > 0;
+    this.overlay.querySelector(".el-route")!.classList.toggle("is-active", live);
   }
 
   private onCanvasClick(e: MouseEvent): void {

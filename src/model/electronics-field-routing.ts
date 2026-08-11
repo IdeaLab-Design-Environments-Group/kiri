@@ -111,17 +111,12 @@ export function planRoutesFreeform(
 
   const diag = boundsDiagonal(faces.flatMap((f) => f.poly));
   const terminals = terminalsFor(batteryPoint!, legs, diag);
-  const keepOuts = keepOutsFor(fold, gaps, legs);
-  // The axis the two terminals straddle, which is roughly across the run of the pads. Each net steps off
-  // the pad line along it — the one to +, the other to − — before running any distance.
-  const axis = unit(terminals.pwr.x - terminals.gnd.x, terminals.pwr.y - terminals.gnd.y);
-  // Step far enough to clear the widest LED keep-out.
-  const lift = keepOuts.reduce((m, k) => Math.max(m, k.clear ?? 0), 0) * 1.6;
+  const keepOuts = keepOutsFor(fold, legs);
 
   // Choose which leg of each LED carries PWR. The routes are straight-line constructions, so evaluating a
   // candidate is cheap enough to enumerate the whole space at realistic LED counts — the production
   // router can only afford a greedy sweep because every candidate there costs a re-route.
-  const make = (rev: boolean[]) => build(rev, legs, terminals, style, keepOuts, axis, lift);
+  const make = (rev: boolean[]) => build(rev, legs, terminals, style, keepOuts);
   const best = legs.length <= exhaustiveUpTo
     ? bestOf(enumerateAssignments(legs.length), make)
     : bestOf(greedyAssignments(legs.length, (rev) => score(make(rev))), make);
@@ -150,6 +145,53 @@ function terminalsFor(centre: Vec2, legs: { a: Vec2; b: Vec2 }[], diag: number):
     pwr: { x: centre.x + ax * half, y: centre.y + ay * half },
     gnd: { x: centre.x - ax * half, y: centre.y - ay * half },
   };
+}
+
+/**
+ * Where copper may not go. Only three things, and none of them is about the tiles:
+ *
+ * - **Over an LED.** The chip bridges the two pads, so the body is the segment joining them and copper may
+ *   not cross it. Stated as a crossing rather than a clearance disc deliberately: a disc wide enough to
+ *   matter also forbids the stub that has to *land* on a pad, because a pad cannot be reached without
+ *   passing close to the chip beside it. A crossing test ignores endpoint touches, so landing is legal and
+ *   only genuinely passing over the component is refused.
+ * - **Across a cut (`C`).** The cutter severs the sheet along its whole length; tape over one is cut
+ *   through. That destroys the circuit, so it is not negotiable.
+ * - **Across the silhouette (`B`).** Same cutter, and past it there is no sheet to stick to.
+ *
+ * Fold hinges (`M`/`V`) are deliberately absent: crossing one costs durability — the tape creases and can
+ * crack — not continuity, and being free to cross them is the whole point of this router.
+ */
+function keepOutsFor(fold: FoldFile, legs: { a: Vec2; b: Vec2 }[]): KeepOut[] {
+  const out: KeepOut[] = [];
+  for (const l of legs) out.push({ seg: [l.a, l.b] });
+  const pts = flatPoints(fold);
+  const ev = fold.edges_vertices ?? [];
+  const ea = (fold.edges_assignment as string[] | undefined) ?? [];
+  for (let i = 0; i < ev.length; i++) {
+    const role = ea[i] ?? "B";
+    if (role !== "C" && role !== "B") continue;
+    const a = pts[ev[i]?.[0] ?? -1], b = pts[ev[i]?.[1] ?? -1];
+    if (a && b) out.push({ seg: [a, b] });
+  }
+  return out;
+}
+
+/** Does the straight run `a→b` violate any keep-out? */
+function blocked(a: Vec2, b: Vec2, keepOuts: KeepOut[]): boolean {
+  for (const k of keepOuts) {
+    if (k.seg && properCross(a, b, k.seg[0], k.seg[1])) return true;
+    if (k.at && k.clear != null && distToSeg(k.at, a, b) < k.clear) return true;
+  }
+  return false;
+}
+
+function distToSeg(p: Vec2, a: Vec2, b: Vec2): number {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const l2 = dx * dx + dy * dy;
+  let t = l2 > 0 ? ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p.x - (a.x + dx * t), p.y - (a.y + dy * t));
 }
 
 /** How much dearer a run that still violates a keep-out is, once even a detour has failed. */
@@ -199,102 +241,14 @@ function build(
   terminals: { pwr: Vec2; gnd: Vec2 },
   style: RouteStyle,
   keepOuts: KeepOut[],
-  axis: Vec2,
-  lift: number,
 ): Built {
   const pwrPads = legs.map((l, s) => (rev[s] ? l.b : l.a));
   const gndPads = legs.map((l, s) => (rev[s] ? l.a : l.b));
   const traces: Trace2D[] = [
-    ...netRuns(terminals.pwr, pwrPads, style, keepOuts, axis, +lift).map((points) => ({ net: "pwr" as const, points })),
-    ...netRuns(terminals.gnd, gndPads, style, keepOuts, axis, -lift).map((points) => ({ net: "gnd" as const, points })),
+    ...runsFor(terminals.pwr, pwrPads, style, keepOuts).map((points) => ({ net: "pwr" as const, points })),
+    ...runsFor(terminals.gnd, gndPads, style, keepOuts).map((points) => ({ net: "gnd" as const, points })),
   ];
   return { rev, traces };
-}
-
-/**
- * One net's copper: a stub off each pad, then a tree over the lifted points.
- *
- * The lift is what makes the LED keep-out satisfiable. Both nets' pads sit *on* the hinge lines with the
- * chips between them — often alternating PWR, GND, PWR, GND along one line — so a run directly between two
- * pads of one net passes over the other net's LED. Stepping each pad off that line first, the two nets to
- * opposite sides, gives each net a clear corridor to run in. It is the same rail idea as the production
- * router, without being tied to the tiles.
- */
-function netRuns(
-  terminal: Vec2,
-  pads: Vec2[],
-  style: RouteStyle,
-  keepOuts: KeepOut[],
-  axis: Vec2,
-  lift: number,
-): Vec2[][] {
-  if (pads.length === 0) return [];
-  const lifted = pads.map((p) => ({ x: p.x + axis.x * lift, y: p.y + axis.y * lift }));
-  const runs = runsFor(terminal, lifted, style, keepOuts);
-  // Then drop each lifted point onto its pad. Short, and perpendicular to the corridor, so it only ever
-  // touches its own LED's pad.
-  pads.forEach((p, i) => runs.push([lifted[i]!, p]));
-  return runs;
-}
-
-function unit(x: number, y: number): Vec2 {
-  const l = Math.hypot(x, y);
-  return l < 1e-12 ? { x: 0, y: 1 } : { x: x / l, y: y / l };
-}
-
-/**
- * Where copper may not go. Three kinds, and only three — everything else is fair game:
- *
- * - **Over an LED.** The chip bridges the two pads at the hinge midpoint; tape across it would sit on the
- *   component and short it out. Enforced as a clearance disc about the hinge midpoint, sized well under the
- *   pad separation so a run that *terminates* on a pad is never rejected.
- * - **Across a cut (`C`).** The cutter severs the sheet along its whole length, so tape laid over one is
- *   cut through. This is not an aesthetic rule, it destroys the circuit.
- * - **Across the silhouette (`B`).** Same cutter, and beyond it there is no sheet to stick to.
- *
- * Fold hinges (`M`/`V`) are deliberately *not* here: tape across a fold creases, which is a durability
- * cost, not a broken circuit — and letting copper cross them is the whole point of this router.
- */
-function keepOutsFor(
-  fold: FoldFile,
-  gaps: ReturnType<typeof gapGraph>["gaps"],
-  legs: { a: Vec2; b: Vec2 }[],
-): KeepOut[] {
-  const out: KeepOut[] = [];
-  // "Over the LED" means across the chip: the body is the segment joining the two pads, and copper may
-  // not cross it. Stated as a crossing rather than a clearance disc on purpose — a disc big enough to
-  // matter also forbids the stub that has to *land* on a pad, since you cannot reach a pad without coming
-  // close to the chip beside it. A crossing test excludes endpoint touches, so landing is always legal
-  // and only genuinely passing over the component is rejected.
-  for (const l of legs) out.push({ seg: [l.a, l.b] });
-  const pts = flatPoints(fold);
-  const ev = fold.edges_vertices ?? [];
-  const ea = (fold.edges_assignment as string[] | undefined) ?? [];
-  for (let i = 0; i < ev.length; i++) {
-    const role = ea[i] ?? "B";
-    if (role !== "C" && role !== "B") continue;
-    const a = pts[ev[i]?.[0] ?? -1], b = pts[ev[i]?.[1] ?? -1];
-    if (a && b) out.push({ seg: [a, b] });
-  }
-  void gaps;
-  return out;
-}
-
-/** Does the straight run `a→b` violate any keep-out? */
-function blocked(a: Vec2, b: Vec2, keepOuts: KeepOut[]): boolean {
-  for (const k of keepOuts) {
-    if (k.seg && properCross(a, b, k.seg[0], k.seg[1])) return true;
-    if (k.at && k.clear != null && distToSeg(k.at, a, b) < k.clear) return true;
-  }
-  return false;
-}
-
-function distToSeg(p: Vec2, a: Vec2, b: Vec2): number {
-  const dx = b.x - a.x, dy = b.y - a.y;
-  const l2 = dx * dx + dy * dy;
-  let t = l2 > 0 ? ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2 : 0;
-  t = Math.max(0, Math.min(1, t));
-  return Math.hypot(p.x - (a.x + dx * t), p.y - (a.y + dy * t));
 }
 
 /** One net's copper as polylines: either a radial fan or a Euclidean MST. Both are planar. */
