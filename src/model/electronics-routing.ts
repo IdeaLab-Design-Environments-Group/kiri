@@ -314,8 +314,13 @@ export function planRoutes(
         const t = targets[order[i]!]!;
         const blocked = new Set(occupied);
         blocked.delete(ptKey(t.hinge));
-        // Charge against the other net's route *and* this net's own route so far, so a single net does not
-        // double back along itself either.
+        // Charge against the other net's route and this net's own route so far, so neither the two nets nor a
+        // single net doubles back along what is already laid.
+        //
+        // Making a net's own tape *free* to reuse was measured instead, on the theory that a hop would then
+        // merge into the existing run rather than lay beside it. It cuts copper 23-32% but does not reduce
+        // self-overlap at all (akde-decagon 15% -> 16%), and it costs 21 separate strips there against 2, plus
+        // a PWR/GND crossing and an under-chip violation. Not worth it.
         const toll = new Map(avoid);
         for (const [k, v] of used) toll.set(k, (toll.get(k) ?? 0) + v);
         for (const p of corridorPath(corridor, fromFace, face, blocked, toll)) {
@@ -338,8 +343,8 @@ export function planRoutes(
     const pwr = railPts("pwr", dirPwr, new Map());
     const gnd = railPts("gnd", dirGnd, pwr.used);
     const finish = (): Trace2D[] => [
-      { pts: dedupe(dodgeChips(pwr.pts, targets, onBody)), net: "pwr" },
-      { pts: dedupe(dodgeChips(gnd.pts, targets, onBody)), net: "gnd" },
+      ...asTree(dedupe(dodgeChips(pwr.pts, targets, onBody)), "pwr", term.pwr),
+      ...asTree(dedupe(dodgeChips(gnd.pts, targets, onBody)), "gnd", term.gnd),
     ];
     return finish();
   };
@@ -422,6 +427,64 @@ export function planRoutes(
   }
 
   return { traces: best, pads, unreachable };
+}
+
+/**
+ * Turn a net's walk into the tape you would actually lay for it.
+ *
+ * The walk is one path through every pad of the net, so wherever it has to come back the way it went it
+ * retraces its own steps and the strip is laid twice over. That is electrically harmless -- one net, one
+ * potential -- but it is wasted tape and it reads as a mistake. Since every segment belongs to the same net,
+ * laying each *once* leaves exactly the same circuit: the walk becomes a tree.
+ *
+ * Duplicate segments are dropped, then what is left is broken into the longest chains that can be laid in one
+ * pass, so this trades strip count for tape length and legibility.
+ */
+function asTree(pts: Vec2[], net: "pwr" | "gnd", first: Vec2): Trace2D[] {
+  if (pts.length < 2) return [{ pts, net }];
+
+  const nodes = new Map<string, Vec2>();
+  const adj = new Map<string, Set<string>>();
+  const link = (a: Vec2, b: Vec2): void => {
+    const ka = ptKey(a), kb = ptKey(b);
+    if (ka === kb) return;
+    nodes.set(ka, a);
+    nodes.set(kb, b);
+    if (!adj.has(ka)) adj.set(ka, new Set());
+    if (!adj.has(kb)) adj.set(kb, new Set());
+    adj.get(ka)!.add(kb); // a Set, so a segment walked twice is stored once
+    adj.get(kb)!.add(ka);
+  };
+  for (let i = 1; i < pts.length; i++) link(pts[i - 1]!, pts[i]!);
+
+  // Walk out the remaining edges as long chains, starting from the ends (degree 1) so a chain runs the full
+  // length of a branch rather than stopping in the middle of one.
+  const out: Trace2D[] = [];
+  // The battery terminal goes first, so the strip that carries the supply is one continuous run from it --
+  // that is the piece you lay first, and it should not start in the middle of the pattern.
+  const firstKey = ptKey(first);
+  const starts = [...adj.keys()].sort((a, b) => {
+    if (a === firstKey) return -1;
+    if (b === firstKey) return 1;
+    return (adj.get(a)!.size - adj.get(b)!.size) || (a < b ? -1 : 1);
+  });
+  for (const from of starts) {
+    while (adj.get(from)!.size) {
+      const chain: Vec2[] = [nodes.get(from)!];
+      let at = from;
+      for (;;) {
+        const next = adj.get(at)!.values().next();
+        if (next.done) break;
+        const to = next.value;
+        adj.get(at)!.delete(to);
+        adj.get(to)!.delete(at);
+        chain.push(nodes.get(to)!);
+        at = to;
+      }
+      if (chain.length >= 2) out.push({ pts: chain, net });
+    }
+  }
+  return out.length ? out : [{ pts, net }];
 }
 
 /** Binary min-heap keyed by string, for the corridor search frontier. */

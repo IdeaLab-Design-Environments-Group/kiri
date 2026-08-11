@@ -56,13 +56,16 @@ describe("model/electronics-routing", () => {
     }
   });
 
-  it("emits exactly two strips however many LEDs there are", () => {
-    // The point of the bus topology: one PWR strip and one GND strip, not two per LED.
+  it("emits a handful of strips, not two per LED", () => {
+    // The point of the bus topology: both nets are a few long runs whatever the LED count, rather than a pair
+    // of strips per LED. A net is a tree, so it is laid as one run per branch -- retraced segments are dropped
+    // instead of being taped twice.
     const { faces, gaps } = load("puffin.fkld");
     for (const n of [1, 4, 12]) {
       const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, n), battery: { face: 0 } });
-      expect(r.traces).toHaveLength(2);
-      expect(r.traces.map((t) => t.net).sort()).toEqual(["gnd", "pwr"]);
+      expect(r.traces.length).toBeGreaterThanOrEqual(2);
+      expect(r.traces.length).toBeLessThanOrEqual(2 * n); // never two per LED
+      expect(new Set(r.traces.map((t) => t.net))).toEqual(new Set(["gnd", "pwr"]));
     }
   });
 
@@ -70,23 +73,34 @@ describe("model/electronics-routing", () => {
     const { faces, gaps } = load("house.fkld");
     const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 6), battery: { face: 0 } });
     const term = batteryTerminals(faces[0]!.centroid, patternDiag(faces));
+    // The supply run for each net starts at that net's own terminal.
     const pwr = r.traces.find((t) => t.net === "pwr")!;
     const gnd = r.traces.find((t) => t.net === "gnd")!;
     expect(pwr.pts[0]).toEqual(term.pwr);
     expect(gnd.pts[0]).toEqual(term.gnd);
+    // And no strip of either net is left dangling from a point no other strip of that net touches.
+    for (const net of ["pwr", "gnd"] as const) {
+      const runs = r.traces.filter((t) => t.net === net);
+      const seen = new Set(runs.flatMap((t) => t.pts.map((p) => `${p.x}_${p.y}`)));
+      for (const t of runs.slice(1)) {
+        const touches = t.pts.filter((p) => seen.has(`${p.x}_${p.y}`)).length;
+        expect(touches, `${net} run is connected`).toBeGreaterThan(0);
+      }
+    }
   });
 
   it("lands one rail on each of every LED's two pads", () => {
     const { faces, gaps } = load("church.fkld");
     const leds = ledsOn(gaps, 5);
     const r = planRoutes(faces, gaps, { leds, battery: { face: 0 } });
-    const pwr = r.traces.find((t) => t.net === "pwr")!;
-    const gnd = r.traces.find((t) => t.net === "gnd")!;
+    // A net is laid as several runs, so gather all of its points.
+    const pwrPts = r.traces.filter((t) => t.net === "pwr").flatMap((t) => t.pts);
+    const gndPts = r.traces.filter((t) => t.net === "gnd").flatMap((t) => t.pts);
     leds.forEach((_, i) => {
       const pad = r.pads[i]!;
       // Each pad is a vertex of its own net's strip, and the two pads differ.
-      expect(pwr.pts.some((p) => p.x === pad.pwr.x && p.y === pad.pwr.y)).toBe(true);
-      expect(gnd.pts.some((p) => p.x === pad.gnd.x && p.y === pad.gnd.y)).toBe(true);
+      expect(pwrPts.some((p) => p.x === pad.pwr.x && p.y === pad.pwr.y)).toBe(true);
+      expect(gndPts.some((p) => p.x === pad.gnd.x && p.y === pad.gnd.y)).toBe(true);
       expect(pad.pwr).not.toEqual(pad.gnd);
     });
   });
