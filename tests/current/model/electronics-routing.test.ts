@@ -121,7 +121,7 @@ describe("model/electronics-routing", () => {
   it("keeps crossings far below the graph-search router it replaces", () => {
     // Pins the measured improvement so a regression is visible. The old router scored 78 here and 36 on
     // puffin, on these same configurations, while also running over chips.
-    const cases: [string, number][] = [["akde-hex.fkld", 1], ["puffin.fkld", 5], ["church.fkld", 8]];
+    const cases: [string, number][] = [["akde-hex.fkld", 1], ["puffin.fkld", 7], ["church.fkld", 0]];
     for (const [name, budget] of cases) {
       const { faces, gaps } = load(name);
       const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 12), battery: { face: 0 } });
@@ -159,34 +159,44 @@ describe("model/electronics-routing", () => {
     expect(r.unreachable).toEqual([]);
   });
 
-  it("KNOWN FAILING PROPERTY: copper still sits under chips once tape width is counted", () => {
-    // Documents a real defect rather than hiding it. countOverLed reads 0 because it tests zero-width
-    // centrelines for a proper crossing; with the drawn tape width, 6-12 chips per model have copper under
-    // them. The numbers are pinned so a fix shows up as this test failing high -> low.
-    const expected: Record<string, number> = {
-      "house.fkld": 6,
-      "church.fkld": 7,
-      "puffin.fkld": 9,
-      "akde-hex.fkld": 10,
+  it("keeps copper out from under the chips once tape width is counted", () => {
+    // The real constraint: tape is wide, so a centreline merely *not crossing* the chip is not enough. This
+    // was 6-12 chips per model until the bus was allowed to cross a shared edge away from its midpoint,
+    // which is where the chip sits.
+    // Zero on every bundled pattern except puffin, which still has 2 and is pinned so it cannot grow. Its
+    // 96 faces include tiles so narrow that no crossing point on a shared edge clears the chip.
+    const budget: Record<string, number> = {
+      "house.fkld": 0,
+      "church.fkld": 0,
+      "akde-hex.fkld": 0,
+      "akde-square-pyramid.fkld": 0,
+      "puffin.fkld": 2,
     };
-    for (const [name, want] of Object.entries(expected)) {
+    for (const [name, want] of Object.entries(budget)) {
       const { faces, gaps } = load(name);
       const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 12), battery: { face: 0 } });
-      const diag = patternDiag(faces);
-      const tapeW = diag * 0.011; // the width the modal draws
+      const tapeW = patternDiag(faces) * 0.011; // the width the modal draws
       expect(countUnderLed(r.traces, r.pads, tapeW * 0.5, tapeW * 0.6), name).toBe(want);
-      // The zero-width check passes, which is exactly why this went unnoticed.
       expect(countOverLed(r.traces, r.pads), name).toBe(0);
     }
   });
 
-  it("keeps PWR/GND overlap from getting worse", () => {
-    // Overlap is NOT solved -- both nets share the pattern's only spine -- but it is measured, so pin it.
-    const { faces, gaps } = load("akde-hex.fkld");
-    const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 12), battery: { face: 0 } });
-    const diag = patternDiag(faces);
-    const share = overlapLength(r.traces, diag * 0.008) / totalLength(r.traces);
-    expect(share).toBeLessThanOrEqual(0.2);
+  it("keeps the two nets off each other", () => {
+    // Overlap was 11-41% of copper when both nets were forced through the same face centres and the same
+    // edge midpoints. akde-decagon is included deliberately: it is the pattern where the shared-route toll
+    // actually changes the answer, so testing only akde-hex would leave that knob unguarded.
+    const budget: Record<string, number> = {
+      "house.fkld": 0.04,
+      "church.fkld": 0.04,
+      "akde-hex.fkld": 0.05,
+      "akde-decagon-pyramid.fkld": 0.1,
+    };
+    for (const [name, share] of Object.entries(budget)) {
+      const { faces, gaps } = load(name);
+      const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 12), battery: { face: 0 } });
+      const got = overlapLength(r.traces, patternDiag(faces) * 0.008) / totalLength(r.traces);
+      expect(got, name).toBeLessThanOrEqual(share);
+    }
   });
 
   it("scales with the pattern: geometry scaled by k gives copper scaled by k", () => {
