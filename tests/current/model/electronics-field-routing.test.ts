@@ -187,6 +187,32 @@ describe("model/electronics-field-routing: unrestricted router", () => {
     expect(across).toBe(0);
   });
 
+  it("emits each net as continuous strips, not one piece per tree edge", () => {
+    // This is what made the tape read as a row of angular blocks. The bus turns at every pad, and
+    // `tapeRibbon` can only bevel a bend *inside* one polyline — so a turn between two separate traces was
+    // left as an unfilled notch, which looks exactly like a hard corner. Carrying the strip on through the
+    // pad fills the joint and means fewer pieces to lay.
+    //
+    // On this fixture each net's tree is a simple path, so each net should be a single trace. Per-edge
+    // emission gave three traces per net and four unbevelled joints.
+    const fold = row3();
+    const r = planRoutesFreeform(fold, circuit({ battery: { face: 0 }, leds: allLeds(fold) }));
+    expect(r.traces.filter((t) => t.net === "pwr")).toHaveLength(1);
+    expect(r.traces.filter((t) => t.net === "gnd")).toHaveLength(1);
+    // And it really is a run through the pads, not a two-point hop.
+    for (const t of r.traces) expect(t.points.length).toBeGreaterThanOrEqual(3);
+
+    // No two trace ends may coincide: a shared end is a joint the ribbon cannot bevel.
+    const ends = new Map<string, number>();
+    for (const t of r.traces) {
+      for (const p of [t.points[0]!, t.points[t.points.length - 1]!]) {
+        const k = `${p.x.toFixed(9)},${p.y.toFixed(9)}`;
+        ends.set(k, (ends.get(k) ?? 0) + 1);
+      }
+    }
+    expect([...ends.values()].filter((n) => n > 1)).toHaveLength(0);
+  });
+
   it("is deterministic", () => {
     const fold = block2x2();
     const leds = allLeds(fold);

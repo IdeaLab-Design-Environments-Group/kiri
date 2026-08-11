@@ -263,7 +263,6 @@ function runsFor(terminal: Vec2, pads: Vec2[], style: RouteStyle, keepOuts: Keep
   const bestTo = new Array<number>(nodes.length).fill(Infinity);
   const parent = new Array<number>(nodes.length).fill(-1);
   bestTo[0] = 0;
-  const edges: Vec2[][] = [];
   const runOf = new Map<string, Vec2[]>();
   const runFor = (i: number, j: number): Vec2[] => {
     const key = `${i}_${j}`;
@@ -278,7 +277,6 @@ function runsFor(terminal: Vec2, pads: Vec2[], style: RouteStyle, keepOuts: Keep
     for (let i = 0; i < nodes.length; i++) if (!inTree[i] && bestTo[i]! < du) { du = bestTo[i]!; u = i; }
     if (u < 0) break;
     inTree[u] = true;
-    if (parent[u]! >= 0) edges.push(runFor(parent[u]!, u));
     for (let v = 0; v < nodes.length; v++) {
       if (inTree[v]) continue;
       // Cost is the length of the run that actually respects the keep-outs — a bend where one is needed.
@@ -290,7 +288,51 @@ function runsFor(terminal: Vec2, pads: Vec2[], style: RouteStyle, keepOuts: Keep
       if (w < bestTo[v]!) { bestTo[v] = w; parent[v] = u; }
     }
   }
-  return edges;
+
+  // Stitch the tree into as few continuous strips as possible.
+  //
+  // Emitting one strip per tree edge is what makes the tape read as a row of angular blocks: the bus turns
+  // at every pad, and `tapeRibbon` can only bevel a bend *inside* one polyline, so a turn between two
+  // separate strips is left as an unfilled notch. Carrying a strip straight on through a pad — copper tape
+  // bends — both fills those joints and means fewer pieces to lay.
+  const kids = new Map<number, number[]>();
+  for (let v = 1; v < nodes.length; v++) {
+    const p = parent[v]!;
+    if (p < 0) continue;
+    (kids.get(p) ?? kids.set(p, []).get(p)!).push(v);
+  }
+  const strips: Vec2[][] = [];
+  const stack: { from: number; via: number }[] = [];
+  for (const k of kids.get(0) ?? []) stack.push({ from: 0, via: k });
+  while (stack.length > 0) {
+    const seed = stack.pop()!;
+    let prev = seed.from, cur = seed.via;
+    const pts: Vec2[] = [...runFor(prev, cur)];
+    for (;;) {
+      const next = kids.get(cur) ?? [];
+      if (next.length === 0) break;
+      // Continue into whichever child best keeps the current heading; the rest start their own strips.
+      let go = 0;
+      if (next.length > 1) {
+        const inDx = nodes[cur]!.x - nodes[prev]!.x, inDy = nodes[cur]!.y - nodes[prev]!.y;
+        const il = Math.hypot(inDx, inDy) || 1;
+        let bestDot = -Infinity;
+        next.forEach((c, i) => {
+          const dx = nodes[c]!.x - nodes[cur]!.x, dy = nodes[c]!.y - nodes[cur]!.y;
+          const l = Math.hypot(dx, dy) || 1;
+          const dot = (inDx / il) * (dx / l) + (inDy / il) * (dy / l);
+          if (dot > bestDot) { bestDot = dot; go = i; }
+        });
+      }
+      next.forEach((c, i) => { if (i !== go) stack.push({ from: cur, via: c }); });
+      const seg = runFor(cur, next[go]!);
+      pts.push(...seg.slice(1)); // the joint is already this strip's last point
+      prev = cur;
+      cur = next[go]!;
+    }
+    if (pts.length >= 2) strips.push(pts);
+  }
+  return strips;
 }
 
 /** PWR×GND proper crossings, then total copper — the objective, in that order. */
