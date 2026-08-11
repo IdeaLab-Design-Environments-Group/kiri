@@ -5,7 +5,7 @@
  * model. The 2D interface gets a {@link RoutedCircuit} to draw; the SVG export gets
  * the same traces as a copper layer (see `svg-export-service`).
  */
-import { planRoutes } from "../model/electronics-routing.js";
+import { planRoutesFreeform } from "../model/electronics-field-routing.js";
 import type { Circuit, RoutedCircuit } from "../model/electronics.js";
 import type { LoadedModel } from "../model/fold-file.js";
 import type { ShownModel } from "./sim-scene-service.js";
@@ -26,5 +26,5 @@ export function resolveRoutedCircuit(
 ): RoutedCircuit | null {
   const src = resolveElectronicsTarget(model, shown);
   if (!src) return null;
-  return planRoutes(src.object, circuit);
+  return planRoutesFreeform(src.object, circuit);
 }

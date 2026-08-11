@@ -35,6 +35,7 @@ import {
   boundsDiagonal,
   dist2,
   flatFaces,
+  flatPoints,
   gapForLed,
   gapGraph,
   tapeWidthForDiag,
@@ -49,6 +50,15 @@ export type RouteStyle =
   /** Euclidean minimum spanning tree over terminal + pads. Also planar, so still no self-crossings, but
    *  a fraction of the copper. */
   | "mst";
+
+/** A place copper must not run. */
+interface KeepOut {
+  /** Either a segment copper may not cross, or… */
+  seg?: [Vec2, Vec2];
+  /** …a point copper may not come within `clear` of. */
+  at?: Vec2;
+  clear?: number;
+}
 
 export interface FieldRouteOptions {
   style?: RouteStyle;
@@ -100,16 +110,21 @@ export function planRoutesFreeform(
   if (batteryFace == null || legs.length === 0) return empty(padsFor(legs.map(() => false)));
 
   const diag = boundsDiagonal(faces.flatMap((f) => f.poly));
-  const off = tapeWidthForDiag(diag) * 0.55;
   const terminals = terminalsFor(batteryPoint!, legs, diag);
+  const keepOuts = keepOutsFor(fold, gaps, legs);
+  // The axis the two terminals straddle, which is roughly across the run of the pads. Each net steps off
+  // the pad line along it — the one to +, the other to − — before running any distance.
+  const axis = unit(terminals.pwr.x - terminals.gnd.x, terminals.pwr.y - terminals.gnd.y);
+  // Step far enough to clear the widest LED keep-out.
+  const lift = keepOuts.reduce((m, k) => Math.max(m, k.clear ?? 0), 0) * 1.6;
 
   // Choose which leg of each LED carries PWR. The routes are straight-line constructions, so evaluating a
   // candidate is cheap enough to enumerate the whole space at realistic LED counts — the production
   // router can only afford a greedy sweep because every candidate there costs a re-route.
+  const make = (rev: boolean[]) => build(rev, legs, terminals, style, keepOuts, axis, lift);
   const best = legs.length <= exhaustiveUpTo
-    ? bestOf(enumerateAssignments(legs.length), (rev) => build(rev, legs, terminals, style, off))
-    : bestOf(greedyAssignments(legs.length, (rev) => score(build(rev, legs, terminals, style, off))),
-             (rev) => build(rev, legs, terminals, style, off));
+    ? bestOf(enumerateAssignments(legs.length), make)
+    : bestOf(greedyAssignments(legs.length, (rev) => score(make(rev))), make);
 
   return {
     ledPoints,
@@ -137,6 +152,45 @@ function terminalsFor(centre: Vec2, legs: { a: Vec2; b: Vec2 }[], diag: number):
   };
 }
 
+/** How much dearer a run that still violates a keep-out is, once even a detour has failed. */
+const BLOCKED_PENALTY = 1000;
+
+/**
+ * A run from `a` to `b` that respects the keep-outs, bending around them if the straight line cannot.
+ *
+ * A straight line is often impossible rather than merely expensive: the pads along one hinge line are
+ * collinear with the LED chips sitting *between* them, so every straight pad-to-pad run passes exactly
+ * through an LED. Pricing such an edge out of the tree achieves nothing when all the alternatives are
+ * blocked too — the run has to leave the line and come back. So: try straight, then try a single bend
+ * offset perpendicular to the run, on either side and at increasing distance, and take the first that
+ * clears. Falls back to the straight line, which the caller then prices at {@link BLOCKED_PENALTY} so it
+ * is used only where nothing else connects.
+ */
+function runAround(a: Vec2, b: Vec2, keepOuts: KeepOut[]): Vec2[] | null {
+  if (!blocked(a, b, keepOuts)) return [a, b];
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const l = Math.hypot(dx, dy);
+  if (l < 1e-12) return null;
+  const nx = -dy / l, ny = dx / l;
+  // How far out we might need to go: the largest clearance any keep-out asks for.
+  const reach = keepOuts.reduce((m, k) => Math.max(m, k.clear ?? 0), 0) || l * 0.1;
+  const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  for (const mult of [1.3, 2, 3, 4.5]) {
+    for (const side of [1, -1]) {
+      const w = { x: mid.x + nx * reach * mult * side, y: mid.y + ny * reach * mult * side };
+      if (!blocked(a, w, keepOuts) && !blocked(w, b, keepOuts)) return [a, w, b];
+    }
+  }
+  return null;
+}
+
+/** Length of a polyline. */
+function polyLen(pts: Vec2[]): number {
+  let l = 0;
+  for (let i = 1; i < pts.length; i++) l += dist2(pts[i - 1]!, pts[i]!);
+  return l;
+}
+
 interface Built { rev: boolean[]; traces: Trace2D[] }
 
 function build(
@@ -144,22 +198,109 @@ function build(
   legs: { a: Vec2; b: Vec2 }[],
   terminals: { pwr: Vec2; gnd: Vec2 },
   style: RouteStyle,
-  off: number,
+  keepOuts: KeepOut[],
+  axis: Vec2,
+  lift: number,
 ): Built {
   const pwrPads = legs.map((l, s) => (rev[s] ? l.b : l.a));
   const gndPads = legs.map((l, s) => (rev[s] ? l.a : l.b));
   const traces: Trace2D[] = [
-    ...runsFor(terminals.pwr, pwrPads, style).map((points) => ({ net: "pwr" as const, points })),
-    ...runsFor(terminals.gnd, gndPads, style).map((points) => ({ net: "gnd" as const, points })),
+    ...netRuns(terminals.pwr, pwrPads, style, keepOuts, axis, +lift).map((points) => ({ net: "pwr" as const, points })),
+    ...netRuns(terminals.gnd, gndPads, style, keepOuts, axis, -lift).map((points) => ({ net: "gnd" as const, points })),
   ];
-  void off;
   return { rev, traces };
 }
 
-/** One net's copper as polylines: either a radial fan or a Euclidean MST. Both are planar. */
-function runsFor(terminal: Vec2, pads: Vec2[], style: RouteStyle): Vec2[][] {
+/**
+ * One net's copper: a stub off each pad, then a tree over the lifted points.
+ *
+ * The lift is what makes the LED keep-out satisfiable. Both nets' pads sit *on* the hinge lines with the
+ * chips between them — often alternating PWR, GND, PWR, GND along one line — so a run directly between two
+ * pads of one net passes over the other net's LED. Stepping each pad off that line first, the two nets to
+ * opposite sides, gives each net a clear corridor to run in. It is the same rail idea as the production
+ * router, without being tied to the tiles.
+ */
+function netRuns(
+  terminal: Vec2,
+  pads: Vec2[],
+  style: RouteStyle,
+  keepOuts: KeepOut[],
+  axis: Vec2,
+  lift: number,
+): Vec2[][] {
   if (pads.length === 0) return [];
-  if (style === "fan") return pads.map((p) => [terminal, p]);
+  const lifted = pads.map((p) => ({ x: p.x + axis.x * lift, y: p.y + axis.y * lift }));
+  const runs = runsFor(terminal, lifted, style, keepOuts);
+  // Then drop each lifted point onto its pad. Short, and perpendicular to the corridor, so it only ever
+  // touches its own LED's pad.
+  pads.forEach((p, i) => runs.push([lifted[i]!, p]));
+  return runs;
+}
+
+function unit(x: number, y: number): Vec2 {
+  const l = Math.hypot(x, y);
+  return l < 1e-12 ? { x: 0, y: 1 } : { x: x / l, y: y / l };
+}
+
+/**
+ * Where copper may not go. Three kinds, and only three — everything else is fair game:
+ *
+ * - **Over an LED.** The chip bridges the two pads at the hinge midpoint; tape across it would sit on the
+ *   component and short it out. Enforced as a clearance disc about the hinge midpoint, sized well under the
+ *   pad separation so a run that *terminates* on a pad is never rejected.
+ * - **Across a cut (`C`).** The cutter severs the sheet along its whole length, so tape laid over one is
+ *   cut through. This is not an aesthetic rule, it destroys the circuit.
+ * - **Across the silhouette (`B`).** Same cutter, and beyond it there is no sheet to stick to.
+ *
+ * Fold hinges (`M`/`V`) are deliberately *not* here: tape across a fold creases, which is a durability
+ * cost, not a broken circuit — and letting copper cross them is the whole point of this router.
+ */
+function keepOutsFor(
+  fold: FoldFile,
+  gaps: ReturnType<typeof gapGraph>["gaps"],
+  legs: { a: Vec2; b: Vec2 }[],
+): KeepOut[] {
+  const out: KeepOut[] = [];
+  // "Over the LED" means across the chip: the body is the segment joining the two pads, and copper may
+  // not cross it. Stated as a crossing rather than a clearance disc on purpose — a disc big enough to
+  // matter also forbids the stub that has to *land* on a pad, since you cannot reach a pad without coming
+  // close to the chip beside it. A crossing test excludes endpoint touches, so landing is always legal
+  // and only genuinely passing over the component is rejected.
+  for (const l of legs) out.push({ seg: [l.a, l.b] });
+  const pts = flatPoints(fold);
+  const ev = fold.edges_vertices ?? [];
+  const ea = (fold.edges_assignment as string[] | undefined) ?? [];
+  for (let i = 0; i < ev.length; i++) {
+    const role = ea[i] ?? "B";
+    if (role !== "C" && role !== "B") continue;
+    const a = pts[ev[i]?.[0] ?? -1], b = pts[ev[i]?.[1] ?? -1];
+    if (a && b) out.push({ seg: [a, b] });
+  }
+  void gaps;
+  return out;
+}
+
+/** Does the straight run `a→b` violate any keep-out? */
+function blocked(a: Vec2, b: Vec2, keepOuts: KeepOut[]): boolean {
+  for (const k of keepOuts) {
+    if (k.seg && properCross(a, b, k.seg[0], k.seg[1])) return true;
+    if (k.at && k.clear != null && distToSeg(k.at, a, b) < k.clear) return true;
+  }
+  return false;
+}
+
+function distToSeg(p: Vec2, a: Vec2, b: Vec2): number {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const l2 = dx * dx + dy * dy;
+  let t = l2 > 0 ? ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p.x - (a.x + dx * t), p.y - (a.y + dy * t));
+}
+
+/** One net's copper as polylines: either a radial fan or a Euclidean MST. Both are planar. */
+function runsFor(terminal: Vec2, pads: Vec2[], style: RouteStyle, keepOuts: KeepOut[]): Vec2[][] {
+  if (pads.length === 0) return [];
+  if (style === "fan") return pads.map((p) => runAround(terminal, p, keepOuts) ?? [terminal, p]);
 
   // Prim over terminal + pads. A Euclidean MST in the plane never has crossing edges, so the net cannot
   // cross itself — the property the paper gets from its integral curves, obtained here for free.
@@ -169,15 +310,29 @@ function runsFor(terminal: Vec2, pads: Vec2[], style: RouteStyle): Vec2[][] {
   const parent = new Array<number>(nodes.length).fill(-1);
   bestTo[0] = 0;
   const edges: Vec2[][] = [];
+  const runOf = new Map<string, Vec2[]>();
+  const runFor = (i: number, j: number): Vec2[] => {
+    const key = `${i}_${j}`;
+    const hit = runOf.get(key);
+    if (hit) return hit;
+    const r = runAround(nodes[i]!, nodes[j]!, keepOuts) ?? [nodes[i]!, nodes[j]!];
+    runOf.set(key, r);
+    return r;
+  };
   for (let k = 0; k < nodes.length; k++) {
     let u = -1, du = Infinity;
     for (let i = 0; i < nodes.length; i++) if (!inTree[i] && bestTo[i]! < du) { du = bestTo[i]!; u = i; }
     if (u < 0) break;
     inTree[u] = true;
-    if (parent[u]! >= 0) edges.push([nodes[parent[u]!]!, nodes[u]!]);
+    if (parent[u]! >= 0) edges.push(runFor(parent[u]!, u));
     for (let v = 0; v < nodes.length; v++) {
       if (inTree[v]) continue;
-      const w = dist2(nodes[u]!, nodes[v]!);
+      // Cost is the length of the run that actually respects the keep-outs — a bend where one is needed.
+      // Only a run that could not be made to clear at all is priced out, so nothing is left unconnected.
+      const run = runFor(u, v);
+      const w = blocked(run[0]!, run[run.length - 1]!, keepOuts) && run.length === 2
+        ? polyLen(run) * BLOCKED_PENALTY
+        : polyLen(run);
       if (w < bestTo[v]!) { bestTo[v] = w; parent[v] = u; }
     }
   }

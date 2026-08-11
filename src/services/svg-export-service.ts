@@ -5,7 +5,7 @@
  * you cut".
  */
 import { buildFkldSvgExport, type SvgExportPayload } from "../model/fkld-svg-export.js";
-import { planRoutes } from "../model/electronics-routing.js";
+import { planRoutesFreeform } from "../model/electronics-field-routing.js";
 import type { Circuit } from "../model/electronics.js";
 import type { LoadedModel } from "../model/fold-file.js";
 import type { ShownModel } from "./sim-scene-service.js";
@@ -18,7 +18,7 @@ export function resolveSvgExport(
   const src = shown ?? (model?.kind === "fold" ? { object: model.object, name: model.name } : null);
   if (!src) return null;
   // When LEDs are placed, route them and emit the copper layer registered with cut/score.
-  const copper = circuit && circuit.leds.length > 0 ? planRoutes(src.object, circuit).traces : [];
+  const copper = circuit && circuit.leds.length > 0 ? planRoutesFreeform(src.object, circuit).traces : [];
   return buildFkldSvgExport(src.object, baseName(src.name), copper);
 }
 

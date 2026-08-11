@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { planRoutesFreeform } from "../../../src/model/electronics-field-routing.js";
 import { type Circuit, type Vec2, gapGraph, segsProperlyIntersect } from "../../../src/model/electronics.js";
 import type { FoldFile } from "../../../src/model/fold-file.js";
@@ -22,6 +24,13 @@ function block2x2(): FoldFile {
   };
 }
 const circuit = (over: Partial<Circuit>): Circuit => ({ leds: [], battery: null, ...over });
+
+/** The bundled models are the only fixtures irregular enough to exercise the keep-outs — the toy grids
+ *  below happen to satisfy them by construction, so they cannot tell a working keep-out from a missing
+ *  one. Same loader the sim tests use. */
+function loadExample(name: string): FoldFile {
+  return JSON.parse(readFileSync(fileURLToPath(new URL(`../../../public/examples/${name}`, import.meta.url)), "utf8"));
+}
 const allLeds = (f: FoldFile) =>
   gapGraph(f).gaps.map((g) => ({ a: Math.min(g.faceA, g.faceB), b: Math.max(g.faceA, g.faceB) }));
 
@@ -124,6 +133,58 @@ describe("model/electronics-field-routing: unrestricted router", () => {
     const straddles = (same(pads.pwr, gap.legA) && same(pads.gnd, gap.legB)) ||
       (same(pads.pwr, gap.legB) && same(pads.gnd, gap.legA));
     expect(straddles).toBe(true);
+  });
+
+  it("never runs over an LED, on a model where that takes work", () => {
+    // "Over the LED" means across the chip: the segment joining its two pads. Stated as a crossing rather
+    // than a clearance radius on purpose — a radius wide enough to matter also forbids the stub that has
+    // to *land* on a pad, since a pad cannot be reached without passing close to the chip beside it.
+    //
+    // Measured on puffin: 1 LED-body crossing with the keep-outs off, 0 with them on. The toy grids in this
+    // file cannot show that — stepping each net off the pad line already clears the chips there.
+    const fold = loadExample("puffin.fkld");
+    const gaps = gapGraph(fold).gaps.slice(0, 12);
+    const leds = gaps.map((g) => ({ a: Math.min(g.faceA, g.faceB), b: Math.max(g.faceA, g.faceB) }));
+    const r = planRoutesFreeform(fold, circuit({ battery: { face: 0 }, leds }));
+    let over = 0;
+    for (const t of r.traces) {
+      for (let i = 1; i < t.points.length; i++) {
+        for (const g of gaps) {
+          if (segsProperlyIntersect(t.points[i - 1]!, t.points[i]!, g.legA, g.legB)) over++;
+        }
+      }
+    }
+    expect(over).toBe(0);
+  });
+
+  it("never runs across a cut line or off the sheet", () => {
+    // Not an aesthetic rule: the cutter severs tape laid over a `C` cut, and past the `B` silhouette there
+    // is no sheet to stick to. Fold hinges are deliberately NOT protected — crossing those is the point of
+    // this router, and costs durability rather than continuity.
+    //
+    // Measured on puffin: 16 cut crossings with the keep-outs off, 0 with them on.
+    const fold = loadExample("puffin.fkld");
+    const gaps = gapGraph(fold).gaps.slice(0, 12);
+    const leds = gaps.map((g) => ({ a: Math.min(g.faceA, g.faceB), b: Math.max(g.faceA, g.faceB) }));
+    const r = planRoutesFreeform(fold, circuit({ battery: { face: 0 }, leds }));
+
+    const pts = (fold.vertices_coords ?? []).map((c) => ({ x: Number(c[0]) || 0, y: Number(c[1]) || 0 }));
+    const roles = (fold.edges_assignment as string[] | undefined) ?? [];
+    const cuts = (fold.edges_vertices ?? [])
+      .map((e, i) => ({ e, role: roles[i] ?? "B" }))
+      .filter((x) => x.role === "C" || x.role === "B")
+      .map((x) => [pts[x.e[0]!]!, pts[x.e[1]!]!] as const)
+      .filter(([a, b]) => a && b);
+
+    let across = 0;
+    for (const t of r.traces) {
+      for (let i = 1; i < t.points.length; i++) {
+        for (const [ca, cb] of cuts) {
+          if (segsProperlyIntersect(t.points[i - 1]!, t.points[i]!, ca, cb)) across++;
+        }
+      }
+    }
+    expect(across).toBe(0);
   });
 
   it("is deterministic", () => {
