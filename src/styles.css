@@ -758,6 +758,7 @@ body {
 }
 .el-tool,
 .el-clear,
+.el-export,
 .el-zoom-in,
 .el-zoom-out,
 .el-fit {
@@ -779,6 +780,7 @@ body {
 }
 .el-tool:hover,
 .el-clear:hover,
+.el-export:hover,
 .el-zoom-in:hover,
 .el-zoom-out:hover,
 .el-fit:hover { background: var(--surface-soft, #f3f5f9); border-color: #cdd3df; }

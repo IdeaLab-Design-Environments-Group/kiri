@@ -26,6 +26,7 @@ import {
   pointInFace,
   tilePolys,
 } from "../model/electronics.js";
+import { buildCopperSvgExport } from "../model/copper-svg-export.js";
 import { type RoutedCircuit, EMPTY_ROUTE, batteryTerminals, planRoutes } from "../model/electronics-routing.js";
 import type { FoldFile } from "../model/fold-file.js";
 
@@ -84,6 +85,9 @@ export class ElectronicsModal {
             <span class="el-group">
               <button type="button" class="el-clear" title="Remove all LEDs, the battery and routes">Clear</button>
             </span>
+            <span class="el-group">
+              <button type="button" class="el-export" title="Download the copper tape as an SVG to cut (registered with the cut &amp; score files)">Export SVG</button>
+            </span>
             <span class="el-group el-view-group">
               <button type="button" class="el-zoom-out" title="Zoom out" aria-label="Zoom out">−</button>
               <button type="button" class="el-zoom-in" title="Zoom in" aria-label="Zoom in">+</button>
@@ -116,6 +120,7 @@ export class ElectronicsModal {
       this.toolButtons.set(tool, btn);
     }
     this.overlay.querySelector(".el-clear")!.addEventListener("click", () => this.clear());
+    this.overlay.querySelector(".el-export")!.addEventListener("click", () => this.exportCopper());
     this.overlay.querySelector(".el-zoom-in")!.addEventListener("click", () => this.zoomBy(1.25));
     this.overlay.querySelector(".el-zoom-out")!.addEventListener("click", () => this.zoomBy(0.8));
     this.overlay.querySelector(".el-fit")!.addEventListener("click", () => this.fitView());
@@ -226,6 +231,31 @@ export class ElectronicsModal {
   private pickRadius(): number {
     const diag = Math.hypot(this.bounds.maxX - this.bounds.minX, this.bounds.maxY - this.bounds.minY);
     return Math.max(2, diag * 0.06);
+  }
+
+  /** Download the planned copper as a cutting file, at the width the preview draws. */
+  private exportCopper(): void {
+    if (!this.fold || !this.routed.traces.length) {
+      this.statusEl.textContent = "Nothing to export — place a battery and at least one LED first";
+      return;
+    }
+    const out = buildCopperSvgExport(this.fold, this.routed.traces, this.tapeW());
+    const url = URL.createObjectURL(new Blob([out.svg], { type: "image/svg+xml" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = out.filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    const { pwr, gnd } = out.counts;
+    const w = Math.round(out.widthMm * 100) / 100;
+    let msg =
+      `Exported ${out.filename} — ${pwr} PWR strip${pwr === 1 ? "" : "s"}, ` +
+      `${gnd} GND strip${gnd === 1 ? "" : "s"}, ${w}mm wide`;
+    // The strip width follows the pattern, and a flat pattern need not be at a physical scale.
+    if (out.tooNarrow) msg += " — too narrow to cut; scale the pattern up before cutting";
+    this.statusEl.textContent = msg;
   }
 
   /** Draw the edit, then notify the controller so it stores the circuit.

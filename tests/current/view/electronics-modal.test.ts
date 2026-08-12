@@ -95,6 +95,38 @@ describe("view/electronics-modal", () => {
     expect(modal.svg.innerHTML).not.toContain("el-led-pwr");
   });
 
+  it("exports the copper as a download, and says what there is to cut", () => {
+    const anchors: any[] = [];
+    const { modal } = openOn(grid2x2());
+    const origCreate = (globalThis as any).document.createElement;
+    (globalThis as any).document.createElement = (tag: string) => {
+      const el = origCreate.call((globalThis as any).document, tag);
+      if (tag === "a") anchors.push(el);
+      return el;
+    };
+    (globalThis as any).URL = { createObjectURL: () => "blob:mock", revokeObjectURL: () => {} };
+    (globalThis as any).Blob = class { constructor(readonly parts: any[]) {} };
+
+    // Nothing placed yet: it must say so rather than download an empty file.
+    modal.overlay.querySelector(".el-export").dispatch("click", {});
+    expect(anchors).toHaveLength(0);
+    expect(modal.statusEl.textContent).toContain("Nothing to export");
+
+    modal.selectTool("battery");
+    tapFlat(modal, { x: 0.5, y: 0.5 });
+    modal.selectTool("led");
+    tapFlat(modal, modal.gaps[0].point);
+
+    modal.overlay.querySelector(".el-export").dispatch("click", {});
+    expect(anchors).toHaveLength(1);
+    expect(anchors[0].download).toBe("kiri-copper.svg");
+    expect(modal.statusEl.textContent).toContain("strip");
+
+    (globalThis as any).document.createElement = origCreate;
+    delete (globalThis as any).URL;
+    delete (globalThis as any).Blob;
+  });
+
   it("treats a drag as a pan, not a placement", () => {
     const { modal, edits } = openOn(grid2x2());
     modal.selectTool("battery");
