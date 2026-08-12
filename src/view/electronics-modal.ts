@@ -424,7 +424,7 @@ export class ElectronicsModal {
     if (this.circuit.battery) {
       const f = this.faces[this.circuit.battery.face];
       if (f) {
-        const term = this.defaultTerminals(f.centroid);
+        const term = this.defaultTerminals(f.centroid, f.poly);
         const rSq = this.markerR() * 0.95;
         const sq = (p: Vec2, cls: string, sign: string): void => {
           const c = this.tp(p);
@@ -447,8 +447,8 @@ export class ElectronicsModal {
   }
 
   /** The battery's two terminals. Shared with the router so the copper lands on the drawn squares. */
-  private defaultTerminals(c: Vec2): { pwr: Vec2; gnd: Vec2 } {
-    return batteryTerminals(c, this.diag());
+  private defaultTerminals(c: Vec2, poly?: Vec2[]): { pwr: Vec2; gnd: Vec2 } {
+    return batteryTerminals(c, this.diag(), poly);
   }
 
   /** Tape width, scaled to the pattern like every other marker here. Real copper tape is wide relative to

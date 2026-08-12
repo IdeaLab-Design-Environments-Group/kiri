@@ -90,6 +90,18 @@ const EDGE_CROSSINGS = [1 / 4, 3 / 4];
  *  through the face centre there was no second route to divert onto, and the toll did nothing at any value. */
 const SHARED_TOLL = 2;
 
+/** What it costs a net to route in the other net's lane, as a multiple of the raw distance.
+ *
+ *  Swept: 1.5 is the only value that keeps copper out from under every chip, and its overlap is within a
+ *  point of the best (akde-decagon 4% against 3%). Higher values buy a crossing on puffin but put copper
+ *  under a chip there and drive its overlap back to 24%, which is the wrong trade -- tape under a chip
+ *  destroys the part. */
+const LANE_TOLL = 1.5;
+
+/** What it costs to route through the other net's battery terminal. Large: that is a short at the source, so
+ *  no detour is too long to avoid it -- but finite, so a terminal boxed in by geometry stays reachable. */
+const TERMINAL_TOLL = 400;
+
 /** Positional key, for marking a hinge as occupied. Rounded well below any real feature size. */
 const ptKey = (p: Vec2): string => `${Math.round(p.x * 1e6)}_${Math.round(p.y * 1e6)}`;
 
@@ -140,8 +152,33 @@ function polyCrosses(pts: Vec2[], c: Vec2, d: Vec2): boolean {
  *
  *  The preview and the router must agree on these to the last decimal or the copper lands off the pad, so
  *  this is the one definition and both import it. */
-export function batteryTerminals(centre: Vec2, diag: number): PadPair {
-  const h = diag * 0.012 * 1.5; // markerR * 1.5 — matches the drawn terminal squares
+export function batteryTerminals(centre: Vec2, diag: number, poly?: Vec2[]): PadPair {
+  // The two terminals sit either side of the battery's centre, as far apart as its tile has room for.
+  //
+  // Two things went wrong with a fixed narrow spacing. The squares are markerR * 0.95 = diag * 0.0114
+  // half-width, so the old diag * 0.018 left a gap of 0.013 * diag between them -- narrower than the
+  // 0.011 * diag tape that has to pass. Each net's keep-out then reached across its neighbour, so neither could
+  // leave its own pad toward the other side: geometry with no solution, not a routing failure. Widening fixes
+  // it (puffin crossings 5 -> 2) but on a small tile it pushes the terminals off the material, so the spacing
+  // is clamped to the room the tile has.
+  //
+  // Choosing the *axis* for room as well was measured: it improves overlap (akde-decagon 8% -> 4%,
+  // church 5% -> 1%) but costs akde-hex a crossing and two thirds more copper, and it does not rescue the one
+  // tile that is too small in every direction -- so it is not worth the crossing.
+  const want = diag * 0.045;
+  const need = diag * 0.0114 + diag * 0.0055; // the square, plus half a tape width
+  let h = want;
+  if (poly && poly.length >= 3) {
+    let room = Infinity;
+    for (let n = 0; n < poly.length; n++) {
+      const d = segPointDist(poly[n]!, poly[(n + 1) % poly.length]!, centre);
+      if (d < room) room = d;
+    }
+    // Floor: never closer than a tape width can pass, even if that overhangs a small tile. A battery on a tile
+    // that small overhangs it physically too, and the alternative -- terminals so close no strip fits between
+    // them -- is a guaranteed short at the source, which is worse than a pad sitting proud of its tile.
+    h = Math.max(diag * 0.033, Math.min(want, room - need));
+  }
   return { pwr: { x: centre.x + h, y: centre.y }, gnd: { x: centre.x - h, y: centre.y } };
 }
 
@@ -200,7 +237,7 @@ export function planRoutes(
 
   const diag = patternDiag(faces);
   const centre = faces[battery.face]!.centroid;
-  const term = batteryTerminals(centre, diag);
+  const term = batteryTerminals(centre, diag, faces[battery.face]!.poly);
 
   // Collect the LEDs we can wire. An LED whose gap has gone (the pattern changed under it) has no pads.
   const targets: Target[] = [];
@@ -266,7 +303,10 @@ export function planRoutes(
   const lanePref = new Map<string, { pwr: number; gnd: number }>();
   for (const [key, p] of corridor.point) {
     const lane = laneOf(p);
-    lanePref.set(key, { pwr: lane === bank ? 0 : 1.5, gnd: lane === bank ? 1.5 : 0 });
+    lanePref.set(key, {
+      pwr: lane === bank ? 0 : LANE_TOLL,
+      gnd: lane === bank ? LANE_TOLL : 0,
+    });
   }
 
   // `flip[i]` swaps LED i's two pads between the banks. The tour is a plain chain, so a flip is a
@@ -309,6 +349,9 @@ export function planRoutes(
   // Over-LED destroys the part, a crossing shorts the layout, and overlap only makes it hard to build, so
   // they rank in that order and overlap can never be bought with either of the others.
   const clearW = diag * 0.0055; // half a tape width: closer than this and copper is under the chip
+  // The drawn terminal square is markerR * 0.95 = diag * 0.0114 half-width; add half a tape width so the
+  // copper clears the square itself rather than merely missing its centre.
+  const termClear = diag * 0.0114 + clearW;
   const overlapTol = diag * 0.008; // about a tape width: closer than this and the strips are on each other
   const score = (tr: Trace2D[], f: boolean[]): number =>
     // The width-aware measure, not countOverLed: that one tests zero-width centrelines for a crossing, so it
@@ -317,7 +360,9 @@ export function planRoutes(
     // Both chip measures, because neither subsumes the other: the width-aware one exempts the pad the run
     // lands on (so it misses a run that clips the body right at the pad), and the zero-width one only sees a
     // proper crossing (so it misses tape lying alongside). Ranked together, above everything else.
-    (countUnderLed(tr, padsFor(f), clearW, clearW * 1.2) + countOverLed(tr, padsFor(f))) * 1e9 +
+    (countUnderLed(tr, padsFor(f), clearW, clearW * 1.2) +
+      countOverLed(tr, padsFor(f)) +
+      countUnderTerminal(tr, term, termClear)) * 1e9 +
     countNetCrossings(tr) * 1e6 +
     overlapLength(tr, overlapTol) +
     // Length ranks last: of two plans equal on everything that matters more, the shorter and straighter wins.
@@ -343,6 +388,8 @@ export function planRoutes(
       avoid: Map<string, number>,
     ): { pts: Vec2[]; used: Map<string, number> } => {
       const lane = (key: string): number => (net === "pwr" ? lanePref.get(key)?.pwr : lanePref.get(key)?.gnd) ?? 0;
+      // Never route through the other net's terminal: shorting the battery is not a trade worth any shortcut.
+      const forbidden = net === "pwr" ? term.gnd : term.pwr;
       // Each net may work the tour from either end.
       const seq = rev ? order.map((_, k) => order.length - 1 - k) : order.map((_, k) => k);
       const pick = (i: number): { pad: Vec2; face: number } => {
@@ -352,7 +399,14 @@ export function planRoutes(
           ? { pad: t.legs[1], face: t.legFaces[1] }
           : { pad: t.legs[0], face: t.legFaces[0] };
       };
-      const out: Vec2[] = [net === "pwr" ? term.pwr : term.gnd];
+      const mine = net === "pwr" ? term.pwr : term.gnd;
+      const out: Vec2[] = [mine];
+      // Step off the terminal heading directly away from the other one before going anywhere. The corridor
+      // toll keeps the *nodes* clear of the other terminal, and straightening keeps shortcuts clear of it, but
+      // neither governs the very first segment out of the pad -- which is free to sweep straight across its
+      // neighbour, shorting the battery. Leaving on the far side removes that.
+      const away = add(mine, scale(unit(sub(mine, forbidden)), termClear * 0.9));
+      if (onBody(mine, away)) out.push(away);
       const used = new Map<string, number>();
       let fromFace = battery.face;
       for (const i of seq) {
@@ -371,7 +425,13 @@ export function planRoutes(
         const toll = new Map(avoid);
         for (const [k, v] of used) toll.set(k, (toll.get(k) ?? 0) + v);
         for (const k of lanePref.keys()) toll.set(k, (toll.get(k) ?? 0) + lane(k));
-        for (const p of corridorPath(corridor, fromFace, face, blocked, toll)) {
+        for (const [k, p] of corridor.point) {
+          if (Math.sqrt(dist2(p, forbidden)) < termClear) toll.set(k, (toll.get(k) ?? 0) + TERMINAL_TOLL);
+        }
+        for (const p of corridorPath(corridor, fromFace, face, blocked, toll, {
+          at: forbidden,
+          r: termClear,
+        })) {
           out.push(p);
           used.set(ptKey(p), (used.get(ptKey(p)) ?? 0) + 1);
         }
@@ -411,9 +471,11 @@ export function planRoutes(
       const rawPwr = asTree(dedupe(dodgeChips(pwr.pts, targets, onBody)), "pwr", term.pwr, padsOf(f, "pwr"));
       const outPwr = straighten(
         rawPwr, [...keepPwr, ...junctions(rawPwr)], bodies, onBody, rawGnd, clearW, overlapTol,
+        term.gnd, termClear,
       );
       const outGnd = straighten(
         rawGnd, [...keepGnd, ...junctions(rawGnd)], bodies, onBody, outPwr, clearW, overlapTol,
+        term.pwr, termClear,
       );
       // Straightening is only worth having where it is free. It shortens runs a lot -- akde-decagon 2967 ->
       // 1948 -- but a direct route is direct for *both* nets, so taken unconditionally it drives them together
@@ -618,10 +680,14 @@ function straighten(
   others: Trace2D[],
   clear: number,
   apart: number,
+  forbidden: Vec2,
+  forbiddenClear: number,
 ): Trace2D[] {
   const anchors = new Set(keep.map(ptKey));
   const legal = (a: Vec2, b: Vec2): boolean => {
     if (!onBody(a, b)) return false;
+    // A shortcut may not sweep across the other net's battery terminal.
+    if (segPointDist(a, b, forbidden) < forbiddenClear) return false;
     const L = Math.sqrt(dist2(a, b));
     const steps = Math.max(2, Math.ceil(L / (clear * 0.5)));
     for (const [c, d] of bodies) {
@@ -887,6 +953,7 @@ function corridorPath(
   to: number,
   blocked: Set<string>,
   taken: Map<string, number>,
+  forbid: { at: Vec2; r: number } | null,
 ): Vec2[] {
   if (from === to) return [];
   const starts = c.mids.get(from) ?? [];
@@ -930,7 +997,10 @@ function corridorPath(
         const k = ptKey(m);
         if (k === at) continue;
         if (ok && !ok.has(chordKey(here, m))) continue; // that chord would leave the tile
-        const w = best + cost(k, Math.sqrt(dist2(here, m)));
+        // A chord may pass close to the other net's terminal even when both its ends are clear of it: tolling
+        // nodes cannot see that, so the chord itself is measured.
+        const sweeps = forbid ? segPointDist(here, m, forbid.at) < forbid.r : false;
+        const w = best + cost(k, Math.sqrt(dist2(here, m))) * (sweeps ? TERMINAL_TOLL : 1);
         if (w < (dist.get(k) ?? Infinity)) {
           dist.set(k, w);
           prev.set(k, at);
@@ -1100,6 +1170,31 @@ function segPointDist(a: Vec2, b: Vec2, p: Vec2): number {
   const L2 = ab.x * ab.x + ab.y * ab.y;
   const t = L2 < 1e-18 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * ab.x + (p.y - a.y) * ab.y) / L2));
   return len(sub(p, { x: a.x + ab.x * t, y: a.y + ab.y * t }));
+}
+
+/**
+ * Runs passing under the *other* net's battery terminal.
+ *
+ * The two terminals sit a couple of millimetres apart, so a run leaving one can sweep straight across the
+ * other -- shorting the battery, which is the one short that cannot be fixed with a bit of tape afterwards.
+ * A net touching its own terminal is the point; touching the other one is a fault.
+ */
+export function countUnderTerminal(
+  traces: Trace2D[],
+  term: PadPair,
+  clear: number,
+): number {
+  let n = 0;
+  for (const t of traces) {
+    const forbidden = t.net === "pwr" ? term.gnd : term.pwr;
+    for (let i = 1; i < t.pts.length; i++) {
+      if (segPointDist(t.pts[i - 1]!, t.pts[i]!, forbidden) < clear) {
+        n++;
+        break; // one fault per run is enough to report
+      }
+    }
+  }
+  return n;
 }
 
 /** Length over which PWR and GND run on top of each other. Same-net overlap is free -- one potential, and
