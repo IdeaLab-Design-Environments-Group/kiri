@@ -27,7 +27,13 @@ import {
   tilePolys,
 } from "../model/electronics.js";
 import { buildCopperCarrierExport, buildCopperSvgExport } from "../model/copper-svg-export.js";
-import { type RoutedCircuit, EMPTY_ROUTE, batteryTerminals, planRoutes } from "../model/electronics-routing.js";
+import {
+  type RoutedCircuit,
+  EMPTY_ROUTE,
+  TAPE_FRAC,
+  batteryTerminals,
+  planRoutes,
+} from "../model/electronics-routing.js";
 import type { FoldFile } from "../model/fold-file.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -495,48 +501,29 @@ export class ElectronicsModal {
     this.renderStatus();
   }
 
-  /** The carrier frame and its tabs, drawn in the preview's own coordinates.
+  /** The carrier frame and its tabs, taken from the export itself.
    *
-   *  Geometry comes from the export so the two cannot drift apart: the frame is 5mm outside the pattern's
-   *  bounding box and each trace is tabbed to the nearest edge. */
+   *  Deriving them again here would let the preview drift from the file — and it did: the export learned to bend
+   *  tabs around the other net while this still drew a straight line to the nearest wall. The preview's world
+   *  coordinates are the export's sheet coordinates (same margin, same bounds, same Y-flip), so the geometry
+   *  needs no conversion. */
   private carrierParts(): string[] {
     if (!this.fold) return [];
-    const b = this.bounds;
-    const pad = 5; // mm — the export's frame buffer
-    const inner = { x0: b.minX, y0: b.minY, x1: b.maxX, y1: b.maxY };
-    const ring = (x0: number, y0: number, x1: number, y1: number): string => {
+    const out = buildCopperCarrierExport(this.fold, this.routed.traces, this.tapeW());
+    const ring = (r: { x0: number; y0: number; x1: number; y1: number }): string => {
       const c = [
-        this.tp({ x: x0, y: y0 }), this.tp({ x: x1, y: y0 }),
-        this.tp({ x: x1, y: y1 }), this.tp({ x: x0, y: y1 }),
+        { x: r.x0, y: r.y0 }, { x: r.x1, y: r.y0 }, { x: r.x1, y: r.y1 }, { x: r.x0, y: r.y1 },
       ];
       return "M " + c.map((p, i) => (i === 0 ? "" : "L ") + ptStr(p)).join(" ") + " Z";
     };
-    const parts: string[] = [];
-    // The frame: outer ring plus the window as a hole, so it reads as a border rather than a filled sheet.
-    parts.push(
-      `<path d="${ring(inner.x0 - pad, inner.y0 - pad, inner.x1 + pad, inner.y1 + pad)} ` +
-        `${ring(inner.x0, inner.y0, inner.x1, inner.y1)}" class="el-carrier" fill-rule="evenodd" />`,
-    );
-    // One tab per run, to whichever edge is nearest — the same choice the export makes.
-    for (const t of this.routed.traces) {
-      let best: { p: Vec2; q: Vec2; d: number } | null = null;
-      for (const p of t.pts) {
-        const opts: [Vec2, number][] = [
-          [{ x: inner.x0 - pad, y: p.y }, p.x - inner.x0],
-          [{ x: inner.x1 + pad, y: p.y }, inner.x1 - p.x],
-          [{ x: p.x, y: inner.y0 - pad }, p.y - inner.y0],
-          [{ x: p.x, y: inner.y1 + pad }, inner.y1 - p.y],
-        ];
-        for (const [q, d] of opts) {
-          if (!best || d < best.d) best = { p, q, d };
-        }
-      }
-      if (!best) continue;
-      const a = this.tp(best.p), z = this.tp(best.q);
-      parts.push(
-        `<line x1="${fmt(a.x)}" y1="${fmt(a.y)}" x2="${fmt(z.x)}" y2="${fmt(z.y)}" ` +
-          `class="el-carrier-tab" stroke-width="${fmt(this.tapeW() * 0.35)}" />`,
-      );
+    const parts: string[] = [
+      // The frame: outer edge with the window as a hole, so it reads as a border rather than a filled sheet.
+      `<path d="${ring(out.frame.outer)} ${ring(out.frame.window)}" class="el-carrier" fill-rule="evenodd" />`,
+    ];
+    for (const path of out.tabPaths) {
+      if (path.length < 2) continue;
+      const d = "M " + path.map((p, i) => (i === 0 ? "" : "L ") + ptStr(p)).join(" ");
+      parts.push(`<path d="${d}" class="el-carrier-tab" fill="none" stroke-width="${fmt(this.tapeW())}" />`);
     }
     return parts;
   }
@@ -554,6 +541,9 @@ export class ElectronicsModal {
       `Exported ${out.filename} — one frame holding ${out.counts.traces} trace` +
       `${out.counts.traces === 1 ? "" : "s"}, ${out.counts.tabs} tab` +
       `${out.counts.tabs === 1 ? "" : "s"} to snip, ${w}mm wide`;
+    if (out.crossingTabs > 0) {
+      msg += ` — warning: ${out.crossingTabs} tab${out.crossingTabs === 1 ? "" : "s"} cross another trace`;
+    }
     if (out.tooNarrow) msg += " — too narrow to cut; scale the pattern up before cutting";
     this.statusEl.textContent = msg;
   }
@@ -579,10 +569,9 @@ export class ElectronicsModal {
     return batteryTerminals(c, this.diag(), poly);
   }
 
-  /** Tape width, scaled to the pattern like every other marker here. Real copper tape is wide relative to
-   *  these features, so this is deliberately chunky rather than a hairline. */
+  /** Tape width. Shared with the router, so the strips drawn are the strips it planned clearances for. */
   private tapeW(): number {
-    return this.diag() * 0.011;
+    return this.diag() * TAPE_FRAC;
   }
 
   private diag(): number {

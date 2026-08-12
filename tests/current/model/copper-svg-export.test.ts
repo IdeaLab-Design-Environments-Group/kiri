@@ -8,7 +8,7 @@ import {
 } from "../../../src/model/copper-svg-export.js";
 import { buildFkldSvgExport } from "../../../src/model/fkld-svg-export.js";
 import { flatFaces, gapGraph, ledOf, type Circuit, type Led } from "../../../src/model/electronics.js";
-import { patternDiag, planRoutes } from "../../../src/model/electronics-routing.js";
+import { TAPE_FRAC, patternDiag, planRoutes } from "../../../src/model/electronics-routing.js";
 
 const EXAMPLES = new URL("../../../public/examples/", import.meta.url).pathname;
 
@@ -37,7 +37,7 @@ function planned(name: string, n = 6) {
   const { fold, faces, gaps } = load(name);
   const circuit: Circuit = { leds: ledsOn(gaps, n), battery: { face: 0 } };
   const r = planRoutes(faces, gaps, circuit);
-  return { fold, faces, traces: r.traces, tapeW: patternDiag(faces) * 0.011 };
+  return { fold, faces, traces: r.traces, tapeW: patternDiag(faces) * TAPE_FRAC };
 }
 
 describe("model/copper-svg-export", () => {
@@ -131,6 +131,34 @@ describe("model/copper-svg-export", () => {
         .filter(([x1, , x2]) => Math.abs(x1 - win.x0) < 1e-6 && Math.abs(x2 - win.x0) < 1e-6);
       const covered = onLeft.reduce((n, [, y1, , y2]) => n + Math.abs(y2 - y1), 0);
       if (onLeft.length) expect(covered).toBeLessThan(win.y1 - win.y0 - 1e-6);
+    });
+
+    it("tabs at the tape's own width, clear of the other net, using whichever wall is free", () => {
+      // A tab across another trace would be stuck down on top of it, shorting the two, and snipping it would cut
+      // the trace underneath. Same-net runs are not obstacles: they meet at junctions by design.
+      for (const name of ["house.fkld", "church.fkld", "akde-hex.fkld"]) {
+        const { fold, traces, tapeW } = planned(name, 12);
+        const out = buildCopperCarrierExport(fold, traces, tapeW);
+        expect(out.crossingTabs, `${name} has tabs across a trace`).toBe(0);
+        expect(out.tabPaths).toHaveLength(out.counts.tabs);
+        // Every tab starts inside the window and ends on one of its four walls.
+        const { window: win } = out.frame;
+        for (const path of out.tabPaths) {
+          const end = path[path.length - 1]!;
+          const onWall =
+            Math.abs(end.x - win.x0) < 1e-6 || Math.abs(end.x - win.x1) < 1e-6 ||
+            Math.abs(end.y - win.y0) < 1e-6 || Math.abs(end.y - win.y1) < 1e-6;
+          expect(onWall, `${name} tab does not reach a wall`).toBe(true);
+        }
+      }
+    });
+
+    it("reports tabs it could not route clear rather than hiding them", () => {
+      // puffin's window is crowded enough that some runs are enclosed by the other net with no clear line out.
+      const { fold, traces, tapeW } = planned("puffin.fkld", 12);
+      const out = buildCopperCarrierExport(fold, traces, tapeW);
+      expect(out.crossingTabs).toBeGreaterThan(0);
+      expect(out.crossingTabs).toBeLessThanOrEqual(out.counts.tabs);
     });
 
     it("frames the pattern with a 5mm border, inside the sheet the other layers use", () => {

@@ -90,6 +90,15 @@ const EDGE_CROSSINGS = [1 / 4, 3 / 4];
  *  through the face centre there was no second route to divert onto, and the toll did nothing at any value. */
 const SHARED_TOLL = 2;
 
+/**
+ * Tape width, as a fraction of the pattern diagonal.
+ *
+ * The one definition. Every clearance in the router is derived from it, the preview draws it, and both export
+ * files cut it — so widening the tape widens the keep-outs with it, instead of leaving the router planning for
+ * a hairline while the cutter is asked for a real strip.
+ */
+export const TAPE_FRAC = 0.02;
+
 /** What it costs a net to route in the other net's lane, as a multiple of the raw distance.
  *
  *  Swept: 1.5 is the only value that keeps copper out from under every chip, and its overlap is within a
@@ -166,7 +175,7 @@ export function batteryTerminals(centre: Vec2, diag: number, poly?: Vec2[]): Pad
   // church 5% -> 1%) but costs akde-hex a crossing and two thirds more copper, and it does not rescue the one
   // tile that is too small in every direction -- so it is not worth the crossing.
   const want = diag * 0.045;
-  const need = diag * 0.0114 + diag * 0.0055; // the square, plus half a tape width
+  const need = diag * 0.0114 + diag * TAPE_FRAC * 0.5; // the square, plus half a tape width
   let h = want;
   if (poly && poly.length >= 3) {
     let room = Infinity;
@@ -177,7 +186,9 @@ export function batteryTerminals(centre: Vec2, diag: number, poly?: Vec2[]): Pad
     // Floor: never closer than a tape width can pass, even if that overhangs a small tile. A battery on a tile
     // that small overhangs it physically too, and the alternative -- terminals so close no strip fits between
     // them -- is a guaranteed short at the source, which is worse than a pad sitting proud of its tile.
-    h = Math.max(diag * 0.033, Math.min(want, room - need));
+    // The floor scales with the tape: a wider strip needs a wider gap to pass between the pads, and needs to
+    // clear a bigger keep-out on the way out. Fixed at 0.033 it was enough for a 0.011 strip and not for 0.02.
+    h = Math.max(need + diag * TAPE_FRAC, Math.min(want, room - need));
   }
   return { pwr: { x: centre.x + h, y: centre.y }, gnd: { x: centre.x - h, y: centre.y } };
 }
@@ -348,11 +359,11 @@ export function planRoutes(
   // the other.
   // Over-LED destroys the part, a crossing shorts the layout, and overlap only makes it hard to build, so
   // they rank in that order and overlap can never be bought with either of the others.
-  const clearW = diag * 0.0055; // half a tape width: closer than this and copper is under the chip
+  const clearW = diag * TAPE_FRAC * 0.5; // half a tape width: closer than this and copper is under the chip
   // The drawn terminal square is markerR * 0.95 = diag * 0.0114 half-width; add half a tape width so the
   // copper clears the square itself rather than merely missing its centre.
   const termClear = diag * 0.0114 + clearW;
-  const overlapTol = diag * 0.008; // about a tape width: closer than this and the strips are on each other
+  const overlapTol = diag * TAPE_FRAC * 0.75; // closer than this and the strips are on each other
   const score = (tr: Trace2D[], f: boolean[]): number =>
     // The width-aware measure, not countOverLed: that one tests zero-width centrelines for a crossing, so it
     // reads zero while tape is sitting on top of a chip. Scoring on it left the search blind to the very
@@ -467,8 +478,36 @@ export function planRoutes(
       // PWR is straightened against GND's route as planned (before its own straightening), so its shortcuts
       // cannot buy directness by cutting across where GND is going to be. Passing nothing here let exactly
       // that happen.
-      const rawGnd = asTree(dedupe(dodgeChips(gnd.pts, targets, onBody)), "gnd", term.gnd, padsOf(f, "gnd"));
-      const rawPwr = asTree(dedupe(dodgeChips(pwr.pts, targets, onBody)), "pwr", term.pwr, padsOf(f, "pwr"));
+      // Push any run that still passes too close to the other net's terminal out around it. The corridor governs
+      // its chords and straightening governs its shortcuts, but the segments that land on a pad answer to
+      // neither -- and those were the ones still sweeping the terminal on church.
+      const clearTerm = (rail: Vec2[], forbidden: Vec2): Vec2[] => {
+        const out: Vec2[] = [rail[0]!];
+        for (let i = 1; i < rail.length; i++) {
+          const a = out[out.length - 1]!, b = rail[i]!;
+          if (segPointDist(a, b, forbidden) >= termClear) {
+            out.push(b);
+            continue;
+          }
+          // Step aside, perpendicular to the run, on the far side from the terminal.
+          const d = unit(sub(b, a));
+          const n = leftOf(d);
+          const side = sideOf(a, d, forbidden) > 0 ? -1 : 1;
+          const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+          const w = add(mid, scale(n, side * termClear * 1.2));
+          const ok =
+            segPointDist(a, w, forbidden) >= termClear &&
+            segPointDist(w, b, forbidden) >= termClear &&
+            onBody(a, w) && onBody(w, b);
+          if (ok) out.push(w);
+          out.push(b);
+        }
+        return out;
+      };
+      const rawGnd = asTree(dedupe(dodgeChips(gnd.pts, targets, onBody)), "gnd", term.gnd, padsOf(f, "gnd"))
+        .map((t) => ({ ...t, pts: clearTerm(t.pts, term.pwr) }));
+      const rawPwr = asTree(dedupe(dodgeChips(pwr.pts, targets, onBody)), "pwr", term.pwr, padsOf(f, "pwr"))
+        .map((t) => ({ ...t, pts: clearTerm(t.pts, term.gnd) }));
       const outPwr = straighten(
         rawPwr, [...keepPwr, ...junctions(rawPwr)], bodies, onBody, rawGnd, clearW, overlapTol,
         term.gnd, termClear,
@@ -955,6 +994,26 @@ function corridorPath(
   taken: Map<string, number>,
   forbid: { at: Vec2; r: number } | null,
 ): Vec2[] {
+  // Try first with every chord that sweeps the other net's terminal *forbidden*, not merely dear. Tolling it
+  // was not enough: on church the route took a chord passing 0.090 from the terminal when 0.099 was required and
+  // there was room to spare, because a large toll is still finite. If forbidding leaves no route at all, fall
+  // back to the tolled search rather than dropping the LED.
+  if (forbid) {
+    const strict = searchCorridor(c, from, to, blocked, taken, forbid, true);
+    if (strict.length) return strict;
+  }
+  return searchCorridor(c, from, to, blocked, taken, forbid, false);
+}
+
+function searchCorridor(
+  c: Corridor,
+  from: number,
+  to: number,
+  blocked: Set<string>,
+  taken: Map<string, number>,
+  forbid: { at: Vec2; r: number } | null,
+  strict: boolean,
+): Vec2[] {
   if (from === to) return [];
   const starts = c.mids.get(from) ?? [];
   const goal = new Set((c.mids.get(to) ?? []).map(ptKey));
@@ -1000,6 +1059,7 @@ function corridorPath(
         // A chord may pass close to the other net's terminal even when both its ends are clear of it: tolling
         // nodes cannot see that, so the chord itself is measured.
         const sweeps = forbid ? segPointDist(here, m, forbid.at) < forbid.r : false;
+        if (sweeps && strict) continue;
         const w = best + cost(k, Math.sqrt(dist2(here, m))) * (sweeps ? TERMINAL_TOLL : 1);
         if (w < (dist.get(k) ?? Infinity)) {
           dist.set(k, w);

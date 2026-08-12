@@ -21,8 +21,7 @@ const MARGIN = 8; // mm — must match the FKLD SVG export or the layers import 
 /** Width of the carrier frame's border, outside the pattern window. */
 const FRAME_BUFFER = 5;
 
-/** Width of the tabs holding each trace to the frame. Thin enough to snip, wide enough to survive handling. */
-const TAB_W = 1;
+
 
 /** Below this the strips are not worth cutting: a blade will not track it and copper tape is not sold that
  *  narrow. Reported rather than silently widened, since widening would break registration with the preview
@@ -207,6 +206,18 @@ export interface CopperCarrierExport {
   svg: string;
   /** How many traces are held in the frame, and how many tabs to snip once it is stuck down. */
   counts: { traces: number; tabs: number };
+  /**
+   * Tabs that could not reach a wall without lying across another trace.
+   *
+   * Such a tab is stuck down on top of the trace it crosses, shorting the two, and snipping it cuts into the
+   * trace underneath. Reported rather than hidden: on a crowded window there may be no clear line out, and that
+   * is worth knowing before cutting.
+   */
+  crossingTabs: number;
+  /** Tab centrelines in sheet coordinates, so a preview can draw exactly what will be cut. */
+  tabPaths: Vec2[][];
+  /** The frame's window and outer edge in sheet coordinates, likewise. */
+  frame: { window: Win; outer: Win };
   widthMm: number;
   tooNarrow: boolean;
 }
@@ -242,29 +253,49 @@ export function buildCopperCarrierExport(
   cuts.push(rectPath(ox0, oy0, ox1, oy1));
 
   // Each trace: its outline, opened where its tab attaches, plus the tab's two sides.
+  //
+  // A tab is the width of the tape itself, and it must not lie across another trace: it would be stuck down on
+  // top of it, shorting the two, and snipping it would cut into the trace underneath. So every candidate anchor
+  // is tried -- each vertex of the run against each of the four walls, nearest first -- and the first tab that
+  // reaches its wall without touching another run is the one used. Tabs therefore end up spread over all four
+  // walls rather than all diving for the closest edge.
+  // Densified, so a tab can leave from anywhere along an outline rather than only at its corners. With thick
+  // tape and a crowded window, corners alone leave most runs with no clear line out to a wall.
+  const rings = runs.map((t) => ({
+    net: t.net,
+    ring: densify(outlineStrip(t.pts, tapeW).map(T), tapeW),
+  }));
   const gaps: { side: Side; from: number; to: number }[] = [];
   let tabs = 0;
-  for (const t of runs) {
-    const ring = outlineStrip(t.pts, tapeW).map(T);
-    if (ring.length < 3) continue;
-    const anchor = nearestOnWindow(ring, win);
-    if (!anchor) continue;
-    const { index, side } = anchor;
-    // Open the ring: drop the vertex the tab attaches at, and remember where the tab meets the window.
+  let crossingTabs = 0;
+  const tabPaths: Vec2[][] = [];
+  rings.forEach(({ net, ring }, ri) => {
+    if (ring.length < 3) return;
+    // Only the *other* net's runs are obstacles. Runs of the same net meet at junctions by design and may
+    // overlap freely -- one net, one potential -- so treating them as obstacles left every candidate blocked,
+    // which is why neither more anchors nor bent tabs changed anything.
+    const others = rings.filter((r, i) => i !== ri && r.net !== net).map((r) => r.ring);
+    const choice = pickTab(ring, others, win, tapeW);
+    if (!choice) return;
+    const { index, side } = choice;
+    if (!choice.clear) crossingTabs++;
+    tabPaths.push(choice.path);
+    // Open the ring: drop the vertex the tab attaches at, so the trace stays joined to its tab.
     const open = ring.slice(index + 1).concat(ring.slice(0, index));
     if (open.length >= 2) cuts.push(openPath(open));
-    const a = ring[index]!;
-    const across = perpTo(side);
-    const p1 = { x: a.x + across.x * (TAB_W / 2), y: a.y + across.y * (TAB_W / 2) };
-    const p2 = { x: a.x - across.x * (TAB_W / 2), y: a.y - across.y * (TAB_W / 2) };
-    const q1 = onWindow(p1, side, win);
-    const q2 = onWindow(p2, side, win);
-    cuts.push(openPath([p1, q1]), openPath([p2, q2]));
+    // The tab's two sides: its centreline offset either way, so a bent tab keeps its width around the corner.
+    const s1 = offsetSide(choice.path, tapeW / 2);
+    const s2 = offsetSide(choice.path, -tapeW / 2);
+    const q1 = onWindow(s1[s1.length - 1]!, side, win);
+    const q2 = onWindow(s2[s2.length - 1]!, side, win);
+    s1[s1.length - 1] = q1;
+    s2[s2.length - 1] = q2;
+    cuts.push(openPath(s1), openPath(s2));
     // The window edge must break across the tab's footprint, or the tab is severed from the frame.
     const [from, to] = alongSide(side, q1, q2);
     gaps.push({ side, from, to });
     tabs++;
-  }
+  });
 
   // The window edge, cut in the spans between tabs.
   for (const side of SIDES) {
@@ -284,6 +315,9 @@ export function buildCopperCarrierExport(
       `<svg xmlns="http://www.w3.org/2000/svg" width="${fmt(w)}mm" height="${fmt(h)}mm" ` +
       `viewBox="0 0 ${fmt(w)} ${fmt(h)}">\n${body}\n</svg>\n`,
     counts: { traces: runs.length, tabs },
+    crossingTabs,
+    tabPaths,
+    frame: { window: win, outer: { x0: ox0, y0: oy0, x1: ox1, y1: oy1 } },
     widthMm: tapeW,
     tooNarrow: tapeW < MIN_CUTTABLE_MM,
   };
@@ -291,23 +325,104 @@ export function buildCopperCarrierExport(
 
 type Side = "left" | "right" | "top" | "bottom";
 const SIDES: Side[] = ["left", "right", "top", "bottom"];
-type Win = { x0: number; y0: number; x1: number; y1: number };
+export type Win = { x0: number; y0: number; x1: number; y1: number };
 
-/** The ring vertex closest to the window edge, and which edge that is — where the tab goes. */
-function nearestOnWindow(ring: Vec2[], win: Win): { index: number; side: Side } | null {
-  let best = Infinity, index = -1, side: Side = "left";
+/** Insert points along each edge so anchors are available between the corners, at roughly `step` spacing. */
+function densify(ring: Vec2[], step: number): Vec2[] {
+  if (ring.length < 2 || step <= 0) return ring;
+  const out: Vec2[] = [];
+  for (let i = 0; i < ring.length; i++) {
+    const a = ring[i]!, b = ring[(i + 1) % ring.length]!;
+    out.push(a);
+    const n = Math.floor(len(sub(b, a)) / step);
+    for (let k = 1; k < n; k++) {
+      const u = k / n;
+      out.push({ x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u });
+    }
+  }
+  return out;
+}
+
+/**
+ * How to tab a trace: where it leaves its outline, and the path out to a wall.
+ *
+ * A tab must not lie across another trace — it would be stuck down on top of it, shorting the two, and snipping
+ * it would cut into the trace underneath. Straight tabs alone cannot manage it on a crowded window (puffin: 8
+ * of 13 blocked), so each candidate may also turn one corner: sideways along the wall first, then out. Every
+ * combination of anchor, wall and sideways step is tried shortest-first, and the first clear one is used.
+ *
+ * When nothing is clear the shortest is used anyway — a trace is never left loose — and the caller is told via
+ * {@link CopperCarrierExport.crossingTabs}.
+ */
+function pickTab(
+  ring: Vec2[],
+  others: Vec2[][],
+  win: Win,
+  tapeW: number,
+): { index: number; side: Side; path: Vec2[]; clear: boolean } | null {
+  // Nine offsets is as good as twenty-four: measured identical, so the extra reach buys nothing.
+  const SIDE_STEPS = [0, 1.5, -1.5, 3, -3, 5, -5, 8, -8];
+  const candidates: { index: number; side: Side; step: number; reach: number }[] = [];
   ring.forEach((p, i) => {
-    const d: [Side, number][] = [
-      ["left", p.x - win.x0],
-      ["right", win.x1 - p.x],
-      ["top", p.y - win.y0],
-      ["bottom", win.y1 - p.y],
+    const dist: [Side, number][] = [
+      ["left", p.x - win.x0], ["right", win.x1 - p.x],
+      ["top", p.y - win.y0], ["bottom", win.y1 - p.y],
     ];
-    for (const [sd, dist] of d) {
-      if (dist < best) { best = dist; index = i; side = sd; }
+    for (const [side, d] of dist) {
+      if (d < 0) continue; // already outside that wall
+      for (const step of SIDE_STEPS) {
+        candidates.push({ index: i, side, step, reach: d + Math.abs(step) * tapeW });
+      }
     }
   });
-  return index < 0 ? null : { index, side };
+  candidates.sort((a, b) => a.reach - b.reach || a.index - b.index);
+
+  let fallback: { index: number; side: Side; path: Vec2[] } | null = null;
+  for (const c of candidates) {
+    const a = ring[c.index]!;
+    const across = perpTo(c.side);
+    const bend = c.step === 0
+      ? null
+      : { x: a.x + across.x * c.step * tapeW, y: a.y + across.y * c.step * tapeW };
+    const end = onWindow(bend ?? a, c.side, win);
+    const path = bend ? [a, bend, end] : [a, end];
+    if (!fallback) fallback = { index: c.index, side: c.side, path };
+    const blocked = others.some((o) => {
+      for (let k = 1; k < path.length; k++) {
+        if (segNearRing(path[k - 1]!, path[k]!, o, tapeW)) return true;
+      }
+      return false;
+    });
+    if (!blocked) return { index: c.index, side: c.side, path, clear: true };
+  }
+  return fallback ? { ...fallback, clear: false } : null;
+}
+
+/** Whether the tab segment a-q comes within a tape width of any edge of `ring`. */
+function segNearRing(a: Vec2, q: Vec2, ring: Vec2[], tapeW: number): boolean {
+  for (let i = 0; i < ring.length; i++) {
+    const c = ring[i]!, d = ring[(i + 1) % ring.length]!;
+    if (segsIntersect(a, q, c, d)) return true;
+    if (segSegDist(a, q, c, d) < tapeW) return true;
+  }
+  return false;
+}
+
+function segsIntersect(a: Vec2, b: Vec2, c: Vec2, d: Vec2): boolean {
+  const cr = (p: Vec2, q: Vec2, r: Vec2): number => (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+  const d1 = cr(a, b, c), d2 = cr(a, b, d), d3 = cr(c, d, a), d4 = cr(c, d, b);
+  return ((d1 > 0) !== (d2 > 0)) && ((d3 > 0) !== (d4 > 0));
+}
+
+function segSegDist(a: Vec2, b: Vec2, c: Vec2, d: Vec2): number {
+  return Math.min(ptSegDist(a, c, d), ptSegDist(b, c, d), ptSegDist(c, a, b), ptSegDist(d, a, b));
+}
+
+function ptSegDist(p: Vec2, a: Vec2, b: Vec2): number {
+  const ab = sub(b, a);
+  const L2 = ab.x * ab.x + ab.y * ab.y;
+  const t = L2 < 1e-18 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * ab.x + (p.y - a.y) * ab.y) / L2));
+  return len(sub(p, { x: a.x + ab.x * t, y: a.y + ab.y * t }));
 }
 
 /** Unit vector across a tab running to `side` — the direction its width is measured in. */
