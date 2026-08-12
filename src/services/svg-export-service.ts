@@ -5,6 +5,7 @@
  * you cut".
  */
 import { buildFkldSvgExport, type SvgExportPayload } from "../model/fkld-svg-export.js";
+import type { Circuit } from "../model/electronics.js";
 import type { LoadedModel } from "../model/fold-file.js";
 import type { ShownModel } from "./sim-scene-service.js";
 

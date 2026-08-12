@@ -44,9 +44,7 @@ type P = { x: number; y: number };
 
 const fmt = (n: number): string => (Number.isFinite(n) ? String(Math.round(n * 1000) / 1000) : "0");
 
-/**
- * Build the full SVG export payload from a flat FKLD/FOLD pattern, or null if there's nothing to cut.
- */
+/** Build the full SVG export payload from a flat FKLD/FOLD pattern, or null if there's nothing to cut. */
 export function buildFkldSvgExport(
   fold: FoldFile,
   baseName = "kirigami",
@@ -188,6 +186,7 @@ function assembleLoops(bEdges: [number, number][]): number[][] | null {
   }
   return loops;
 }
+
 
 /** A two-point line `M…L…` pulled in by `gap` at both ends; null if it would collapse. */
 function shortenedSeg(a: P, b: P, gap: number): string | null {

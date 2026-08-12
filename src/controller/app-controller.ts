@@ -22,12 +22,14 @@ import { resolveSimScene } from "../services/sim-scene-service.js";
 import { resolveSvgExport } from "../services/svg-export-service.js";
 import { resolveStlExport } from "../services/stl-export-service.js";
 import { DEFAULT_PRINT_SIZE } from "../model/stl-export.js";
+import { EMPTY_CIRCUIT, type Circuit } from "../model/electronics.js";
 import type { ConvertPanel } from "../view/convert-panel.js";
 import type { ViewerFrame } from "../view/viewer-frame.js";
 import type { HeaderActions } from "../view/header-actions.js";
 import type { SimModal } from "../view/sim-modal.js";
 import type { ExportModal } from "../view/export-modal.js";
 import type { PatternEditorModal } from "../view/pattern-editor-modal.js";
+import type { ElectronicsModal } from "../view/electronics-modal.js";
 import type { PatternGrid } from "../model/pattern-grid.js";
 
 const SAMPLE_URL = "./examples/house.fkld";
@@ -42,6 +44,7 @@ export class AppController {
     private readonly sim: SimModal,
     private readonly exporter: ExportModal,
     private readonly patternEditor: PatternEditorModal,
+    private readonly electronics: ElectronicsModal,
   ) {
     // 3D Sim folds exactly what the VIEWER is showing (fall back to the loaded model). This keeps
     // "what you see is what gets simulated" true even when the viewer and the convert panel differ.
@@ -85,6 +88,10 @@ export class AppController {
     this.patternEditor.onUse((grid) => this.usePattern(grid));
     this.patternEditor.setSerializer((grid) => serializePatternGrid(grid));
 
+    // Electronics tool: the modal authors a Circuit; we store it and the next render
+    // plans the routes and pushes the preview back (single-render path).
+    this.electronics.onEdit((circuit) => this.updateCircuit(circuit));
+
     // Model changes → re-render every view (fires once immediately with state).
     this.store.subscribe((state) => this.render(state));
   }
@@ -103,6 +110,15 @@ export class AppController {
     this.sim.setEnabled(!!simObject && canSimulate(simObject));
     // Export is available for any displayed FKLD/FOLD pattern (even non-simulable ones).
     this.exporter.setEnabled(!!simObject);
+    // Electronics: lay LEDs and the battery on any displayed flat pattern. There is no auto-router, so
+    // the modal has nothing pushed back to it — it draws the placement it was given.
+    this.electronics.setEnabled(!!simObject);
+    this.electronics.setPattern(simObject);
+  }
+
+  /** Store the authored LED circuit; the render subscription redraws it. */
+  updateCircuit(circuit: Circuit): void {
+    this.store.update({ circuit });
   }
 
   // ---- intents (each: a service call + a store update) ---------------------
@@ -185,9 +201,9 @@ export class AppController {
 
   // ---- model transitions --------------------------------------------------
 
-  /** Commit a loaded model to the store with its standard status line. */
+  /** Commit a loaded model to the store with its standard status line (and a fresh, empty circuit). */
   private apply(model: LoadedModel): void {
-    this.store.update({ model, status: loadedStatus(model) });
+    this.store.update({ model, status: loadedStatus(model), circuit: null });
   }
 
   /** Commit a generated pattern and show it in the viewer. */
