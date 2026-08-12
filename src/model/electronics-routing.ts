@@ -277,6 +277,33 @@ export function planRoutes(
   // reached past an occupied hinge is still reachable.
   const occupied = new Set(targets.map((t) => ptKey(t.hinge)));
   let dirPwr = false, dirGnd = false;
+  const padsFor = (f: boolean[]): PadPair[] => {
+    const out = pads.map((p) => p);
+    for (let i = 0; i < order.length; i++) {
+      const t = targets[order[i]!]!;
+      const [l0, l1] = t.legs;
+      out[t.slot] = f[i] ? { pwr: l1, gnd: l0 } : { pwr: l0, gnd: l1 };
+    }
+    return out;
+  };
+
+  // Running over a chip is destructive -- it shorts the part -- while a PWR/GND crossing is a short in the
+  // layout. Both must go, so score them lexicographically with over-LED dominant and never trade one for
+  // the other.
+  // Over-LED destroys the part, a crossing shorts the layout, and overlap only makes it hard to build, so
+  // they rank in that order and overlap can never be bought with either of the others.
+  const clearW = diag * 0.0055; // half a tape width: closer than this and copper is under the chip
+  const overlapTol = diag * 0.008; // about a tape width: closer than this and the strips are on each other
+  const score = (tr: Trace2D[], f: boolean[]): number =>
+    // The width-aware measure, not countOverLed: that one tests zero-width centrelines for a crossing, so it
+    // reads zero while tape is sitting on top of a chip. Scoring on it left the search blind to the very
+    // constraint it was supposed to be enforcing first.
+    countUnderLed(tr, padsFor(f), clearW, clearW * 1.2) * 1e9 +
+    countNetCrossings(tr) * 1e6 +
+    overlapLength(tr, overlapTol) +
+    // Length ranks last: of two plans equal on everything that matters more, the shorter and straighter wins.
+    totalLength(tr) * 1e-6;
+
   /** Whether a straight run from a to b stays on the material. */
   const onBody = (a: Vec2, b: Vec2): boolean => {
     for (let k = 1; k < 10; k++) {
@@ -350,33 +377,35 @@ export function planRoutes(
         return swap ? t.legs[1] : t.legs[0];
       });
 
-    const finish = (): Trace2D[] => [
-      ...asTree(dedupe(dodgeChips(pwr.pts, targets, onBody)), "pwr", term.pwr, padsOf(f, "pwr")),
-      ...asTree(dedupe(dodgeChips(gnd.pts, targets, onBody)), "gnd", term.gnd, padsOf(f, "gnd")),
-    ];
+    const finish = (): Trace2D[] => {
+      const bodies = targets.map((t) => [t.legs[0], t.legs[1]] as [Vec2, Vec2]);
+      const keepPwr = [term.pwr, ...padsOf(f, "pwr")];
+      const keepGnd = [term.gnd, ...padsOf(f, "gnd")];
+      // Straighten each net in turn. PWR goes first with only the chips to avoid; GND is then straightened
+      // against PWR's finished geometry, so a shortcut can never buy directness by crossing the other net.
+      // PWR is straightened against GND's route as planned (before its own straightening), so its shortcuts
+      // cannot buy directness by cutting across where GND is going to be. Passing nothing here let exactly
+      // that happen.
+      const rawGnd = asTree(dedupe(dodgeChips(gnd.pts, targets, onBody)), "gnd", term.gnd, padsOf(f, "gnd"));
+      const outPwr = straighten(
+        asTree(dedupe(dodgeChips(pwr.pts, targets, onBody)), "pwr", term.pwr, padsOf(f, "pwr")),
+        keepPwr, bodies, onBody, rawGnd, clearW, overlapTol,
+      );
+      const outGnd = straighten(rawGnd, keepGnd, bodies, onBody, outPwr, clearW, overlapTol);
+      // Straightening is only worth having where it is free. It shortens runs a lot -- akde-decagon 2967 ->
+      // 1948 -- but a direct route is direct for *both* nets, so taken unconditionally it drives them together
+      // (puffin overlap 15% -> 26%) and can push copper under a chip. Both plans are built and the objective
+      // decides: shorts first, then overlap, and only then length.
+      const straightened = [...outPwr, ...outGnd];
+      const asRouted = [
+        ...asTree(dedupe(dodgeChips(pwr.pts, targets, onBody)), "pwr", term.pwr, padsOf(f, "pwr")),
+        ...rawGnd,
+      ];
+      return score(straightened, f) <= score(asRouted, f) ? straightened : asRouted;
+    };
     return finish();
   };
 
-  const padsFor = (f: boolean[]): PadPair[] => {
-    const out = pads.map((p) => p);
-    for (let i = 0; i < order.length; i++) {
-      const t = targets[order[i]!]!;
-      const [l0, l1] = t.legs;
-      out[t.slot] = f[i] ? { pwr: l1, gnd: l0 } : { pwr: l0, gnd: l1 };
-    }
-    return out;
-  };
-
-  // Running over a chip is destructive -- it shorts the part -- while a PWR/GND crossing is a short in the
-  // layout. Both must go, so score them lexicographically with over-LED dominant and never trade one for
-  // the other.
-  // Over-LED destroys the part, a crossing shorts the layout, and overlap only makes it hard to build, so
-  // they rank in that order and overlap can never be bought with either of the others.
-  const overlapTol = diag * 0.008; // about a tape width: closer than this and the strips are on each other
-  const score = (tr: Trace2D[], f: boolean[]): number =>
-    countOverLed(tr, padsFor(f)) * 1e9 +
-    countNetCrossings(tr) * 1e6 +
-    overlapLength(tr, overlapTol);
 
   // Descend from each seed by single flips, first improvement, and keep the best arrangement found. No one
   // seed wins everywhere -- the geometric seed beats all-false on akde-decagon and loses on puffin -- and
@@ -525,6 +554,75 @@ function asTree(pts: Vec2[], net: "pwr" | "gnd", first: Vec2, required: Vec2[]):
     }
   }
   return out.length ? out : [{ pts, net }];
+}
+
+/**
+ * Pull each run straight where it may be.
+ *
+ * The corridor is a graph, so a route is a sequence of hops between edge crossing points -- shortest *in the
+ * graph*, which is not the same as shortest on the material. Two pads with clear material between them come
+ * out as a dogleg via whatever crossing points lay on the way. Wherever the direct line between two points of
+ * a run is legal, the vertices between them are dropped.
+ *
+ * A shortcut has to keep every promise the route already made, so it is taken only if it stays on the body,
+ * clears every chip by a tape width, and does not cross the other net. Pads and terminals are anchors -- a
+ * shortcut may never skip past one, or the tape would stop touching what it is there to connect.
+ */
+function straighten(
+  traces: Trace2D[],
+  keep: Vec2[],
+  bodies: [Vec2, Vec2][],
+  onBody: (a: Vec2, b: Vec2) => boolean,
+  others: Trace2D[],
+  clear: number,
+  apart: number,
+): Trace2D[] {
+  const anchors = new Set(keep.map(ptKey));
+  const legal = (a: Vec2, b: Vec2): boolean => {
+    if (!onBody(a, b)) return false;
+    const L = Math.sqrt(dist2(a, b));
+    const steps = Math.max(2, Math.ceil(L / (clear * 0.5)));
+    for (const [c, d] of bodies) {
+      // Exempting a whole chip because the shortcut *ends* on one of its pads is too generous: the run can
+      // then lie alongside that chip's body all the way in. Only the pad's own neighbourhood is exempt, which
+      // is the same rule the under-chip measure applies.
+      const own = anchors.has(ptKey(c)) ? c : anchors.has(ptKey(d)) ? d : null;
+      for (let k = 0; k <= steps; k++) {
+        const u = k / steps;
+        const m = { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u };
+        if (own && Math.sqrt(dist2(m, own)) <= clear * 1.2) continue;
+        if (segPointDist(c, d, m) < clear) return false;
+      }
+    }
+    // Keep clear of the other net, not merely uncrossed. Directness and separation pull against each other --
+    // the shortest route between the same two regions is much the same for both nets, so straightening both
+    // makes them parallel. A shortcut is therefore only taken where it does not come within a tape width of
+    // the other net: the run stays bent exactly where being direct would mean shadowing.
+    for (const o of others) {
+      for (let i = 1; i < o.pts.length; i++) {
+        if (segNearSeg(a, b, o.pts[i - 1]!, o.pts[i]!) < apart) return false;
+      }
+    }
+    return true;
+  };
+
+  return traces.map((t) => {
+    const pts = t.pts;
+    const out: Vec2[] = [pts[0]!];
+    let i = 0;
+    while (i < pts.length - 1) {
+      // Reach as far ahead as the direct line allows, stopping at the first anchor on the way.
+      let best = i + 1;
+      for (let j = i + 2; j < pts.length; j++) {
+        if (anchors.has(ptKey(pts[j - 1]!))) break; // cannot skip past a pad or a terminal
+        if (!legal(pts[i]!, pts[j]!)) continue;
+        best = j;
+      }
+      out.push(pts[best]!);
+      i = best;
+    }
+    return { pts: out, net: t.net };
+  });
 }
 
 /** Binary min-heap keyed by string, for the corridor search frontier. */
@@ -941,6 +1039,15 @@ export function countUnderLed(
 }
 
 const isOrigin = (p: Vec2): boolean => p.x === 0 && p.y === 0;
+
+/** Closest approach between segments ab and cd (0 when they intersect). */
+function segNearSeg(a: Vec2, b: Vec2, c: Vec2, d: Vec2): number {
+  if (segsCross(a, b, c, d)) return 0;
+  return Math.min(
+    segPointDist(a, b, c), segPointDist(a, b, d),
+    segPointDist(c, d, a), segPointDist(c, d, b),
+  );
+}
 
 /** Distance from point `p` to segment ab. */
 function segPointDist(a: Vec2, b: Vec2, p: Vec2): number {
