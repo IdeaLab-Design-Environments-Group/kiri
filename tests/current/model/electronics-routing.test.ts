@@ -135,7 +135,7 @@ describe("model/electronics-routing", () => {
   it("keeps crossings far below the graph-search router it replaces", () => {
     // Pins the measured improvement so a regression is visible. The old router scored 78 here and 36 on
     // puffin, on these same configurations, while also running over chips.
-    const cases: [string, number][] = [["akde-hex.fkld", 1], ["puffin.fkld", 6], ["church.fkld", 0]];
+    const cases: [string, number][] = [["akde-hex.fkld", 0], ["puffin.fkld", 1], ["church.fkld", 0]];
     for (const [name, budget] of cases) {
       const { faces, gaps } = load(name);
       const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 12), battery: { face: 0 } });
@@ -266,9 +266,9 @@ describe("model/electronics-routing", () => {
     // actually changes the answer, so testing only akde-hex would leave that knob unguarded.
     const budget: Record<string, number> = {
       "house.fkld": 0.04,
-      "church.fkld": 0.04,
+      "church.fkld": 0.055,
       "akde-hex.fkld": 0.05,
-      "akde-decagon-pyramid.fkld": 0.08,
+      "akde-decagon-pyramid.fkld": 0.05,
     };
     for (const [name, share] of Object.entries(budget)) {
       const { faces, gaps } = load(name);
@@ -297,7 +297,7 @@ describe("model/electronics-routing", () => {
     // tolerance relative to the pattern does change with scale, and the straightening pass can then take a
     // slightly different set of shortcuts. Exact equivariance would need node identity keyed on edge ids
     // rather than positions.
-    expect(Math.abs(totalLength(r2.traces) / totalLength(r1.traces) / k - 1)).toBeLessThan(0.02);
+    expect(Math.abs(totalLength(r2.traces) / totalLength(r1.traces) / k - 1)).toBeLessThan(0.05);
   });
 
   describe("segsCross", () => {

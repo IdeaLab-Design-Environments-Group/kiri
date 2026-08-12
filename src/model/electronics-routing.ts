@@ -253,6 +253,22 @@ export function planRoutes(
   // Which bank is PWR: the side the + terminal already sits on as the bus leaves the battery.
   const bank = sideOf(centre, dirs[0]!, term.pwr) || 1;
 
+  const spine: Vec2[] = [centre, ...order.map((oi) => targets[oi]!.hinge)];
+  const laneOf = (p: Vec2): number => {
+    let best = Infinity, side = 1;
+    for (let i = 1; i < spine.length; i++) {
+      const a = spine[i - 1]!, b = spine[i]!;
+      const d = segPointDist(a, b, p);
+      if (d < best) { best = d; side = sideOf(a, unit(sub(b, a)), p); }
+    }
+    return side;
+  };
+  const lanePref = new Map<string, { pwr: number; gnd: number }>();
+  for (const [key, p] of corridor.point) {
+    const lane = laneOf(p);
+    lanePref.set(key, { pwr: lane === bank ? 0 : 1.5, gnd: lane === bank ? 1.5 : 0 });
+  }
+
   // `flip[i]` swaps LED i's two pads between the banks. The tour is a plain chain, so a flip is a
   // genuinely local change: a crossing it causes can be undone without disturbing the rest of the bus.
   const seeds: boolean[][] = [
@@ -298,7 +314,10 @@ export function planRoutes(
     // The width-aware measure, not countOverLed: that one tests zero-width centrelines for a crossing, so it
     // reads zero while tape is sitting on top of a chip. Scoring on it left the search blind to the very
     // constraint it was supposed to be enforcing first.
-    countUnderLed(tr, padsFor(f), clearW, clearW * 1.2) * 1e9 +
+    // Both chip measures, because neither subsumes the other: the width-aware one exempts the pad the run
+    // lands on (so it misses a run that clips the body right at the pad), and the zero-width one only sees a
+    // proper crossing (so it misses tape lying alongside). Ranked together, above everything else.
+    (countUnderLed(tr, padsFor(f), clearW, clearW * 1.2) + countOverLed(tr, padsFor(f))) * 1e9 +
     countNetCrossings(tr) * 1e6 +
     overlapLength(tr, overlapTol) +
     // Length ranks last: of two plans equal on everything that matters more, the shorter and straighter wins.
@@ -323,6 +342,7 @@ export function planRoutes(
       rev: boolean,
       avoid: Map<string, number>,
     ): { pts: Vec2[]; used: Map<string, number> } => {
+      const lane = (key: string): number => (net === "pwr" ? lanePref.get(key)?.pwr : lanePref.get(key)?.gnd) ?? 0;
       // Each net may work the tour from either end.
       const seq = rev ? order.map((_, k) => order.length - 1 - k) : order.map((_, k) => k);
       const pick = (i: number): { pad: Vec2; face: number } => {
@@ -350,6 +370,7 @@ export function planRoutes(
         // a PWR/GND crossing and an under-chip violation. Not worth it.
         const toll = new Map(avoid);
         for (const [k, v] of used) toll.set(k, (toll.get(k) ?? 0) + v);
+        for (const k of lanePref.keys()) toll.set(k, (toll.get(k) ?? 0) + lane(k));
         for (const p of corridorPath(corridor, fromFace, face, blocked, toll)) {
           out.push(p);
           used.set(ptKey(p), (used.get(ptKey(p)) ?? 0) + 1);
@@ -387,20 +408,19 @@ export function planRoutes(
       // cannot buy directness by cutting across where GND is going to be. Passing nothing here let exactly
       // that happen.
       const rawGnd = asTree(dedupe(dodgeChips(gnd.pts, targets, onBody)), "gnd", term.gnd, padsOf(f, "gnd"));
+      const rawPwr = asTree(dedupe(dodgeChips(pwr.pts, targets, onBody)), "pwr", term.pwr, padsOf(f, "pwr"));
       const outPwr = straighten(
-        asTree(dedupe(dodgeChips(pwr.pts, targets, onBody)), "pwr", term.pwr, padsOf(f, "pwr")),
-        keepPwr, bodies, onBody, rawGnd, clearW, overlapTol,
+        rawPwr, [...keepPwr, ...junctions(rawPwr)], bodies, onBody, rawGnd, clearW, overlapTol,
       );
-      const outGnd = straighten(rawGnd, keepGnd, bodies, onBody, outPwr, clearW, overlapTol);
+      const outGnd = straighten(
+        rawGnd, [...keepGnd, ...junctions(rawGnd)], bodies, onBody, outPwr, clearW, overlapTol,
+      );
       // Straightening is only worth having where it is free. It shortens runs a lot -- akde-decagon 2967 ->
       // 1948 -- but a direct route is direct for *both* nets, so taken unconditionally it drives them together
       // (puffin overlap 15% -> 26%) and can push copper under a chip. Both plans are built and the objective
       // decides: shorts first, then overlap, and only then length.
       const straightened = [...outPwr, ...outGnd];
-      const asRouted = [
-        ...asTree(dedupe(dodgeChips(pwr.pts, targets, onBody)), "pwr", term.pwr, padsOf(f, "pwr")),
-        ...rawGnd,
-      ];
+      const asRouted = [...rawPwr, ...rawGnd];
       return score(straightened, f) <= score(asRouted, f) ? straightened : asRouted;
     };
     return finish();
@@ -557,6 +577,28 @@ function asTree(pts: Vec2[], net: "pwr" | "gnd", first: Vec2, required: Vec2[]):
 }
 
 /**
+ * The points where one run of a net hangs off another.
+ *
+ * A net is laid as several runs that meet at shared points, and those meeting points hold the tree together.
+ * Straightening must treat them as anchors: shortcutting one run past the vertex another attaches to silently
+ * cuts that run -- and everything beyond it -- off from the battery. That is an open circuit, not a cosmetic
+ * problem, so it outranks any length or overlap the shortcut would buy.
+ */
+function junctions(traces: Trace2D[]): Vec2[] {
+  const count = new Map<string, { p: Vec2; n: number }>();
+  for (const t of traces) {
+    // Per run, count a point once: a run that revisits a point does not make it a junction.
+    for (const key of new Set(t.pts.map(ptKey))) {
+      const at = t.pts.find((p) => ptKey(p) === key)!;
+      const rec = count.get(key);
+      if (rec) rec.n++;
+      else count.set(key, { p: at, n: 1 });
+    }
+  }
+  return [...count.values()].filter((r) => r.n > 1).map((r) => r.p);
+}
+
+/**
  * Pull each run straight where it may be.
  *
  * The corridor is a graph, so a route is a sequence of hops between edge crossing points -- shortest *in the
@@ -583,6 +625,9 @@ function straighten(
     const L = Math.sqrt(dist2(a, b));
     const steps = Math.max(2, Math.ceil(L / (clear * 0.5)));
     for (const [c, d] of bodies) {
+      // No shortcut may pass through a chip, pad exemption or not. The exemption below is about *proximity*
+      // near the pad the run lands on; a run that actually crosses the body is over the part either way.
+      if (segsCross(a, b, c, d)) return false;
       // Exempting a whole chip because the shortcut *ends* on one of its pads is too generous: the run can
       // then lie alongside that chip's body all the way in. Only the pad's own neighbourhood is exempt, which
       // is the same rule the under-chip measure applies.
