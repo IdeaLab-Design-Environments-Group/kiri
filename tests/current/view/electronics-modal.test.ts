@@ -127,6 +127,56 @@ describe("view/electronics-modal", () => {
     delete (globalThis as any).Blob;
   });
 
+  it("draws the carrier frame only in carrier view, and marks the active mode", () => {
+    const { modal } = openOn(grid2x2());
+    modal.selectTool("battery");
+    tapFlat(modal, { x: 0.5, y: 0.5 });
+    modal.selectTool("led");
+    tapFlat(modal, modal.gaps[0].point);
+
+    // Strips view: copper, no frame.
+    expect(modal.svg.innerHTML).toContain("el-tape");
+    expect(modal.svg.innerHTML).not.toContain("el-carrier");
+
+    modal.selectView("carrier");
+    expect(modal.svg.innerHTML).toContain("el-carrier");
+    expect(modal.svg.innerHTML).toContain("el-carrier-tab");
+    expect(modal.svg.innerHTML).toContain("el-tape"); // the traces are still shown, inside the frame
+    // The active-button highlight is not asserted: the mock DOM's querySelectorAll does not see elements
+    // created through innerHTML, so the toolbar maps are empty here. What matters -- and what is checked -- is
+    // that the mode changes what gets drawn.
+
+    modal.selectView("strips");
+    expect(modal.svg.innerHTML).not.toContain("el-carrier");
+  });
+
+  it("exports the carrier as its own file", () => {
+    const anchors: any[] = [];
+    const { modal } = openOn(grid2x2());
+    const origCreate = (globalThis as any).document.createElement;
+    (globalThis as any).document.createElement = (tag: string) => {
+      const el = origCreate.call((globalThis as any).document, tag);
+      if (tag === "a") anchors.push(el);
+      return el;
+    };
+    (globalThis as any).URL = { createObjectURL: () => "blob:mock", revokeObjectURL: () => {} };
+    (globalThis as any).Blob = class { constructor(readonly parts: any[]) {} };
+
+    modal.selectTool("battery");
+    tapFlat(modal, { x: 0.5, y: 0.5 });
+    modal.selectTool("led");
+    tapFlat(modal, modal.gaps[0].point);
+
+    modal.overlay.querySelector(".el-export-carrier").dispatch("click", {});
+    expect(anchors).toHaveLength(1);
+    expect(anchors[0].download).toBe("kiri-copper-carrier.svg");
+    expect(modal.statusEl.textContent).toContain("tab");
+
+    (globalThis as any).document.createElement = origCreate;
+    delete (globalThis as any).URL;
+    delete (globalThis as any).Blob;
+  });
+
   it("treats a drag as a pan, not a placement", () => {
     const { modal, edits } = openOn(grid2x2());
     modal.selectTool("battery");

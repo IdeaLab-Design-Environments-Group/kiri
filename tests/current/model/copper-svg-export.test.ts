@@ -1,6 +1,11 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { buildCopperSvgExport, outlineStrip } from "../../../src/model/copper-svg-export.js";
+import {
+  buildCopperCarrierExport,
+  buildCopperSvgExport,
+  outlineStrip,
+  sheetFrame,
+} from "../../../src/model/copper-svg-export.js";
 import { buildFkldSvgExport } from "../../../src/model/fkld-svg-export.js";
 import { flatFaces, gapGraph, ledOf, type Circuit, type Led } from "../../../src/model/electronics.js";
 import { patternDiag, planRoutes } from "../../../src/model/electronics-routing.js";
@@ -98,6 +103,59 @@ describe("model/copper-svg-export", () => {
     const out = buildCopperSvgExport(fold, [], tapeW);
     expect(out.counts).toEqual({ pwr: 0, gnd: 0 });
     expect(out.svg).toContain("<svg");
+  });
+
+  describe("carrier frame", () => {
+    it("holds every trace on a tab instead of cutting it free", () => {
+      // The point of the carrier: the copper leaves the mat as one piece, so the traces arrive already in
+      // position. A closed cut round a trace would free it whatever tabs are drawn -- so no trace outline may
+      // be a closed path.
+      const { fold, traces, tapeW } = planned("church.fkld");
+      const out = buildCopperCarrierExport(fold, traces, tapeW);
+      expect(out.counts.traces).toBeGreaterThan(0);
+      expect(out.counts.tabs).toBe(out.counts.traces); // one tab each, nothing left loose
+      // Exactly one closed path: the frame's outer edge. Everything else is open.
+      const closed = (out.svg.match(/ Z"/g) ?? []).length;
+      expect(closed).toBe(1);
+    });
+
+    it("breaks the window edge across each tab, so the tab reaches the frame", () => {
+      // If the window edge were cut straight through, every tab would be severed from the frame and the traces
+      // would drop out -- the exact failure the carrier exists to avoid.
+      const { fold, traces, tapeW } = planned("house.fkld");
+      const out = buildCopperCarrierExport(fold, traces, tapeW);
+      const { window: win } = sheetFrame(fold);
+      // Collect the cut spans lying on the left edge and check they do not cover it end to end.
+      const onLeft = [...out.svg.matchAll(/M ([\d.-]+) ([\d.-]+) L ([\d.-]+) ([\d.-]+)(?! L)/g)]
+        .map((m) => m.slice(1).map(Number) as [number, number, number, number])
+        .filter(([x1, , x2]) => Math.abs(x1 - win.x0) < 1e-6 && Math.abs(x2 - win.x0) < 1e-6);
+      const covered = onLeft.reduce((n, [, y1, , y2]) => n + Math.abs(y2 - y1), 0);
+      if (onLeft.length) expect(covered).toBeLessThan(win.y1 - win.y0 - 1e-6);
+    });
+
+    it("frames the pattern with a 5mm border, inside the sheet the other layers use", () => {
+      const { fold, traces, tapeW } = planned("akde-hex.fkld");
+      const out = buildCopperCarrierExport(fold, traces, tapeW);
+      const { w, h, window: win } = sheetFrame(fold);
+      // The outer rectangle is the first path, and sits 5mm outside the window on every side.
+      const first = out.svg.match(/<path d="M ([^"]+) Z"/)![1]!.match(/-?[\d.]+/g)!.map(Number);
+      // The file rounds to 3 decimals, so compare at that precision.
+      expect(first[0]).toBeCloseTo(win.x0 - 5, 3);
+      expect(first[1]).toBeCloseTo(win.y0 - 5, 3);
+      expect(first[2]).toBeCloseTo(win.x1 + 5, 3);
+      expect(first[5]).toBeCloseTo(win.y1 + 5, 3);
+      // Still the same sheet, so it registers with cut and score.
+      expect(out.svg).toContain(`width="${Math.round(w * 1000) / 1000}mm"`);
+      expect(out.svg).toContain(`height="${Math.round(h * 1000) / 1000}mm"`);
+    });
+
+    it("is named apart from the plain trace file, and reports the same width warning", () => {
+      const { fold, traces, tapeW } = planned("church.fkld");
+      const out = buildCopperCarrierExport(fold, traces, tapeW, "puffin");
+      expect(out.filename).toBe("puffin-copper-carrier.svg");
+      expect(out.tooNarrow).toBe(true); // church is 19mm across
+      expect(buildCopperCarrierExport(fold, traces, 5).tooNarrow).toBe(false);
+    });
   });
 
   describe("outlineStrip", () => {

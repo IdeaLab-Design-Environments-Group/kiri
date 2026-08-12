@@ -26,7 +26,7 @@ import {
   pointInFace,
   tilePolys,
 } from "../model/electronics.js";
-import { buildCopperSvgExport } from "../model/copper-svg-export.js";
+import { buildCopperCarrierExport, buildCopperSvgExport } from "../model/copper-svg-export.js";
 import { type RoutedCircuit, EMPTY_ROUTE, batteryTerminals, planRoutes } from "../model/electronics-routing.js";
 import type { FoldFile } from "../model/fold-file.js";
 
@@ -35,14 +35,23 @@ const MARGIN = 8; // mm — must match the SVG export so preview ↔ export regi
 
 type Tool = "led" | "battery";
 
+/** How the copper is shown, matching the two ways it can be cut.
+ *
+ *  `strips` is the copper as separate pieces. `carrier` is the 3-layer build: one piece of copper cut as a
+ *  frame around the unfolded pattern with every trace held inside it on thin tabs, so the traces arrive
+ *  already positioned — align the frame, press them down, snip the tabs, lift the frame away. */
+type ViewMode = "strips" | "carrier";
+
 export class ElectronicsModal {
   private readonly overlay: HTMLElement;
   private readonly trigger: HTMLButtonElement;
   private readonly svg: SVGSVGElement;
   private readonly statusEl: HTMLElement;
   private readonly toolButtons = new Map<Tool, HTMLButtonElement>();
+  private readonly viewButtons = new Map<ViewMode, HTMLButtonElement>();
 
   private tool: Tool = "led";
+  private viewMode: ViewMode = "strips";
   private fold: FoldFile | null = null;
   private faces: FlatFace[] = [];
   private tiles: TilePoly[] = [];
@@ -85,8 +94,13 @@ export class ElectronicsModal {
             <span class="el-group">
               <button type="button" class="el-clear" title="Remove all LEDs, the battery and routes">Clear</button>
             </span>
+            <span class="el-group el-view-modes">
+              <button type="button" class="el-view" data-view="traces" title="Show the copper as separate strips">Strips</button>
+              <button type="button" class="el-view" data-view="carrier" title="Show the copper as one carrier frame holding every trace in place">Carrier</button>
+            </span>
             <span class="el-group">
-              <button type="button" class="el-export" title="Download the copper tape as an SVG to cut (registered with the cut &amp; score files)">Export SVG</button>
+              <button type="button" class="el-export" title="Download the copper as separate strips to cut">Export SVG</button>
+              <button type="button" class="el-export-carrier" title="Download one carrier frame holding every trace in place: align it, stick the traces down, snip the tabs">Export carrier</button>
             </span>
             <span class="el-group el-view-group">
               <button type="button" class="el-zoom-out" title="Zoom out" aria-label="Zoom out">−</button>
@@ -121,6 +135,12 @@ export class ElectronicsModal {
     }
     this.overlay.querySelector(".el-clear")!.addEventListener("click", () => this.clear());
     this.overlay.querySelector(".el-export")!.addEventListener("click", () => this.exportCopper());
+    this.overlay.querySelector(".el-export-carrier")!.addEventListener("click", () => this.exportCarrier());
+    for (const btn of this.overlay.querySelectorAll<HTMLButtonElement>(".el-view")) {
+      const mode = btn.dataset.view as ViewMode;
+      btn.addEventListener("click", () => this.selectView(mode));
+      this.viewButtons.set(mode, btn);
+    }
     this.overlay.querySelector(".el-zoom-in")!.addEventListener("click", () => this.zoomBy(1.25));
     this.overlay.querySelector(".el-zoom-out")!.addEventListener("click", () => this.zoomBy(0.8));
     this.overlay.querySelector(".el-fit")!.addEventListener("click", () => this.fitView());
@@ -184,6 +204,12 @@ export class ElectronicsModal {
 
   // ---- editing -------------------------------------------------------------
 
+  /** Switch between the two ways of showing (and cutting) the copper. */
+  private selectView(mode: ViewMode): void {
+    this.viewMode = mode;
+    this.render();
+  }
+
   private selectTool(tool: Tool): void {
     this.tool = tool;
     for (const [t, btn] of this.toolButtons) btn.classList.toggle("is-active", t === tool);
@@ -198,6 +224,7 @@ export class ElectronicsModal {
   /** Reflect active state on the toggle-ish toolbar buttons. */
   private syncButtons(): void {
     for (const [t, btn] of this.toolButtons) btn.classList.toggle("is-active", t === this.tool);
+    for (const [m, btn] of this.viewButtons) btn.classList.toggle("is-active", m === this.viewMode);
   }
 
   private onCanvasClick(e: MouseEvent): void {
@@ -240,14 +267,7 @@ export class ElectronicsModal {
       return;
     }
     const out = buildCopperSvgExport(this.fold, this.routed.traces, this.tapeW());
-    const url = URL.createObjectURL(new Blob([out.svg], { type: "image/svg+xml" }));
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = out.filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    this.download(out.filename, out.svg);
     const { pwr, gnd } = out.counts;
     const w = Math.round(out.widthMm * 100) / 100;
     let msg =
@@ -401,6 +421,10 @@ export class ElectronicsModal {
       const d = "M " + t.ring.map((p, k) => (k === 0 ? "" : "L ") + ptStr(this.tp(p))).join(" ") + " Z";
       parts.push(`<path d="${d}" class="el-tile" />`);
     }
+    // In carrier view, the frame and its tabs — the single piece of copper the traces arrive on.
+    if (this.viewMode === "carrier" && this.routed.traces.length) {
+      parts.push(...this.carrierParts());
+    }
     // Copper tape, under the components so the pads and terminals stay readable on top of it.
     for (const t of this.routed.traces) {
       const cls = t.net === "pwr" ? "el-tape el-tape-pwr" : "el-tape el-tape-gnd";
@@ -469,6 +493,80 @@ export class ElectronicsModal {
     }
     this.svg.innerHTML = parts.join("");
     this.renderStatus();
+  }
+
+  /** The carrier frame and its tabs, drawn in the preview's own coordinates.
+   *
+   *  Geometry comes from the export so the two cannot drift apart: the frame is 5mm outside the pattern's
+   *  bounding box and each trace is tabbed to the nearest edge. */
+  private carrierParts(): string[] {
+    if (!this.fold) return [];
+    const b = this.bounds;
+    const pad = 5; // mm — the export's frame buffer
+    const inner = { x0: b.minX, y0: b.minY, x1: b.maxX, y1: b.maxY };
+    const ring = (x0: number, y0: number, x1: number, y1: number): string => {
+      const c = [
+        this.tp({ x: x0, y: y0 }), this.tp({ x: x1, y: y0 }),
+        this.tp({ x: x1, y: y1 }), this.tp({ x: x0, y: y1 }),
+      ];
+      return "M " + c.map((p, i) => (i === 0 ? "" : "L ") + ptStr(p)).join(" ") + " Z";
+    };
+    const parts: string[] = [];
+    // The frame: outer ring plus the window as a hole, so it reads as a border rather than a filled sheet.
+    parts.push(
+      `<path d="${ring(inner.x0 - pad, inner.y0 - pad, inner.x1 + pad, inner.y1 + pad)} ` +
+        `${ring(inner.x0, inner.y0, inner.x1, inner.y1)}" class="el-carrier" fill-rule="evenodd" />`,
+    );
+    // One tab per run, to whichever edge is nearest — the same choice the export makes.
+    for (const t of this.routed.traces) {
+      let best: { p: Vec2; q: Vec2; d: number } | null = null;
+      for (const p of t.pts) {
+        const opts: [Vec2, number][] = [
+          [{ x: inner.x0 - pad, y: p.y }, p.x - inner.x0],
+          [{ x: inner.x1 + pad, y: p.y }, inner.x1 - p.x],
+          [{ x: p.x, y: inner.y0 - pad }, p.y - inner.y0],
+          [{ x: p.x, y: inner.y1 + pad }, inner.y1 - p.y],
+        ];
+        for (const [q, d] of opts) {
+          if (!best || d < best.d) best = { p, q, d };
+        }
+      }
+      if (!best) continue;
+      const a = this.tp(best.p), z = this.tp(best.q);
+      parts.push(
+        `<line x1="${fmt(a.x)}" y1="${fmt(a.y)}" x2="${fmt(z.x)}" y2="${fmt(z.y)}" ` +
+          `class="el-carrier-tab" stroke-width="${fmt(this.tapeW() * 0.35)}" />`,
+      );
+    }
+    return parts;
+  }
+
+  /** Download the carrier: one piece of copper with every trace held in place. */
+  private exportCarrier(): void {
+    if (!this.fold || !this.routed.traces.length) {
+      this.statusEl.textContent = "Nothing to export — place a battery and at least one LED first";
+      return;
+    }
+    const out = buildCopperCarrierExport(this.fold, this.routed.traces, this.tapeW());
+    this.download(out.filename, out.svg);
+    const w = Math.round(out.widthMm * 100) / 100;
+    let msg =
+      `Exported ${out.filename} — one frame holding ${out.counts.traces} trace` +
+      `${out.counts.traces === 1 ? "" : "s"}, ${out.counts.tabs} tab` +
+      `${out.counts.tabs === 1 ? "" : "s"} to snip, ${w}mm wide`;
+    if (out.tooNarrow) msg += " — too narrow to cut; scale the pattern up before cutting";
+    this.statusEl.textContent = msg;
+  }
+
+  private download(filename: string, svg: string): void {
+    const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   }
 
   /** Marker radius scaled to the pattern so it reads at any model size. */

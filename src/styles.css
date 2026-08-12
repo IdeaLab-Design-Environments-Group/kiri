@@ -759,6 +759,8 @@ body {
 .el-tool,
 .el-clear,
 .el-export,
+.el-export-carrier,
+.el-view,
 .el-zoom-in,
 .el-zoom-out,
 .el-fit {
@@ -781,9 +783,12 @@ body {
 .el-tool:hover,
 .el-clear:hover,
 .el-export:hover,
+.el-export-carrier:hover,
+.el-view:hover,
 .el-zoom-in:hover,
 .el-zoom-out:hover,
 .el-fit:hover { background: var(--surface-soft, #f3f5f9); border-color: #cdd3df; }
+.el-view.is-active,
 .el-tool.is-active {
   background: var(--accent-soft, #eef3ff);
   color: var(--accent-strong, #1741c4);
@@ -812,6 +817,9 @@ body {
 /* Tiles are fill-only so coplanar (F-edge) triangles merge into clean rigid panels — no internal
    triangulation lines. The pinched gaps read as the lighter cloth showing through between tiles. */
 .el-tile { fill: #b3b8c1; stroke: none; }
+/* The carrier frame: one piece of copper, its window the unfolded pattern, holding the traces on thin tabs. */
+.el-carrier { fill: #c9863f; fill-opacity: 0.3; stroke: #a8702f; stroke-width: 0.6; vector-effect: non-scaling-stroke; }
+.el-carrier-tab { stroke: #a8702f; stroke-opacity: 0.85; stroke-linecap: butt; }
 /* Copper tape, in the same PWR red / GND dark as the pads and the battery terminals it joins. Each segment
    is drawn separately with butt caps, so it reads as a rectangle of tape of the real width, and semi-
    transparent so overlapping strips of the same net stay legible. */
