@@ -820,10 +820,16 @@ body {
 /* The carrier frame: one piece of copper, its window the unfolded pattern, holding the traces on thin tabs. */
 .el-carrier { fill: #c9863f; fill-opacity: 0.3; stroke: #a8702f; stroke-width: 0.6; vector-effect: non-scaling-stroke; }
 .el-carrier-tab { stroke: #a8702f; stroke-opacity: 0.85; stroke-linecap: butt; }
-/* Copper tape, in the same PWR red / GND dark as the pads and the battery terminals it joins. Each segment
-   is drawn separately with butt caps, so it reads as a rectangle of tape of the real width, and semi-
-   transparent so overlapping strips of the same net stay legible. */
-.el-tape { fill: none; stroke-linecap: butt; stroke-linejoin: miter; opacity: 0.55; }
+/* Copper tape, in the same PWR red / GND dark as the pads and the battery terminals it joins. One path per run
+   with mitred joins, so a run reads as the single strip it is; square ends and semi-transparency so it still
+   reads as tape of a real width with overlaps visible. */
+.el-tape {
+  fill: none;
+  stroke-linecap: butt;
+  stroke-linejoin: miter;
+  stroke-miterlimit: 2;
+  opacity: 0.55;
+}
 .el-tape-pwr { stroke: #ff0000; }
 .el-tape-gnd { stroke: #222222; }
 /* Each LED = two distinct pads (PWR red +, GND dark −) bridged by an amber chip body. */

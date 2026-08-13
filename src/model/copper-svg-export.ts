@@ -18,6 +18,13 @@ import type { Trace2D } from "./electronics-routing.js";
 
 const MARGIN = 8; // mm — must match the FKLD SVG export or the layers import misaligned
 
+/** How far from a pad or terminal a tab must anchor, in tape widths.
+ *
+ *  A tape width clears the pad itself, which is about a third of that. Anything larger and short runs -- the
+ *  ones running only from one pad to the next -- have no point left to grip: at 1.6 widths, 7 of puffin's 15
+ *  runs were fully excluded and had to fall back onto a pad. At 1.0 it is 1. */
+const PAD_CLEAR = 1.0;
+
 /** Width of the carrier frame's border, outside the pattern window. */
 const FRAME_BUFFER = 5;
 
@@ -214,6 +221,14 @@ export interface CopperCarrierExport {
    * is worth knowing before cutting.
    */
   crossingTabs: number;
+  /**
+   * Tabs that had to grip a pad because the run had nowhere else to be gripped.
+   *
+   * Happens on a run shorter than a tape width or two between its two pads: every point on it is under a
+   * component. Such a tab is still better than leaving the trace loose in the window, but it sits where the LED
+   * goes and is snipped at the pad, so it is counted rather than passed off as clean.
+   */
+  padTabs: number;
   /** Tab centrelines in sheet coordinates, so a preview can draw exactly what will be cut. */
   tabPaths: Vec2[][];
   /** The frame's window and outer edge in sheet coordinates, likewise. */
@@ -242,6 +257,8 @@ export function buildCopperCarrierExport(
   traces: Trace2D[],
   tapeW: number,
   baseName = "kiri",
+  /** Pads and battery terminals, in flat coordinates. Tabs are kept off them. */
+  keepOff: Vec2[] = [],
 ): CopperCarrierExport {
   const { w, h, window: win, T } = sheetFrame(fold);
   const runs = traces.filter((t) => t.pts.length >= 2);
@@ -265,9 +282,14 @@ export function buildCopperCarrierExport(
     net: t.net,
     ring: densify(outlineStrip(t.pts, tapeW).map(T), tapeW),
   }));
+  // A tab must grip the trace, not the component. Anchoring on a pad puts the tab exactly where the LED sits
+  // and means snipping it cuts at the pad; the same goes for a battery terminal. Those spots are excluded, so a
+  // tab lands on the run's body.
+  const avoid = keepOff.map(T);
   const gaps: { side: Side; from: number; to: number }[] = [];
   let tabs = 0;
   let crossingTabs = 0;
+  let padTabs = 0;
   const tabPaths: Vec2[][] = [];
   rings.forEach(({ net, ring }, ri) => {
     if (ring.length < 3) return;
@@ -275,10 +297,11 @@ export function buildCopperCarrierExport(
     // overlap freely -- one net, one potential -- so treating them as obstacles left every candidate blocked,
     // which is why neither more anchors nor bent tabs changed anything.
     const others = rings.filter((r, i) => i !== ri && r.net !== net).map((r) => r.ring);
-    const choice = pickTab(ring, others, win, tapeW);
+    const choice = pickTab(ring, others, win, tapeW, avoid);
     if (!choice) return;
     const { index, side } = choice;
     if (!choice.clear) crossingTabs++;
+    if (choice.onComponent) padTabs++;
     tabPaths.push(choice.path);
     // Open the ring: drop the vertex the tab attaches at, so the trace stays joined to its tab.
     const open = ring.slice(index + 1).concat(ring.slice(0, index));
@@ -316,6 +339,7 @@ export function buildCopperCarrierExport(
       `viewBox="0 0 ${fmt(w)} ${fmt(h)}">\n${body}\n</svg>\n`,
     counts: { traces: runs.length, tabs },
     crossingTabs,
+    padTabs,
     tabPaths,
     frame: { window: win, outer: { x0: ox0, y0: oy0, x1: ox1, y1: oy1 } },
     widthMm: tapeW,
@@ -359,11 +383,16 @@ function pickTab(
   others: Vec2[][],
   win: Win,
   tapeW: number,
-): { index: number; side: Side; path: Vec2[]; clear: boolean } | null {
+  avoid: Vec2[],
+): { index: number; side: Side; path: Vec2[]; clear: boolean; onComponent: boolean } | null {
+  /** Whether a ring point is too close to a pad or terminal to tab onto. */
+  const onComponent = (p: Vec2): boolean =>
+    avoid.some((q) => Math.hypot(p.x - q.x, p.y - q.y) < tapeW * PAD_CLEAR);
   // Nine offsets is as good as twenty-four: measured identical, so the extra reach buys nothing.
   const SIDE_STEPS = [0, 1.5, -1.5, 3, -3, 5, -5, 8, -8];
   const candidates: { index: number; side: Side; step: number; reach: number }[] = [];
   ring.forEach((p, i) => {
+    if (onComponent(p)) return; // a pad or a terminal: grip the trace elsewhere
     const dist: [Side, number][] = [
       ["left", p.x - win.x0], ["right", win.x1 - p.x],
       ["top", p.y - win.y0], ["bottom", win.y1 - p.y],
@@ -375,6 +404,24 @@ function pickTab(
       }
     }
   });
+  let forcedOntoComponent = false;
+  if (!candidates.length) {
+    // Every point sits on a component (a very short run between two pads). Better held by a tab on a pad than
+    // left loose in the window, so try again without the exclusion — and say so.
+    forcedOntoComponent = true;
+    ring.forEach((p, i) => {
+      const dist: [Side, number][] = [
+        ["left", p.x - win.x0], ["right", win.x1 - p.x],
+        ["top", p.y - win.y0], ["bottom", win.y1 - p.y],
+      ];
+      for (const [side, d] of dist) {
+        if (d < 0) continue;
+        for (const step of SIDE_STEPS) {
+          candidates.push({ index: i, side, step, reach: d + Math.abs(step) * tapeW });
+        }
+      }
+    });
+  }
   candidates.sort((a, b) => a.reach - b.reach || a.index - b.index);
 
   let fallback: { index: number; side: Side; path: Vec2[] } | null = null;
@@ -393,9 +440,9 @@ function pickTab(
       }
       return false;
     });
-    if (!blocked) return { index: c.index, side: c.side, path, clear: true };
+    if (!blocked) return { index: c.index, side: c.side, path, clear: true, onComponent: forcedOntoComponent };
   }
-  return fallback ? { ...fallback, clear: false } : null;
+  return fallback ? { ...fallback, clear: false, onComponent: forcedOntoComponent } : null;
 }
 
 /** Whether the tab segment a-q comes within a tape width of any edge of `ring`. */
