@@ -779,9 +779,21 @@ function asTree(pts: Vec2[], net: "pwr" | "gnd", first: Vec2, required: Vec2[]):
       const chain: Vec2[] = [nodes.get(from)!];
       let at = from;
       for (;;) {
-        const next = adj.get(at)!.values().next();
-        if (next.done) break;
-        const to = next.value;
+        const options = [...adj.get(at)!];
+        if (!options.length) break;
+        // At a junction, carry straight on. Taking whichever branch came first made a strip turn a corner at
+        // every fork, so one continuous piece of tape read as a handful of fragments; the count of pieces is
+        // fixed by the tree's leaves, but which edges each piece is made of is not.
+        let to = options[0]!;
+        if (options.length > 1 && chain.length >= 2) {
+          const came = unit(sub(nodes.get(at)!, chain[chain.length - 2]!));
+          let bestDot = -Infinity;
+          for (const cand of options) {
+            const d = unit(sub(nodes.get(cand)!, nodes.get(at)!));
+            const dot = came.x * d.x + came.y * d.y;
+            if (dot > bestDot) { bestDot = dot; to = cand; }
+          }
+        }
         adj.get(at)!.delete(to);
         adj.get(to)!.delete(at);
         chain.push(nodes.get(to)!);

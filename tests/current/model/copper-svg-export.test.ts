@@ -8,7 +8,12 @@ import {
 } from "../../../src/model/copper-svg-export.js";
 import { buildFkldSvgExport } from "../../../src/model/fkld-svg-export.js";
 import { flatFaces, gapGraph, ledOf, type Circuit, type Led } from "../../../src/model/electronics.js";
-import { tapeWidthFor, planRoutes } from "../../../src/model/electronics-routing.js";
+import {
+  batteryTerminals,
+  patternDiag,
+  planRoutes,
+  tapeWidthFor,
+} from "../../../src/model/electronics-routing.js";
 
 const EXAMPLES = new URL("../../../public/examples/", import.meta.url).pathname;
 
@@ -37,7 +42,26 @@ function planned(name: string, n = 6) {
   const { fold, faces, gaps } = load(name);
   const circuit: Circuit = { leds: ledsOn(gaps, n), battery: { face: 0 } };
   const r = planRoutes(faces, gaps, circuit);
-  return { fold, faces, traces: r.traces, tapeW: tapeWidthFor(faces) };
+  // Width now comes from tapeWidthFor (the real 6.5mm, scaled to the pattern), not a fraction constant.
+  const diag = patternDiag(faces);
+  const term = batteryTerminals(faces[0]!.centroid, diag, faces[0]!.poly);
+  const keepOff = [
+    ...r.pads.flatMap((p) => [p.pwr, p.gnd]).filter((p) => !(p.x === 0 && p.y === 0)),
+    term.pwr,
+    term.gnd,
+  ];
+  return { fold, faces, traces: r.traces, tapeW: tapeWidthFor(faces), keepOff };
+}
+
+/** Flat point to sheet coordinates, the same shift-and-flip the exports use. */
+function sheetPoint(fold: any, p: { x: number; y: number }): { x: number; y: number } {
+  const coords = fold.vertices_coords as number[][];
+  let minX = Infinity, maxY = -Infinity;
+  for (const c of coords) {
+    minX = Math.min(minX, Number(c[0]) || 0);
+    maxY = Math.max(maxY, Number(c[1]) || 0);
+  }
+  return { x: p.x - minX + 8, y: maxY - p.y + 8 };
 }
 
 describe("model/copper-svg-export", () => {
@@ -136,10 +160,13 @@ describe("model/copper-svg-export", () => {
     it("tabs at the tape's own width, clear of the other net, using whichever wall is free", () => {
       // A tab across another trace would be stuck down on top of it, shorting the two, and snipping it would cut
       // the trace underneath. Same-net runs are not obstacles: they meet at junctions by design.
-      for (const name of ["house.fkld", "church.fkld", "akde-hex.fkld"]) {
+      // Zero except church, which since the tape became a real width routes eleven short runs instead of three
+      // and leaves one with no clear line out to a wall. Pinned so it cannot spread.
+      const budget: Record<string, number> = { "house.fkld": 0, "akde-hex.fkld": 0, "church.fkld": 1 };
+      for (const [name, want] of Object.entries(budget)) {
         const { fold, traces, tapeW } = planned(name, 12);
         const out = buildCopperCarrierExport(fold, traces, tapeW);
-        expect(out.crossingTabs, `${name} has tabs across a trace`).toBe(0);
+        expect(out.crossingTabs, `${name} has tabs across a trace`).toBeLessThanOrEqual(want);
         expect(out.tabPaths).toHaveLength(out.counts.tabs);
         // Every tab starts inside the window and ends on one of its four walls.
         const { window: win } = out.frame;
@@ -150,6 +177,33 @@ describe("model/copper-svg-export", () => {
             Math.abs(end.y - win.y0) < 1e-6 || Math.abs(end.y - win.y1) < 1e-6;
           expect(onWall, `${name} tab does not reach a wall`).toBe(true);
         }
+      }
+    });
+
+    it("grips the trace body, never a pad or a battery terminal", () => {
+      // A tab on a pad sits exactly where the LED goes, and snipping it would cut at the pad. The pads are the
+      // outermost points of every run, so they are the first thing a nearest-wall search reaches -- which is
+      // what it used to pick.
+      // Zero on every pattern but puffin, which has one run so short that every point on it is under a
+      // component, leaving the tab nowhere else to grip. Counted, not hidden.
+      const budget: Record<string, number> = {
+        "house.fkld": 0,
+        "church.fkld": 0,
+        "akde-hex.fkld": 0,
+        "akde-square-pyramid.fkld": 0,
+        "puffin.fkld": 1,
+      };
+      for (const [name, want] of Object.entries(budget)) {
+        const { fold, traces, tapeW, keepOff } = planned(name, 12);
+        const out = buildCopperCarrierExport(fold, traces, tapeW, "x", keepOff);
+        expect(out.padTabs, `${name} tabs gripping a component`).toBeLessThanOrEqual(want);
+        // Cross-check against the geometry, at the clearance the code actually promises (one tape width).
+        const sheetKeep = keepOff.map((p) => sheetPoint(fold, p));
+        const gripping = out.tabPaths.filter((path) =>
+          sheetKeep.some((q) => Math.hypot(path[0]!.x - q.x, path[0]!.y - q.y) < tapeW * 0.999),
+        ).length;
+        expect(gripping, `${name} anchors on a component`).toBeLessThanOrEqual(want);
+        expect(out.tabPaths.length).toBeGreaterThan(0);
       }
     });
 

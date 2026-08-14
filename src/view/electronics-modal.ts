@@ -434,15 +434,12 @@ export class ElectronicsModal {
     // Copper tape, under the components so the pads and terminals stay readable on top of it.
     for (const t of this.routed.traces) {
       const cls = t.net === "pwr" ? "el-tape el-tape-pwr" : "el-tape el-tape-gnd";
-      // Segment by segment rather than one polyline: butt caps then give each run square ends, so it reads
-      // as a rectangle of tape at its real width instead of a rounded line.
-      for (let k = 1; k < t.pts.length; k++) {
-        const a = this.tp(t.pts[k - 1]!);
-        const b = this.tp(t.pts[k]!);
-        parts.push(
-          `<path d="M ${ptStr(a)} L ${ptStr(b)}" class="${cls}" stroke-width="${fmt(this.tapeW())}" />`,
-        );
-      }
+      // One path per run, not one per segment. Drawing each segment separately gave every bend a seam, so a
+      // single continuous strip read as a row of loose rectangles -- which is what it is not: each run is one
+      // piece of tape, and the joins are mitred corners in it.
+      if (t.pts.length < 2) continue;
+      const d = "M " + t.pts.map((p, k) => (k === 0 ? "" : "L ") + ptStr(this.tp(p))).join(" ");
+      parts.push(`<path d="${d}" class="${cls}" stroke-width="${fmt(this.tapeW())}" />`);
     }
     // Each LED is two distinct pads straddling its hinge — a PWR (+) pad toward face `a` and a GND (−)
     // pad toward face `b` — bridged by the LED chip. An LED whose gap no longer exists has nowhere to
@@ -509,7 +506,7 @@ export class ElectronicsModal {
    *  needs no conversion. */
   private carrierParts(): string[] {
     if (!this.fold) return [];
-    const out = buildCopperCarrierExport(this.fold, this.routed.traces, this.tapeW());
+    const out = buildCopperCarrierExport(this.fold, this.routed.traces, this.tapeW(), "kiri", this.keepOff());
     const ring = (r: { x0: number; y0: number; x1: number; y1: number }): string => {
       const c = [
         { x: r.x0, y: r.y0 }, { x: r.x1, y: r.y0 }, { x: r.x1, y: r.y1 }, { x: r.x0, y: r.y1 },
@@ -528,19 +525,41 @@ export class ElectronicsModal {
     return parts;
   }
 
+  /** Pads and battery terminals — the spots a carrier tab must not grip, since a tab there sits under the
+   *  component and snipping it would cut at the pad. */
+  private keepOff(): Vec2[] {
+    const out: Vec2[] = [];
+    for (const p of this.routed.pads) {
+      if (!isZero(p.pwr)) out.push(p.pwr);
+      if (!isZero(p.gnd)) out.push(p.gnd);
+    }
+    const batt = this.circuit.battery;
+    const face = batt ? this.faces[batt.face] : null;
+    if (face) {
+      const t = this.defaultTerminals(face.centroid, face.poly);
+      out.push(t.pwr, t.gnd);
+    }
+    return out;
+  }
+
   /** Download the carrier: one piece of copper with every trace held in place. */
   private exportCarrier(): void {
     if (!this.fold || !this.routed.traces.length) {
       this.statusEl.textContent = "Nothing to export — place a battery and at least one LED first";
       return;
     }
-    const out = buildCopperCarrierExport(this.fold, this.routed.traces, this.tapeW());
+    const out = buildCopperCarrierExport(
+      this.fold, this.routed.traces, this.tapeW(), "kiri", this.keepOff(),
+    );
     this.download(out.filename, out.svg);
     const w = Math.round(out.widthMm * 100) / 100;
     let msg =
       `Exported ${out.filename} — one frame holding ${out.counts.traces} trace` +
       `${out.counts.traces === 1 ? "" : "s"}, ${out.counts.tabs} tab` +
       `${out.counts.tabs === 1 ? "" : "s"} to snip, ${w}mm wide`;
+    if (out.padTabs > 0) {
+      msg += ` — ${out.padTabs} tab${out.padTabs === 1 ? "" : "s"} grip a pad (run too short to grip elsewhere)`;
+    }
     if (out.crossingTabs > 0) {
       msg += ` — warning: ${out.crossingTabs} tab${out.crossingTabs === 1 ? "" : "s"} cross another trace`;
     }
