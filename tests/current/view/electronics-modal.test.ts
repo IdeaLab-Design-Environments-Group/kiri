@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { ElectronicsModal } from "../../../src/view/electronics-modal.js";
 import type { FoldFile } from "../../../src/model/fold-file.js";
+import { flatFaces } from "../../../src/model/electronics.js";
+import { batteryTerminals, patternDiag, tapeWidthFor } from "../../../src/model/electronics-routing.js";
 import { installDom } from "./mock-dom.js";
 
 /** A 2x2 grid of unit quads: four faces, hinges between neighbours. */
@@ -67,6 +69,43 @@ describe("view/electronics-modal", () => {
     expect(modal.svg.innerHTML).not.toBe(before);
     expect(modal.svg.innerHTML).toContain("el-batt-pwr");
     expect(modal.svg.innerHTML).toContain("el-batt-gnd");
+  });
+
+  it("draws the battery pads where the router put them, not at some other tape width", () => {
+    // The pad spacing is derived from the tape width, so drawing them at a different width from the one the
+    // router planned with puts the two squares somewhere the copper never goes. With the width read off the
+    // pattern (a scale-less pattern is taken as a 130mm sheet) the bare default was several pattern-widths
+    // too wide, and both squares landed outside the drawn sheet entirely — copper on screen, no battery.
+    const fold = grid2x2();
+    const { modal } = openOn(fold);
+    modal.selectTool("battery");
+    tapFlat(modal, { x: 0.5, y: 0.5 });
+
+    const rects = [...(modal.svg.innerHTML as string).matchAll(
+      /<rect x="([\d.-]+)" y="([\d.-]+)" width="([\d.-]+)" height="([\d.-]+)"[^>]*class="el-batt /g,
+    )].map((m) => ({ x: Number(m[1]) + Number(m[3]) / 2, y: Number(m[2]) + Number(m[4]) / 2 }));
+    expect(rects).toHaveLength(2);
+
+    // Same separation as the router's own terminals — the transform to sheet coords is a flip plus a
+    // translation, so distance is preserved and no coordinate mapping is needed here.
+    const faces = flatFaces(fold);
+    const term = batteryTerminals(faces[0]!.centroid, patternDiag(faces), faces[0]!.poly, tapeWidthFor(faces));
+    const want = Math.hypot(term.pwr.x - term.gnd.x, term.pwr.y - term.gnd.y);
+    const got = Math.hypot(rects[0]!.x - rects[1]!.x, rects[0]!.y - rects[1]!.y);
+    // The markup is written through fmt(), which rounds to 3 decimals, so compare at that precision. The
+    // regression this guards against is a ~36x discrepancy, nowhere near the rounding floor.
+    expect(Math.abs(got - want), `pad spacing ${got} vs router ${want}`).toBeLessThan(2e-3);
+
+    // And both are on the sheet, which is what actually failed on screen.
+    const MARGIN = 8;
+    const b = modal.bounds;
+    const w = b.maxX - b.minX + 2 * MARGIN, h = b.maxY - b.minY + 2 * MARGIN;
+    for (const r of rects) {
+      expect(r.x, "battery pad off the sheet in x").toBeGreaterThanOrEqual(0);
+      expect(r.x, "battery pad off the sheet in x").toBeLessThanOrEqual(w);
+      expect(r.y, "battery pad off the sheet in y").toBeGreaterThanOrEqual(0);
+      expect(r.y, "battery pad off the sheet in y").toBeLessThanOrEqual(h);
+    }
   });
 
   it("draws a placed LED's two pads immediately", () => {

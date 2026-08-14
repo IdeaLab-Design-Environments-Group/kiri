@@ -26,7 +26,7 @@ const FRAME_BUFFER = 5;
 /** Below this the strips are not worth cutting: a blade will not track it and copper tape is not sold that
  *  narrow. Reported rather than silently widened, since widening would break registration with the preview
  *  and could make separate strips touch. */
-const MIN_CUTTABLE_MM = 1.5;
+const MIN_CUTTABLE_MM = 6.5;
 
 /** Cut colours. Distinct so a cutter treats each net as its own layer. */
 const PWR_FILL = "#ff0000";

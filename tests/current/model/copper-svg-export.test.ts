@@ -8,7 +8,7 @@ import {
 } from "../../../src/model/copper-svg-export.js";
 import { buildFkldSvgExport } from "../../../src/model/fkld-svg-export.js";
 import { flatFaces, gapGraph, ledOf, type Circuit, type Led } from "../../../src/model/electronics.js";
-import { TAPE_FRAC, patternDiag, planRoutes } from "../../../src/model/electronics-routing.js";
+import { tapeWidthFor, planRoutes } from "../../../src/model/electronics-routing.js";
 
 const EXAMPLES = new URL("../../../public/examples/", import.meta.url).pathname;
 
@@ -37,7 +37,7 @@ function planned(name: string, n = 6) {
   const { fold, faces, gaps } = load(name);
   const circuit: Circuit = { leds: ledsOn(gaps, n), battery: { face: 0 } };
   const r = planRoutes(faces, gaps, circuit);
-  return { fold, faces, traces: r.traces, tapeW: patternDiag(faces) * TAPE_FRAC };
+  return { fold, faces, traces: r.traces, tapeW: tapeWidthFor(faces) };
 }
 
 describe("model/copper-svg-export", () => {
@@ -93,9 +93,9 @@ describe("model/copper-svg-export", () => {
     expect(outSmall.tooNarrow).toBe(true);
 
     // The same pattern at a real scale is fine.
-    const outReal = buildCopperSvgExport(small.fold, small.traces, 5);
+    const outReal = buildCopperSvgExport(small.fold, small.traces, 8);
     expect(outReal.tooNarrow).toBe(false);
-    expect(outReal.widthMm).toBe(5);
+    expect(outReal.widthMm).toBe(8);
   });
 
   it("produces nothing to cut when nothing is planned", () => {
@@ -182,7 +182,7 @@ describe("model/copper-svg-export", () => {
       const out = buildCopperCarrierExport(fold, traces, tapeW, "puffin");
       expect(out.filename).toBe("puffin-copper-carrier.svg");
       expect(out.tooNarrow).toBe(true); // church is 19mm across
-      expect(buildCopperCarrierExport(fold, traces, 5).tooNarrow).toBe(false);
+      expect(buildCopperCarrierExport(fold, traces, 8).tooNarrow).toBe(false);
     });
   });
 
