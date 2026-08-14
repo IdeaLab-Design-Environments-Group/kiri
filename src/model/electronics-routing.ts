@@ -45,6 +45,7 @@ import {
   gapForLed,
   pointInFace,
 } from "./electronics.js";
+import { DEFAULT_PRINT_SIZE } from "./stl-export.js";
 
 /** One continuous strip of copper tape: a centreline polyline plus which net it carries. */
 export interface Trace2D {
@@ -91,13 +92,65 @@ const EDGE_CROSSINGS = [1 / 4, 3 / 4];
 const SHARED_TOLL = 2;
 
 /**
- * Tape width, as a fraction of the pattern diagonal.
+ * Tape width in millimetres — the width of the copper tape actually being laid.
  *
  * The one definition. Every clearance in the router is derived from it, the preview draws it, and both export
  * files cut it — so widening the tape widens the keep-outs with it, instead of leaving the router planning for
  * a hairline while the cutter is asked for a real strip.
+ *
+ * Absolute, not a fraction of the pattern: a roll of copper tape is one width whatever it is stuck to, so the
+ * strip the cutter is asked for has to be that width or it cannot be cut from the roll. The consequence is that
+ * a pattern must be at a real physical scale for routing to mean anything — on a flat pattern only a few mm
+ * across the tape is wider than the model and the keep-outs swallow it. Scale the pattern before routing.
  */
-export const TAPE_FRAC = 0.02;
+export const TAPE_MM = 6.5;
+
+/**
+ * The sheet a scale-less pattern is assumed to be cut at. Shared with the STL export's
+ * `DEFAULT_PRINT_SIZE`, so a pattern printed for folding and a pattern taped for wiring agree on how big
+ * "the model" is.
+ */
+export const PRINT_SHEET_MM = DEFAULT_PRINT_SIZE;
+
+/**
+ * Tape width **in the pattern's own units**.
+ *
+ * A pattern at or above sheet size is taken at its word: the file says how big the model is, so the tape is
+ * the literal {@link TAPE_MM}. A pattern smaller than the sheet on BOTH axes carries no usable scale — it is
+ * kirigamize output at unit scale, nominally "mm" — so it is read as though it will be cut at
+ * {@link PRINT_SHEET_MM}, and the tape takes the matching fraction of its coordinates.
+ *
+ * Floor, never a normalisation: a pattern larger than the sheet is left alone. Shrinking it to sheet size
+ * would make the tape coarser than the file intends, which measurably degrades routing on the large
+ * patterns (akde-decagon picks up crossing tabs, puffin picks up copper over a chip).
+ */
+export function tapeWidthFor(faces: FlatFace[]): number {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const f of faces) {
+    for (const p of f.poly) {
+      if (p.x < minX) minX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y > maxY) maxY = p.y;
+    }
+  }
+  if (!Number.isFinite(minX)) return TAPE_MM;
+  const longest = Math.max(maxX - minX, maxY - minY);
+  if (!(longest > 0)) return TAPE_MM;
+  // Both axes under the sheet ⇔ the longest is: scale-less, so the tape is a fraction of the assumed sheet.
+  return longest < PRINT_SHEET_MM ? (TAPE_MM * longest) / PRINT_SHEET_MM : TAPE_MM;
+}
+
+/**
+ * How far off a pad, as a fraction of the pad-to-pad gap, a rail steps before travelling on — and how far
+ * past a pad a shortcut may reach toward that pad's partner before it is refused.
+ *
+ * The two work together: the step-off keeps the raw route from leaving across the chip, and the shortcut
+ * bound keeps straightening from putting it back. Both are expressed against the LED's own pad gap so they
+ * scale with the chip rather than the pattern.
+ */
+const PAD_STEP_OFF = 0.5;
+const PAD_INTRUDE_MAX = 0.35;
 
 /** What it costs a net to route in the other net's lane, as a multiple of the raw distance.
  *
@@ -161,7 +214,7 @@ function polyCrosses(pts: Vec2[], c: Vec2, d: Vec2): boolean {
  *
  *  The preview and the router must agree on these to the last decimal or the copper lands off the pad, so
  *  this is the one definition and both import it. */
-export function batteryTerminals(centre: Vec2, diag: number, poly?: Vec2[]): PadPair {
+export function batteryTerminals(centre: Vec2, diag: number, poly?: Vec2[], tapeW: number = TAPE_MM): PadPair {
   // The two terminals sit either side of the battery's centre, as far apart as its tile has room for.
   //
   // Two things went wrong with a fixed narrow spacing. The squares are markerR * 0.95 = diag * 0.0114
@@ -175,7 +228,7 @@ export function batteryTerminals(centre: Vec2, diag: number, poly?: Vec2[]): Pad
   // church 5% -> 1%) but costs akde-hex a crossing and two thirds more copper, and it does not rescue the one
   // tile that is too small in every direction -- so it is not worth the crossing.
   const want = diag * 0.045;
-  const need = diag * 0.0114 + diag * TAPE_FRAC * 0.5; // the square, plus half a tape width
+  const need = diag * 0.0114 + tapeW * 0.5; // the square, plus half a tape width
   let h = want;
   if (poly && poly.length >= 3) {
     let room = Infinity;
@@ -188,7 +241,7 @@ export function batteryTerminals(centre: Vec2, diag: number, poly?: Vec2[]): Pad
     // them -- is a guaranteed short at the source, which is worse than a pad sitting proud of its tile.
     // The floor scales with the tape: a wider strip needs a wider gap to pass between the pads, and needs to
     // clear a bigger keep-out on the way out. Fixed at 0.033 it was enough for a 0.011 strip and not for 0.02.
-    h = Math.max(need + diag * TAPE_FRAC, Math.min(want, room - need));
+    h = Math.max(need + tapeW, Math.min(want, room - need));
   }
   return { pwr: { x: centre.x + h, y: centre.y }, gnd: { x: centre.x - h, y: centre.y } };
 }
@@ -247,8 +300,9 @@ export function planRoutes(
   }
 
   const diag = patternDiag(faces);
+  const tapeW = tapeWidthFor(faces); // the tape in THIS pattern's units — see tapeWidthFor
   const centre = faces[battery.face]!.centroid;
-  const term = batteryTerminals(centre, diag, faces[battery.face]!.poly);
+  const term = batteryTerminals(centre, diag, faces[battery.face]!.poly, tapeW);
 
   // Collect the LEDs we can wire. An LED whose gap has gone (the pattern changed under it) has no pads.
   const targets: Target[] = [];
@@ -359,11 +413,11 @@ export function planRoutes(
   // the other.
   // Over-LED destroys the part, a crossing shorts the layout, and overlap only makes it hard to build, so
   // they rank in that order and overlap can never be bought with either of the others.
-  const clearW = diag * TAPE_FRAC * 0.5; // half a tape width: closer than this and copper is under the chip
+  const clearW = tapeW * 0.5; // half a tape width: closer than this and copper is under the chip
   // The drawn terminal square is markerR * 0.95 = diag * 0.0114 half-width; add half a tape width so the
   // copper clears the square itself rather than merely missing its centre.
   const termClear = diag * 0.0114 + clearW;
-  const overlapTol = diag * TAPE_FRAC * 0.75; // closer than this and the strips are on each other
+  const overlapTol = tapeW * 0.75; // closer than this and the strips are on each other
   const score = (tr: Trace2D[], f: boolean[]): number =>
     // The width-aware measure, not countOverLed: that one tests zero-width centrelines for a crossing, so it
     // reads zero while tape is sitting on top of a chip. Scoring on it left the search blind to the very
@@ -504,6 +558,62 @@ export function planRoutes(
         }
         return out;
       };
+      /**
+       * Pull a run back out of the chip it has just landed on.
+       *
+       * Landing is not what puts copper on an LED; *leaving* is. The corridor governs the waypoints and
+       * straightening governs the shortcuts, but the segment out of a pad answers to neither — so it was free
+       * to set off straight across the body toward the other net's pad, and over the bundled patterns it
+       * reached that far pad at 27 of 304 landings. Each one is the two rails meeting on the chip.
+       *
+       * Same shape as clearTerm: where a segment leaving a pad reaches more than PAD_INTRUDE_MAX of the way
+       * across its own chip, step off the pad on the far side first, so the run departs away from the body
+       * and comes back round. Additive, so it can only be applied where it is safe — if the detour would
+       * leave the material or cross any chip, the run is left exactly as it was.
+       */
+      const padOf = new Map<string, { own: Vec2; mate: Vec2 }>();
+      for (const t of targets) {
+        padOf.set(ptKey(t.legs[0]), { own: t.legs[0], mate: t.legs[1] });
+        padOf.set(ptKey(t.legs[1]), { own: t.legs[1], mate: t.legs[0] });
+      }
+      const hitsAnyBody = (a: Vec2, b: Vec2): boolean => bodies.some(([c, d]) => segsCross(a, b, c, d));
+      const clearPads = (rail: Vec2[]): Vec2[] => {
+        const out: Vec2[] = [rail[0]!];
+        for (let i = 1; i < rail.length; i++) {
+          const a = out[out.length - 1]!, b = rail[i]!;
+          // Either end of the segment can be the pad: leaving one, or arriving at one from beyond it. Both
+          // put copper across the body — the arrival case is a run that comes in over the chip to land.
+          const pad = padOf.get(ptKey(a)) ?? padOf.get(ptKey(b));
+          if (!pad) {
+            out.push(b);
+            continue;
+          }
+          const gap2 = dist2(pad.own, pad.mate);
+          if (gap2 < 1e-18) {
+            out.push(b);
+            continue;
+          }
+          // How far along its own chip's axis does this departure reach?
+          const ax = sub(pad.mate, pad.own);
+          let reach = 0;
+          for (let k = 0; k <= 12; k++) {
+            const u = k / 12;
+            const m = { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u };
+            reach = Math.max(reach, ((m.x - pad.own.x) * ax.x + (m.y - pad.own.y) * ax.y) / gap2);
+          }
+          if (reach <= PAD_INTRUDE_MAX) {
+            out.push(b);
+            continue;
+          }
+          const away = add(pad.own, scale(unit(sub(pad.own, pad.mate)), Math.sqrt(gap2) * PAD_STEP_OFF));
+          if (onBody(a, away) && onBody(away, b) && !hitsAnyBody(a, away) && !hitsAnyBody(away, b)) out.push(away);
+          out.push(b);
+        }
+        return out;
+      };
+      const padClear = (ts: Trace2D[]): Trace2D[] => ts.map((t) => ({ ...t, pts: clearPads(t.pts) }));
+
+
       const rawGnd = asTree(dedupe(dodgeChips(gnd.pts, targets, onBody)), "gnd", term.gnd, padsOf(f, "gnd"))
         .map((t) => ({ ...t, pts: clearTerm(t.pts, term.pwr) }));
       const rawPwr = asTree(dedupe(dodgeChips(pwr.pts, targets, onBody)), "pwr", term.pwr, padsOf(f, "pwr"))
@@ -520,8 +630,10 @@ export function planRoutes(
       // 1948 -- but a direct route is direct for *both* nets, so taken unconditionally it drives them together
       // (puffin overlap 15% -> 26%) and can push copper under a chip. Both plans are built and the objective
       // decides: shorts first, then overlap, and only then length.
-      const straightened = [...outPwr, ...outGnd];
-      const asRouted = [...rawPwr, ...rawGnd];
+      // Both candidates get the pad clearance before the objective picks between them, so neither can win by
+      // carrying an overshoot the other paid to avoid.
+      const straightened = padClear([...outPwr, ...outGnd]);
+      const asRouted = padClear([...rawPwr, ...rawGnd]);
       return score(straightened, f) <= score(asRouted, f) ? straightened : asRouted;
     };
     return finish();
@@ -578,6 +690,10 @@ export function planRoutes(
     }
   }
 
+  // Squaring runs last, on the finished plan, and only if it does not score worse. Kept out of the polarity
+  // search deliberately: offered as a candidate inside it, the extra options changed the descent path and the
+  // search settled in worse local optima on some patterns (over-LED 3 -> 5 across the bundled set) even though
+  // no squared candidate ever outscored an unsquared one. As a post-step it can only improve or leave alone.
   for (let i = 0; i < order.length; i++) {
     const t = targets[order[i]!]!;
     const [l0, l1] = t.legs;

@@ -15,7 +15,7 @@ import {
   countUnderLed,
   countUnderTerminal,
   overlapLength,
-  TAPE_FRAC,
+  tapeWidthFor,
   patternDiag,
   planRoutes,
   segsCross,
@@ -74,7 +74,7 @@ describe("model/electronics-routing", () => {
   it("starts each net on its own battery terminal", () => {
     const { faces, gaps } = load("house.fkld");
     const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 6), battery: { face: 0 } });
-    const term = batteryTerminals(faces[0]!.centroid, patternDiag(faces), faces[0]!.poly);
+    const term = batteryTerminals(faces[0]!.centroid, patternDiag(faces), faces[0]!.poly, tapeWidthFor(faces));
     // The supply run for each net starts at that net's own terminal.
     const pwr = r.traces.find((t) => t.net === "pwr")!;
     const gnd = r.traces.find((t) => t.net === "gnd")!;
@@ -153,7 +153,7 @@ describe("model/electronics-routing", () => {
       const { faces, gaps } = load(name);
       const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 12), battery: { face: 0 } });
       const diag = patternDiag(faces);
-      const term = batteryTerminals(faces[0]!.centroid, diag, faces[0]!.poly);
+      const term = batteryTerminals(faces[0]!.centroid, diag, faces[0]!.poly, tapeWidthFor(faces));
       // The battery's own neighbourhood is excluded. Its terminals are held far enough apart for a strip to pass
       // between them, which on a small tile puts them proud of it -- deliberately, since a cell that size
       // overhangs the tile physically too. Everything away from the battery must still be on material.
@@ -196,7 +196,7 @@ describe("model/electronics-routing", () => {
     for (const name of models) {
       const { faces, gaps } = load(name);
       const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 12), battery: { face: 0 } });
-      const tapeW = patternDiag(faces) * TAPE_FRAC; // the width the router, preview and cutter all use
+      const tapeW = tapeWidthFor(faces); // the width the router, preview and cutter all use
       expect(countUnderLed(r.traces, r.pads, tapeW * 0.5, tapeW * 0.6), name).toBe(0);
       expect(countOverLed(r.traces, r.pads), name).toBe(0);
     }
@@ -243,7 +243,7 @@ describe("model/electronics-routing", () => {
     for (const name of ["house.fkld", "puffin.fkld", "akde-hex.fkld"]) {
       const { faces, gaps } = load(name);
       const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 12), battery: { face: 0 } });
-      const term = batteryTerminals(faces[0]!.centroid, patternDiag(faces), faces[0]!.poly);
+      const term = batteryTerminals(faces[0]!.centroid, patternDiag(faces), faces[0]!.poly, tapeWidthFor(faces));
       for (const net of ["pwr", "gnd"] as const) {
         const adj = new Map<string, Set<string>>();
         const add = (a: string, b: string): void => {
@@ -288,14 +288,17 @@ describe("model/electronics-routing", () => {
       "akde-hex.fkld": 0,
       "akde-square-pyramid.fkld": 0,
       "puffin.fkld": 0,
-      "church.fkld": 1,
+      // Was 1: church's own tile could not absorb the sidestep while the tape was a fixed 6.5 units on a
+      // 4.6-unit pattern. Reading it as a 130mm sheet puts the tape back in proportion and the sidestep fits,
+      // so every bundled pattern is now clean. Pinned at 0 so it cannot come back.
+      "church.fkld": 0,
     };
     for (const [name, want] of Object.entries(budget)) {
       const { faces, gaps } = load(name);
       const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 12), battery: { face: 0 } });
       const diag = patternDiag(faces);
-      const term = batteryTerminals(faces[0]!.centroid, diag, faces[0]!.poly);
-      expect(countUnderTerminal(r.traces, term, diag * 0.0114 + diag * TAPE_FRAC * 0.5), name).toBe(want);
+      const term = batteryTerminals(faces[0]!.centroid, diag, faces[0]!.poly, tapeWidthFor(faces));
+      expect(countUnderTerminal(r.traces, term, diag * 0.0114 + tapeWidthFor(faces) * 0.5), name).toBe(want);
     }
   });
 
@@ -304,9 +307,9 @@ describe("model/electronics-routing", () => {
     for (const name of ["house.fkld", "church.fkld", "akde-hex.fkld", "puffin.fkld"]) {
       const { faces } = load(name);
       const diag = patternDiag(faces);
-      const term = batteryTerminals(faces[0]!.centroid, diag, faces[0]!.poly);
+      const term = batteryTerminals(faces[0]!.centroid, diag, faces[0]!.poly, tapeWidthFor(faces));
       const gap = Math.hypot(term.pwr.x - term.gnd.x, term.pwr.y - term.gnd.y) - 2 * diag * 0.0114;
-      expect(gap, `${name} terminal gap`).toBeGreaterThan(diag * TAPE_FRAC);
+      expect(gap, `${name} terminal gap`).toBeGreaterThan(tapeWidthFor(faces));
     }
   });
 
@@ -347,7 +350,12 @@ describe("model/electronics-routing", () => {
     // tolerance relative to the pattern does change with scale, and the straightening pass can then take a
     // slightly different set of shortcuts. Exact equivariance would need node identity keyed on edge ids
     // rather than positions.
-    expect(Math.abs(totalLength(r2.traces) / totalLength(r1.traces) / k - 1)).toBeLessThan(0.05);
+    // Widened from 0.05 to 0.08 when the pad-clearance pass landed. That pass adds a vertex beside each pad,
+    // and every one of them is subject to the ptKey effect above, so the drift it already tolerated got
+    // bigger: this pattern measures 0.038 without the pass and 0.065 with it. The invariant the test exists
+    // for is intact — the pass's own thresholds are fractions of the LED's pad gap, so there is still no
+    // absolute-mm term. Tighten this back if node identity is ever keyed on edge ids.
+    expect(Math.abs(totalLength(r2.traces) / totalLength(r1.traces) / k - 1)).toBeLessThan(0.08);
   });
 
   describe("segsCross", () => {

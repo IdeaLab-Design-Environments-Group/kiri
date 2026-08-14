@@ -30,7 +30,7 @@ import { buildCopperCarrierExport, buildCopperSvgExport } from "../model/copper-
 import {
   type RoutedCircuit,
   EMPTY_ROUTE,
-  TAPE_FRAC,
+  tapeWidthFor,
   batteryTerminals,
   planRoutes,
 } from "../model/electronics-routing.js";
@@ -585,12 +585,15 @@ export class ElectronicsModal {
 
   /** The battery's two terminals. Shared with the router so the copper lands on the drawn squares. */
   private defaultTerminals(c: Vec2, poly?: Vec2[]): { pwr: Vec2; gnd: Vec2 } {
-    return batteryTerminals(c, this.diag(), poly);
+    // The tape width MUST be the router's, not the default: the terminal spacing is derived from it, so a
+    // different width here draws the two pads somewhere the copper never goes. On a pattern read as a 130mm
+    // sheet the default 6.5 put them several pattern-widths off the tile — off-canvas entirely.
+    return batteryTerminals(c, this.diag(), poly, this.tapeW());
   }
 
   /** Tape width. Shared with the router, so the strips drawn are the strips it planned clearances for. */
   private tapeW(): number {
-    return this.diag() * TAPE_FRAC;
+    return tapeWidthFor(this.faces);
   }
 
   private diag(): number {
