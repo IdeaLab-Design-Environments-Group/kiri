@@ -507,7 +507,19 @@ export function planRoutes(
     return true;
   };
 
-  const build = (f: boolean[]): Trace2D[] => {
+  // Tours are memoised on the pads they order. The descent flips one LED at a time and revisits the same
+  // assignments repeatedly, and a 2-opt per net per build is what made a plan take 1.9s.
+  const tourCache = new Map<string, number[]>();
+  const cachedTour = (from: Vec2, pts: Vec2[]): number[] => {
+    const key = `${ptKey(from)}|${pts.map(ptKey).join(",")}`;
+    const hit = tourCache.get(key);
+    if (hit) return hit;
+    const made = tourOf(from, pts);
+    tourCache.set(key, made);
+    return made;
+  };
+
+  const build = (f: boolean[], perNetOrder = false): Trace2D[] => {
     // What the first net routed. The second pays a toll to reuse it, which now buys a different chord rather
     // than the same one dearer, because a face has many ways through.
     /** Route one net, charging a toll for every waypoint in `avoid` (what the other net currently uses).
@@ -528,7 +540,7 @@ export function planRoutes(
         const swap = net === "pwr" ? f[i]! : !f[i]!;
         return swap ? t.legs[1] : t.legs[0];
       });
-      const own = perNet ? tourOf(mineFirst, myPads) : order.map((_, k) => k);
+      const own = perNet ? cachedTour(mineFirst, myPads) : order.map((_, k) => k);
       const seq = rev ? own.slice().reverse() : own;
       const pick = (i: number): { pad: Vec2; face: number } => {
         const t = targets[order[i]!]!;
@@ -543,8 +555,11 @@ export function planRoutes(
       // toll keeps the *nodes* clear of the other terminal, and straightening keeps shortcuts clear of it, but
       // neither governs the very first segment out of the pad -- which is free to sweep straight across its
       // neighbour, shorting the battery. Leaving on the far side removes that.
-      const away = add(mine, scale(unit(sub(mine, forbidden)), termClear * 0.9));
-      if (onBody(mine, away)) out.push(away);
+      // Held back until it is known to be needed: `escape` is spliced in below only if the run's first real
+      // segment would otherwise sweep the other terminal. Pushing it unconditionally put a sideways stub on
+      // every net -- GND's pointing away from PWR, which is a jog to the left for no reason -- and left a wedge
+      // at the pad where the run should meet it square.
+      const escape = add(mine, scale(unit(sub(mine, forbidden)), termClear * 0.9));
       const used = new Map<string, number>();
       let fromFace = battery.face;
       for (const i of seq) {
@@ -566,15 +581,21 @@ export function planRoutes(
         for (const [k, p] of corridor.point) {
           if (Math.sqrt(dist2(p, forbidden)) < termClear) toll.set(k, (toll.get(k) ?? 0) + TERMINAL_TOLL);
         }
+        // The origin is wherever this hop actually starts: the terminal for the first, the last pad after that.
+        const origin = out.length ? out[out.length - 1]! : mine;
         for (const p of corridorPath(corridor, fromFace, face, blocked, toll, {
           at: forbidden,
           r: termClear,
-        })) {
+        }, origin, onBody)) {
           out.push(p);
           used.set(ptKey(p), (used.get(ptKey(p)) ?? 0) + 1);
         }
         out.push(pad);
         fromFace = face;
+      }
+      // Now decide: does leaving the pad actually cross the other terminal?
+      if (out.length >= 2 && segPointDist(out[0]!, out[1]!, forbidden) < termClear && onBody(mine, escape)) {
+        out.splice(1, 0, escape);
       }
       return { pts: out, used };
     };
@@ -730,11 +751,11 @@ export function planRoutes(
         .map((t) => ({ ...t, pts: clearChips(clearTerm(t.pts, term.gnd), "pwr", f) }));
       const outPwr = straighten(
         rawPwr, [...keepPwr, ...junctions(rawPwr)], bodies, onBody, rawGnd, clearW, overlapTol,
-        term.gnd, termClear,
+        term.gnd, termClear, [term.pwr, term.gnd], termClear * 2.5,
       );
       const outGnd = straighten(
         rawGnd, [...keepGnd, ...junctions(rawGnd)], bodies, onBody, outPwr, clearW, overlapTol,
-        term.pwr, termClear,
+        term.pwr, termClear, [term.pwr, term.gnd], termClear * 2.5,
       );
       // Straightening is only worth having where it is free. It shortens runs a lot -- akde-decagon 2967 ->
       // 1948 -- but a direct route is direct for *both* nets, so taken unconditionally it drives them together
@@ -751,6 +772,11 @@ export function planRoutes(
     // across itself to reach a pad it could have taken in sequence (akde-square's repeated tape 29% -> 21% of
     // its length, a third less copper) but lets the two wander apart -- akde-decagon's repeated tape goes the
     // other way, 5% -> 22%, and puffin picks up crossings. Neither wins everywhere, so the score decides.
+    if (perNetOrder) return finish(routeBoth(true));
+    // Both visiting orders, judged by the same objective: shared walks the nets through the hinges in step and
+    // keeps them parallel, per-net orders each net's own pads and stops it zigzagging across itself. Neither
+    // wins everywhere -- akde-hex needs per-net (its repeated tape is 42% without it), akde-decagon needs
+    // shared -- so the score decides.
     const shared = finish(routeBoth(false));
     const perNet = finish(routeBoth(true));
     return score(perNet, f) < score(shared, f) ? perNet : shared;
@@ -967,6 +993,8 @@ function straighten(
   apart: number,
   forbidden: Vec2,
   forbiddenClear: number,
+  terminals: [Vec2, Vec2],
+  near: number,
 ): Trace2D[] {
   const anchors = new Set(keep.map(ptKey));
   const legal = (a: Vec2, b: Vec2): boolean => {
@@ -990,13 +1018,21 @@ function straighten(
         if (segPointDist(c, d, m) < clear) return false;
       }
     }
+    // Right at the battery the two nets are unavoidably close: their pads sit about a strip and a half apart, so
+    // every departure fails the separation rule below and the run is left with a hard turn the moment it leaves
+    // the pad. Near the terminals only crossing is forbidden, not proximity.
+    const nearBattery =
+      len(sub(a, terminals[0])) < near || len(sub(a, terminals[1])) < near ||
+      len(sub(b, terminals[0])) < near || len(sub(b, terminals[1])) < near;
+
     // Keep clear of the other net, not merely uncrossed. Directness and separation pull against each other --
     // the shortest route between the same two regions is much the same for both nets, so straightening both
     // makes them parallel. A shortcut is therefore only taken where it does not come within a tape width of
     // the other net: the run stays bent exactly where being direct would mean shadowing.
     for (const o of others) {
       for (let i = 1; i < o.pts.length; i++) {
-        if (segNearSeg(a, b, o.pts[i - 1]!, o.pts[i]!) < apart) return false;
+        const gap = segNearSeg(a, b, o.pts[i - 1]!, o.pts[i]!);
+        if (nearBattery ? gap <= 0 : gap < apart) return false;
       }
     }
     return true;
@@ -1079,8 +1115,11 @@ function chordInside(f: FlatFace, a: Vec2, b: Vec2, faces: FlatFace[], tapeW: nu
   const half = tapeW * 0.5;
   const nx = L < 1e-12 ? 0 : (-(b.y - a.y) / L) * half;
   const ny = L < 1e-12 ? 0 : ((b.x - a.x) / L) * half;
-  for (let k = 1; k < 8; k++) {
-    const u = k / 8;
+  // Sampled against the tape, not a fixed eight steps: a long chord checked at eight points can pass while a
+  // stretch between two of them hangs off the material.
+  const steps = Math.max(8, Math.ceil(L / half));
+  for (let k = 1; k < steps; k++) {
+    const u = k / steps;
     const m = { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u };
     if (!pointInPolyLocal(f.poly, m)) return false;
     // The strip's edges may leave this tile onto a neighbour -- that is just crossing a crease -- but they may
@@ -1273,16 +1312,18 @@ function corridorPath(
   blocked: Set<string>,
   taken: Map<string, number>,
   forbid: { at: Vec2; r: number } | null,
+  origin: Vec2 | null,
+  legOk: ((a: Vec2, b: Vec2) => boolean) | null,
 ): Vec2[] {
   // Try first with every chord that sweeps the other net's terminal *forbidden*, not merely dear. Tolling it
   // was not enough: on church the route took a chord passing 0.090 from the terminal when 0.099 was required and
   // there was room to spare, because a large toll is still finite. If forbidding leaves no route at all, fall
   // back to the tolled search rather than dropping the LED.
   if (forbid) {
-    const strict = searchCorridor(c, from, to, blocked, taken, forbid, true);
+    const strict = searchCorridor(c, from, to, blocked, taken, forbid, true, origin, legOk);
     if (strict.length) return strict;
   }
-  return searchCorridor(c, from, to, blocked, taken, forbid, false);
+  return searchCorridor(c, from, to, blocked, taken, forbid, false, origin, legOk);
 }
 
 function searchCorridor(
@@ -1293,6 +1334,8 @@ function searchCorridor(
   taken: Map<string, number>,
   forbid: { at: Vec2; r: number } | null,
   strict: boolean,
+  origin: Vec2 | null,
+  legOk: ((a: Vec2, b: Vec2) => boolean) | null,
 ): Vec2[] {
   if (from === to) return [];
   const starts = c.mids.get(from) ?? [];
@@ -1313,8 +1356,14 @@ function searchCorridor(
   const seen = new Set<string>();
   const heap = new MinHeap();
   for (const m of starts) {
+    // The leg from the origin to this first waypoint is not a chord, so nothing else checks it stays on the
+    // material. Pricing it without checking it let a run set off across a hole.
+    if (origin && legOk && !legOk(origin, m)) continue;
     const k = ptKey(m);
-    const d = cost(k, 0);
+    // Priced from where the run actually begins. Seeding every node of the starting tile at zero left the first
+    // leg -- terminal to first waypoint -- costing nothing, so the search would happily set off from a node
+    // behind the terminal and doubled back to get going.
+    const d = cost(k, origin ? Math.sqrt(dist2(origin, m)) : 0);
     dist.set(k, d);
     heap.push(k, d);
   }
@@ -1658,6 +1707,10 @@ export function selfOverlapLength(traces: Trace2D[], tol: number): number {
             for (let j = 1; j < b.pts.length && !near; j++) {
               if (tj === ti && Math.abs(j - i) <= 1) continue;
               const c = b.pts[j - 1]!, d = b.pts[j]!;
+              // Cheap rejection first: most segment pairs are nowhere near each other, and the distance test
+              // is what made scoring every candidate cost seconds.
+              if (m.x < Math.min(c.x, d.x) - tol || m.x > Math.max(c.x, d.x) + tol) continue;
+              if (m.y < Math.min(c.y, d.y) - tol || m.y > Math.max(c.y, d.y) + tol) continue;
               if (sharesEnd(p, q, c, d)) continue;
               if (segPointDist(c, d, m) <= tol) near = true;
             }
