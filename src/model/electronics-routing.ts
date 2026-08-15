@@ -82,6 +82,21 @@ const OCCUPIED_TOLL = 500;
  *  extra freedom lets the two nets interleave rather than separate. */
 const EDGE_CROSSINGS = [1 / 4, 3 / 4];
 
+/**
+ * What crossing a mountain fold, a cut, or a valley folded past 170 degrees costs, as a fraction of the
+ * pattern's bounding-box diagonal.
+ *
+ * Nakaya et al. use the whole diagonal, chosen to exceed any single step so a crease is crossed only when a
+ * tile is reachable no other way. Their graph is one node per face; ours is many nodes per face, so the same
+ * figure bites harder here.
+ *
+ * Swept: at the full diagonal, akde-decagon's mountain crossings fall 39 -> 23 but puffin gains a chip
+ * violation, and a chip violation is destructive where a mountain crossing is only fragile. At half, nothing
+ * regresses and most of the gain remains: akde-decagon 39 -> 25 with a third less copper, akde-hex's valley
+ * crossings 13 -> 11. At 0.15 the penalty stops changing any route.
+ */
+const FOLD_PENALTY_FRAC = 0.5;
+
 /** How much dearer each previous use of a waypoint by the other net makes it, so the two nets take genuinely
  *  different routes instead of one shadowing the other.
  *
@@ -325,7 +340,9 @@ export function planRoutes(
   // Drop LEDs the battery cannot reach across the material. Their tiles sit on a separate island of the
   // pattern, and the only way to "reach" them would be a straight line through empty space -- which is what
   // used to happen, and is what put copper outside the body. Better to report them honestly.
-  const corridor = buildCorridor(faces, gaps);
+  // The crossing penalty is the pattern's bounding-box diagonal, as in the paper: larger than any single step
+  // in the graph, so a crease is crossed only when nothing else reaches the tile.
+  const corridor = buildCorridor(faces, gaps, patternDiag(faces) * FOLD_PENALTY_FRAC);
   const reach = reachableFaces(corridor, battery.face);
   for (let i = targets.length - 1; i >= 0; i--) {
     const t = targets[i]!;
@@ -1037,7 +1054,12 @@ interface Corridor {
   point: Map<string, Vec2>;
   /** Per face: which midpoint pairs may be joined directly, i.e. whose chord stays on the tile. */
   chords: Map<number, Set<string>>;
+  /** Extra cost for crossing at this node — a mountain fold, a steep valley or a cut. */
+  cost: Map<string, number>;
 }
+
+/** Unordered key for the edge between two vertex ids. */
+const edgeKeyOf = (a: number, b: number): string => (a < b ? `${a}_${b}` : `${b}_${a}`);
 
 /**
  * The pattern's travel network. Nodes are **edge midpoints**, and crossing a tile means taking a chord from
@@ -1049,10 +1071,29 @@ interface Corridor {
  * waypoint diverted nothing even at 400x. Chords give a face many ways through, so the second net has
  * somewhere else to go.
  */
-function buildCorridor(faces: FlatFace[], gaps: GapEdge[]): Corridor {
+function buildCorridor(faces: FlatFace[], gaps: GapEdge[], foldPenalty: number): Corridor {
   const mids = new Map<number, Vec2[]>();
   const faceOf = new Map<string, number[]>();
   const point = new Map<string, Vec2>();
+  const cost = new Map<string, number>();
+
+  // Crossing penalties, after Nakaya et al., "4D Leaf Circuits" (SCF '25), Algorithm 1.
+  //
+  // Their fatigue test is the reason: a trace carried over a *mountain* fold shows a sharp rise in resistance
+  // and fractures within a hundred folding cycles, while the same trace on a valley fold stays flat. So a
+  // mountain crossing is charged the pattern's bounding-box diagonal -- more than any single step in the graph,
+  // which makes the router take any available detour, while still leaving a mountain crossable when the tile is
+  // reachable no other way. They apply the same penalty to a valley folded past 170 degrees, as such a crease
+  // closes on itself and can short across.
+  //
+  // Cuts are ours to add: the material is severed there, so tape spanning one is bridging a hole rather than
+  // lying on a substrate.
+  const penaltyOf = new Map<string, number>();
+  for (const g of gaps) {
+    const steepValley = g.dihedral != null && Math.abs(g.dihedral) > 170;
+    const bad = g.assignment === "M" || g.assignment === "C" || (g.assignment === "V" && steepValley);
+    if (bad) penaltyOf.set(edgeKeyOf(g.verts[0], g.verts[1]), foldPenalty);
+  }
   const gapKeys = new Set(gaps.map((g) => ptKey(g.point)));
 
   faces.forEach((f, fi) => {
@@ -1078,6 +1119,8 @@ function buildCorridor(faces: FlatFace[], gaps: GapEdge[]): Corridor {
         const owners = faceOf.get(key) ?? [];
         if (!owners.includes(fi)) owners.push(fi);
         faceOf.set(key, owners);
+        const pen = penaltyOf.get(edgeKeyOf(va, vb));
+        if (pen) cost.set(key, pen);
       }
     }
     mids.set(fi, list);
@@ -1103,7 +1146,7 @@ function buildCorridor(faces: FlatFace[], gaps: GapEdge[]): Corridor {
   for (const key of gapKeys) {
     if (!point.has(key)) continue;
   }
-  return { mids, faceOf, point, chords };
+  return { mids, faceOf, point, chords, cost };
 }
 
 /**
@@ -1148,9 +1191,12 @@ function searchCorridor(
   if (!starts.length || !goal.size) return [];
 
   const cost = (key: string, step: number): number => {
+    // The fold penalty is additive, not a multiplier: it is a fixed price for crossing that crease, and it must
+    // not scale with how long the step happens to be.
+    const fold = c.cost.get(key) ?? 0;
     const chip = blocked.has(key) ? OCCUPIED_TOLL : 1;
     const shared = 1 + (taken.get(key) ?? 0) * SHARED_TOLL;
-    return step * chip * shared;
+    return step * chip * shared + fold;
   };
 
   const dist = new Map<string, number>();

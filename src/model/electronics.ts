@@ -72,6 +72,10 @@ export const EMPTY_CIRCUIT: Circuit = { leds: [], battery: null };
   legA: Vec2;
   /** Pinched edge-midpoint on `faceB`'s tile — the leg landing pad on that gray tile. */
   legB: Vec2;
+  /** The FOLD assignment of this hinge: `M` mountain, `V` valley, `C` cut (or `""` when untagged). */
+  assignment: string;
+  /** Target dihedral angle in degrees where the pattern records one, else null. */
+  dihedral: number | null;
 }
 /** One gray rigid tile (the printed inset hexagon/polygon) in flat mm, aligned 1:1 with the faces. */export interface TilePoly {
   face: number;
@@ -136,6 +140,24 @@ const edgeKey = (a: number, b: number): string => (a < b ? `${a}_${b}` : `${b}_$
   });
   return shared;
 }
+/** edgeKey → target dihedral angle in degrees, where the pattern records one.
+ *
+ *  FOLD's own `edges_foldAngle` is honoured first; FKLD patterns carry the same thing as
+ *  `fkld:edges_dihedralTarget`. Used to tell a gentle valley from one folded almost flat against itself. */
+function dihedralMap(fold: FoldFile): Map<string, number> {
+  const out = new Map<string, number>();
+  const ev = (fold.edges_vertices as number[][] | undefined) ?? [];
+  const raw =
+    ((fold as Record<string, unknown>).edges_foldAngle as number[] | undefined) ??
+    ((fold as Record<string, unknown>)["fkld:edges_dihedralTarget"] as number[] | undefined) ??
+    [];
+  ev.forEach((e, i) => {
+    const v = raw[i];
+    if (typeof v === "number" && Number.isFinite(v)) out.set(edgeKey(num(e[0]), num(e[1])), v);
+  });
+  return out;
+}
+
 /** edgeKey → assignment string, read from the explicit FOLD edge list. */function assignmentMap(fold: FoldFile): Map<string, string> {
   const assignOf = new Map<string, string>();
   const ev = fold.edges_vertices;
@@ -233,6 +255,7 @@ const edgeKey = (a: number, b: number): string => (a < b ? `${a}_${b}` : `${b}_$
 
   const shared = sharedEdges(faces);
   const assignOf = assignmentMap(fold);
+  const dihedralOf = dihedralMap(fold);
   const pinchD = faces.map((f) => (f.poly.length >= 3 ? tilePinch(f.poly, gap) : 0));
 
   for (const [key, rec] of shared) {
@@ -255,6 +278,8 @@ const edgeKey = (a: number, b: number): string => (a < b ? `${a}_${b}` : `${b}_$
     link(fB);
     gaps.push({
       mid: midNode, faceA: fA, faceB: fB, point, ends: [pa, pb], verts: [rec.a, rec.b], legA, legB,
+      assignment: assignOf.get(key) ?? "",
+      dihedral: dihedralOf.get(key) ?? null,
     });
   }
 

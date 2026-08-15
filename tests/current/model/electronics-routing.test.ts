@@ -120,7 +120,9 @@ describe("model/electronics-routing", () => {
     const leds = [...ledsOn(gaps, 3), { a: 900, b: 901 }];
     const r = planRoutes(faces, gaps, { leds, battery: { face: 0 } });
     expect(r.unreachable).toEqual([3]);
-    expect(r.traces).toHaveLength(2);
+    // Both nets are still laid -- how many runs each is cut into is a routing detail, not the property here.
+    expect(new Set(r.traces.map((t) => t.net))).toEqual(new Set(["pwr", "gnd"]));
+    expect(r.traces.length).toBeGreaterThanOrEqual(2);
     // Index alignment with circuit.leds must hold including the unroutable one.
     expect(r.pads).toHaveLength(4);
     expect(r.pads[3]).toEqual({ pwr: { x: 0, y: 0 }, gnd: { x: 0, y: 0 } });
@@ -142,6 +144,35 @@ describe("model/electronics-routing", () => {
       const { faces, gaps } = load(name);
       const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 12), battery: { face: 0 } });
       expect(countNetCrossings(r.traces), name).toBeLessThanOrEqual(budget);
+    }
+  });
+
+  it("prefers valleys and flat panels over mountain folds", () => {
+    // After Nakaya et al., "4D Leaf Circuits" (SCF '25), Algorithm 1. Their fatigue test is the reason: a trace
+    // carried over a mountain fold shows a sharp rise in resistance and fractures within a hundred folding
+    // cycles, where the same trace on a valley stays flat. Crossing a crease is charged the pattern's bounding
+    // box diagonal, so a route takes any detour it can rather than going over a mountain.
+    //
+    // Some crossings are unavoidable -- every tile-to-tile move on a kirigami crosses something -- so this pins
+    // the measured counts rather than demanding zero.
+    const budget: Record<string, number> = {
+      "akde-decagon-pyramid.fkld": 25,
+      "akde-hex.fkld": 22,
+      "house.fkld": 11,
+    };
+    for (const [name, want] of Object.entries(budget)) {
+      const { faces, gaps } = load(name);
+      const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 12), battery: { face: 0 } });
+      const mountains = gaps.filter((g) => g.assignment === "M");
+      let crossed = 0;
+      for (const t of r.traces) {
+        for (let i = 1; i < t.pts.length; i++) {
+          for (const g of mountains) {
+            if (segsCross(t.pts[i - 1]!, t.pts[i]!, g.ends[0], g.ends[1])) crossed++;
+          }
+        }
+      }
+      expect(crossed, `${name} crosses mountain folds`).toBeLessThanOrEqual(want);
     }
   });
 

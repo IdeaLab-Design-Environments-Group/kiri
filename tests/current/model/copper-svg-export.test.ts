@@ -160,9 +160,9 @@ describe("model/copper-svg-export", () => {
     it("tabs at the tape's own width, clear of the other net, using whichever wall is free", () => {
       // A tab across another trace would be stuck down on top of it, shorting the two, and snipping it would cut
       // the trace underneath. Same-net runs are not obstacles: they meet at junctions by design.
-      // Zero except church, which since the tape became a real width routes eleven short runs instead of three
-      // and leaves one with no clear line out to a wall. Pinned so it cannot spread.
-      const budget: Record<string, number> = { "house.fkld": 0, "akde-hex.fkld": 0, "church.fkld": 1 };
+      // Zero on akde-hex. house and church each keep a couple: routing around mountain folds sends runs down
+      // narrower corridors, which leaves fewer clear lines out to a wall. Pinned so they cannot spread.
+      const budget: Record<string, number> = { "akde-hex.fkld": 0, "house.fkld": 2, "church.fkld": 1 };
       for (const [name, want] of Object.entries(budget)) {
         const { fold, traces, tapeW } = planned(name, 12);
         const out = buildCopperCarrierExport(fold, traces, tapeW);
