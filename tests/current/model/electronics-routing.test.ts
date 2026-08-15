@@ -15,6 +15,7 @@ import {
   countUnderLed,
   countUnderTerminal,
   overlapLength,
+  selfOverlapLength,
   tapeWidthFor,
   terminalHalfWidth,
   patternDiag,
@@ -369,6 +370,26 @@ describe("model/electronics-routing", () => {
       // between the pads that actually get drawn.
       const gap = Math.hypot(term.pwr.x - term.gnd.x, term.pwr.y - term.gnd.y) - 2 * term.half;
       expect(gap, `${name} terminal gap`).toBeGreaterThan(tapeWidthFor(faces));
+    }
+  });
+
+  it("does not lay a net twice over itself", () => {
+    // Repeated tape: a net running back alongside where it has already been. It was invisible to the search --
+    // only the two nets shadowing *each other* was scored -- so nothing had reason to stop it, and akde-square
+    // was laying 29% of its length twice. Now scored, and pinned here.
+    const budget: Record<string, number> = {
+      "house.fkld": 0.02,
+      "church.fkld": 0.02,
+      "akde-decagon-pyramid.fkld": 0.05,
+      "akde-hex.fkld": 0.14,
+      "akde-square-pyramid.fkld": 0.2,
+    };
+    for (const [name, share] of Object.entries(budget)) {
+      const { faces, gaps } = load(name);
+      const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 12), battery: { face: 0 } });
+      const tapeW = tapeWidthFor(faces);
+      const got = selfOverlapLength(r.traces, tapeW * 0.75) / totalLength(r.traces);
+      expect(got, `${name} lays itself twice`).toBeLessThanOrEqual(share);
     }
   });
 

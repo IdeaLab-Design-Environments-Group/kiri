@@ -294,6 +294,12 @@ export function patternDiag(faces: FlatFace[]): number {
 
 // ---- the router -------------------------------------------------------------
 
+/** A routed net: its walk, and the corridor waypoints it took. */
+interface Rail {
+  pts: Vec2[];
+  used: Map<string, number>;
+}
+
 /** One LED that will actually be wired. */
 interface Target {
   /** Index into `circuit.leds`. */
@@ -474,7 +480,11 @@ export function planRoutes(
       countOverLed(tr, padsFor(f)) +
       countUnderTerminal(tr, term, termClear)) * 1e9 +
     countNetCrossings(tr) * 1e6 +
+    // Both kinds of overlap: the two nets shadowing each other, and a net laid twice over itself. Only the
+    // first was scored, so nothing in the search had any reason to stop a net doubling back -- and it did,
+    // over a fifth of its length on some patterns.
     overlapLength(tr, overlapTol) +
+    selfOverlapLength(tr, overlapTol) +
     // Length ranks last: of two plans equal on everything that matters more, the shorter and straighter wins.
     totalLength(tr) * 1e-6;
 
@@ -506,12 +516,20 @@ export function planRoutes(
       net: "pwr" | "gnd",
       rev: boolean,
       avoid: Map<string, number>,
+      perNet: boolean,
     ): { pts: Vec2[]; used: Map<string, number> } => {
       const lane = (key: string): number => (net === "pwr" ? lanePref.get(key)?.pwr : lanePref.get(key)?.gnd) ?? 0;
       // Never route through the other net's terminal: shorting the battery is not a trade worth any shortcut.
       const forbidden = net === "pwr" ? term.gnd : term.pwr;
-      // Each net may work the tour from either end.
-      const seq = rev ? order.map((_, k) => order.length - 1 - k) : order.map((_, k) => k);
+      // This net's own visiting order over its own pads, not the shared hinge order — see tourOf.
+      const mineFirst = net === "pwr" ? term.pwr : term.gnd;
+      const myPads = order.map((oi, i) => {
+        const t = targets[oi]!;
+        const swap = net === "pwr" ? f[i]! : !f[i]!;
+        return swap ? t.legs[1] : t.legs[0];
+      });
+      const own = perNet ? tourOf(mineFirst, myPads) : order.map((_, k) => k);
+      const seq = rev ? own.slice().reverse() : own;
       const pick = (i: number): { pad: Vec2; face: number } => {
         const t = targets[order[i]!]!;
         const swap = net === "pwr" ? f[i]! : !f[i]!;
@@ -568,8 +586,11 @@ export function planRoutes(
     // to change nothing at all: rerouting PWR against GND's route converges on the same PWR route. It only
     // appeared to help while it was also being run inside the polarity search, and that gain was the search
     // finding a different polarity, not the rerouting. Removed rather than left in as a costly no-op.
-    const pwr = railPts("pwr", dirPwr, new Map());
-    const gnd = railPts("gnd", dirGnd, pwr.used);
+    /** Route both nets, PWR with a clear field and GND paying a toll for what PWR took. */
+    const routeBoth = (perNet: boolean): { pwr: Rail; gnd: Rail } => {
+      const a = railPts("pwr", dirPwr, new Map(), perNet);
+      return { pwr: a, gnd: railPts("gnd", dirGnd, a.used, perNet) };
+    };
     /** The pads this net must reach — the only points a branch may legitimately end at. */
     const padsOf = (fl: boolean[], net: "pwr" | "gnd"): Vec2[] =>
       order.map((oi, i) => {
@@ -578,7 +599,7 @@ export function planRoutes(
         return swap ? t.legs[1] : t.legs[0];
       });
 
-    const finish = (): Trace2D[] => {
+    const finish = (r: { pwr: Rail; gnd: Rail }): Trace2D[] => {
       const bodies = targets.map((t) => [t.legs[0], t.legs[1]] as [Vec2, Vec2]);
       const keepPwr = [term.pwr, ...padsOf(f, "pwr")];
       const keepGnd = [term.gnd, ...padsOf(f, "gnd")];
@@ -703,9 +724,9 @@ export function planRoutes(
       const padClear = (ts: Trace2D[]): Trace2D[] => ts.map((t) => ({ ...t, pts: clearPads(t.pts) }));
 
 
-      const rawGnd = asTree(dedupe(dodgeChips(gnd.pts, targets, onBody)), "gnd", term.gnd, padsOf(f, "gnd"))
+      const rawGnd = asTree(dedupe(dodgeChips(r.gnd.pts, targets, onBody)), "gnd", term.gnd, padsOf(f, "gnd"))
         .map((t) => ({ ...t, pts: clearChips(clearTerm(t.pts, term.pwr), "gnd", f) }));
-      const rawPwr = asTree(dedupe(dodgeChips(pwr.pts, targets, onBody)), "pwr", term.pwr, padsOf(f, "pwr"))
+      const rawPwr = asTree(dedupe(dodgeChips(r.pwr.pts, targets, onBody)), "pwr", term.pwr, padsOf(f, "pwr"))
         .map((t) => ({ ...t, pts: clearChips(clearTerm(t.pts, term.gnd), "pwr", f) }));
       const outPwr = straighten(
         rawPwr, [...keepPwr, ...junctions(rawPwr)], bodies, onBody, rawGnd, clearW, overlapTol,
@@ -725,7 +746,14 @@ export function planRoutes(
       const asRouted = padClear([...rawPwr, ...rawGnd]);
       return score(straightened, f) <= score(asRouted, f) ? straightened : asRouted;
     };
-    return finish();
+    // Two visiting orders, judged by the same objective. The shared one walks both nets through the hinges in
+    // step, which keeps them parallel; the per-net one orders each net's own pads, which stops a net zigzagging
+    // across itself to reach a pad it could have taken in sequence (akde-square's repeated tape 29% -> 21% of
+    // its length, a third less copper) but lets the two wander apart -- akde-decagon's repeated tape goes the
+    // other way, 5% -> 22%, and puffin picks up crossings. Neither wins everywhere, so the score decides.
+    const shared = finish(routeBoth(false));
+    const perNet = finish(routeBoth(true));
+    return score(perNet, f) < score(shared, f) ? perNet : shared;
   };
 
 
@@ -1336,6 +1364,50 @@ function searchCorridor(
 }
 
 /** Greedy nearest-neighbour visiting order, starting from the battery. */
+/**
+ * Visiting order for a set of points, starting from `from`: nearest-neighbour, then 2-opt.
+ *
+ * Each net orders its *own* pads with this. The shared order is built from the hinge midpoints, but a net's
+ * pads sit to one side of those hinges, so an order that is short hinge-to-hinge can zigzag pad-to-pad -- the
+ * net then runs out and back across itself to reach pads it could have taken in sequence.
+ */
+function tourOf(from: Vec2, pts: Vec2[]): number[] {
+  const left = pts.map((_, i) => i);
+  const order: number[] = [];
+  let at = from;
+  while (left.length) {
+    let best = 0;
+    for (let k = 1; k < left.length; k++) {
+      if (dist2(pts[left[k]!]!, at) < dist2(pts[left[best]!]!, at)) best = k;
+    }
+    const pick = left.splice(best, 1)[0]!;
+    order.push(pick);
+    at = pts[pick]!;
+  }
+  // 2-opt: reverse any span that shortens the walk. Removes the crossings a greedy nearest-neighbour leaves.
+  const at2 = (i: number): Vec2 => (i < 0 ? from : pts[order[i]!]!);
+  const walk = (): number => {
+    let sum = 0;
+    for (let i = 0; i < order.length; i++) sum += len(sub(at2(i), at2(i - 1)));
+    return sum;
+  };
+  for (let guard = 0, moved = true; moved && guard < 32; guard++) {
+    moved = false;
+    for (let i = 0; i < order.length - 1 && !moved; i++) {
+      for (let j = i + 1; j < order.length && !moved; j++) {
+        const before = walk();
+        const span = order.slice(i, j + 1).reverse();
+        const trial = [...order.slice(0, i), ...span, ...order.slice(j + 1)];
+        const keep = order.slice();
+        order.splice(0, order.length, ...trial);
+        if (walk() < before - 1e-12) moved = true;
+        else order.splice(0, order.length, ...keep);
+      }
+    }
+  }
+  return order;
+}
+
 function nearestTour(centre: Vec2, targets: Target[]): number[] {
   const left = targets.map((_, i) => i);
   const order: number[] = [];
@@ -1556,6 +1628,52 @@ function nearPolyline(pts: Vec2[], p: Vec2): number {
     if (d < best) best = d;
   }
   return best;
+}
+
+/**
+ * Length a net lays within `tol` of a non-adjacent part of *itself* — tape laid twice over.
+ *
+ * Electrically free, since it is one net at one potential, but it is wasted copper and it reads as a mistake:
+ * the strip runs out and comes back alongside where it has already been. Segments that share an endpoint are
+ * skipped, or every corner would count as its own overlap.
+ */
+export function selfOverlapLength(traces: Trace2D[], tol: number): number {
+  let sum = 0;
+  for (const net of ["pwr", "gnd"] as const) {
+    const mine = traces.filter((t) => t.net === net);
+    for (let ti = 0; ti < mine.length; ti++) {
+      const a = mine[ti]!;
+      for (let i = 1; i < a.pts.length; i++) {
+        const p = a.pts[i - 1]!, q = a.pts[i]!;
+        const L = len(sub(q, p));
+        if (L < 1e-12) continue;
+        const steps = Math.max(2, Math.ceil(L / tol));
+        let hits = 0;
+        for (let k = 0; k < steps; k++) {
+          const u = (k + 0.5) / steps;
+          const m = { x: p.x + (q.x - p.x) * u, y: p.y + (q.y - p.y) * u };
+          let near = false;
+          for (let tj = 0; tj < mine.length && !near; tj++) {
+            const b = mine[tj]!;
+            for (let j = 1; j < b.pts.length && !near; j++) {
+              if (tj === ti && Math.abs(j - i) <= 1) continue;
+              const c = b.pts[j - 1]!, d = b.pts[j]!;
+              if (sharesEnd(p, q, c, d)) continue;
+              if (segPointDist(c, d, m) <= tol) near = true;
+            }
+          }
+          if (near) hits++;
+        }
+        sum += (L * hits) / steps;
+      }
+    }
+  }
+  return sum;
+}
+
+function sharesEnd(a: Vec2, b: Vec2, c: Vec2, d: Vec2): boolean {
+  const same = (p: Vec2, q: Vec2): boolean => Math.abs(p.x - q.x) < 1e-9 && Math.abs(p.y - q.y) < 1e-9;
+  return same(a, c) || same(a, d) || same(b, c) || same(b, d);
 }
 
 /** Total copper length. */
