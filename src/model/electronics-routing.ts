@@ -172,6 +172,10 @@ export function tapeWidthFor(faces: FlatFace[]): number {
 const PAD_STEP_OFF = 0.5;
 const PAD_INTRUDE_MAX = 0.35;
 
+/** How much nearer an earlier pad must be, in squared distance, before a branch leaves it instead of carrying
+ *  on from the last pad. Below 1 it means "clearly nearer". */
+const BRANCH_GAIN = 0.25;
+
 /** What it costs a net to route in the other net's lane, as a multiple of the raw distance.
  *
  *  Re-swept once the tape halved, which left more room to detour into: 3 now clears akde-decagon's overlap
@@ -296,7 +300,8 @@ export function patternDiag(faces: FlatFace[]): number {
 
 /** A routed net: its walk, and the corridor waypoints it took. */
 interface Rail {
-  pts: Vec2[];
+  /** One polyline per branch: each starts at a point the net had already reached. */
+  paths: Vec2[][];
   used: Map<string, number>;
 }
 
@@ -519,6 +524,9 @@ export function planRoutes(
     return made;
   };
 
+  // Whether a net may branch off an earlier pad rather than chaining from the last one. Off while the polarity
+  // is searched -- it is not a polarity question -- and tried once at the end, kept only if it scores better.
+  let branching = false;
   const build = (f: boolean[], perNetOrder = false): Trace2D[] => {
     // What the first net routed. The second pays a toll to reuse it, which now buys a different chord rather
     // than the same one dearer, because a face has many ways through.
@@ -529,7 +537,8 @@ export function planRoutes(
       rev: boolean,
       avoid: Map<string, number>,
       perNet: boolean,
-    ): { pts: Vec2[]; used: Map<string, number> } => {
+      mayBranch: boolean,
+    ): { paths: Vec2[][]; used: Map<string, number> } => {
       const lane = (key: string): number => (net === "pwr" ? lanePref.get(key)?.pwr : lanePref.get(key)?.gnd) ?? 0;
       // Never route through the other net's terminal: shorting the battery is not a trade worth any shortcut.
       const forbidden = net === "pwr" ? term.gnd : term.pwr;
@@ -550,7 +559,12 @@ export function planRoutes(
           : { pad: t.legs[0], face: t.legFaces[0] };
       };
       const mine = net === "pwr" ? term.pwr : term.gnd;
-      const out: Vec2[] = [mine];
+      const paths: Vec2[][] = [];
+      // Points this net has already reached: the terminal, then every pad it has landed on. A hop starts from
+      // whichever is nearest, so an LED's own pad carries the connection on to the next LED instead of the run
+      // going back for it. That is what stops the net doubling along itself to reach a neighbour it was already
+      // beside -- and every branch starts somewhere already connected, so the net stays one piece.
+      const reached: { pt: Vec2; face: number }[] = [{ pt: mine, face: battery.face }];
       // Step off the terminal heading directly away from the other one before going anywhere. The corridor
       // toll keeps the *nodes* clear of the other terminal, and straightening keeps shortcuts clear of it, but
       // neither governs the very first segment out of the pad -- which is free to sweep straight across its
@@ -561,7 +575,6 @@ export function planRoutes(
       // at the pad where the run should meet it square.
       const escape = add(mine, scale(unit(sub(mine, forbidden)), termClear * 0.9));
       const used = new Map<string, number>();
-      let fromFace = battery.face;
       for (const i of seq) {
         const { pad, face } = pick(i);
         // The LED being landed on is allowed: the rail approaches its pad, not through its chip.
@@ -581,23 +594,40 @@ export function planRoutes(
         for (const [k, p] of corridor.point) {
           if (Math.sqrt(dist2(p, forbidden)) < termClear) toll.set(k, (toll.get(k) ?? 0) + TERMINAL_TOLL);
         }
-        // The origin is wherever this hop actually starts: the terminal for the first, the last pad after that.
-        const origin = out.length ? out[out.length - 1]! : mine;
-        for (const p of corridorPath(corridor, fromFace, face, blocked, toll, {
+        // Branch off an earlier pad only when it is clearly nearer than carrying on from the last one.
+        //
+        // Taking the nearest every time cuts cross-net overlap (puffin 16% -> 13%) and copper, but it breaks up
+        // the chain that keeps the two nets running parallel: repeated tape rose on three patterns and house,
+        // akde-decagon and puffin each picked up a PWR/GND crossing, which is a short. Requiring a clear
+        // improvement keeps the chain unless branching genuinely pays.
+        const last = reached[reached.length - 1]!;
+        let from = last;
+        if (mayBranch) {
+          for (const r of reached) {
+            if (dist2(r.pt, pad) < dist2(from.pt, pad) * BRANCH_GAIN) from = r;
+          }
+        }
+        const branch: Vec2[] = [from.pt];
+        for (const p of corridorPath(corridor, from.face, face, blocked, toll, {
           at: forbidden,
           r: termClear,
-        }, origin, onBody)) {
-          out.push(p);
+        }, from.pt, onBody)) {
+          branch.push(p);
           used.set(ptKey(p), (used.get(ptKey(p)) ?? 0) + 1);
         }
-        out.push(pad);
-        fromFace = face;
+        branch.push(pad);
+        paths.push(branch);
+        reached.push({ pt: pad, face });
       }
-      // Now decide: does leaving the pad actually cross the other terminal?
-      if (out.length >= 2 && segPointDist(out[0]!, out[1]!, forbidden) < termClear && onBody(mine, escape)) {
-        out.splice(1, 0, escape);
+      // Does leaving the terminal actually cross the other one? Only the branch that starts there can.
+      for (const b of paths) {
+        if (b.length >= 2 && ptKey(b[0]!) === ptKey(mine) &&
+            segPointDist(b[0]!, b[1]!, forbidden) < termClear && onBody(mine, escape)) {
+          b.splice(1, 0, escape);
+        }
       }
-      return { pts: out, used };
+      if (!paths.length) paths.push([mine]);
+      return { paths, used };
     };
 
     // PWR routes with a clear field; GND then pays a toll for every waypoint PWR took, so it goes round the
@@ -608,9 +638,9 @@ export function planRoutes(
     // appeared to help while it was also being run inside the polarity search, and that gain was the search
     // finding a different polarity, not the rerouting. Removed rather than left in as a costly no-op.
     /** Route both nets, PWR with a clear field and GND paying a toll for what PWR took. */
-    const routeBoth = (perNet: boolean): { pwr: Rail; gnd: Rail } => {
-      const a = railPts("pwr", dirPwr, new Map(), perNet);
-      return { pwr: a, gnd: railPts("gnd", dirGnd, a.used, perNet) };
+    const routeBoth = (perNet: boolean, mayBranch: boolean): { pwr: Rail; gnd: Rail } => {
+      const a = railPts("pwr", dirPwr, new Map(), perNet, mayBranch);
+      return { pwr: a, gnd: railPts("gnd", dirGnd, a.used, perNet, mayBranch) };
     };
     /** The pads this net must reach — the only points a branch may legitimately end at. */
     const padsOf = (fl: boolean[], net: "pwr" | "gnd"): Vec2[] =>
@@ -745,9 +775,9 @@ export function planRoutes(
       const padClear = (ts: Trace2D[]): Trace2D[] => ts.map((t) => ({ ...t, pts: clearPads(t.pts) }));
 
 
-      const rawGnd = asTree(dedupe(dodgeChips(r.gnd.pts, targets, onBody)), "gnd", term.gnd, padsOf(f, "gnd"))
+      const rawGnd = asTree(r.gnd.paths.map((b: Vec2[]) => dedupe(dodgeChips(b, targets, onBody))), "gnd", term.gnd, padsOf(f, "gnd"))
         .map((t) => ({ ...t, pts: clearChips(clearTerm(t.pts, term.pwr), "gnd", f) }));
-      const rawPwr = asTree(dedupe(dodgeChips(r.pwr.pts, targets, onBody)), "pwr", term.pwr, padsOf(f, "pwr"))
+      const rawPwr = asTree(r.pwr.paths.map((b: Vec2[]) => dedupe(dodgeChips(b, targets, onBody))), "pwr", term.pwr, padsOf(f, "pwr"))
         .map((t) => ({ ...t, pts: clearChips(clearTerm(t.pts, term.gnd), "pwr", f) }));
       const outPwr = straighten(
         rawPwr, [...keepPwr, ...junctions(rawPwr)], bodies, onBody, rawGnd, clearW, overlapTol,
@@ -772,13 +802,13 @@ export function planRoutes(
     // across itself to reach a pad it could have taken in sequence (akde-square's repeated tape 29% -> 21% of
     // its length, a third less copper) but lets the two wander apart -- akde-decagon's repeated tape goes the
     // other way, 5% -> 22%, and puffin picks up crossings. Neither wins everywhere, so the score decides.
-    if (perNetOrder) return finish(routeBoth(true));
+    if (perNetOrder) return finish(routeBoth(true, branching));
     // Both visiting orders, judged by the same objective: shared walks the nets through the hinges in step and
     // keeps them parallel, per-net orders each net's own pads and stops it zigzagging across itself. Neither
     // wins everywhere -- akde-hex needs per-net (its repeated tape is 42% without it), akde-decagon needs
     // shared -- so the score decides.
-    const shared = finish(routeBoth(false));
-    const perNet = finish(routeBoth(true));
+    const shared = finish(routeBoth(false, branching));
+    const perNet = finish(routeBoth(true, branching));
     return score(perNet, f) < score(shared, f) ? perNet : shared;
   };
 
@@ -815,6 +845,19 @@ export function planRoutes(
       best = tr;
       flip = f.slice();
     }
+  }
+
+  // An LED's own pad can carry the connection on to the next LED, instead of the run going back for it. Tried
+  // once here rather than inside the search: it cuts cross-net overlap and copper (puffin 16% -> 13%, akde-hex
+  // 1543 -> 1370) but breaks up the chain that keeps the two nets parallel, so on some patterns it adds a
+  // PWR/GND crossing -- a short. The score ranks crossings above overlap, so it is kept only where it does not.
+  branching = true;
+  const branched = build(flip);
+  if (score(branched, flip) < bestS) {
+    best = branched;
+    bestS = score(branched, flip);
+  } else {
+    branching = false;
   }
 
   // With polarity settled, try each net working the tour from either end and keep the best. Four builds.
@@ -858,21 +901,24 @@ export function planRoutes(
  * Duplicate segments are dropped, then what is left is broken into the longest chains that can be laid in one
  * pass, so this trades strip count for tape length and legibility.
  */
-function asTree(pts: Vec2[], net: "pwr" | "gnd", first: Vec2, required: Vec2[]): Trace2D[] {
-  if (pts.length < 2) return [{ pts, net }];
+function asTree(branches: Vec2[][], net: "pwr" | "gnd", first: Vec2, required: Vec2[]): Trace2D[] {
+  const flat = branches.filter((b) => b.length >= 2);
+  if (!flat.length) return branches.length ? [{ pts: branches[0]!, net }] : [];
 
   const nodes = new Map<string, Vec2>();
   const edges = new Map<string, { a: string; b: string; w: number }>();
-  for (let i = 1; i < pts.length; i++) {
-    const a = pts[i - 1]!, b = pts[i]!;
-    const ka = ptKey(a), kb = ptKey(b);
-    if (ka === kb) continue;
-    nodes.set(ka, a);
-    nodes.set(kb, b);
-    // Keyed, so a segment walked twice is stored once.
-    edges.set(chordKey(a, b), { a: ka, b: kb, w: Math.sqrt(dist2(a, b)) });
+  for (const pts of flat) {
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1]!, b = pts[i]!;
+      const ka = ptKey(a), kb = ptKey(b);
+      if (ka === kb) continue;
+      nodes.set(ka, a);
+      nodes.set(kb, b);
+      // Keyed, so a segment walked twice is stored once.
+      edges.set(chordKey(a, b), { a: ka, b: kb, w: Math.sqrt(dist2(a, b)) });
+    }
   }
-  if (!edges.size) return [{ pts, net }];
+  if (!edges.size) return [{ pts: flat[0]!, net }];
 
   // Spanning tree, shortest edges first. Deduplicating segments was not enough: where the walk went out one
   // way and came back another, the union of the two contains a *cycle*, and every point on it is reached
@@ -946,7 +992,7 @@ function asTree(pts: Vec2[], net: "pwr" | "gnd", first: Vec2, required: Vec2[]):
       if (chain.length >= 2) out.push({ pts: chain, net });
     }
   }
-  return out.length ? out : [{ pts, net }];
+  return out.length ? out : [{ pts: flat[0]!, net }];
 }
 
 /**
