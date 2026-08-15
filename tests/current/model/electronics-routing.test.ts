@@ -177,37 +177,48 @@ describe("model/electronics-routing", () => {
     }
   });
 
-  it("keeps every trace inside the body", () => {
-    // Copper must lie on material. Sampling along each segment catches a span that leaves the silhouette
-    // between its endpoints -- which endpoint-only checks miss, and which is exactly what straight
-    // pad-to-pad hops used to do.
-    for (const name of ["house.fkld", "church.fkld", "puffin.fkld", "akde-hex.fkld"]) {
+  it("keeps the whole width of every strip inside the shape", () => {
+    // Tape has width, so checking the centreline is not enough: a run tracking the boundary keeps its centre on
+    // the material while half the strip hangs off. Both edges are sampled here, which is what the router now
+    // plans to -- its containment test and its corridor chords both account for the width.
+    //
+    // The battery's own surroundings are no longer excluded: the pads are half a trace wide now and fit inside
+    // their tile, so there is nothing left to except.
+    for (const name of ["house.fkld", "church.fkld", "puffin.fkld", "akde-hex.fkld", "akde-decagon-pyramid.fkld"]) {
       const { faces, gaps } = load(name);
       const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 12), battery: { face: 0 } });
-      const diag = patternDiag(faces);
-      const term = batteryTerminals(faces[0]!.centroid, diag, faces[0]!.poly, tapeWidthFor(faces));
-      // The battery's own neighbourhood is excluded. Its terminals are held far enough apart for a strip to pass
-      // between them, which on a small tile puts them proud of it -- deliberately, since a cell that size
-      // overhangs the tile physically too. Everything away from the battery must still be on material.
-      const nearBattery = (p: { x: number; y: number }): boolean => {
-        const d = Math.min(
-          Math.hypot(p.x - term.pwr.x, p.y - term.pwr.y),
-          Math.hypot(p.x - term.gnd.x, p.y - term.gnd.y),
-        );
-        return d < diag * 0.06;
-      };
+      const half = tapeWidthFor(faces) * 0.5;
       let off = 0;
       for (const t of r.traces) {
         for (let i = 1; i < t.pts.length; i++) {
           const a = t.pts[i - 1]!, b = t.pts[i]!;
+          const L = Math.hypot(b.x - a.x, b.y - a.y);
+          if (L < 1e-9) continue;
+          const nx = (-(b.y - a.y) / L) * half, ny = ((b.x - a.x) / L) * half;
           for (let k = 1; k <= 9; k++) {
             const u = k / 10;
-            const p = { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u };
-            if (!nearBattery(p) && pointInFace(faces, p) < 0) off++;
+            const m = { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u };
+            if (pointInFace(faces, { x: m.x + nx, y: m.y + ny }) < 0) off++;
+            if (pointInFace(faces, { x: m.x - nx, y: m.y - ny }) < 0) off++;
           }
         }
       }
-      expect(off, `${name} has copper off the body away from the battery`).toBe(0);
+      expect(off, `${name} has copper hanging off the shape`).toBe(0);
+    }
+  });
+
+  it("keeps the battery pads inside their own tile", () => {
+    // Every corner of both pads, not just their centres: a pad proud of the tile is copper off the shape too.
+    for (const name of ["house.fkld", "church.fkld", "puffin.fkld", "akde-hex.fkld"]) {
+      const { faces } = load(name);
+      const tapeW = tapeWidthFor(faces);
+      const hw = terminalHalfWidth(tapeW);
+      const term = batteryTerminals(faces[0]!.centroid, patternDiag(faces), faces[0]!.poly, tapeW);
+      for (const p of [term.pwr, term.gnd]) {
+        for (const [dx, dy] of [[hw, hw], [hw, -hw], [-hw, hw], [-hw, -hw]] as [number, number][]) {
+          expect(pointInFace(faces, { x: p.x + dx, y: p.y + dy }), `${name} pad corner`).toBeGreaterThanOrEqual(0);
+        }
+      }
     }
   });
 

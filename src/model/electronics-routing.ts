@@ -350,7 +350,7 @@ export function planRoutes(
   // used to happen, and is what put copper outside the body. Better to report them honestly.
   // The crossing penalty is the pattern's bounding-box diagonal, as in the paper: larger than any single step
   // in the graph, so a crease is crossed only when nothing else reaches the tile.
-  const corridor = buildCorridor(faces, gaps, patternDiag(faces) * FOLD_PENALTY_FRAC);
+  const corridor = buildCorridor(faces, gaps, patternDiag(faces) * FOLD_PENALTY_FRAC, tapeW);
   const reach = reachableFaces(corridor, battery.face);
   for (let i = targets.length - 1; i >= 0; i--) {
     const t = targets[i]!;
@@ -458,11 +458,21 @@ export function planRoutes(
     // Length ranks last: of two plans equal on everything that matters more, the shorter and straighter wins.
     totalLength(tr) * 1e-6;
 
-  /** Whether a straight run from a to b stays on the material. */
+  /** Whether a strip of tape laid from a to b stays on the material.
+   *
+   *  Both edges are checked, not just the centreline. Tape has width, so a run tracking the boundary keeps its
+   *  centre on the material while half the strip hangs off it -- which is what put copper outside the shape. */
   const onBody = (a: Vec2, b: Vec2): boolean => {
-    for (let k = 1; k < 10; k++) {
-      const u = k / 10;
-      if (pointInFace(faces, { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u }) < 0) return false;
+    const L = Math.hypot(b.x - a.x, b.y - a.y);
+    const half = tapeW * 0.5;
+    const nx = L < 1e-12 ? 0 : (-(b.y - a.y) / L) * half;
+    const ny = L < 1e-12 ? 0 : ((b.x - a.x) / L) * half;
+    const steps = Math.max(9, Math.ceil(L / half));
+    for (let k = 0; k <= steps; k++) {
+      const u = k / steps;
+      const m = { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u };
+      if (pointInFace(faces, { x: m.x + nx, y: m.y + ny }) < 0) return false;
+      if (pointInFace(faces, { x: m.x - nx, y: m.y - ny }) < 0) return false;
     }
     return true;
   };
@@ -1015,11 +1025,19 @@ function chordKey(a: Vec2, b: Vec2): string {
 
 /** Whether the straight line between two boundary points stays on the face. Sampled, so a chord that leaves
  *  and re-enters a concave face is rejected too. */
-function chordInside(f: FlatFace, a: Vec2, b: Vec2): boolean {
+function chordInside(f: FlatFace, a: Vec2, b: Vec2, faces: FlatFace[], tapeW: number): boolean {
+  const L = Math.hypot(b.x - a.x, b.y - a.y);
+  const half = tapeW * 0.5;
+  const nx = L < 1e-12 ? 0 : (-(b.y - a.y) / L) * half;
+  const ny = L < 1e-12 ? 0 : ((b.x - a.x) / L) * half;
   for (let k = 1; k < 8; k++) {
     const u = k / 8;
     const m = { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u };
     if (!pointInPolyLocal(f.poly, m)) return false;
+    // The strip's edges may leave this tile onto a neighbour -- that is just crossing a crease -- but they may
+    // not leave the material altogether.
+    if (pointInFace(faces, { x: m.x + nx, y: m.y + ny }) < 0) return false;
+    if (pointInFace(faces, { x: m.x - nx, y: m.y - ny }) < 0) return false;
   }
   return true;
 }
@@ -1113,7 +1131,7 @@ const edgeKeyOf = (a: number, b: number): string => (a < b ? `${a}_${b}` : `${b}
  * waypoint diverted nothing even at 400x. Chords give a face many ways through, so the second net has
  * somewhere else to go.
  */
-function buildCorridor(faces: FlatFace[], gaps: GapEdge[], foldPenalty: number): Corridor {
+function buildCorridor(faces: FlatFace[], gaps: GapEdge[], foldPenalty: number, tapeW: number): Corridor {
   const mids = new Map<number, Vec2[]>();
   const faceOf = new Map<string, number[]>();
   const point = new Map<string, Vec2>();
@@ -1176,7 +1194,7 @@ function buildCorridor(faces: FlatFace[], gaps: GapEdge[], foldPenalty: number):
     const ok = new Set<string>();
     for (let a = 0; a < list.length; a++) {
       for (let b = a + 1; b < list.length; b++) {
-        if (chordInside(f, list[a]!, list[b]!)) {
+        if (chordInside(f, list[a]!, list[b]!, faces, tapeW)) {
           ok.add(chordKey(list[a]!, list[b]!));
         }
       }
