@@ -31,6 +31,14 @@ export interface Vec2 {
  */export interface Led {
   a: number;
   b: number;
+  /**
+   * Which way round the author wants this LED, when they have said.
+   *
+   * Left unset, the router decides — it flips LEDs to clear crossings, and which pad is `+` falls out of that.
+   * Once set it is respected: the search leaves this LED alone and routes around the orientation given, which
+   * is what makes rotating one a decision rather than a suggestion.
+   */
+  flip?: boolean;
 }
 /** The single power source, pinned to a face (its two terminals are derived around it). */export interface Battery {
   face: number;

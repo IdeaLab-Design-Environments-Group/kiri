@@ -308,6 +308,8 @@ interface Target {
   legs: [Vec2, Vec2];
   /** The face each of `legs` sits on, so a pad can be joined to the corridor graph at its own tile. */
   legFaces: [number, number];
+  /** Orientation the author fixed for this LED, if they did. The search may not change it. */
+  pinned?: boolean;
 }
 
 /**
@@ -344,6 +346,7 @@ export function planRoutes(
       return;
     }
     targets.push({
+      pinned: led.flip,
       slot,
       hinge: gap.point,
       ends: gap.ends,
@@ -409,6 +412,15 @@ export function planRoutes(
 
   // `flip[i]` swaps LED i's two pads between the banks. The tour is a plain chain, so a flip is a
   // genuinely local change: a crossing it causes can be undone without disturbing the rest of the bus.
+  /** Force every pinned LED to the orientation its author chose. */
+  const pin = (f: boolean[]): boolean[] => {
+    for (let i = 0; i < order.length; i++) {
+      const p = targets[order[i]!]!.pinned;
+      if (p !== undefined) f[i] = p;
+    }
+    return f;
+  };
+
   const seeds: boolean[][] = [
     // Geometric: put each pad on the bank its own side of the travel direction already faces.
     order.map((oi, i) => sideOf(targets[oi]!.hinge, dirs[i]!, targets[oi]!.legs[0]!) !== bank),
@@ -720,16 +732,17 @@ export function planRoutes(
   // Descend from each seed by single flips, first improvement, and keep the best arrangement found. No one
   // seed wins everywhere -- the geometric seed beats all-false on akde-decagon and loses on puffin -- and
   // three descents on a handful of LEDs is cheap enough to run on every edit.
-  let flip = seeds[0]!;
+  let flip = pin(seeds[0]!.slice());
   let best = build(flip);
   let bestS = score(best, flip);
   for (const seed of seeds) {
-    const f = seed.slice();
+    const f = pin(seed.slice());
     let tr = build(f);
     let sc = score(tr, f);
     for (let sweep = 0; sweep < order.length && sc > 0; sweep++) {
       let moved = false;
       for (let i = 0; i < order.length && sc > 0; i++) {
+        if (targets[order[i]!]!.pinned !== undefined) continue; // the author fixed this one
         f[i] = !f[i];
         const cand = build(f);
         const cs = score(cand, f);
