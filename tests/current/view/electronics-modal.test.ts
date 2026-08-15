@@ -157,8 +157,10 @@ describe("view/electronics-modal", () => {
     expect(after.gnd).toEqual(before.pwr);
     expect(modal.circuit.leds[0].flip).toBeTypeOf("boolean");
 
-    // And again turns it back.
+    // And again hands the decision back to the router, rather than fixing the opposite orientation forever.
+    // Fixing one the wrong way can force a crossing the router would have avoided, so there has to be a way out.
     (globalThis as any).document.dispatch("keydown", { key: "r" });
+    expect(modal.circuit.leds[0].flip).toBeUndefined();
     expect(modal.routed.pads[0].pwr).toEqual(before.pwr);
   });
 

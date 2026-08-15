@@ -313,10 +313,20 @@ export class ElectronicsModal {
       this.statusEl.textContent = "Select an LED first, then press R to turn it round";
       return;
     }
-    const flip = !(led.flip ?? this.plannedFlip(this.selected));
+    // R cycles: the router's choice -> turned round -> back to the router's choice.
+    //
+    // The third step matters. Fixing an orientation forbids the router from turning that LED, and turning one
+    // the wrong way can force a PWR/GND crossing that it would otherwise have avoided -- so there has to be a
+    // way to hand the decision back. Without it the first press was permanent.
+    const next: boolean | undefined =
+      led.flip === undefined ? !this.plannedFlip(this.selected) : undefined;
     this.circuit = {
       ...this.circuit,
-      leds: this.circuit.leds.map((l, i) => (i === this.selected ? { ...l, flip } : l)),
+      leds: this.circuit.leds.map((l, i) => {
+        if (i !== this.selected) return l;
+        const { flip: _drop, ...rest } = l;
+        return next === undefined ? rest : { ...rest, flip: next };
+      }),
     };
     this.emit();
   }
@@ -674,7 +684,7 @@ export class ElectronicsModal {
     if (this.circuit.leds[this.selected]) {
       const fixed = this.circuit.leds[this.selected]!.flip !== undefined;
       msg += ` · LED ${this.selected + 1} selected — R to turn it round, Delete to remove`;
-      if (fixed) msg += " (orientation fixed)";
+      msg += fixed ? " (orientation fixed — R again to let the router choose)" : " (router chooses)";
     } else if (n > 0) {
       msg += " · click an LED to select it";
     }
