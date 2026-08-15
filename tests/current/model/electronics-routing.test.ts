@@ -351,7 +351,9 @@ describe("model/electronics-routing", () => {
       "akde-hex.fkld": 0,
       "akde-square-pyramid.fkld": 0,
       "church.fkld": 0,
-      "puffin.fkld": 1,
+      // Cleared once chip faults were ranked above terminal faults: puffin had been trading one for the other,
+      // and with the trade refused it keeps neither.
+      "puffin.fkld": 0,
     };
     for (const [name, want] of Object.entries(budget)) {
       const { faces, gaps } = load(name);
@@ -390,8 +392,9 @@ describe("model/electronics-routing", () => {
       "house.fkld": 0.02,
       "church.fkld": 0.02,
       "akde-decagon-pyramid.fkld": 0.05,
-      "akde-hex.fkld": 0.14,
-      "akde-square-pyramid.fkld": 0.2,
+      "akde-hex.fkld": 0.13,
+      // 20% -> 6%: a branch now merges into tape the net already laid instead of running beside it.
+      "akde-square-pyramid.fkld": 0.08,
     };
     for (const [name, share] of Object.entries(budget)) {
       const { faces, gaps } = load(name);

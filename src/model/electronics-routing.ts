@@ -172,6 +172,10 @@ export function tapeWidthFor(faces: FlatFace[]): number {
 const PAD_STEP_OFF = 0.5;
 const PAD_INTRUDE_MAX = 0.35;
 
+/** What a step along tape this net already laid costs, as a fraction of its length. Cheap, so a branch merges
+ *  into the trunk rather than running alongside it -- which is the doubling back. */
+const OWN_TAPE_DISCOUNT = 0.2;
+
 /** How much nearer an earlier pad must be, in squared distance, before a branch leaves it instead of carrying
  *  on from the last pad. Below 1 it means "clearly nearer". */
 const BRANCH_GAIN = 0.25;
@@ -481,9 +485,11 @@ export function planRoutes(
     // Both chip measures, because neither subsumes the other: the width-aware one exempts the pad the run
     // lands on (so it misses a run that clips the body right at the pad), and the zero-width one only sees a
     // proper crossing (so it misses tape lying alongside). Ranked together, above everything else.
-    (countUnderLed(tr, padsFor(f), clearW, clearW * 1.2) +
-      countOverLed(tr, padsFor(f)) +
-      countUnderTerminal(tr, term, termClear)) * 1e9 +
+    // Chips first, and separately: tape under a chip destroys the component, while tape across a battery pad
+    // shorts the supply. Both are faults, but they are not the same fault, and weighing them equally let the
+    // router swap one for the other -- puffin traded its terminal fault for a chip fault and called it even.
+    (countUnderLed(tr, padsFor(f), clearW, clearW * 1.2) + countOverLed(tr, padsFor(f))) * 1e12 +
+    countUnderTerminal(tr, term, termClear) * 1e9 +
     countNetCrossings(tr) * 1e6 +
     // Both kinds of overlap: the two nets shadowing each other, and a net laid twice over itself. Only the
     // first was scored, so nothing in the search had any reason to stop a net doubling back -- and it did,
@@ -527,6 +533,9 @@ export function planRoutes(
   // Whether a net may branch off an earlier pad rather than chaining from the last one. Off while the polarity
   // is searched -- it is not a polarity question -- and tried once at the end, kept only if it scores better.
   let branching = false;
+  // Whether a net may travel cheaply along tape it has already laid, so a branch merges into the trunk instead
+  // of running beside it. Tried after the polarity search, like branching, and kept only if it scores better.
+  let merging = false;
   const build = (f: boolean[], perNetOrder = false): Trace2D[] => {
     // What the first net routed. The second pays a toll to reuse it, which now buys a different chord rather
     // than the same one dearer, because a face has many ways through.
@@ -538,6 +547,7 @@ export function planRoutes(
       avoid: Map<string, number>,
       perNet: boolean,
       mayBranch: boolean,
+      merging: boolean,
     ): { paths: Vec2[][]; used: Map<string, number> } => {
       const lane = (key: string): number => (net === "pwr" ? lanePref.get(key)?.pwr : lanePref.get(key)?.gnd) ?? 0;
       // Never route through the other net's terminal: shorting the battery is not a trade worth any shortcut.
@@ -589,7 +599,6 @@ export function planRoutes(
         // self-overlap at all (akde-decagon 15% -> 16%), and it costs 21 separate strips there against 2, plus
         // a PWR/GND crossing and an under-chip violation. Not worth it.
         const toll = new Map(avoid);
-        for (const [k, v] of used) toll.set(k, (toll.get(k) ?? 0) + v);
         for (const k of lanePref.keys()) toll.set(k, (toll.get(k) ?? 0) + lane(k));
         for (const [k, p] of corridor.point) {
           if (Math.sqrt(dist2(p, forbidden)) < termClear) toll.set(k, (toll.get(k) ?? 0) + TERMINAL_TOLL);
@@ -611,7 +620,7 @@ export function planRoutes(
         for (const p of corridorPath(corridor, from.face, face, blocked, toll, {
           at: forbidden,
           r: termClear,
-        }, from.pt, onBody)) {
+        }, from.pt, onBody, merging ? new Set(used.keys()) : null)) {
           branch.push(p);
           used.set(ptKey(p), (used.get(ptKey(p)) ?? 0) + 1);
         }
@@ -639,8 +648,8 @@ export function planRoutes(
     // finding a different polarity, not the rerouting. Removed rather than left in as a costly no-op.
     /** Route both nets, PWR with a clear field and GND paying a toll for what PWR took. */
     const routeBoth = (perNet: boolean, mayBranch: boolean): { pwr: Rail; gnd: Rail } => {
-      const a = railPts("pwr", dirPwr, new Map(), perNet, mayBranch);
-      return { pwr: a, gnd: railPts("gnd", dirGnd, a.used, perNet, mayBranch) };
+      const a = railPts("pwr", dirPwr, new Map(), perNet, mayBranch, merging);
+      return { pwr: a, gnd: railPts("gnd", dirGnd, a.used, perNet, mayBranch, merging) };
     };
     /** The pads this net must reach — the only points a branch may legitimately end at. */
     const padsOf = (fl: boolean[], net: "pwr" | "gnd"): Vec2[] =>
@@ -851,6 +860,15 @@ export function planRoutes(
   // once here rather than inside the search: it cuts cross-net overlap and copper (puffin 16% -> 13%, akde-hex
   // 1543 -> 1370) but breaks up the chain that keeps the two nets parallel, so on some patterns it adds a
   // PWR/GND crossing -- a short. The score ranks crossings above overlap, so it is kept only where it does not.
+  merging = true;
+  const merged = build(flip);
+  if (score(merged, flip) < bestS) {
+    best = merged;
+    bestS = score(merged, flip);
+  } else {
+    merging = false;
+  }
+
   branching = true;
   const branched = build(flip);
   if (score(branched, flip) < bestS) {
@@ -1360,16 +1378,17 @@ function corridorPath(
   forbid: { at: Vec2; r: number } | null,
   origin: Vec2 | null,
   legOk: ((a: Vec2, b: Vec2) => boolean) | null,
+  mine: Set<string> | null,
 ): Vec2[] {
   // Try first with every chord that sweeps the other net's terminal *forbidden*, not merely dear. Tolling it
   // was not enough: on church the route took a chord passing 0.090 from the terminal when 0.099 was required and
   // there was room to spare, because a large toll is still finite. If forbidding leaves no route at all, fall
   // back to the tolled search rather than dropping the LED.
   if (forbid) {
-    const strict = searchCorridor(c, from, to, blocked, taken, forbid, true, origin, legOk);
+    const strict = searchCorridor(c, from, to, blocked, taken, forbid, true, origin, legOk, mine);
     if (strict.length) return strict;
   }
-  return searchCorridor(c, from, to, blocked, taken, forbid, false, origin, legOk);
+  return searchCorridor(c, from, to, blocked, taken, forbid, false, origin, legOk, mine);
 }
 
 function searchCorridor(
@@ -1382,6 +1401,7 @@ function searchCorridor(
   strict: boolean,
   origin: Vec2 | null,
   legOk: ((a: Vec2, b: Vec2) => boolean) | null,
+  mine: Set<string> | null,
 ): Vec2[] {
   if (from === to) return [];
   const starts = c.mids.get(from) ?? [];
@@ -1389,12 +1409,19 @@ function searchCorridor(
   if (!starts.length || !goal.size) return [];
 
   const cost = (key: string, step: number): number => {
+    // Travelling along tape this net has already laid is cheap, so a branch *merges* into the trunk instead of
+    // running beside it. Charging for it -- which this used to do -- is what made a net double back along
+    // itself: the cheapest route became one that paralleled its own tape a hair away.
+    //
+    // A discount rather than a negative weight: a negative edge breaks Dijkstra outright, which is exactly what
+    // happened the first time this was tried.
+    const own = mine?.has(key) ? OWN_TAPE_DISCOUNT : 1;
     // The fold penalty is additive, not a multiplier: it is a fixed price for crossing that crease, and it must
     // not scale with how long the step happens to be.
     const fold = c.cost.get(key) ?? 0;
     const chip = blocked.has(key) ? OCCUPIED_TOLL : 1;
     const shared = 1 + (taken.get(key) ?? 0) * SHARED_TOLL;
-    return step * chip * shared + fold;
+    return step * chip * shared * own + fold;
   };
 
   const dist = new Map<string, number>();
