@@ -117,8 +117,13 @@ const SHARED_TOLL = 2;
  * strip the cutter is asked for has to be that width or it cannot be cut from the roll. The consequence is that
  * a pattern must be at a real physical scale for routing to mean anything — on a flat pattern only a few mm
  * across the tape is wider than the model and the keep-outs swallow it. Scale the pattern before routing.
+ *
+ * 3.25mm, half the 6.5mm this was set to. 6.5 was taken as the narrowest roll made, which is not so — 3mm and
+ * 5mm copper tape are both stocked — and at 6.5 the strips crowd these patterns, taking up most of a tile and
+ * leaving the router little room to work in. Narrower tape is also less of the surface stiffened, which matters
+ * on a sheet meant to fold.
  */
-export const TAPE_MM = 6.5;
+export const TAPE_MM = 3.25;
 
 /**
  * The sheet a scale-less pattern is assumed to be cut at. Shared with the STL export's
@@ -555,6 +560,40 @@ export function planRoutes(
       // Push any run that still passes too close to the other net's terminal out around it. The corridor governs
       // its chords and straightening governs its shortcuts, but the segments that land on a pad answer to
       // neither -- and those were the ones still sweeping the terminal on church.
+      /** Push any span lying too close to a chip out around it, on the finished geometry.
+       *
+       *  The terminals already had this; the chips only had a waypoint slide before straightening, so a span
+       *  that ended up beside a chip *after* offsetting and shortcutting had nothing left to move it. Its own
+       *  pads are exempt: landing on them is the point. */
+      const clearChips = (rail: Vec2[], net: "pwr" | "gnd", f: boolean[]): Vec2[] => {
+        const pads = padsFor(f).filter((p) => !(isOrigin(p.pwr) && isOrigin(p.gnd)));
+        const out: Vec2[] = [rail[0]!];
+        for (let i = 1; i < rail.length; i++) {
+          const a = out[out.length - 1]!;
+          const b = rail[i]!;
+          const hit = pads.find((p) => {
+            const own = net === "pwr" ? p.pwr : p.gnd;
+            if (len(sub(a, own)) < clearW * 1.2 || len(sub(b, own)) < clearW * 1.2) return false;
+            return segNearSeg(a, b, p.pwr, p.gnd) < clearW;
+          });
+          if (hit) {
+            const c = { x: (hit.pwr.x + hit.gnd.x) / 2, y: (hit.pwr.y + hit.gnd.y) / 2 };
+            const d = unit(sub(b, a));
+            const n = leftOf(d);
+            const side = sideOf(a, d, c) > 0 ? -1 : 1;
+            const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+            const w = add(mid, scale(n, side * clearW * 1.6));
+            const better =
+              segNearSeg(a, w, hit.pwr, hit.gnd) >= clearW &&
+              segNearSeg(w, b, hit.pwr, hit.gnd) >= clearW &&
+              onBody(a, w) && onBody(w, b);
+            if (better) out.push(w);
+          }
+          out.push(b);
+        }
+        return out;
+      };
+
       const clearTerm = (rail: Vec2[], forbidden: Vec2): Vec2[] => {
         const out: Vec2[] = [rail[0]!];
         for (let i = 1; i < rail.length; i++) {
@@ -635,9 +674,9 @@ export function planRoutes(
 
 
       const rawGnd = asTree(dedupe(dodgeChips(gnd.pts, targets, onBody)), "gnd", term.gnd, padsOf(f, "gnd"))
-        .map((t) => ({ ...t, pts: clearTerm(t.pts, term.pwr) }));
+        .map((t) => ({ ...t, pts: clearChips(clearTerm(t.pts, term.pwr), "gnd", f) }));
       const rawPwr = asTree(dedupe(dodgeChips(pwr.pts, targets, onBody)), "pwr", term.pwr, padsOf(f, "pwr"))
-        .map((t) => ({ ...t, pts: clearTerm(t.pts, term.gnd) }));
+        .map((t) => ({ ...t, pts: clearChips(clearTerm(t.pts, term.gnd), "pwr", f) }));
       const outPwr = straighten(
         rawPwr, [...keepPwr, ...junctions(rawPwr)], bodies, onBody, rawGnd, clearW, overlapTol,
         term.gnd, termClear,
