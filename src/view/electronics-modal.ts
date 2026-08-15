@@ -29,11 +29,11 @@ import {
 import { buildCopperCarrierExport, buildCopperSvgExport } from "../model/copper-svg-export.js";
 import {
   type RoutedCircuit,
+  type Terminals,
   EMPTY_ROUTE,
   tapeWidthFor,
   batteryTerminals,
   planRoutes,
-  terminalHalfWidth,
 } from "../model/electronics-routing.js";
 import type { FoldFile } from "../model/fold-file.js";
 
@@ -483,9 +483,9 @@ export class ElectronicsModal {
       const f = this.faces[this.circuit.battery.face];
       if (f) {
         const term = this.defaultTerminals(f.centroid, f.poly);
-        // Half a trace wide, from the same definition the router plans clearances with — the drawn pad and the
-        // planned pad have to be the same pad.
-        const rSq = terminalHalfWidth(this.tapeW());
+        // The size the router settled on, which may be smaller than the wanted one where the tile is tight —
+        // the drawn pad and the planned pad have to be the same pad.
+        const rSq = term.half;
         const sq = (p: Vec2, cls: string, sign: string): void => {
           const c = this.tp(p);
           parts.push(
@@ -587,7 +587,7 @@ export class ElectronicsModal {
   }
 
   /** The battery's two terminals. Shared with the router so the copper lands on the drawn squares. */
-  private defaultTerminals(c: Vec2, poly?: Vec2[]): { pwr: Vec2; gnd: Vec2 } {
+  private defaultTerminals(c: Vec2, poly?: Vec2[]): Terminals {
     // The tape width MUST be the router's, not the default: the terminal spacing is derived from it, so a
     // different width here draws the two pads somewhere the copper never goes. On a pattern read as a 130mm
     // sheet the default 6.5 put them several pattern-widths off the tile — off-canvas entirely.

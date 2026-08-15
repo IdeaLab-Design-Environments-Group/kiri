@@ -212,8 +212,8 @@ describe("model/electronics-routing", () => {
     for (const name of ["house.fkld", "church.fkld", "puffin.fkld", "akde-hex.fkld"]) {
       const { faces } = load(name);
       const tapeW = tapeWidthFor(faces);
-      const hw = terminalHalfWidth(tapeW);
       const term = batteryTerminals(faces[0]!.centroid, patternDiag(faces), faces[0]!.poly, tapeW);
+      const hw = term.half; // the size after clamping to the tile — what is actually drawn
       for (const p of [term.pwr, term.gnd]) {
         for (const [dx, dy] of [[hw, hw], [hw, -hw], [-hw, hw], [-hw, -hw]] as [number, number][]) {
           expect(pointInFace(faces, { x: p.x + dx, y: p.y + dy }), `${name} pad corner`).toBeGreaterThanOrEqual(0);
@@ -365,8 +365,9 @@ describe("model/electronics-routing", () => {
       const diag = patternDiag(faces);
       const term = batteryTerminals(faces[0]!.centroid, diag, faces[0]!.poly, tapeWidthFor(faces));
       const tapeW = tapeWidthFor(faces);
-      const gap =
-        Math.hypot(term.pwr.x - term.gnd.x, term.pwr.y - term.gnd.y) - 2 * terminalHalfWidth(tapeW);
+      // term.half, not the wanted size: on a tight tile the pad shrinks to fit, and the gap has to be measured
+      // between the pads that actually get drawn.
+      const gap = Math.hypot(term.pwr.x - term.gnd.x, term.pwr.y - term.gnd.y) - 2 * term.half;
       expect(gap, `${name} terminal gap`).toBeGreaterThan(tapeWidthFor(faces));
     }
   });

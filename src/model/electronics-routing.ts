@@ -174,11 +174,10 @@ const PAD_INTRUDE_MAX = 0.35;
 
 /** What it costs a net to route in the other net's lane, as a multiple of the raw distance.
  *
- *  Swept: 1.5 is the only value that keeps copper out from under every chip, and its overlap is within a
- *  point of the best (akde-decagon 4% against 3%). Higher values buy a crossing on puffin but put copper
- *  under a chip there and drive its overlap back to 24%, which is the wrong trade -- tape under a chip
- *  destroys the part. */
-const LANE_TOLL = 1.5;
+ *  Re-swept once the tape halved, which left more room to detour into: 3 now clears akde-decagon's overlap
+ *  entirely (2% -> 0) and takes a crossing off puffin, where at 6.5mm anything above 1.5 put copper under a
+ *  chip. Above 6 it turns bad again -- puffin 27% overlap at 12. */
+const LANE_TOLL = 3;
 
 /** What it costs to route through the other net's battery terminal. Large: that is a short at the source, so
  *  no detour is too long to avoid it -- but finite, so a terminal boxed in by geometry stays reachable. */
@@ -234,39 +233,48 @@ function polyCrosses(pts: Vec2[], c: Vec2, d: Vec2): boolean {
  *
  *  The preview and the router must agree on these to the last decimal or the copper lands off the pad, so
  *  this is the one definition and both import it. */
-/** Half-width of a battery terminal pad: half a trace wide, so the pads read as part of the wiring rather than
- *  as two large squares, and so they can sit close together. */
-export function terminalHalfWidth(tapeW: number): number {
-  return tapeW * 0.25;
+/** The battery's two terminals: where they sit, and how big each pad is. */
+export interface Terminals {
+  pwr: Vec2;
+  gnd: Vec2;
+  /** Half-width of each pad, after clamping to what the tile can hold. */
+  half: number;
 }
 
-export function batteryTerminals(centre: Vec2, diag: number, poly?: Vec2[], tapeW: number = TAPE_MM): PadPair {
-  // The two terminals sit either side of the battery's centre, just far enough apart for a strip to pass
-  // between them with clearance either side.
+/** Half-width a battery pad wants: a bit over a trace, enough of a landing to fix a cell to while still
+ *  reading as part of the wiring. {@link batteryTerminals} shrinks it where the tile cannot hold it. */
+export function terminalHalfWidth(tapeW: number): number {
+  return tapeW * 0.6;
+}
+
+export function batteryTerminals(centre: Vec2, diag: number, poly?: Vec2[], tapeW: number = TAPE_MM): Terminals {
+  // Two pads either side of the battery's centre, just far enough apart for a strip to pass between them.
   //
-  // Everything here is measured in tape widths rather than in fractions of the pattern, which is what fixed the
-  // original fault: the pads were a fixed diag * 0.0114 half-width at a fixed diag * 0.018 spacing, leaving a
-  // gap narrower than the strip that had to pass through it. Each net's keep-out then reached across its
-  // neighbour, so neither could leave its own pad toward the other side -- geometry with no solution rather
-  // than a routing failure. Tying both to the tape means the gap is always a strip and a bit.
+  // Everything is measured in tape widths rather than fractions of the pattern, which is what fixed the
+  // original fault: pads of a fixed size at a fixed spacing left a gap narrower than the strip that had to pass
+  // through it, so each net's keep-out reached across its neighbour and neither could leave its own pad toward
+  // the other side -- geometry with no solution rather than a routing failure.
   //
-  // Choosing the *axis* for room as well was measured: it improves overlap (akde-decagon 8% -> 4%,
-  // church 5% -> 1%) but costs akde-hex a crossing and two thirds more copper, so it is not worth it.
-  const half = terminalHalfWidth(tapeW);
-  const need = half + tapeW * 0.5; // the pad, plus half a strip
-  const want = half + tapeW * 0.7; // leaves a strip and 40% clearance between the two pads
-  let h = want;
+  // Both the size and the spacing are clamped to the tile. A pad hanging off its tile is copper outside the
+  // shape, which is the one thing the containment rule does not allow, so on a tile too small to hold the pads
+  // at their wanted size they shrink rather than overhang.
+  let half = terminalHalfWidth(tapeW);
+  let h = half + tapeW * 0.7; // leaves a strip and 40% clearance between the two pads
   if (poly && poly.length >= 3) {
     let room = Infinity;
     for (let n = 0; n < poly.length; n++) {
       const d = segPointDist(poly[n]!, poly[(n + 1) % poly.length]!, centre);
       if (d < room) room = d;
     }
-    // Never closer than a strip can pass, even where that overhangs a small tile: a battery on a tile that
-    // small overhangs it physically too, and pads too close to route between are a short at the source.
-    h = Math.max(need + tapeW * 0.2, Math.min(want, room - need));
+    // The far corner of a pad sits at (h + half) across and half up, so keep that inside the tile.
+    // Shrink the *pad* until it fits, never the spacing: the gap between the pads has to stay a full strip and
+    // a bit, or the router cannot get a trace out from between them -- the fault this geometry exists to avoid.
+    // Squeezing the spacing instead left puffin with a gap of 0.58 of a strip and a terminal short.
+    const fit = (hh: number): boolean => Math.hypot(2 * hh + tapeW * 0.7, hh) <= room;
+    while (half > tapeW * 0.2 && !fit(half)) half *= 0.85;
+    h = half + tapeW * 0.7;
   }
-  return { pwr: { x: centre.x + h, y: centre.y }, gnd: { x: centre.x - h, y: centre.y } };
+  return { pwr: { x: centre.x + h, y: centre.y }, gnd: { x: centre.x - h, y: centre.y }, half };
 }
 
 /** Pattern diagonal — the scale every relative length here is expressed in. */
@@ -441,7 +449,7 @@ export function planRoutes(
   const clearW = tapeW * 0.5; // half a tape width: closer than this and copper is under the chip
   // The pad's own half-width plus half a strip, so copper clears the pad itself rather than merely missing its
   // centre.
-  const termClear = terminalHalfWidth(tapeW) + clearW;
+  const termClear = term.half + clearW;
   const overlapTol = tapeW * 0.75; // closer than this and the strips are on each other
   const score = (tr: Trace2D[], f: boolean[]): number =>
     // The width-aware measure, not countOverLed: that one tests zero-width centrelines for a crossing, so it
