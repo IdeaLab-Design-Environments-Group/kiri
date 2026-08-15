@@ -33,6 +33,7 @@ import {
   tapeWidthFor,
   batteryTerminals,
   planRoutes,
+  terminalHalfWidth,
 } from "../model/electronics-routing.js";
 import type { FoldFile } from "../model/fold-file.js";
 
@@ -482,7 +483,9 @@ export class ElectronicsModal {
       const f = this.faces[this.circuit.battery.face];
       if (f) {
         const term = this.defaultTerminals(f.centroid, f.poly);
-        const rSq = this.markerR() * 0.95;
+        // Half a trace wide, from the same definition the router plans clearances with — the drawn pad and the
+        // planned pad have to be the same pad.
+        const rSq = terminalHalfWidth(this.tapeW());
         const sq = (p: Vec2, cls: string, sign: string): void => {
           const c = this.tp(p);
           parts.push(

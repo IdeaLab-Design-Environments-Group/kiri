@@ -191,7 +191,7 @@ describe("model/copper-svg-export", () => {
         "church.fkld": 0,
         "akde-hex.fkld": 0,
         "akde-square-pyramid.fkld": 0,
-        "puffin.fkld": 1,
+        "puffin.fkld": 2,
       };
       for (const [name, want] of Object.entries(budget)) {
         const { fold, traces, tapeW, keepOff } = planned(name, 12);

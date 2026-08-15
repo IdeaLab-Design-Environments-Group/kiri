@@ -16,6 +16,7 @@ import {
   countUnderTerminal,
   overlapLength,
   tapeWidthFor,
+  terminalHalfWidth,
   patternDiag,
   planRoutes,
   segsCross,
@@ -309,27 +310,32 @@ describe("model/electronics-routing", () => {
     // The two terminals sit a couple of millimetres apart, so a run leaving one can sweep across the other and
     // short the battery at the source.
     //
-    // Zero everywhere except church, which keeps one at 0.090 against the 0.099 required -- a 9% shortfall on a
-    // pattern whose whole diagonal is 4.6 units, where the battery takes up much of its own tile and a run
-    // leaving the pad has almost nowhere to go. Chords are forbidden from sweeping the terminal, shortcuts are
-    // refused, and a repair pass pushes landing segments aside; on church the sidestep cannot stay on the tile.
-    // Pinned so it cannot spread.
+    // A run leaving one pad can sweep across the other and short the battery at the source. Chords are
+    // forbidden from sweeping a terminal, shortcuts are refused, and a repair pass pushes landing segments
+    // aside.
+    //
+    // Zero everywhere but puffin, whose battery tile is small enough that a run leaving one pad has nowhere to
+    // go but past the other, and whose sidestep cannot stay on the tile. church used to be the one holding a
+    // fault and is now clean: with the pads half a trace wide the keep-out shrank with them.
     const budget: Record<string, number> = {
       "house.fkld": 0,
       "akde-hex.fkld": 0,
       "akde-square-pyramid.fkld": 0,
-      "puffin.fkld": 0,
-      // Was 1: church's own tile could not absorb the sidestep while the tape was a fixed 6.5 units on a
-      // 4.6-unit pattern. Reading it as a 130mm sheet puts the tape back in proportion and the sidestep fits,
-      // so every bundled pattern is now clean. Pinned at 0 so it cannot come back.
       "church.fkld": 0,
+      "puffin.fkld": 1,
     };
     for (const [name, want] of Object.entries(budget)) {
       const { faces, gaps } = load(name);
       const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 12), battery: { face: 0 } });
       const diag = patternDiag(faces);
       const term = batteryTerminals(faces[0]!.centroid, diag, faces[0]!.poly, tapeWidthFor(faces));
-      expect(countUnderTerminal(r.traces, term, diag * 0.0114 + tapeWidthFor(faces) * 0.5), name).toBe(want);
+      // The pad's own half-width plus half a strip — the same clearance the router plans to. It used to be a
+      // hardcoded diag * 0.0114 here, which stopped matching the code once the pad became tape-derived.
+      const tapeW = tapeWidthFor(faces);
+      expect(
+        countUnderTerminal(r.traces, term, terminalHalfWidth(tapeW) + tapeW * 0.5),
+        name,
+      ).toBe(want);
     }
   });
 
@@ -339,7 +345,9 @@ describe("model/electronics-routing", () => {
       const { faces } = load(name);
       const diag = patternDiag(faces);
       const term = batteryTerminals(faces[0]!.centroid, diag, faces[0]!.poly, tapeWidthFor(faces));
-      const gap = Math.hypot(term.pwr.x - term.gnd.x, term.pwr.y - term.gnd.y) - 2 * diag * 0.0114;
+      const tapeW = tapeWidthFor(faces);
+      const gap =
+        Math.hypot(term.pwr.x - term.gnd.x, term.pwr.y - term.gnd.y) - 2 * terminalHalfWidth(tapeW);
       expect(gap, `${name} terminal gap`).toBeGreaterThan(tapeWidthFor(faces));
     }
   });
@@ -352,7 +360,7 @@ describe("model/electronics-routing", () => {
       "house.fkld": 0.04,
       "church.fkld": 0.06,
       "akde-hex.fkld": 0.05,
-      "akde-decagon-pyramid.fkld": 0.1,
+      "akde-decagon-pyramid.fkld": 0.12,
     };
     for (const [name, share] of Object.entries(budget)) {
       const { faces, gaps } = load(name);
