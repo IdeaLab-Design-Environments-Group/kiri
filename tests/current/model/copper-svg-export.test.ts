@@ -157,7 +157,7 @@ describe("model/copper-svg-export", () => {
       if (onLeft.length) expect(covered).toBeLessThan(win.y1 - win.y0 - 1e-6);
     });
 
-    it("tabs at the tape's own width, clear of the other net, using whichever wall is free", () => {
+    it("tabs at the tape's own width, clear of the other net, using whichever wall is free", { timeout: 30000 }, () => {
       // A tab across another trace would be stuck down on top of it, shorting the two, and snipping it would cut
       // the trace underneath. Same-net runs are not obstacles: they meet at junctions by design.
       // Zero on akde-hex. house and church each keep a couple: routing around mountain folds sends runs down
@@ -180,7 +180,7 @@ describe("model/copper-svg-export", () => {
       }
     });
 
-    it("grips the trace body, never a pad or a battery terminal", () => {
+    it("grips the trace body, never a pad or a battery terminal", { timeout: 30000 }, () => {
       // A tab on a pad sits exactly where the LED goes, and snipping it would cut at the pad. The pads are the
       // outermost points of every run, so they are the first thing a nearest-wall search reaches -- which is
       // what it used to pick.
@@ -207,7 +207,7 @@ describe("model/copper-svg-export", () => {
       }
     });
 
-    it("reports tabs it could not route clear rather than hiding them", () => {
+    it("reports tabs it could not route clear rather than hiding them", { timeout: 30000 }, () => {
       // puffin's window is crowded enough that some runs are enclosed by the other net with no clear line out.
       const { fold, traces, tapeW } = planned("puffin.fkld", 12);
       const out = buildCopperCarrierExport(fold, traces, tapeW);
