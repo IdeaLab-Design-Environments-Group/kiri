@@ -216,6 +216,16 @@ function sideOf(origin: Vec2, dir: Vec2, p: Vec2): number {
   return c >= 0 ? 1 : -1;
 }
 
+/** Whether segment ab properly crosses any of the given polylines. */
+function crossesAny(a: Vec2, b: Vec2, lines: Vec2[][]): boolean {
+  for (const line of lines) {
+    for (let i = 1; i < line.length; i++) {
+      if (segsCross(a, b, line[i - 1]!, line[i]!)) return true;
+    }
+  }
+  return false;
+}
+
 /** True when segments ab and cd properly cross (interiors meet; shared endpoints and collinear touching
  *  do not count — same-net tape is allowed to touch). */
 export function segsCross(a: Vec2, b: Vec2, c: Vec2, d: Vec2): boolean {
@@ -545,6 +555,7 @@ export function planRoutes(
       net: "pwr" | "gnd",
       rev: boolean,
       avoid: Map<string, number>,
+      theirTape: Vec2[][] | null,
       perNet: boolean,
       mayBranch: boolean,
       merging: boolean,
@@ -620,7 +631,7 @@ export function planRoutes(
         for (const p of corridorPath(corridor, from.face, face, blocked, toll, {
           at: forbidden,
           r: termClear,
-        }, from.pt, onBody, merging ? new Set(used.keys()) : null)) {
+        }, from.pt, onBody, merging ? new Set(used.keys()) : null, theirTape)) {
           branch.push(p);
           used.set(ptKey(p), (used.get(ptKey(p)) ?? 0) + 1);
         }
@@ -648,8 +659,9 @@ export function planRoutes(
     // finding a different polarity, not the rerouting. Removed rather than left in as a costly no-op.
     /** Route both nets, PWR with a clear field and GND paying a toll for what PWR took. */
     const routeBoth = (perNet: boolean, mayBranch: boolean): { pwr: Rail; gnd: Rail } => {
-      const a = railPts("pwr", dirPwr, new Map(), perNet, mayBranch, merging);
-      return { pwr: a, gnd: railPts("gnd", dirGnd, a.used, perNet, mayBranch, merging) };
+      const a = railPts("pwr", dirPwr, new Map(), null, perNet, mayBranch, merging);
+      // GND is routed knowing exactly where PWR's tape lies, so it can go round rather than across it.
+      return { pwr: a, gnd: railPts("gnd", dirGnd, a.used, a.paths, perNet, mayBranch, merging) };
     };
     /** The pads this net must reach — the only points a branch may legitimately end at. */
     const padsOf = (fl: boolean[], net: "pwr" | "gnd"): Vec2[] =>
@@ -1379,16 +1391,17 @@ function corridorPath(
   origin: Vec2 | null,
   legOk: ((a: Vec2, b: Vec2) => boolean) | null,
   mine: Set<string> | null,
+  theirs: Vec2[][] | null,
 ): Vec2[] {
   // Try first with every chord that sweeps the other net's terminal *forbidden*, not merely dear. Tolling it
   // was not enough: on church the route took a chord passing 0.090 from the terminal when 0.099 was required and
   // there was room to spare, because a large toll is still finite. If forbidding leaves no route at all, fall
   // back to the tolled search rather than dropping the LED.
-  if (forbid) {
-    const strict = searchCorridor(c, from, to, blocked, taken, forbid, true, origin, legOk, mine);
+  if (forbid || theirs?.length) {
+    const strict = searchCorridor(c, from, to, blocked, taken, forbid, true, origin, legOk, mine, theirs);
     if (strict.length) return strict;
   }
-  return searchCorridor(c, from, to, blocked, taken, forbid, false, origin, legOk, mine);
+  return searchCorridor(c, from, to, blocked, taken, forbid, false, origin, legOk, mine, theirs);
 }
 
 function searchCorridor(
@@ -1402,6 +1415,7 @@ function searchCorridor(
   origin: Vec2 | null,
   legOk: ((a: Vec2, b: Vec2) => boolean) | null,
   mine: Set<string> | null,
+  theirs: Vec2[][] | null,
 ): Vec2[] {
   if (from === to) return [];
   const starts = c.mids.get(from) ?? [];
@@ -1465,7 +1479,14 @@ function searchCorridor(
         // nodes cannot see that, so the chord itself is measured.
         const sweeps = forbid ? segPointDist(here, m, forbid.at) < forbid.r : false;
         if (sweeps && strict) continue;
-        const w = best + cost(k, Math.sqrt(dist2(here, m))) * (sweeps ? TERMINAL_TOLL : 1);
+        // Cutting across the other net's tape is a short, and until now the search could not see one: crossings
+        // were only counted after a whole plan was built, so nothing could steer around them. A chord that
+        // crosses the other net is refused outright on the strict pass -- which is what makes a run go the long
+        // way round instead -- and merely very dear on the fallback, so a pad walled in by the other net stays
+        // reachable.
+        const cuts = theirs ? crossesAny(here, m, theirs) : false;
+        if (cuts && strict) continue;
+        const w = best + cost(k, Math.sqrt(dist2(here, m))) * (sweeps || cuts ? TERMINAL_TOLL : 1);
         if (w < (dist.get(k) ?? Infinity)) {
           dist.set(k, w);
           prev.set(k, at);

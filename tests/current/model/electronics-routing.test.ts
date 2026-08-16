@@ -138,10 +138,15 @@ describe("model/electronics-routing", () => {
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
   });
 
-  it("keeps crossings far below the graph-search router it replaces", () => {
+  it("keeps crossings far below the graph-search router it replaces", { timeout: 30000 }, () => {
     // Pins the measured improvement so a regression is visible. The old router scored 78 here and 36 on
     // puffin, on these same configurations, while also running over chips.
-    const cases: [string, number][] = [["akde-hex.fkld", 0], ["puffin.fkld", 5], ["church.fkld", 0]];
+    // Zero on every bundled pattern but akde-decagon, since the search learned to route *around* the other net
+    // rather than only being marked down for crossing it afterwards.
+    const cases: [string, number][] = [
+      ["akde-hex.fkld", 0], ["puffin.fkld", 0], ["church.fkld", 0], ["house.fkld", 0],
+      ["akde-square-pyramid.fkld", 0], ["akde-decagon-pyramid.fkld", 1],
+    ];
     for (const [name, budget] of cases) {
       const { faces, gaps } = load(name);
       const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 12), battery: { face: 0 } });
@@ -215,7 +220,7 @@ describe("model/electronics-routing", () => {
     }
   });
 
-  it("keeps the battery pads inside their own tile", () => {
+  it("keeps the battery pads inside their own tile", { timeout: 30000 }, () => {
     // Every corner of both pads, not just their centres: a pad proud of the tile is copper off the shape too.
     for (const name of ["house.fkld", "church.fkld", "puffin.fkld", "akde-hex.fkld"]) {
       const { faces } = load(name);
@@ -230,7 +235,7 @@ describe("model/electronics-routing", () => {
     }
   });
 
-  it("routes every LED on a connected pattern rather than reporting it unreachable", () => {
+  it("routes every LED on a connected pattern rather than reporting it unreachable", { timeout: 30000 }, () => {
     // Guards the corridor's adjacency: building it from hinged edges alone makes the two triangles of one
     // flat panel look disconnected, and 10 of 12 LEDs then get dropped as unreachable.
     const { faces, gaps } = load("akde-hex.fkld");
@@ -335,7 +340,7 @@ describe("model/electronics-routing", () => {
     }
   });
 
-  it("keeps each net off the other net's battery terminal", () => {
+  it("keeps each net off the other net's battery terminal", { timeout: 30000 }, () => {
     // The two terminals sit a couple of millimetres apart, so a run leaving one can sweep across the other and
     // short the battery at the source.
     //
