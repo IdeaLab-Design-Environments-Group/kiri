@@ -634,6 +634,9 @@ export class ElectronicsModal {
     if (out.padTabs > 0) {
       msg += ` — ${out.padTabs} tab${out.padTabs === 1 ? "" : "s"} grip a pad (run too short to grip elsewhere)`;
     }
+    if (out.componentTabs > 0) {
+      msg += ` — warning: ${out.componentTabs} tab${out.componentTabs === 1 ? "" : "s"} pass over a component`;
+    }
     if (out.crossingTabs > 0) {
       msg += ` — warning: ${out.crossingTabs} tab${out.crossingTabs === 1 ? "" : "s"} cross another trace`;
     }

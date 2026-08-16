@@ -53,6 +53,14 @@ function planned(name: string, n = 6) {
   return { fold, faces, traces: r.traces, tapeW: tapeWidthFor(faces), keepOff };
 }
 
+/** Distance from a point to a segment. */
+function ptSeg(p: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }): number {
+  const abx = b.x - a.x, aby = b.y - a.y;
+  const l2 = abx * abx + aby * aby;
+  const t = l2 < 1e-18 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * abx + (p.y - a.y) * aby) / l2));
+  return Math.hypot(p.x - (a.x + abx * t), p.y - (a.y + aby * t));
+}
+
 /** Flat point to sheet coordinates, the same shift-and-flip the exports use. */
 function sheetPoint(fold: any, p: { x: number; y: number }): { x: number; y: number } {
   const coords = fold.vertices_coords as number[][];
@@ -205,6 +213,53 @@ describe("model/copper-svg-export", () => {
         expect(gripping, `${name} anchors on a component`).toBeLessThanOrEqual(want);
         expect(out.tabPaths.length).toBeGreaterThan(0);
       }
+    });
+
+    it("does not run a tab over a pad or a terminal", { timeout: 30000 }, () => {
+      // Keeping the *anchor* off a component was not enough: the tab still crossed parts on its way to the
+      // wall, where it is stuck down on top of one and cuts into it when snipped. Zero everywhere but puffin,
+      // whose window is crowded enough that some runs have no clear line out at all -- those fall back to the
+      // shortest tab and are reported, not hidden.
+      const budget: Record<string, number> = {
+        "house.fkld": 0,
+        "church.fkld": 0,
+        "akde-hex.fkld": 0,
+        "akde-decagon-pyramid.fkld": 0,
+        "puffin.fkld": 2,
+      };
+      for (const [name, want] of Object.entries(budget)) {
+        const { fold, traces, tapeW, keepOff } = planned(name, 12);
+        const out = buildCopperCarrierExport(fold, traces, tapeW, "x", keepOff);
+        expect(out.componentTabs, `${name} tabs over a component`).toBeLessThanOrEqual(want);
+
+        // Cross-check against the geometry rather than trusting the count.
+        const sheetKeep = keepOff.map((p) => sheetPoint(fold, p));
+        let over = 0;
+        for (const path of out.tabPaths) {
+          const hit = sheetKeep.some((q) =>
+            path.slice(1).some((_, i) => ptSeg(q, path[i]!, path[i + 1]!) < tapeW * 0.999),
+          );
+          if (hit) over++;
+        }
+        expect(over, `${name} tab paths over a component`).toBeLessThanOrEqual(want);
+      }
+    });
+
+    it("uses more than one wall when the runs are spread out", { timeout: 30000 }, () => {
+      // All tabs diving for the same edge means long runs across the window and more chance of crossing
+      // something; spreading them keeps each one short.
+      const { fold, traces, tapeW, keepOff } = planned("akde-decagon-pyramid.fkld", 12);
+      const out = buildCopperCarrierExport(fold, traces, tapeW, "x", keepOff);
+      const { window: win } = out.frame;
+      const walls = new Set<string>();
+      for (const path of out.tabPaths) {
+        const e = path[path.length - 1]!;
+        if (Math.abs(e.x - win.x0) < 1e-6) walls.add("left");
+        else if (Math.abs(e.x - win.x1) < 1e-6) walls.add("right");
+        else if (Math.abs(e.y - win.y0) < 1e-6) walls.add("top");
+        else if (Math.abs(e.y - win.y1) < 1e-6) walls.add("bottom");
+      }
+      expect(walls.size).toBeGreaterThanOrEqual(3);
     });
 
     it("reports tabs it could not route clear rather than hiding them", { timeout: 30000 }, () => {

@@ -229,6 +229,14 @@ export interface CopperCarrierExport {
    * goes and is snipped at the pad, so it is counted rather than passed off as clean.
    */
   padTabs: number;
+  /**
+   * Tabs whose route out passes over a pad or a terminal.
+   *
+   * Only the fallback can produce one: when no candidate anchor, wall or sideways step gets clear of the
+   * components and the other net, the shortest is used anyway rather than leaving the trace loose. Such a tab
+   * is stuck down on top of a part and cuts into it when snipped, so it is counted and shown.
+   */
+  componentTabs: number;
   /** Tab centrelines in sheet coordinates, so a preview can draw exactly what will be cut. */
   tabPaths: Vec2[][];
   /** The frame's window and outer edge in sheet coordinates, likewise. */
@@ -290,6 +298,7 @@ export function buildCopperCarrierExport(
   let tabs = 0;
   let crossingTabs = 0;
   let padTabs = 0;
+  let componentTabs = 0;
   const tabPaths: Vec2[][] = [];
   rings.forEach(({ net, ring }, ri) => {
     if (ring.length < 3) return;
@@ -302,6 +311,7 @@ export function buildCopperCarrierExport(
     const { index, side } = choice;
     if (!choice.clear) crossingTabs++;
     if (choice.onComponent) padTabs++;
+    if (choice.overComponent) componentTabs++;
     tabPaths.push(choice.path);
     // Open the ring: drop the vertex the tab attaches at, so the trace stays joined to its tab.
     const open = ring.slice(index + 1).concat(ring.slice(0, index));
@@ -340,6 +350,7 @@ export function buildCopperCarrierExport(
     counts: { traces: runs.length, tabs },
     crossingTabs,
     padTabs,
+    componentTabs,
     tabPaths,
     frame: { window: win, outer: { x0: ox0, y0: oy0, x1: ox1, y1: oy1 } },
     widthMm: tapeW,
@@ -384,7 +395,14 @@ function pickTab(
   win: Win,
   tapeW: number,
   avoid: Vec2[],
-): { index: number; side: Side; path: Vec2[]; clear: boolean; onComponent: boolean } | null {
+): {
+  index: number;
+  side: Side;
+  path: Vec2[];
+  clear: boolean;
+  onComponent: boolean;
+  overComponent: boolean;
+} | null {
   /** Whether a ring point is too close to a pad or terminal to tab onto. */
   const onComponent = (p: Vec2): boolean =>
     avoid.some((q) => Math.hypot(p.x - q.x, p.y - q.y) < tapeW * PAD_CLEAR);
@@ -424,7 +442,7 @@ function pickTab(
   }
   candidates.sort((a, b) => a.reach - b.reach || a.index - b.index);
 
-  let fallback: { index: number; side: Side; path: Vec2[] } | null = null;
+  let fallback: { index: number; side: Side; path: Vec2[]; over?: boolean } | null = null;
   for (const c of candidates) {
     const a = ring[c.index]!;
     const across = perpTo(c.side);
@@ -433,16 +451,41 @@ function pickTab(
       : { x: a.x + across.x * c.step * tapeW, y: a.y + across.y * c.step * tapeW };
     const end = onWindow(bend ?? a, c.side, win);
     const path = bend ? [a, bend, end] : [a, end];
-    if (!fallback) fallback = { index: c.index, side: c.side, path };
+    if (!fallback) fallback = { index: c.index, side: c.side, path, over: false };
+    // A tab may not run *over* a pad or a terminal on its way out, not merely start off one. Keeping the anchor
+    // clear was not enough: the run itself passed across components on the way to the wall, where it would be
+    // stuck down on top of the part and cut into it when snipped.
+    const overComponent = avoid.some((q) => {
+      for (let k = 1; k < path.length; k++) {
+        if (ptSegDist(q, path[k - 1]!, path[k]!) < tapeW * PAD_CLEAR) return true;
+      }
+      return false;
+    });
+    if (overComponent) {
+      // Remember the shortest one anyway: if nothing at all is clear, a tab over a part still beats a trace
+      // left loose in the window.
+      if (!fallback) fallback = { index: c.index, side: c.side, path, over: true };
+      continue;
+    }
     const blocked = others.some((o) => {
       for (let k = 1; k < path.length; k++) {
         if (segNearRing(path[k - 1]!, path[k]!, o, tapeW)) return true;
       }
       return false;
     });
-    if (!blocked) return { index: c.index, side: c.side, path, clear: true, onComponent: forcedOntoComponent };
+    if (!blocked) {
+      return {
+        index: c.index, side: c.side, path,
+        clear: true, onComponent: forcedOntoComponent, overComponent: false,
+      };
+    }
   }
-  return fallback ? { ...fallback, clear: false, onComponent: forcedOntoComponent } : null;
+  return fallback
+    ? {
+        index: fallback.index, side: fallback.side, path: fallback.path,
+        clear: false, onComponent: forcedOntoComponent, overComponent: !!fallback.over,
+      }
+    : null;
 }
 
 /** Whether the tab segment a-q comes within a tape width of any edge of `ring`. */
