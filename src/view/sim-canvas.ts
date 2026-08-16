@@ -65,6 +65,7 @@ const OVERLAY_COLOURS: Record<AnchoredMesh["kind"], number> = {
   "led-body": 0xd8b24a,
   "batt-pwr": 0xee3b30,
   "batt-gnd": 0x2b2f36,
+  mark: 0xffffff,
 };
 
 export class SimCanvas {
@@ -91,6 +92,7 @@ export class SimCanvas {
   /** The electronics layer on the folded model, positioned from the live folded corners. */
   private overlayMeshes: THREE.Mesh[] = [];
   private overlaySpec: AnchoredMesh[] = [];
+  private overlayVisible = true;
   private geo: THREE.BufferGeometry | null = null;
   private posAttr: THREE.BufferAttribute | null = null;
   // 3D-printed thick-tile layer (rebuilt each frame from the live folded positions).
@@ -455,16 +457,28 @@ export class SimCanvas {
         }),
       );
       // Copper under the components, as in the layout: pads and chips read on top of the tape they land on.
-      mesh.renderOrder = m.kind === "pwr" || m.kind === "gnd" ? 3 : 4;
+      // Copper behind the components, and the polarity marks on top of both.
+      mesh.renderOrder = m.kind === "pwr" || m.kind === "gnd" ? 3 : m.kind === "mark" ? 5 : 4;
+      mesh.visible = this.overlayVisible;
       this.overlayMeshes.push(mesh);
       this.group.add(mesh);
     }
     this.updateOverlay();
   }
 
+  /** Show or hide the electronics layer without discarding it, so toggling it back is instant. */
+  setOverlayVisible(visible: boolean): void {
+    const wasHidden = !this.overlayVisible;
+    this.overlayVisible = visible;
+    for (const mesh of this.overlayMeshes) mesh.visible = visible;
+    // While hidden the layer is not repositioned, so bring it up to date on the way back — otherwise it
+    // reappears where the model was when it was switched off, which on a static fold never corrects itself.
+    if (visible && wasHidden) this.updateOverlay();
+  }
+
   /** Recompute where the layer is, from the live folded corners. */
   private updateOverlay(): void {
-    if (!this.fold || !this.overlaySpec.length) return;
+    if (!this.fold || !this.overlaySpec.length || !this.overlayVisible) return;
     const p = this.fold.model.position;
     this.overlaySpec.forEach((m, i) => {
       const mesh = this.overlayMeshes[i];

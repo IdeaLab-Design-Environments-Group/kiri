@@ -130,4 +130,25 @@ describe("view/sim-modal", () => {
     expect(status.textContent).toContain("Cannot simulate this model: boom");
     expect(canvasInstances[0]?.stop).toHaveBeenCalled();
   });
+
+  it("offers an electronics toggle only when there is something to show", async () => {
+    const { document } = installDom();
+    const { SimModal } = await import("../../../src/view/sim-modal.js");
+    const modal = new SimModal() as any;
+    modal.mountTrigger(document.createElement("div") as unknown as HTMLElement);
+
+    // Nothing placed: a switch for an empty layer is a puzzle, not a control.
+    expect(modal.elecControl.hidden).toBe(true);
+
+    modal.setTraces([{ kind: "pwr", tris: [] }]);
+    expect(modal.elecControl.hidden).toBe(false);
+    expect(modal.showElectronics).toBe(true);
+
+    modal.elecToggle.checked = false;
+    modal.elecToggle.dispatch("change", {});
+    expect(modal.showElectronics).toBe(false);
+
+    modal.setTraces([]);
+    expect(modal.elecControl.hidden).toBe(true);
+  });
 });

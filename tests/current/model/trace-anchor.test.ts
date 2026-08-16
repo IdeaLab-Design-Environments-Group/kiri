@@ -146,5 +146,23 @@ describe("model/trace-anchor", () => {
       });
       expect(Math.max(...ys) - Math.min(...ys)).toBeCloseTo(1.5, 9);
     });
+    it("marks which pad is positive and which is negative", () => {
+      // Colour says it in the layout, where the legend is beside it. On a model turned to any angle, the shape
+      // has to say it: a bar on the negative pad, a cross on the positive one.
+      const faces = flatFaces({
+        vertices_coords: [[0, 0], [20, 0], [20, 20], [0, 20]],
+        faces_vertices: [[0, 1, 2, 3]],
+        edges_vertices: [],
+        edges_assignment: [],
+      } as never);
+      const meshes = anchorOverlay(
+        [], [{ pwr: { x: 6, y: 10 }, gnd: { x: 14, y: 10 } }], null, 2, faces,
+      );
+      const marks = meshes.filter((m) => m.kind === "mark");
+      expect(marks).toHaveLength(1);
+      // Three bars in all: one for the minus, two crossed for the plus. Two triangles each.
+      expect(marks[0]!.tris).toHaveLength(3 * 6);
+    });
+
   });
 });

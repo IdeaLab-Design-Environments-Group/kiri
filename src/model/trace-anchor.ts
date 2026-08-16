@@ -28,7 +28,7 @@ export interface AnchorPoint {
  */
 export interface AnchoredMesh {
   /** What this is, so the view can colour it as the 2D layout does. */
-  kind: "pwr" | "gnd" | "led-pwr" | "led-gnd" | "led-body" | "batt-pwr" | "batt-gnd";
+  kind: "pwr" | "gnd" | "led-pwr" | "led-gnd" | "led-body" | "batt-pwr" | "batt-gnd" | "mark";
   /** Corners in threes: one triangle per three entries. */
   tris: AnchorPoint[];
 }
@@ -90,6 +90,9 @@ export function anchorOverlay(
     if (p.length) out.push({ kind: "led-pwr", tris: p });
     const g = square(pad.gnd, tapeW * 0.55, faces);
     if (g.length) out.push({ kind: "led-gnd", tris: g });
+    // Which end is which, marked on the part itself. Colour alone says it in the 2D layout, where the legend is
+    // beside it; on the model, turned to any angle and lit from any side, a shape is the only reliable label.
+    marks(out, pad.pwr, pad.gnd, tapeW * 0.55, faces);
   }
 
   if (terminals) {
@@ -97,12 +100,40 @@ export function anchorOverlay(
     if (p.length) out.push({ kind: "batt-pwr", tris: p });
     const g = square(terminals.gnd, terminals.half, faces);
     if (g.length) out.push({ kind: "batt-gnd", tris: g });
+    marks(out, terminals.pwr, terminals.gnd, terminals.half, faces);
   }
 
   return out;
 }
 
 const isOrigin = (p: Vec2): boolean => p.x === 0 && p.y === 0;
+
+/**
+ * A `+` on the positive pad and a `−` on the negative one, drawn as bars rather than text.
+ *
+ * Geometry, not a font: a glyph would need a texture atlas and would face the camera rather than lying on the
+ * part, and this has to read at any angle on a folded model. Bars are anchored like everything else, so they
+ * fold with the pad they are on.
+ */
+function marks(out: AnchoredMesh[], pwr: Vec2, gnd: Vec2, half: number, faces: FlatFace[]): void {
+  const arm = half * 0.62;   // reaches most of the way across the pad
+  const thick = half * 0.26;
+  const bars: AnchorPoint[] = [];
+  // Minus: one bar. Plus: the same bar crossed. Drawn in the pattern's own axes, as the pads are.
+  pushQuad(bars, [
+    { x: gnd.x - arm, y: gnd.y - thick }, { x: gnd.x + arm, y: gnd.y - thick },
+    { x: gnd.x + arm, y: gnd.y + thick }, { x: gnd.x - arm, y: gnd.y + thick },
+  ], faces);
+  pushQuad(bars, [
+    { x: pwr.x - arm, y: pwr.y - thick }, { x: pwr.x + arm, y: pwr.y - thick },
+    { x: pwr.x + arm, y: pwr.y + thick }, { x: pwr.x - arm, y: pwr.y + thick },
+  ], faces);
+  pushQuad(bars, [
+    { x: pwr.x - thick, y: pwr.y - arm }, { x: pwr.x + thick, y: pwr.y - arm },
+    { x: pwr.x + thick, y: pwr.y + arm }, { x: pwr.x - thick, y: pwr.y + arm },
+  ], faces);
+  if (bars.length) out.push({ kind: "mark", tris: bars });
+}
 
 /** A strip of the given width along `pts`, as triangles. Corners are squared off rather than mitred: a mitre
  *  that overshoots a face boundary would anchor outside it, and at these widths the difference is invisible. */
