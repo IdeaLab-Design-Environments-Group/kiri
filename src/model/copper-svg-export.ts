@@ -14,7 +14,7 @@
  */
 import type { FoldFile } from "./fold-file.js";
 import type { Vec2 } from "./electronics.js";
-import type { Trace2D } from "./electronics-routing.js";
+import { type Trace2D, landingWidth } from "./electronics-routing.js";
 
 const MARGIN = 8; // mm — must match the FKLD SVG export or the layers import misaligned
 
@@ -103,6 +103,8 @@ export function buildCopperSvgExport(
   traces: Trace2D[],
   tapeW: number,
   baseName = "kiri",
+  /** LED pads, so a run can be narrowed where it lands between an LED's legs. */
+  pads: { pwr: Vec2; gnd: Vec2 }[] = [],
 ): CopperSvgExport {
   const { w, h, T } = sheetFrame(fold);
 
@@ -110,7 +112,7 @@ export function buildCopperSvgExport(
     const runs = traces.filter((t) => t.net === net && t.pts.length >= 2);
     const paths: string[] = [];
     for (const t of runs) {
-      const ring = outlineStrip(t.pts, tapeW);
+      const ring = outlineStrip(t.pts, widthsFor(t, tapeW, pads));
       if (ring.length < 3) continue;
       paths.push(`<path d="${ringPath(ring.map(T))}" />`);
     }
@@ -135,25 +137,62 @@ export function buildCopperSvgExport(
 }
 
 /**
+ * The tape's width at each point of a run.
+ *
+ * Full width along the way, narrowed only where it lands on an LED pad whose partner leg is close enough that a
+ * full-width strip would reach across the chip. The two nets would otherwise meet under the part and short it,
+ * and a vinyl cutter could not weed the gap between them.
+ */
+function widthsFor(t: Trace2D, tapeW: number, pads: { pwr: Vec2; gnd: Vec2 }[]): number[] {
+  return t.pts.map((p) => {
+    let w = tapeW;
+    for (const pad of pads) {
+      const own = t.net === "pwr" ? pad.pwr : pad.gnd;
+      const mate = t.net === "pwr" ? pad.gnd : pad.pwr;
+      if (Math.hypot(p.x - own.x, p.y - own.y) > tapeW) continue; // not landing here
+      w = Math.min(w, landingWidth(own, mate, tapeW));
+    }
+    return w;
+  });
+}
+
+/**
  * The closed outline of a strip of tape laid along `pts`.
  *
  * Walks one side of the centreline out and the other back, so the result is a single ring: the shape to cut.
  * Corners are mitred, capped so a sharp turn produces a blunt corner rather than a long spike.
  */
-export function outlineStrip(pts: Vec2[], width: number): Vec2[] {
+export function outlineStrip(pts: Vec2[], width: number | number[]): Vec2[] {
   const clean = dedupe(pts);
-  if (clean.length < 2 || width <= 0) return [];
-  const half = width / 2;
-  const left = offsetSide(clean, half);
-  const right = offsetSide(clean, -half);
+  if (clean.length < 2) return [];
+  // A width per point, so a run can narrow where it lands between an LED's legs and stay full width elsewhere.
+  const widths = Array.isArray(width)
+    ? matchLength(width, pts, clean)
+    : clean.map(() => width);
+  if (widths.every((w) => w <= 0)) return [];
+  const left = offsetSide(clean, widths.map((w) => w / 2));
+  const right = offsetSide(clean, widths.map((w) => -w / 2));
   return [...left, ...right.reverse()];
 }
 
+/** Carry per-point widths through `dedupe`, which may have dropped repeated points. */
+function matchLength(widths: number[], original: Vec2[], clean: Vec2[]): number[] {
+  const out: number[] = [];
+  let j = 0;
+  for (const p of clean) {
+    while (j < original.length && (original[j]!.x !== p.x || original[j]!.y !== p.y)) j++;
+    out.push(widths[Math.min(j, widths.length - 1)] ?? widths[widths.length - 1] ?? 0);
+    j++;
+  }
+  return out;
+}
+
 /** Offset a polyline to one side by `off` (signed), mitring at the joins. */
-function offsetSide(pts: Vec2[], off: number): Vec2[] {
+function offsetSide(pts: Vec2[], offs: number[]): Vec2[] {
   const out: Vec2[] = [];
   const miterLimit = 2;
   for (let i = 0; i < pts.length; i++) {
+    const off = offs[i] ?? offs[offs.length - 1] ?? 0;
     const prev = i > 0 ? pts[i - 1]! : null;
     const next = i < pts.length - 1 ? pts[i + 1]! : null;
     const dIn = prev ? unit(sub(pts[i]!, prev)) : unit(sub(next!, pts[i]!));
@@ -317,8 +356,8 @@ export function buildCopperCarrierExport(
     const open = ring.slice(index + 1).concat(ring.slice(0, index));
     if (open.length >= 2) cuts.push(openPath(open));
     // The tab's two sides: its centreline offset either way, so a bent tab keeps its width around the corner.
-    const s1 = offsetSide(choice.path, tapeW / 2);
-    const s2 = offsetSide(choice.path, -tapeW / 2);
+    const s1 = offsetSide(choice.path, choice.path.map(() => tapeW / 2));
+    const s2 = offsetSide(choice.path, choice.path.map(() => -tapeW / 2));
     const q1 = onWindow(s1[s1.length - 1]!, side, win);
     const q2 = onWindow(s2[s2.length - 1]!, side, win);
     s1[s1.length - 1] = q1;

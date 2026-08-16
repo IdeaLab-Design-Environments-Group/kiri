@@ -13,7 +13,9 @@ import {
   countNetCrossings,
   countOverLed,
   countUnderLed,
+  countAcuteJoins,
   countUnderTerminal,
+  landingWidth,
   overlapLength,
   selfOverlapLength,
   tapeWidthFor,
@@ -407,6 +409,43 @@ describe("model/electronics-routing", () => {
       const tapeW = tapeWidthFor(faces);
       const got = selfOverlapLength(r.traces, tapeW * 0.75) / totalLength(r.traces);
       expect(got, `${name} lays itself twice`).toBeLessThanOrEqual(share);
+    }
+  });
+
+  it("leaves a weedable gap under every LED", { timeout: 30000 }, () => {
+    // These are cut on a vinyl cutter. Where an LED's legs are closer together than the tape is wide -- which
+    // they are on the denser patterns, by up to 0.7mm -- a full-width strip on each leg would meet under the
+    // chip and short it, and there would be nothing to weed between them. The landing narrows instead.
+    for (const name of ["house.fkld", "church.fkld", "puffin.fkld", "akde-decagon-pyramid.fkld", "akde-hex.fkld"]) {
+      const { faces, gaps } = load(name);
+      const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 12), battery: { face: 0 } });
+      const tapeW = tapeWidthFor(faces);
+      for (const pad of r.pads) {
+        if (pad.pwr.x === 0 && pad.pwr.y === 0) continue;
+        const sep = Math.hypot(pad.pwr.x - pad.gnd.x, pad.pwr.y - pad.gnd.y);
+        const a = landingWidth(pad.pwr, pad.gnd, tapeW);
+        const b = landingWidth(pad.gnd, pad.pwr, tapeW);
+        expect(sep - a / 2 - b / 2, `${name} copper gap under a chip`).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("keeps two runs of one net from leaving a point at a sharp angle", { timeout: 30000 }, () => {
+    // The wedge of substrate between two strips doubling back on each other tears rather than weeding, so a
+    // sharp join is a cutting defect. None at a battery terminal or an LED pad on any bundled pattern; the few
+    // that remain are mid-route junctions on the two crowded ones, and are pinned.
+    const budget: Record<string, number> = {
+      "house.fkld": 0,
+      "church.fkld": 0,
+      "akde-hex.fkld": 0,
+      "akde-square-pyramid.fkld": 0,
+      "puffin.fkld": 2,
+      "akde-decagon-pyramid.fkld": 1,
+    };
+    for (const [name, want] of Object.entries(budget)) {
+      const { faces, gaps } = load(name);
+      const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 12), battery: { face: 0 } });
+      expect(countAcuteJoins(r.traces), `${name} sharp joins`).toBeLessThanOrEqual(want);
     }
   });
 

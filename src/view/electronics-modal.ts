@@ -291,7 +291,7 @@ export class ElectronicsModal {
       this.statusEl.textContent = "Nothing to export — place a battery and at least one LED first";
       return;
     }
-    const out = buildCopperSvgExport(this.fold, this.routed.traces, this.tapeW());
+    const out = buildCopperSvgExport(this.fold, this.routed.traces, this.tapeW(), "kiri", this.routed.pads);
     this.download(out.filename, out.svg);
     const { pwr, gnd } = out.counts;
     const w = Math.round(out.widthMm * 100) / 100;

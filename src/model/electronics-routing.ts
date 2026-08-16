@@ -259,6 +259,29 @@ export interface Terminals {
   half: number;
 }
 
+/**
+ * Bare gap wanted between the two nets' copper under an LED, as a fraction of the tape width.
+ *
+ * A vinyl cutter has to be able to weed the strip between the pads, and the chip has to sit on bare substrate
+ * rather than bridging its own two legs. Where the LED's legs are closer together than the tape is wide -- which
+ * they are on the denser patterns, by up to 0.7mm -- the copper of the two nets would otherwise overlap under
+ * the part and short it.
+ */
+export const LED_GAP_FRAC = 0.35;
+
+/**
+ * How wide the tape may be where it lands on `pad`, given the chip it shares with `mate`.
+ *
+ * Full width wherever there is room. Where there is not, it narrows to leave the gap, down to a floor: below
+ * that the strip is too thin to cut, and the honest answer is that the pattern is too small for this tape
+ * rather than a sliver that tears on weeding.
+ */
+export function landingWidth(pad: Vec2, mate: Vec2, tapeW: number): number {
+  const sep = Math.hypot(pad.x - mate.x, pad.y - mate.y);
+  const room = sep - tapeW * LED_GAP_FRAC;
+  return Math.max(tapeW * 0.35, Math.min(tapeW, room));
+}
+
 /** Half-width a battery pad wants: a bit over a trace, enough of a landing to fix a cell to while still
  *  reading as part of the wiring. {@link batteryTerminals} shrinks it where the tile cannot hold it. */
 export function terminalHalfWidth(tapeW: number): number {
@@ -504,6 +527,9 @@ export function planRoutes(
     // Both kinds of overlap: the two nets shadowing each other, and a net laid twice over itself. Only the
     // first was scored, so nothing in the search had any reason to stop a net doubling back -- and it did,
     // over a fifth of its length on some patterns.
+    // A sharp join is a cutting defect -- the wedge of substrate between two strips leaving a point at a narrow
+    // angle tears rather than weeding -- so it ranks with the overlaps rather than below them.
+    countAcuteJoins(tr) * overlapTol * 4 +
     overlapLength(tr, overlapTol) +
     selfOverlapLength(tr, overlapTol) +
     // Length ranks last: of two plans equal on everything that matters more, the shorter and straighter wins.
@@ -1821,6 +1847,41 @@ export function selfOverlapLength(traces: Trace2D[], tol: number): number {
 function sharesEnd(a: Vec2, b: Vec2, c: Vec2, d: Vec2): boolean {
   const same = (p: Vec2, q: Vec2): boolean => Math.abs(p.x - q.x) < 1e-9 && Math.abs(p.y - q.y) < 1e-9;
   return same(a, c) || same(a, d) || same(b, c) || same(b, d);
+}
+
+/**
+ * Joins where two runs of one net leave the same point at a sharp angle.
+ *
+ * A cutter has to weed the substrate between them, and a narrow wedge tears or lifts instead of coming away —
+ * so two strips doubling back alongside each other are a cutting defect, not just an untidy one.
+ */
+export function countAcuteJoins(traces: Trace2D[], minAngle = Math.PI / 6): number {
+  let n = 0;
+  for (const net of ["pwr", "gnd"] as const) {
+    const mine = traces.filter((t) => t.net === net);
+    const at = new Map<string, Vec2[]>();
+    for (const t of mine) {
+      for (let i = 0; i < t.pts.length; i++) {
+        const here = t.pts[i]!;
+        const away = t.pts[i === 0 ? 1 : i - 1];
+        if (!away) continue;
+        const k = ptKey(here);
+        at.set(k, [...(at.get(k) ?? []), { x: away.x - here.x, y: away.y - here.y }]);
+      }
+    }
+    for (const dirs of at.values()) {
+      for (let i = 0; i < dirs.length; i++) {
+        for (let j = i + 1; j < dirs.length; j++) {
+          const a = Math.atan2(dirs[i]!.y, dirs[i]!.x);
+          const b = Math.atan2(dirs[j]!.y, dirs[j]!.x);
+          let d = Math.abs(a - b);
+          if (d > Math.PI) d = 2 * Math.PI - d;
+          if (d < minAngle) n++;
+        }
+      }
+    }
+  }
+  return n;
 }
 
 /** Total copper length. */
