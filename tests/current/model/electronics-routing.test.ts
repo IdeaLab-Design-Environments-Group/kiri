@@ -13,6 +13,7 @@ import {
   countNetCrossings,
   countOverLed,
   countUnderLed,
+  type Trace2D,
   countAcuteJoins,
   countUnderTerminal,
   landingWidth,
@@ -24,6 +25,7 @@ import {
   planRoutes,
   segsCross,
   totalLength,
+  trimAtOwnJoins,
 } from "../../../src/model/electronics-routing.js";
 
 const EXAMPLES = new URL("../../../public/examples/", import.meta.url).pathname;
@@ -447,6 +449,38 @@ describe("model/electronics-routing", () => {
       const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 12), battery: { face: 0 } });
       expect(countAcuteJoins(r.traces), `${name} sharp joins`).toBeLessThanOrEqual(want);
     }
+  });
+
+  describe("trimAtOwnJoins", () => {
+    it("stops the run with more to save at the crossing, keeping its shape", () => {
+      // Two runs of one net meeting: the connection is made where they touch, so the tail past it is copper for
+      // nothing. It ends *at* the crossing -- same straight run, just shorter.
+      //
+      // Which one gives way is the one with the longer redundant tail, not whichever comes first in the list:
+      // here the horizontal run has 5 units past the crossing against the vertical run's 4.
+      const across: Trace2D = { net: "pwr", pts: [{ x: 0, y: 5 }, { x: 10, y: 5 }] };
+      const down: Trace2D = { net: "pwr", pts: [{ x: 5, y: 0 }, { x: 5, y: 9 }] };
+      const out = trimAtOwnJoins([across, down], [{ x: 0, y: 5 }, { x: 5, y: 0 }]);
+      expect(out[0]!.pts).toEqual([{ x: 0, y: 5 }, { x: 5, y: 5 }]);
+      // Only one gives way -- cutting both would break the connection they make.
+      expect(out[1]!.pts).toEqual(down.pts);
+    });
+
+    it("keeps a tail that carries a pad", () => {
+      // The tail past the crossing is the reason that run exists, so cutting it would strand the pad.
+      const trunk: Trace2D = { net: "gnd", pts: [{ x: 0, y: 5 }, { x: 10, y: 5 }] };
+      const branch: Trace2D = { net: "gnd", pts: [{ x: 5, y: 0 }, { x: 5, y: 9 }] };
+      const out = trimAtOwnJoins([trunk, branch], [{ x: 0, y: 5 }, { x: 5, y: 0 }, { x: 5, y: 9 }]);
+      expect(out.find((t) => t.pts.some((p) => p.y === 9))!.pts).toEqual(branch.pts);
+    });
+
+    it("leaves the other net alone", () => {
+      // Two nets crossing is a short to be routed around, never something to trim: cutting one would break it.
+      const pwr: Trace2D = { net: "pwr", pts: [{ x: 0, y: 5 }, { x: 10, y: 5 }] };
+      const gnd: Trace2D = { net: "gnd", pts: [{ x: 5, y: 0 }, { x: 5, y: 9 }] };
+      const out = trimAtOwnJoins([pwr, gnd], [{ x: 0, y: 5 }, { x: 5, y: 0 }]);
+      expect(out.map((t) => t.pts)).toEqual([pwr.pts, gnd.pts]);
+    });
   });
 
   it("keeps the two nets off each other", { timeout: 20000 }, () => {

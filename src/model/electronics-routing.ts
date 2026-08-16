@@ -842,7 +842,10 @@ export function planRoutes(
       // carrying an overshoot the other paid to avoid.
       const straightened = padClear([...outPwr, ...outGnd]);
       const asRouted = padClear([...rawPwr, ...rawGnd]);
-      return score(straightened, f) <= score(asRouted, f) ? straightened : asRouted;
+      const keep = [...keepPwr, ...keepGnd];
+      const a = trimAtOwnJoins(straightened, keep);
+      const b = trimAtOwnJoins(asRouted, keep);
+      return score(a, f) <= score(b, f) ? a : b;
     };
     // Two visiting orders, judged by the same objective. The shared one walks both nets through the hinges in
     // step, which keeps them parallel; the per-net one orders each net's own pads, which stops a net zigzagging
@@ -1882,6 +1885,110 @@ export function countAcuteJoins(traces: Trace2D[], minAngle = Math.PI / 6): numb
     }
   }
   return n;
+}
+
+/**
+ * Where two runs of one net meet, stop the redundant one at the meeting point.
+ *
+ * The connection is made where they touch — everything past that is copper laid for nothing, and on a cut sheet
+ * it is a second strip to weed and stick down alongside the first. So the run is truncated at the crossing,
+ * keeping its shape and simply ending earlier.
+ *
+ * Only a tail that reaches nothing is removed: if the part beyond the crossing carries a pad or a terminal, it
+ * is the reason that run exists and it stays.
+ *
+ * This handles runs that *cross*. Runs that merely lie alongside each other were tried too -- dropping a tail
+ * already covered by another run of its own net -- and were not worth it: repeated tape stayed at the same 26%
+ * across the bundled patterns, because what is left is mid-run parallelism rather than redundant ends, and it
+ * split church's copper from four strips into eight. Mid-run doubling cannot be trimmed without cutting the
+ * connection; it has to not be routed that way in the first place.
+ */
+export function trimAtOwnJoins(traces: Trace2D[], required: Vec2[]): Trace2D[] {
+  const needed = new Set(required.map(ptKey));
+  const out = traces.map((t) => ({ ...t, pts: t.pts.slice() }));
+
+  // Junctions count as required too. A tail past a crossing may be where another run of this net attaches, and
+  // cutting it strands that run and everything beyond it -- an open circuit, not a saving. Pads and terminals
+  // alone were not enough: this orphaned a pad on puffin.
+  const seen = new Map<string, number>();
+  for (const t of out) {
+    for (const k of new Set(t.pts.map(ptKey))) seen.set(k, (seen.get(k) ?? 0) + 1);
+  }
+  for (const [k, n] of seen) if (n > 1) needed.add(k);
+
+  // Longest redundant tail first, and re-checked each round: which run gives way should be the one with more
+  // copper to save, not whichever happens to come first in the list.
+  for (;;) {
+    let best: { i: number; fromEnd: boolean; cut: { index: number; at: Vec2 }; saved: number } | null = null;
+    for (let i = 0; i < out.length; i++) {
+      const t = out[i]!;
+      const others = out.filter((o, k) => k !== i && o.net === t.net);
+      if (!others.length) continue;
+      for (const fromEnd of [true, false]) {
+        const cut = firstJoin(t.pts, others, fromEnd);
+        if (!cut) continue;
+        const tail = fromEnd ? t.pts.slice(cut.index + 1) : t.pts.slice(0, cut.index + 1);
+        if (!tail.length || tail.some((p) => needed.has(ptKey(p)))) continue;
+        const from = fromEnd ? cut.at : cut.at;
+        let saved = len(sub(tail[fromEnd ? 0 : tail.length - 1]!, from));
+        for (let k = 1; k < tail.length; k++) saved += len(sub(tail[k]!, tail[k - 1]!));
+        if (!best || saved > best.saved) best = { i, fromEnd, cut, saved };
+      }
+    }
+    if (!best) break;
+    const t = out[best.i]!;
+    t.pts = best.fromEnd
+      ? [...t.pts.slice(0, best.cut.index + 1), best.cut.at]
+      : [best.cut.at, ...t.pts.slice(best.cut.index + 1)];
+    // Junctions can appear or vanish as runs shorten, so the protected set is rebuilt before the next round.
+    const again = new Map<string, number>();
+    for (const o of out) for (const k of new Set(o.pts.map(ptKey))) again.set(k, (again.get(k) ?? 0) + 1);
+    for (const [k, n] of again) if (n > 1) needed.add(k);
+  }
+
+  return out.filter((t) => t.pts.length >= 2);
+}
+
+const mid = (a: Vec2, b: Vec2): Vec2 => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+
+/** Whether `p` lies on `pts` within `tol`. */
+function onRun(p: Vec2, pts: Vec2[], tol: number): boolean {
+  for (let i = 1; i < pts.length; i++) {
+    if (segPointDist(pts[i - 1]!, pts[i]!, p) <= tol) return true;
+  }
+  return false;
+}
+
+/** The crossing nearest the chosen end of `pts`, as the index of the segment before it and the point itself. */
+function firstJoin(
+  pts: Vec2[],
+  others: Trace2D[],
+  fromEnd: boolean,
+): { index: number; at: Vec2 } | null {
+  const order = fromEnd
+    ? [...Array(pts.length - 1).keys()].reverse()
+    : [...Array(pts.length - 1).keys()];
+  for (const i of order) {
+    const a = pts[i]!, b = pts[i + 1]!;
+    for (const o of others) {
+      for (let j = 1; j < o.pts.length; j++) {
+        const c = o.pts[j - 1]!, d = o.pts[j]!;
+        if (!segsCross(a, b, c, d)) continue;
+        const at = intersection(a, b, c, d);
+        if (at) return { index: i, at };
+      }
+    }
+  }
+  return null;
+}
+
+/** Where two crossing segments meet. */
+function intersection(a: Vec2, b: Vec2, c: Vec2, d: Vec2): Vec2 | null {
+  const r = sub(b, a), sVec = sub(d, c);
+  const den = cross(r, sVec);
+  if (Math.abs(den) < 1e-12) return null;
+  const t = cross(sub(c, a), sVec) / den;
+  return { x: a.x + r.x * t, y: a.y + r.y * t };
 }
 
 /** Total copper length. */
