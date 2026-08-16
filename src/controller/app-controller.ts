@@ -23,8 +23,8 @@ import { resolveSvgExport } from "../services/svg-export-service.js";
 import { resolveStlExport } from "../services/stl-export-service.js";
 import { DEFAULT_PRINT_SIZE } from "../model/stl-export.js";
 import { EMPTY_CIRCUIT, type Circuit, flatFaces, gapGraph } from "../model/electronics.js";
-import { planRoutes } from "../model/electronics-routing.js";
-import { type AnchoredTrace, anchorTraces } from "../model/trace-anchor.js";
+import { batteryTerminals, patternDiag, planRoutes, tapeWidthFor } from "../model/electronics-routing.js";
+import { type AnchoredMesh, anchorOverlay } from "../model/trace-anchor.js";
 import type { ConvertPanel } from "../view/convert-panel.js";
 import type { ViewerFrame } from "../view/viewer-frame.js";
 import type { HeaderActions } from "../view/header-actions.js";
@@ -128,13 +128,19 @@ export class AppController {
    *
    *  Routed here rather than read back from the Electronics modal: the modal may never have been opened, and
    *  the copper belongs on the model either way. */
-  private tracesForSim(fold: FoldFile | null): AnchoredTrace[] {
+  private tracesForSim(fold: FoldFile | null): AnchoredMesh[] {
     const circuit = this.store.getState().circuit ?? EMPTY_CIRCUIT;
     if (!fold || (!circuit.leds.length && !circuit.battery)) return [];
     try {
       const faces = flatFaces(fold);
       const gaps = gapGraph(fold, faces).gaps;
-      return anchorTraces(planRoutes(faces, gaps, circuit).traces, faces);
+      const routed = planRoutes(faces, gaps, circuit);
+      const tapeW = tapeWidthFor(faces);
+      const face = circuit.battery ? faces[circuit.battery.face] : null;
+      const term = face
+        ? batteryTerminals(face.centroid, patternDiag(faces), face.poly, tapeW)
+        : null;
+      return anchorOverlay(routed.traces, routed.pads, term, tapeW, faces);
     } catch {
       // A pattern the router cannot read is not a reason to break the simulation.
       return [];

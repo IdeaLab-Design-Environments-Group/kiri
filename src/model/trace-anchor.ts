@@ -12,7 +12,26 @@
  * guess, so a wrong answer never appears on the model as if it were real.
  */
 import { type FlatFace, type Vec2, pointInFace } from "./electronics.js";
-import type { Trace2D } from "./electronics-routing.js";
+import type { PadPair, Trace2D } from "./electronics-routing.js";
+
+/** A point of the flat pattern, expressed against the mesh: a triangle and the weights inside it. */
+export interface AnchorPoint {
+  tri: [number, number, number];
+  bary: [number, number, number];
+}
+
+/**
+ * A flat piece of the electronics layer, ready to be drawn on the folded model.
+ *
+ * Triangles rather than lines, so the copper has the width it will really be cut at and the pads read as pads.
+ * Every corner is anchored, so the whole piece folds with the face it sits on.
+ */
+export interface AnchoredMesh {
+  /** What this is, so the view can colour it as the 2D layout does. */
+  kind: "pwr" | "gnd" | "led-pwr" | "led-gnd" | "led-body" | "batt-pwr" | "batt-gnd";
+  /** Corners in threes: one triangle per three entries. */
+  tris: AnchorPoint[];
+}
 
 /** One trace, with every point expressed against the mesh instead of the flat plane. */
 export interface AnchoredTrace {
@@ -38,6 +57,97 @@ export function anchorTraces(traces: Trace2D[], faces: FlatFace[]): AnchoredTrac
     if (points.length >= 2) out.push({ net: t.net, points });
   }
   return out;
+}
+
+/**
+ * Build the whole electronics layer as flat triangles, pinned to the mesh.
+ *
+ * Everything is laid out in the flat pattern first -- ribbons along the traces, squares on the pads -- and only
+ * then anchored, so the 3D view shows the same shapes at the same sizes as the 2D layout rather than a separate
+ * idea of them. A piece whose corners do not all land on the material is dropped: half a pad drawn against a
+ * guessed face is worse than no pad.
+ */
+export function anchorOverlay(
+  traces: Trace2D[],
+  pads: PadPair[],
+  terminals: { pwr: Vec2; gnd: Vec2; half: number } | null,
+  tapeW: number,
+  faces: FlatFace[],
+): AnchoredMesh[] {
+  const out: AnchoredMesh[] = [];
+
+  for (const t of traces) {
+    const tris = ribbon(t.pts, tapeW, faces);
+    if (tris.length) out.push({ kind: t.net, tris });
+  }
+
+  for (const pad of pads) {
+    if (isOrigin(pad.pwr) && isOrigin(pad.gnd)) continue;
+    // The chip body first, so the two pads sit on top of it as they do in the layout.
+    const body = ribbon([pad.pwr, pad.gnd], tapeW * 0.5, faces);
+    if (body.length) out.push({ kind: "led-body", tris: body });
+    const p = square(pad.pwr, tapeW * 0.55, faces);
+    if (p.length) out.push({ kind: "led-pwr", tris: p });
+    const g = square(pad.gnd, tapeW * 0.55, faces);
+    if (g.length) out.push({ kind: "led-gnd", tris: g });
+  }
+
+  if (terminals) {
+    const p = square(terminals.pwr, terminals.half, faces);
+    if (p.length) out.push({ kind: "batt-pwr", tris: p });
+    const g = square(terminals.gnd, terminals.half, faces);
+    if (g.length) out.push({ kind: "batt-gnd", tris: g });
+  }
+
+  return out;
+}
+
+const isOrigin = (p: Vec2): boolean => p.x === 0 && p.y === 0;
+
+/** A strip of the given width along `pts`, as triangles. Corners are squared off rather than mitred: a mitre
+ *  that overshoots a face boundary would anchor outside it, and at these widths the difference is invisible. */
+function ribbon(pts: Vec2[], width: number, faces: FlatFace[]): AnchorPoint[] {
+  const half = width / 2;
+  const tris: AnchorPoint[] = [];
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1]!, b = pts[i]!;
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const L = Math.hypot(dx, dy);
+    if (L < 1e-12) continue;
+    const nx = (-dy / L) * half, ny = (dx / L) * half;
+    const quad: Vec2[] = [
+      { x: a.x + nx, y: a.y + ny },
+      { x: b.x + nx, y: b.y + ny },
+      { x: b.x - nx, y: b.y - ny },
+      { x: a.x - nx, y: a.y - ny },
+    ];
+    pushQuad(tris, quad, faces);
+  }
+  return tris;
+}
+
+/** An axis-aligned square of half-width `half` centred on `c`. */
+function square(c: Vec2, half: number, faces: FlatFace[]): AnchorPoint[] {
+  const tris: AnchorPoint[] = [];
+  pushQuad(
+    tris,
+    [
+      { x: c.x - half, y: c.y - half },
+      { x: c.x + half, y: c.y - half },
+      { x: c.x + half, y: c.y + half },
+      { x: c.x - half, y: c.y + half },
+    ],
+    faces,
+  );
+  return tris;
+}
+
+/** Anchor a quad as two triangles, or drop it if any corner is off the material. */
+function pushQuad(into: AnchorPoint[], quad: Vec2[], faces: FlatFace[]): void {
+  const anchored = quad.map((p) => anchorPoint(p, faces));
+  if (anchored.some((a) => !a)) return;
+  const [p0, p1, p2, p3] = anchored as AnchorPoint[];
+  into.push(p0, p1, p2, p0, p2, p3);
 }
 
 /** Pin one point: the face under it, a triangle of that face, and the weights inside that triangle. */

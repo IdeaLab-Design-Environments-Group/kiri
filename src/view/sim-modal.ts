@@ -1,6 +1,6 @@
 import type { FoldScene, SimMaterial } from "../sim/index.js";
 import { DEFAULT_MAX_SUBDIV, TILE_INSET_FRAC } from "../model/tile-subdiv.js";
-import type { AnchoredTrace } from "../model/trace-anchor.js";
+import type { AnchoredMesh } from "../model/trace-anchor.js";
 import type { SimCanvas } from "./sim-canvas.js";
 
 /** Returns a ready fold scene when the sim opens, or null when no model is loaded. */
@@ -27,7 +27,7 @@ export class SimModal {
   private readonly gapSlider: HTMLInputElement;
   private readonly gapValue: HTMLElement;
   private readonly tabs: HTMLButtonElement[];
-  private traces: AnchoredTrace[] = [];
+  private traces: AnchoredMesh[] = [];
   private provider: SimSceneProvider | null = null;
   private canvas: SimCanvas | null = null;
   private material: SimMaterial = "vinyl";
@@ -121,9 +121,9 @@ export class SimModal {
 
   /** The copper to draw on the model, pinned to the mesh. Held until a scene exists, since the modal is built
    *  before anything is loaded and the circuit can change while it is closed. */
-  setTraces(traces: AnchoredTrace[]): void {
+  setTraces(traces: AnchoredMesh[]): void {
     this.traces = traces;
-    this.canvas?.setTraces(traces);
+    this.canvas?.setOverlay(traces);
   }
 
   setProvider(provider: SimSceneProvider): void {
@@ -219,7 +219,7 @@ export class SimModal {
       this.canvas.setTileGap(this.gap); // …and the current gap width
       // Re-applied on every build: setScene replaces the geometry the copper is pinned to, so lines made
       // against the previous scene would point at vertices that no longer exist.
-      this.canvas.setTraces(this.traces);
+      this.canvas.setOverlay(this.traces);
       this.syncDetailVisibility();
       this.applyFold();
       this.canvas.warmToTarget();

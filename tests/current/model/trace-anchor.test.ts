@@ -1,8 +1,13 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { anchorTraces } from "../../../src/model/trace-anchor.js";
+import { anchorOverlay, anchorTraces } from "../../../src/model/trace-anchor.js";
 import { flatFaces, gapGraph, ledOf, type Circuit, type Led } from "../../../src/model/electronics.js";
-import { planRoutes } from "../../../src/model/electronics-routing.js";
+import {
+  batteryTerminals,
+  patternDiag,
+  planRoutes,
+  tapeWidthFor,
+} from "../../../src/model/electronics-routing.js";
 
 const EXAMPLES = new URL("../../../public/examples/", import.meta.url).pathname;
 
@@ -87,5 +92,59 @@ describe("model/trace-anchor", () => {
     } as never);
     const out = anchorTraces([{ net: "gnd", pts: [{ x: 0.5, y: 0.5 }, { x: 99, y: 99 }] }], faces);
     expect(out).toHaveLength(0); // one point left is not a run
+  });
+
+  describe("the whole layer", () => {
+    it("draws copper at the tape's width, plus LED footprints and battery pads", () => {
+      const { fold, faces, traces } = planned("house.fkld");
+      const gaps = gapGraph(fold, faces).gaps;
+      const leds: Led[] = [];
+      const seen = new Set<string>();
+      for (const g of gaps) {
+        const l = ledOf(g.faceA, g.faceB);
+        const k = `${l.a}_${l.b}`;
+        if (seen.has(k)) continue;
+        seen.add(k);
+        leds.push(l);
+        if (leds.length >= 6) break;
+      }
+      const r = planRoutes(faces, gaps, { leds, battery: { face: 0 } } as Circuit);
+      const tapeW = tapeWidthFor(faces);
+      const term = batteryTerminals(faces[0]!.centroid, patternDiag(faces), faces[0]!.poly, tapeW);
+      const meshes = anchorOverlay(r.traces, r.pads, term, tapeW, faces);
+
+      const kinds = new Set(meshes.map((m) => m.kind));
+      expect(kinds.has("pwr") || kinds.has("gnd")).toBe(true);
+      expect(kinds.has("led-pwr")).toBe(true);
+      expect(kinds.has("led-gnd")).toBe(true);
+      expect(kinds.has("led-body")).toBe(true);
+      expect(kinds.has("batt-pwr")).toBe(true);
+      expect(kinds.has("batt-gnd")).toBe(true);
+      // Triangles, in threes.
+      for (const m of meshes) expect(m.tris.length % 3).toBe(0);
+      void traces;
+    });
+
+    it("gives the copper the real tape width, not a hairline", () => {
+      // The width is the whole point of drawing a ribbon rather than a line. On a single flat face the
+      // anchored corners rebuild exactly, so the strip can be measured across.
+      const faces = flatFaces({
+        vertices_coords: [[0, 0], [10, 0], [10, 10], [0, 10]],
+        faces_vertices: [[0, 1, 2, 3]],
+        edges_vertices: [],
+        edges_assignment: [],
+      } as never);
+      const coords = [[0, 0], [10, 0], [10, 10], [0, 10]];
+      const meshes = anchorOverlay(
+        [{ net: "pwr", pts: [{ x: 2, y: 5 }, { x: 8, y: 5 }] }], [], null, 1.5, faces,
+      );
+      expect(meshes).toHaveLength(1);
+      const ys = meshes[0]!.tris.map((pt) => {
+        const [a, b, c] = pt.tri;
+        const [wa, wb, wc] = pt.bary;
+        return coords[a]![1]! * wa + coords[b]![1]! * wb + coords[c]![1]! * wc;
+      });
+      expect(Math.max(...ys) - Math.min(...ys)).toBeCloseTo(1.5, 9);
+    });
   });
 });

@@ -461,10 +461,14 @@ describe("controller/app-controller", () => {
     const led = ledOf(gaps[0]!.faceA, gaps[0]!.faceB);
     controller.updateCircuit({ leds: [led], battery: { face: 0 } });
 
-    expect(sim.traces.length).toBeGreaterThan(0);
-    for (const t of sim.traces as { net: string; points: unknown[] }[]) {
-      expect(["pwr", "gnd"]).toContain(t.net);
-      expect(t.points.length).toBeGreaterThan(1);
+    // The whole electronics layer, not just the copper: the pads and the chip footprints go on the model too.
+    const kinds = new Set((sim.traces as { kind: string }[]).map((m) => m.kind));
+    expect(kinds.has("pwr") || kinds.has("gnd")).toBe(true);
+    expect(kinds.has("led-pwr")).toBe(true);
+    expect(kinds.has("batt-pwr")).toBe(true);
+    for (const m of sim.traces as { tris: unknown[] }[]) {
+      expect(m.tris.length % 3).toBe(0); // triangles, in threes
+      expect(m.tris.length).toBeGreaterThan(0);
     }
   });
 });

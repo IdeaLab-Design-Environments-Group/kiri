@@ -3,6 +3,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { FoldNet, FoldScene, FoldSolver, SimMaterial } from "../sim/index.js";
 import { kineticDamp, removeRigidBodyMotion } from "../sim/index.js";
 import { DEFAULT_MAX_SUBDIV, MAX_TILE_GAP, MIN_TILE_GAP, TILE_INSET_FRAC } from "../model/tile-subdiv.js";
+import type { AnchoredMesh } from "../model/trace-anchor.js";
 
 /**
  * Three.js viewport for the forward fold — renders the FoldNet as lit triangle faces plus
@@ -55,11 +56,16 @@ const SETTLE_REL = 4e-4;
 /** Hard cap: freeze this many frames after reaching the target even if it never fully settles (~4s). */
 const MAX_SETTLE_FRAMES = 240;
 
-/** A trace to draw on the folded model: each point pinned to a triangle of the flat pattern. */
-export interface SimTrace {
-  net: "pwr" | "gnd";
-  points: { tri: [number, number, number]; bary: [number, number, number] }[];
-}
+/** The 2D layout's own colours, so the model and the layout show the same thing. */
+const OVERLAY_COLOURS: Record<AnchoredMesh["kind"], number> = {
+  pwr: 0xff0000,
+  gnd: 0x222222,
+  "led-pwr": 0xee3b30,
+  "led-gnd": 0x2b2f36,
+  "led-body": 0xd8b24a,
+  "batt-pwr": 0xee3b30,
+  "batt-gnd": 0x2b2f36,
+};
 
 export class SimCanvas {
   private readonly scene = new THREE.Scene();
@@ -82,9 +88,9 @@ export class SimCanvas {
   private molMesh: THREE.Mesh | null = null;
   private molGeo: THREE.BufferGeometry | null = null;
   private creaseLines: THREE.LineSegments[] = [];
-  /** Copper shown on the folded model: one line per trace, positioned from the live folded corners. */
-  private traceLines: THREE.Line[] = [];
-  private traceSpec: SimTrace[] = [];
+  /** The electronics layer on the folded model, positioned from the live folded corners. */
+  private overlayMeshes: THREE.Mesh[] = [];
+  private overlaySpec: AnchoredMesh[] = [];
   private geo: THREE.BufferGeometry | null = null;
   private posAttr: THREE.BufferAttribute | null = null;
   // 3D-printed thick-tile layer (rebuilt each frame from the live folded positions).
@@ -421,47 +427,50 @@ export class SimCanvas {
   }
 
   /**
-   * Show the planned copper on the folded model.
+   * Show the electronics layer on the folded model: copper at its real width, the LED footprints and the
+   * battery pads, in the colours the 2D layout uses.
    *
-   * Each trace point is stored as a triangle of the flat pattern plus barycentric weights, not as a position.
-   * A face is rigid and stays planar while the sheet folds, so the same weights over the *folded* corners give
-   * where that point of tape has ended up — the copper then follows the fold exactly, for free, without being
-   * re-solved.
+   * Every corner is stored as a triangle of the flat pattern plus the weights that place it inside — see
+   * `anchorOverlay`. A face is rigid and stays planar while the sheet folds, so the same weights over the
+   * *folded* corners give where that piece has ended up. The layer then follows the fold exactly, for three
+   * multiplies per corner, with nothing re-solved.
    */
-  setTraces(traces: SimTrace[]): void {
-    this.disposeTraces();
-    this.traceSpec = traces;
-    if (!traces.length || !this.fold) return;
-    for (const t of traces) {
+  setOverlay(meshes: AnchoredMesh[]): void {
+    this.disposeOverlay();
+    this.overlaySpec = meshes;
+    if (!meshes.length || !this.fold) return;
+    for (const m of meshes) {
       const geo = new THREE.BufferGeometry();
-      geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(t.points.length * 3), 3));
-      const line = new THREE.Line(
+      geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(m.tris.length * 3), 3));
+      const mesh = new THREE.Mesh(
         geo,
-        new THREE.LineBasicMaterial({
-          color: t.net === "pwr" ? 0xff2d2d : 0x1a1a1a,
-          // Drawn over the sheet rather than fighting it for depth: copper sits on the surface, and z-fighting
-          // against the very faces it is stuck to reads as flicker.
+        new THREE.MeshBasicMaterial({
+          color: OVERLAY_COLOURS[m.kind],
+          // Unlit and depth-test-free: this is a layer stuck to the surface, and shading it or fighting the
+          // very faces it sits on for depth reads as flicker rather than as material.
           depthTest: false,
           transparent: true,
-          opacity: 0.95,
+          opacity: m.kind === "pwr" || m.kind === "gnd" ? 0.85 : 1,
+          side: THREE.DoubleSide,
         }),
       );
-      line.renderOrder = 3;
-      this.traceLines.push(line);
-      this.group.add(line);
+      // Copper under the components, as in the layout: pads and chips read on top of the tape they land on.
+      mesh.renderOrder = m.kind === "pwr" || m.kind === "gnd" ? 3 : 4;
+      this.overlayMeshes.push(mesh);
+      this.group.add(mesh);
     }
-    this.updateTraces();
+    this.updateOverlay();
   }
 
-  /** Recompute where the copper is, from the live folded corners. */
-  private updateTraces(): void {
-    if (!this.fold || !this.traceSpec.length) return;
+  /** Recompute where the layer is, from the live folded corners. */
+  private updateOverlay(): void {
+    if (!this.fold || !this.overlaySpec.length) return;
     const p = this.fold.model.position;
-    this.traceSpec.forEach((t, i) => {
-      const line = this.traceLines[i];
-      if (!line) return;
-      const attr = line.geometry.getAttribute("position") as THREE.BufferAttribute;
-      t.points.forEach((pt, k) => {
+    this.overlaySpec.forEach((m, i) => {
+      const mesh = this.overlayMeshes[i];
+      if (!mesh) return;
+      const attr = mesh.geometry.getAttribute("position") as THREE.BufferAttribute;
+      m.tris.forEach((pt, k) => {
         const [a, b, c] = pt.tri;
         const [wa, wb, wc] = pt.bary;
         attr.setXYZ(
@@ -472,18 +481,18 @@ export class SimCanvas {
         );
       });
       attr.needsUpdate = true;
-      line.geometry.computeBoundingSphere();
+      mesh.geometry.computeBoundingSphere();
     });
   }
 
-  private disposeTraces(): void {
-    for (const line of this.traceLines) {
-      this.group.remove(line);
-      line.geometry.dispose();
-      (line.material as THREE.Material).dispose();
+  private disposeOverlay(): void {
+    for (const mesh of this.overlayMeshes) {
+      this.group.remove(mesh);
+      mesh.geometry.dispose();
+      (mesh.material as THREE.Material).dispose();
     }
-    this.traceLines = [];
-    this.traceSpec = [];
+    this.overlayMeshes = [];
+    this.overlaySpec = [];
   }
 
   private flushGeometry(): void {
@@ -492,7 +501,7 @@ export class SimCanvas {
     this.geo?.computeVertexNormals();
     if (this.molMesh?.visible) this.molGeo?.computeVertexNormals();
     if (this.material === "printed") this.updatePrintedTiles();
-    this.updateTraces();
+    this.updateOverlay();
   }
 
   /**
