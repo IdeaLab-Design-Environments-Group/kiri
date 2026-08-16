@@ -252,52 +252,6 @@ describe("view/electronics-modal", () => {
     delete (globalThis as any).Blob;
   });
 
-  it("shows an imported drawing on the PCB tab, and the layout on the others", () => {
-    const { modal } = openOn(grid2x2());
-    modal.selectTool("battery");
-    tapFlat(modal, { x: 0.5, y: 0.5 });
-
-    modal.loadSvg('<svg viewBox="0 0 40 20"><rect width="10" height="5" fill="#0f0"/></svg>', "board.svg");
-    expect(modal.svg.innerHTML).toContain("<rect");
-    expect(modal.svg.innerHTML).toContain("#0f0");
-    // The layout is not drawn underneath it — this tab is the board, not a mix of the two.
-    expect(modal.svg.innerHTML).not.toContain("el-batt");
-    expect(modal.statusEl.textContent).toContain("board.svg");
-
-    // Switching back brings the layout, with the battery still placed.
-    modal.selectView("strips");
-    expect(modal.svg.innerHTML).toContain("el-batt");
-    expect(modal.svg.innerHTML).not.toContain("#0f0");
-  });
-
-  it("says what it stripped out of an imported drawing", () => {
-    // Silently showing a different drawing than the file contains would be worse than saying so.
-    const { modal } = openOn(grid2x2());
-    modal.loadSvg('<svg viewBox="0 0 10 10"><script>alert(1)</script><rect onclick="x()"/></svg>', "risky.svg");
-    expect(modal.svg.innerHTML).not.toContain("alert");
-    expect(modal.svg.innerHTML).not.toContain("onclick");
-    expect(modal.statusEl.textContent).toContain("removed");
-    expect(modal.statusEl.textContent).toContain("event handler");
-  });
-
-  it("reports a file that is not an SVG instead of blanking the tab", () => {
-    const { modal } = openOn(grid2x2());
-    modal.selectView("pcb");
-    modal.loadSvg("<html>not a drawing</html>", "notes.txt");
-    expect(modal.pcb).toBeNull();
-    expect(modal.statusEl.textContent).toContain("notes.txt");
-  });
-
-  it("keeps a separate window for each tab", () => {
-    // Zooming the board must not move the layout underneath, and the reverse.
-    const { modal } = openOn(grid2x2());
-    modal.loadSvg('<svg viewBox="0 0 40 20"><rect width="1" height="1"/></svg>', "b.svg");
-    const layoutBefore = { ...modal.view };
-    modal.zoomBy(2);
-    expect(modal.view).toEqual(layoutBefore);
-    expect(modal.pcbView.w).toBeLessThan(40 * 1.2);
-  });
-
   it("treats a drag as a pan, not a placement", () => {
     const { modal, edits } = openOn(grid2x2());
     modal.selectTool("battery");

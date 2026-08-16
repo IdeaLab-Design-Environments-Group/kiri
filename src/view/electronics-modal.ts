@@ -28,7 +28,6 @@ import {
   tilePolys,
 } from "../model/electronics.js";
 import { buildCopperCarrierExport, buildCopperSvgExport } from "../model/copper-svg-export.js";
-import { type ImportedSvg, importSvg } from "../model/svg-import.js";
 import {
   type RoutedCircuit,
   type Terminals,
@@ -46,13 +45,10 @@ type Tool = "led" | "battery";
 
 /** How the copper is shown, matching the two ways it can be cut.
  *
- *  `pcb` is a different thing again: someone else's board drawing, imported and shown for reference beside the
- *  layout — it is not routed, exported or otherwise touched.
- *
  *  `strips` is the copper as separate pieces. `carrier` is the 3-layer build: one piece of copper cut as a
  *  frame around the unfolded pattern with every trace held inside it on thin tabs, so the traces arrive
  *  already positioned — align the frame, press them down, snip the tabs, lift the frame away. */
-type ViewMode = "strips" | "carrier" | "pcb";
+type ViewMode = "strips" | "carrier";
 
 export class ElectronicsModal {
   private readonly overlay: HTMLElement;
@@ -66,11 +62,6 @@ export class ElectronicsModal {
   private viewMode: ViewMode = "strips";
   /** Index into `circuit.leds` of the LED under the cursor's last tap, or -1. */
   private selected = -1;
-  /** The imported board drawing, and the window we are looking at it through. Session-only: an import is a
-   *  reference for the work in hand, not part of the pattern, so nothing is written back to the model. */
-  private pcb: ImportedSvg | null = null;
-  private pcbView = { x: 0, y: 0, w: 1, h: 1 };
-  private pcbName = "";
   private fold: FoldFile | null = null;
   private faces: FlatFace[] = [];
   private tiles: TilePoly[] = [];
@@ -116,10 +107,6 @@ export class ElectronicsModal {
             <span class="el-group el-view-modes">
               <button type="button" class="el-view" data-view="traces" title="Show the copper as separate strips">Strips</button>
               <button type="button" class="el-view" data-view="carrier" title="Show the copper as one carrier frame holding every trace in place">Carrier</button>
-              <button type="button" class="el-view" data-view="pcb" title="Import and view a PCB drawing for reference">PCB</button>
-            </span>
-            <span class="el-group el-pcb-group">
-              <button type="button" class="el-import" title="Import a PCB drawing (SVG) to view alongside the layout">Import SVG…</button>
             </span>
             <span class="el-group">
               <button type="button" class="el-export" title="Download the copper as separate strips to cut">Export SVG</button>
@@ -159,7 +146,6 @@ export class ElectronicsModal {
     this.overlay.querySelector(".el-clear")!.addEventListener("click", () => this.clear());
     this.overlay.querySelector(".el-export")!.addEventListener("click", () => this.exportCopper());
     this.overlay.querySelector(".el-export-carrier")!.addEventListener("click", () => this.exportCarrier());
-    this.overlay.querySelector(".el-import")!.addEventListener("click", () => this.pickSvg());
     for (const btn of this.overlay.querySelectorAll<HTMLButtonElement>(".el-view")) {
       const mode = btn.dataset.view as ViewMode;
       btn.addEventListener("click", () => this.selectView(mode));
@@ -239,7 +225,6 @@ export class ElectronicsModal {
   /** Switch between the two ways of showing (and cutting) the copper. */
   private selectView(mode: ViewMode): void {
     this.viewMode = mode;
-    this.syncButtons();
     this.render();
   }
 
@@ -258,13 +243,6 @@ export class ElectronicsModal {
   private syncButtons(): void {
     for (const [t, btn] of this.toolButtons) btn.classList.toggle("is-active", t === this.tool);
     for (const [m, btn] of this.viewButtons) btn.classList.toggle("is-active", m === this.viewMode);
-    // The layout tools do nothing on the PCB tab, and importing does nothing off it: hide rather than leave
-    // buttons that quietly ignore the click.
-    const pcb = this.viewMode === "pcb";
-    for (const sel of [".el-tool", ".el-clear", ".el-export", ".el-export-carrier"]) {
-      for (const btn of this.overlay.querySelectorAll<HTMLElement>(sel)) btn.hidden = pcb;
-    }
-    for (const btn of this.overlay.querySelectorAll<HTMLElement>(".el-import")) btn.hidden = !pcb;
   }
 
   private onCanvasClick(e: MouseEvent): void {
@@ -427,13 +405,6 @@ export class ElectronicsModal {
 
   /** Reset the view to frame the whole pattern with a small relative pad (uniform at any mm scale). */
   private fitView(): void {
-    if (this.viewMode === "pcb") {
-      const b = this.pcb?.viewBox ?? { x: 0, y: 0, w: 1, h: 1 };
-      const p = Math.max(b.w, b.h) * 0.06;
-      this.pcbView = { x: b.x - p, y: b.y - p, w: b.w + 2 * p, h: b.h + 2 * p };
-      this.applyViewBox();
-      return;
-    }
     const pad = Math.max(this.content.w, this.content.h) * 0.06;
     // The pattern occupies the world rect [MARGIN, MARGIN, content.w, content.h] (see `tp`).
     this.view = { x: MARGIN - pad, y: MARGIN - pad, w: this.content.w + 2 * pad, h: this.content.h + 2 * pad };
@@ -441,36 +412,24 @@ export class ElectronicsModal {
   }
 
   /** Push the current `view` window onto the SVG viewBox (preserveAspectRatio keeps it undistorted). */
-  /** The window currently on screen: the pattern's, or the imported drawing's. Kept apart so switching tabs
-   *  does not throw away where you were in either. */
-  private activeView(): { x: number; y: number; w: number; h: number } {
-    return this.viewMode === "pcb" ? this.pcbView : this.view;
-  }
-
   private applyViewBox(): void {
-    const v = this.activeView();
+    const v = this.view;
     this.svg.setAttribute("viewBox", `${fmt(v.x)} ${fmt(v.y)} ${fmt(v.w)} ${fmt(v.h)}`);
   }
 
   /** Zoom by `factor` (>1 in, <1 out) about a world point (defaults to the view centre). */
   private zoomBy(factor: number, about?: Vec2): void {
-    const v = this.activeView();
+    const v = this.view;
     const c = about ?? { x: v.x + v.w / 2, y: v.y + v.h / 2 };
-    // Clamp so we never zoom past ~50× in or past the whole content (with slack) out. The imported drawing has
-    // its own extent, so the limits follow whichever is on screen.
-    const span = this.viewMode === "pcb" && this.pcb
-      ? Math.max(this.pcb.viewBox.w, this.pcb.viewBox.h)
-      : Math.max(this.content.w, this.content.h);
-    const minW = span / 50;
-    const maxW = span * 1.5;
+    // Clamp so we never zoom past ~50× in or past the whole content (with slack) out.
+    const minW = Math.max(this.content.w, this.content.h) / 50;
+    const maxW = Math.max(this.content.w, this.content.h) * 1.5;
     let nw = v.w / factor;
     nw = Math.min(maxW, Math.max(minW, nw));
     const scale = nw / v.w;
     const nh = v.h * scale;
     // Keep the `about` point fixed under the cursor.
-    const moved = { x: c.x - (c.x - v.x) * scale, y: c.y - (c.y - v.y) * scale, w: nw, h: nh };
-    if (this.viewMode === "pcb") this.pcbView = moved;
-    else this.view = moved;
+    this.view = { x: c.x - (c.x - v.x) * scale, y: c.y - (c.y - v.y) * scale, w: nw, h: nh };
     this.applyViewBox();
   }
 
@@ -493,9 +452,8 @@ export class ElectronicsModal {
     const dxPix = e.clientX - this.pan.x;
     const dyPix = e.clientY - this.pan.y;
     // px → world: ctm.a / ctm.d are world-units-per-pixel inverses (pixels per world unit).
-    const v = this.activeView();
-    v.x -= dxPix / (ctm.a || 1);
-    v.y -= dyPix / (ctm.d || 1);
+    this.view.x -= dxPix / (ctm.a || 1);
+    this.view.y -= dyPix / (ctm.d || 1);
     this.applyViewBox();
     this.pan.moved += Math.abs(dxPix) + Math.abs(dyPix);
     this.pan.x = e.clientX;
@@ -518,10 +476,6 @@ export class ElectronicsModal {
   }
 
   private render(): void {
-    if (this.viewMode === "pcb") {
-      this.renderPcb();
-      return;
-    }
     this.replan();
     this.applyViewBox(); // keep the current pan/zoom window across re-renders
 
@@ -698,51 +652,6 @@ export class ElectronicsModal {
     URL.revokeObjectURL(url);
   }
 
-  /** Draw the imported board drawing, or an invitation to import one.
-   *
-   *  The markup goes in as the sanitiser returned it: everything that could act rather than draw has already
-   *  been taken out (see `importSvg`), and it is placed inside the app's own `<svg>`, so the imported root
-   *  element — with whatever width, height or style it declared — never becomes part of the page. */
-  private renderPcb(): void {
-    this.applyViewBox();
-    this.svg.innerHTML = this.pcb ? this.pcb.inner : "";
-    this.renderStatus();
-  }
-
-  /** Ask for a file, sanitise it, and show it. */
-  private pickSvg(): void {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = ".svg,image/svg+xml";
-    input.addEventListener("change", () => {
-      const file = input.files?.[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.addEventListener("load", () => this.loadSvg(String(reader.result ?? ""), file.name));
-      reader.addEventListener("error", () => {
-        this.statusEl.textContent = `Could not read ${file.name}`;
-      });
-      reader.readAsText(file);
-    });
-    input.click();
-  }
-
-  /** Sanitise and show `source`. Separate from the file picking so it can be tested without a file dialog. */
-  loadSvg(source: string, name = "drawing.svg"): void {
-    let imported: ImportedSvg;
-    try {
-      imported = importSvg(source);
-    } catch (err) {
-      this.statusEl.textContent = `${name}: ${err instanceof Error ? err.message : "could not be read"}`;
-      return;
-    }
-    this.pcb = imported;
-    this.pcbName = name;
-    this.selectView("pcb");
-    this.fitView();
-    this.render();
-  }
-
   /** Marker radius scaled to the pattern so it reads at any model size. */
   private markerR(): number {
     return this.diag() * 0.012;
@@ -766,25 +675,6 @@ export class ElectronicsModal {
   }
 
   private renderStatus(): void {
-    if (this.viewMode === "pcb") {
-      if (!this.pcb) {
-        this.statusEl.textContent = "No drawing imported — use Import SVG… to open a PCB drawing";
-        return;
-      }
-      const { elements, handlers, externalRefs } = this.pcb.removed;
-      const stripped = elements + handlers + externalRefs;
-      let msg = `${this.pcbName} · ${Math.round(this.pcb.viewBox.w)} × ${Math.round(this.pcb.viewBox.h)} units`;
-      // Say what was taken out rather than quietly showing a different drawing than the file contains.
-      if (stripped > 0) {
-        const bits: string[] = [];
-        if (elements) bits.push(`${elements} element${elements === 1 ? "" : "s"}`);
-        if (handlers) bits.push(`${handlers} event handler${handlers === 1 ? "" : "s"}`);
-        if (externalRefs) bits.push(`${externalRefs} external reference${externalRefs === 1 ? "" : "s"}`);
-        msg += ` · removed ${bits.join(", ")} for safety`;
-      }
-      this.statusEl.textContent = msg;
-      return;
-    }
     const n = this.circuit.leds.length;
     const batt = this.circuit.battery ? "battery set" : "no battery";
     let msg = `${n} LED${n === 1 ? "" : "s"} · ${batt}`;
