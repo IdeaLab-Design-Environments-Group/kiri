@@ -48,7 +48,7 @@ describe("view/sim-modal", () => {
     modal.setEnabled(true);
 
     expect(host.children).toHaveLength(1);
-    expect(host.children[0]?.textContent).toBe("3D Sim");
+    expect(host.children[0]?.textContent).toBe("Simulation & Routing");
     expect(host.children[0]?.disabled).toBe(false);
   });
 
