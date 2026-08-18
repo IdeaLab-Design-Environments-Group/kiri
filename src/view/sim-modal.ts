@@ -1,12 +1,14 @@
 import type { FoldScene, SimMaterial } from "../sim/index.js";
 import { DEFAULT_MAX_SUBDIV, TILE_INSET_FRAC } from "../model/tile-subdiv.js";
+import type { AnchoredMesh } from "../model/trace-anchor.js";
 import type { SimCanvas } from "./sim-canvas.js";
 
 /** Returns a ready fold scene when the sim opens, or null when no model is loaded. */
 export type SimSceneProvider = () => { scene: FoldScene; title: string } | null;
 
 /**
- * "3D Sim" trigger + modal hosting the Three.js fold simulation. Opening
+ * "Simulation & Routing" trigger + modal hosting the Three.js fold simulation, with the planned copper drawn
+ * on the folded model. The copper is *placed* in the Electronics modal; this is where it is seen in 3D. Opening
  * builds the scene from the current model and starts the CPU solver; the
  * fold slider scrubs `foldPercent` 0→1; "Reset fold" rebuilds from the
  * current model. The canvas (and Three.js) load lazily on first open.
@@ -25,6 +27,10 @@ export class SimModal {
   private readonly gapSlider: HTMLInputElement;
   private readonly gapValue: HTMLElement;
   private readonly tabs: HTMLButtonElement[];
+  private traces: AnchoredMesh[] = [];
+  private showElectronics = true;
+  private readonly elecControl: HTMLElement;
+  private readonly elecToggle: HTMLInputElement;
   private provider: SimSceneProvider | null = null;
   private canvas: SimCanvas | null = null;
   private material: SimMaterial = "vinyl";
@@ -38,7 +44,7 @@ export class SimModal {
     this.trigger = document.createElement("button");
     this.trigger.type = "button";
     this.trigger.className = "sim-trigger";
-    this.trigger.textContent = "3D Sim";
+    this.trigger.textContent = "Simulation & Routing";
     this.trigger.disabled = true;
     this.trigger.addEventListener("click", () => {
       this.open().catch((err) => {
@@ -53,7 +59,7 @@ export class SimModal {
     this.overlay.innerHTML = `
       <div class="sim-modal" role="dialog" aria-modal="true" aria-label="3D fold simulation">
         <header class="sim-modal-header">
-          <span class="sim-modal-title">3D fold simulation</span>
+          <span class="sim-modal-title">Simulation &amp; routing — the copper on the folded model</span>
           <button type="button" class="sim-modal-close" aria-label="Close">×</button>
         </header>
         <div class="sim-modal-body">
@@ -77,12 +83,22 @@ export class SimModal {
             Fold <span class="sim-fold-value">0%</span>
             <input type="range" class="sim-fold-slider" min="0" max="100" step="1" value="0" />
           </label>
+          <label class="sim-fold-control sim-elec-control" title="Show the copper, the LED footprints and the battery pads on the model">
+            <input type="checkbox" class="sim-elec-toggle" checked /> Electronics
+          </label>
           <button type="button" class="sim-reset-btn">Reset fold</button>
         </footer>
       </div>
     `;
     document.body.appendChild(this.overlay);
     this.mount = this.overlay.querySelector(".sim-canvas-mount")!;
+    this.elecControl = this.overlay.querySelector(".sim-elec-control")!;
+    this.elecToggle = this.overlay.querySelector(".sim-elec-toggle")!;
+    this.elecControl.hidden = true;
+    this.elecToggle.addEventListener("change", () => {
+      this.showElectronics = this.elecToggle.checked;
+      this.canvas?.setOverlayVisible(this.showElectronics);
+    });
     this.statusEl = this.overlay.querySelector(".sim-status")!;
     this.foldSlider = this.overlay.querySelector(".sim-fold-slider")!;
     this.foldValue = this.overlay.querySelector(".sim-fold-value")!;
@@ -114,6 +130,20 @@ export class SimModal {
 
   mountTrigger(container: HTMLElement): void {
     container.appendChild(this.trigger);
+  }
+
+  /** The copper to draw on the model, pinned to the mesh. Held until a scene exists, since the modal is built
+   *  before anything is loaded and the circuit can change while it is closed. */
+  setTraces(traces: AnchoredMesh[]): void {
+    this.traces = traces;
+    this.canvas?.setOverlay(traces);
+    this.canvas?.setOverlayVisible(this.showElectronics);
+    this.syncElecToggle();
+  }
+
+  /** Hide the toggle when there is nothing placed — a switch for an empty layer is a puzzle, not a control. */
+  private syncElecToggle(): void {
+    this.elecControl.hidden = this.traces.length === 0;
   }
 
   setProvider(provider: SimSceneProvider): void {
@@ -207,6 +237,10 @@ export class SimModal {
       this.canvas.setScene(built.scene);
       this.canvas.setTileDetail(this.detail); // honor the current adaptive-detail setting
       this.canvas.setTileGap(this.gap); // …and the current gap width
+      // Re-applied on every build: setScene replaces the geometry the copper is pinned to, so lines made
+      // against the previous scene would point at vertices that no longer exist.
+      this.canvas.setOverlay(this.traces);
+      this.canvas.setOverlayVisible(this.showElectronics);
       this.syncDetailVisibility();
       this.applyFold();
       this.canvas.warmToTarget();

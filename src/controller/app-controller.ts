@@ -22,7 +22,9 @@ import { resolveSimScene } from "../services/sim-scene-service.js";
 import { resolveSvgExport } from "../services/svg-export-service.js";
 import { resolveStlExport } from "../services/stl-export-service.js";
 import { DEFAULT_PRINT_SIZE } from "../model/stl-export.js";
-import { EMPTY_CIRCUIT, type Circuit } from "../model/electronics.js";
+import { EMPTY_CIRCUIT, type Circuit, flatFaces, gapGraph } from "../model/electronics.js";
+import { batteryTerminals, patternDiag, planRoutes, tapeWidthFor } from "../model/electronics-routing.js";
+import { type AnchoredMesh, anchorOverlay } from "../model/trace-anchor.js";
 import type { ConvertPanel } from "../view/convert-panel.js";
 import type { ViewerFrame } from "../view/viewer-frame.js";
 import type { HeaderActions } from "../view/header-actions.js";
@@ -114,11 +116,35 @@ export class AppController {
     // the modal has nothing pushed back to it — it draws the placement it was given.
     this.electronics.setEnabled(!!simObject);
     this.electronics.setPattern(simObject);
+    this.sim.setTraces(this.tracesForSim(simObject));
   }
 
   /** Store the authored LED circuit; the render subscription redraws it. */
   updateCircuit(circuit: Circuit): void {
     this.store.update({ circuit });
+  }
+
+  /** The planned copper, pinned to the mesh so the simulation can draw it on the folded model.
+   *
+   *  Routed here rather than read back from the Electronics modal: the modal may never have been opened, and
+   *  the copper belongs on the model either way. */
+  private tracesForSim(fold: FoldFile | null): AnchoredMesh[] {
+    const circuit = this.store.getState().circuit ?? EMPTY_CIRCUIT;
+    if (!fold || (!circuit.leds.length && !circuit.battery)) return [];
+    try {
+      const faces = flatFaces(fold);
+      const gaps = gapGraph(fold, faces).gaps;
+      const routed = planRoutes(faces, gaps, circuit);
+      const tapeW = tapeWidthFor(faces);
+      const face = circuit.battery ? faces[circuit.battery.face] : null;
+      const term = face
+        ? batteryTerminals(face.centroid, patternDiag(faces), face.poly, tapeW)
+        : null;
+      return anchorOverlay(routed.traces, routed.pads, term, tapeW, faces);
+    } catch {
+      // A pattern the router cannot read is not a reason to break the simulation.
+      return [];
+    }
   }
 
   // ---- intents (each: a service call + a store update) ---------------------

@@ -3,6 +3,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { FoldNet, FoldScene, FoldSolver, SimMaterial } from "../sim/index.js";
 import { kineticDamp, removeRigidBodyMotion } from "../sim/index.js";
 import { DEFAULT_MAX_SUBDIV, MAX_TILE_GAP, MIN_TILE_GAP, TILE_INSET_FRAC } from "../model/tile-subdiv.js";
+import type { AnchoredMesh } from "../model/trace-anchor.js";
 
 /**
  * Three.js viewport for the forward fold — renders the FoldNet as lit triangle faces plus
@@ -55,6 +56,18 @@ const SETTLE_REL = 4e-4;
 /** Hard cap: freeze this many frames after reaching the target even if it never fully settles (~4s). */
 const MAX_SETTLE_FRAMES = 240;
 
+/** The 2D layout's own colours, so the model and the layout show the same thing. */
+const OVERLAY_COLOURS: Record<AnchoredMesh["kind"], number> = {
+  pwr: 0xff0000,
+  gnd: 0x222222,
+  "led-pwr": 0xee3b30,
+  "led-gnd": 0x2b2f36,
+  "led-body": 0xd8b24a,
+  "batt-pwr": 0xee3b30,
+  "batt-gnd": 0x2b2f36,
+  mark: 0xffffff,
+};
+
 export class SimCanvas {
   private readonly scene = new THREE.Scene();
   private readonly camera: THREE.PerspectiveCamera;
@@ -76,6 +89,10 @@ export class SimCanvas {
   private molMesh: THREE.Mesh | null = null;
   private molGeo: THREE.BufferGeometry | null = null;
   private creaseLines: THREE.LineSegments[] = [];
+  /** The electronics layer on the folded model, positioned from the live folded corners. */
+  private overlayMeshes: THREE.Mesh[] = [];
+  private overlaySpec: AnchoredMesh[] = [];
+  private overlayVisible = true;
   private geo: THREE.BufferGeometry | null = null;
   private posAttr: THREE.BufferAttribute | null = null;
   // 3D-printed thick-tile layer (rebuilt each frame from the live folded positions).
@@ -411,12 +428,94 @@ export class SimCanvas {
     }
   }
 
+  /**
+   * Show the electronics layer on the folded model: copper at its real width, the LED footprints and the
+   * battery pads, in the colours the 2D layout uses.
+   *
+   * Every corner is stored as a triangle of the flat pattern plus the weights that place it inside — see
+   * `anchorOverlay`. A face is rigid and stays planar while the sheet folds, so the same weights over the
+   * *folded* corners give where that piece has ended up. The layer then follows the fold exactly, for three
+   * multiplies per corner, with nothing re-solved.
+   */
+  setOverlay(meshes: AnchoredMesh[]): void {
+    this.disposeOverlay();
+    this.overlaySpec = meshes;
+    if (!meshes.length || !this.fold) return;
+    for (const m of meshes) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(m.tris.length * 3), 3));
+      const mesh = new THREE.Mesh(
+        geo,
+        new THREE.MeshBasicMaterial({
+          color: OVERLAY_COLOURS[m.kind],
+          // Unlit and depth-test-free: this is a layer stuck to the surface, and shading it or fighting the
+          // very faces it sits on for depth reads as flicker rather than as material.
+          depthTest: false,
+          transparent: true,
+          opacity: m.kind === "pwr" || m.kind === "gnd" ? 0.85 : 1,
+          side: THREE.DoubleSide,
+        }),
+      );
+      // Copper under the components, as in the layout: pads and chips read on top of the tape they land on.
+      // Copper behind the components, and the polarity marks on top of both.
+      mesh.renderOrder = m.kind === "pwr" || m.kind === "gnd" ? 3 : m.kind === "mark" ? 5 : 4;
+      mesh.visible = this.overlayVisible;
+      this.overlayMeshes.push(mesh);
+      this.group.add(mesh);
+    }
+    this.updateOverlay();
+  }
+
+  /** Show or hide the electronics layer without discarding it, so toggling it back is instant. */
+  setOverlayVisible(visible: boolean): void {
+    const wasHidden = !this.overlayVisible;
+    this.overlayVisible = visible;
+    for (const mesh of this.overlayMeshes) mesh.visible = visible;
+    // While hidden the layer is not repositioned, so bring it up to date on the way back — otherwise it
+    // reappears where the model was when it was switched off, which on a static fold never corrects itself.
+    if (visible && wasHidden) this.updateOverlay();
+  }
+
+  /** Recompute where the layer is, from the live folded corners. */
+  private updateOverlay(): void {
+    if (!this.fold || !this.overlaySpec.length || !this.overlayVisible) return;
+    const p = this.fold.model.position;
+    this.overlaySpec.forEach((m, i) => {
+      const mesh = this.overlayMeshes[i];
+      if (!mesh) return;
+      const attr = mesh.geometry.getAttribute("position") as THREE.BufferAttribute;
+      m.tris.forEach((pt, k) => {
+        const [a, b, c] = pt.tri;
+        const [wa, wb, wc] = pt.bary;
+        attr.setXYZ(
+          k,
+          p[a * 3]! * wa + p[b * 3]! * wb + p[c * 3]! * wc,
+          p[a * 3 + 1]! * wa + p[b * 3 + 1]! * wb + p[c * 3 + 1]! * wc,
+          p[a * 3 + 2]! * wa + p[b * 3 + 2]! * wb + p[c * 3 + 2]! * wc,
+        );
+      });
+      attr.needsUpdate = true;
+      mesh.geometry.computeBoundingSphere();
+    });
+  }
+
+  private disposeOverlay(): void {
+    for (const mesh of this.overlayMeshes) {
+      this.group.remove(mesh);
+      mesh.geometry.dispose();
+      (mesh.material as THREE.Material).dispose();
+    }
+    this.overlayMeshes = [];
+    this.overlaySpec = [];
+  }
+
   private flushGeometry(): void {
     this.syncShellDisplay();
     if (this.posAttr) this.posAttr.needsUpdate = true;
     this.geo?.computeVertexNormals();
     if (this.molMesh?.visible) this.molGeo?.computeVertexNormals();
     if (this.material === "printed") this.updatePrintedTiles();
+    this.updateOverlay();
   }
 
   /**

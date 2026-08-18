@@ -48,7 +48,7 @@ describe("view/sim-modal", () => {
     modal.setEnabled(true);
 
     expect(host.children).toHaveLength(1);
-    expect(host.children[0]?.textContent).toBe("3D Sim");
+    expect(host.children[0]?.textContent).toBe("Simulation & Routing");
     expect(host.children[0]?.disabled).toBe(false);
   });
 
@@ -129,5 +129,26 @@ describe("view/sim-modal", () => {
     const status = document.body.children[0]!.querySelector(".sim-status")!;
     expect(status.textContent).toContain("Cannot simulate this model: boom");
     expect(canvasInstances[0]?.stop).toHaveBeenCalled();
+  });
+
+  it("offers an electronics toggle only when there is something to show", async () => {
+    const { document } = installDom();
+    const { SimModal } = await import("../../../src/view/sim-modal.js");
+    const modal = new SimModal() as any;
+    modal.mountTrigger(document.createElement("div") as unknown as HTMLElement);
+
+    // Nothing placed: a switch for an empty layer is a puzzle, not a control.
+    expect(modal.elecControl.hidden).toBe(true);
+
+    modal.setTraces([{ kind: "pwr", tris: [] }]);
+    expect(modal.elecControl.hidden).toBe(false);
+    expect(modal.showElectronics).toBe(true);
+
+    modal.elecToggle.checked = false;
+    modal.elecToggle.dispatch("change", {});
+    expect(modal.showElectronics).toBe(false);
+
+    modal.setTraces([]);
+    expect(modal.elecControl.hidden).toBe(true);
   });
 });

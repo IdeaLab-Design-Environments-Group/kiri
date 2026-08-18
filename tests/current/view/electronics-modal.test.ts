@@ -122,16 +122,52 @@ describe("view/electronics-modal", () => {
     expect(modal.svg.innerHTML).toContain("el-led-gnd");
   });
 
-  it("removes the drawn component when the same spot is tapped again", () => {
+  it("selects an LED when it is tapped, and removes it on Delete", () => {
+    // Tapping an existing LED used to delete it. It now selects it: deleting on the same gesture that selects
+    // would leave no way to pick an LED up in order to turn it round.
     const { modal } = openOn(grid2x2());
-
     modal.selectTool("led");
     const gap = modal.gaps[0];
     tapFlat(modal, gap.point);
-    expect(modal.svg.innerHTML).toContain("el-led-pwr");
+    expect(modal.circuit.leds).toHaveLength(1);
 
     tapFlat(modal, gap.point);
-    expect(modal.svg.innerHTML).not.toContain("el-led-pwr");
+    expect(modal.circuit.leds, "a second tap selects rather than deletes").toHaveLength(1);
+    expect(modal.selected).toBe(0);
+    expect(modal.svg.innerHTML).toContain("el-led-selected");
+
+    (globalThis as any).document.dispatch("keydown", { key: "Delete" });
+    expect(modal.circuit.leds).toHaveLength(0);
+    expect(modal.selected).toBe(-1);
+  });
+
+  it("turns the selected LED round on R, and fixes that orientation", () => {
+    const { modal } = openOn(grid2x2());
+    modal.selectTool("battery");
+    tapFlat(modal, { x: 0.5, y: 0.5 });
+    modal.selectTool("led");
+    tapFlat(modal, modal.gaps[0].point);
+
+    const before = modal.routed.pads[0];
+    (globalThis as any).document.dispatch("keydown", { key: "r" });
+
+    // The two pads have swapped, and the choice is recorded on the LED so the router cannot undo it.
+    const after = modal.routed.pads[0];
+    expect(after.pwr).toEqual(before.gnd);
+    expect(after.gnd).toEqual(before.pwr);
+    expect(modal.circuit.leds[0].flip).toBeTypeOf("boolean");
+
+    // And again hands the decision back to the router, rather than fixing the opposite orientation forever.
+    // Fixing one the wrong way can force a crossing the router would have avoided, so there has to be a way out.
+    (globalThis as any).document.dispatch("keydown", { key: "r" });
+    expect(modal.circuit.leds[0].flip).toBeUndefined();
+    expect(modal.routed.pads[0].pwr).toEqual(before.pwr);
+  });
+
+  it("says what to do when R is pressed with nothing selected", () => {
+    const { modal } = openOn(grid2x2());
+    (globalThis as any).document.dispatch("keydown", { key: "r" });
+    expect(modal.statusEl.textContent).toContain("Select an LED first");
   });
 
   it("exports the copper as a download, and says what there is to cut", () => {

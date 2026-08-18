@@ -19,6 +19,7 @@ import {
   type Vec2,
   flatFaces,
   flatPoints,
+  dist2,
   gapForLed,
   gapGraph,
   ledOf,
@@ -29,6 +30,7 @@ import {
 import { buildCopperCarrierExport, buildCopperSvgExport } from "../model/copper-svg-export.js";
 import {
   type RoutedCircuit,
+  type Terminals,
   EMPTY_ROUTE,
   tapeWidthFor,
   batteryTerminals,
@@ -58,6 +60,8 @@ export class ElectronicsModal {
 
   private tool: Tool = "led";
   private viewMode: ViewMode = "strips";
+  /** Index into `circuit.leds` of the LED under the cursor's last tap, or -1. */
+  private selected = -1;
   private fold: FoldFile | null = null;
   private faces: FlatFace[] = [];
   private tiles: TilePoly[] = [];
@@ -162,7 +166,15 @@ export class ElectronicsModal {
     this.svg.addEventListener("wheel", (e) => this.onWheel(e), { passive: false });
     document.addEventListener("keydown", (e) => {
       if (this.overlay.hidden) return;
-      if (e.key === "Escape") this.close();
+      if (e.key === "Escape") {
+        this.close();
+        return;
+      }
+      if (e.key === "r" || e.key === "R") {
+        this.rotateSelected();
+        return;
+      }
+      if (e.key === "Delete" || e.key === "Backspace") this.removeSelected();
     });
   }
 
@@ -247,15 +259,22 @@ export class ElectronicsModal {
     } else {
       // LEDs straddle a gap: snap the click to the nearest hinge between two tiles.
       const hit = nearestGap(this.gaps, flat);
-      if (!hit || hit.dist > this.pickRadius()) return;
+      if (!hit || hit.dist > this.pickRadius()) {
+        this.selected = -1; // a tap on bare cloth clears the selection
+        this.render();
+        return;
+      }
       const led = ledOf(hit.gap.faceA, hit.gap.faceB);
-      const has = this.circuit.leds.some((l) => l.a === led.a && l.b === led.b);
-      this.circuit = {
-        ...this.circuit,
-        leds: has
-          ? this.circuit.leds.filter((l) => !(l.a === led.a && l.b === led.b))
-          : [...this.circuit.leds, led],
-      };
+      const at = this.circuit.leds.findIndex((l) => l.a === led.a && l.b === led.b);
+      if (at >= 0) {
+        // An LED already here: select it, so it can be rotated or removed. Tapping it no longer deletes it —
+        // deleting on the same gesture that selects would make rotating one impossible.
+        this.selected = at;
+        this.render();
+        return;
+      }
+      this.circuit = { ...this.circuit, leds: [...this.circuit.leds, led] };
+      this.selected = this.circuit.leds.length - 1;
     }
     this.emit();
   }
@@ -272,7 +291,7 @@ export class ElectronicsModal {
       this.statusEl.textContent = "Nothing to export — place a battery and at least one LED first";
       return;
     }
-    const out = buildCopperSvgExport(this.fold, this.routed.traces, this.tapeW());
+    const out = buildCopperSvgExport(this.fold, this.routed.traces, this.tapeW(), "kiri", this.routed.pads);
     this.download(out.filename, out.svg);
     const { pwr, gnd } = out.counts;
     const w = Math.round(out.widthMm * 100) / 100;
@@ -282,6 +301,53 @@ export class ElectronicsModal {
     // The strip width follows the pattern, and a flat pattern need not be at a physical scale.
     if (out.tooNarrow) msg += " — too narrow to cut; scale the pattern up before cutting";
     this.statusEl.textContent = msg;
+  }
+
+  /** Turn the selected LED round: swap which of its two pads is `+`.
+   *
+   *  This also fixes the orientation. Polarity is otherwise the router's to choose — it flips LEDs to clear
+   *  crossings — so without pinning it the router would be free to turn the LED straight back. */
+  private rotateSelected(): void {
+    const led = this.circuit.leds[this.selected];
+    if (!led) {
+      this.statusEl.textContent = "Select an LED first, then press R to turn it round";
+      return;
+    }
+    // R cycles: the router's choice -> turned round -> back to the router's choice.
+    //
+    // The third step matters. Fixing an orientation forbids the router from turning that LED, and turning one
+    // the wrong way can force a PWR/GND crossing that it would otherwise have avoided -- so there has to be a
+    // way to hand the decision back. Without it the first press was permanent.
+    const next: boolean | undefined =
+      led.flip === undefined ? !this.plannedFlip(this.selected) : undefined;
+    this.circuit = {
+      ...this.circuit,
+      leds: this.circuit.leds.map((l, i) => {
+        if (i !== this.selected) return l;
+        const { flip: _drop, ...rest } = l;
+        return next === undefined ? rest : { ...rest, flip: next };
+      }),
+    };
+    this.emit();
+  }
+
+  /** Which way the router currently has this LED, so the first rotate turns it from what is on screen. */
+  private plannedFlip(i: number): boolean {
+    const led = this.circuit.leds[i];
+    const gap = led ? gapForLed(this.gaps, led) : null;
+    const pads = this.routed.pads[i];
+    if (!gap || !pads) return false;
+    return dist2(pads.pwr, gap.legB) < dist2(pads.pwr, gap.legA);
+  }
+
+  private removeSelected(): void {
+    if (!this.circuit.leds[this.selected]) return;
+    this.circuit = {
+      ...this.circuit,
+      leds: this.circuit.leds.filter((_, i) => i !== this.selected),
+    };
+    this.selected = -1;
+    this.emit();
   }
 
   /** Draw the edit, then notify the controller so it stores the circuit.
@@ -470,6 +536,12 @@ export class ElectronicsModal {
       const pwr = this.tp(pwrPt);
       const gnd = this.tp(gndPt);
       const o = orphan ? " el-led-orphan" : "";
+      if (i === this.selected) {
+        const mid2 = { x: (pwr.x + gnd.x) / 2, y: (pwr.y + gnd.y) / 2 };
+        parts.push(
+          `<circle cx="${fmt(mid2.x)}" cy="${fmt(mid2.y)}" r="${fmt(r * 1.5)}" class="el-led-selected" />`,
+        );
+      }
       // LED chip bridging the two pads, then the two coloured pads on top.
       parts.push(
         `<line x1="${fmt(pwr.x)}" y1="${fmt(pwr.y)}" x2="${fmt(gnd.x)}" y2="${fmt(gnd.y)}" class="el-led-body${o}" stroke-width="${fmt(rPad * 0.9)}" />`,
@@ -482,7 +554,9 @@ export class ElectronicsModal {
       const f = this.faces[this.circuit.battery.face];
       if (f) {
         const term = this.defaultTerminals(f.centroid, f.poly);
-        const rSq = this.markerR() * 0.95;
+        // The size the router settled on, which may be smaller than the wanted one where the tile is tight —
+        // the drawn pad and the planned pad have to be the same pad.
+        const rSq = term.half;
         const sq = (p: Vec2, cls: string, sign: string): void => {
           const c = this.tp(p);
           parts.push(
@@ -560,6 +634,9 @@ export class ElectronicsModal {
     if (out.padTabs > 0) {
       msg += ` — ${out.padTabs} tab${out.padTabs === 1 ? "" : "s"} grip a pad (run too short to grip elsewhere)`;
     }
+    if (out.componentTabs > 0) {
+      msg += ` — warning: ${out.componentTabs} tab${out.componentTabs === 1 ? "" : "s"} pass over a component`;
+    }
     if (out.crossingTabs > 0) {
       msg += ` — warning: ${out.crossingTabs} tab${out.crossingTabs === 1 ? "" : "s"} cross another trace`;
     }
@@ -584,7 +661,7 @@ export class ElectronicsModal {
   }
 
   /** The battery's two terminals. Shared with the router so the copper lands on the drawn squares. */
-  private defaultTerminals(c: Vec2, poly?: Vec2[]): { pwr: Vec2; gnd: Vec2 } {
+  private defaultTerminals(c: Vec2, poly?: Vec2[]): Terminals {
     // The tape width MUST be the router's, not the default: the terminal spacing is derived from it, so a
     // different width here draws the two pads somewhere the copper never goes. On a pattern read as a 130mm
     // sheet the default 6.5 put them several pattern-widths off the tile — off-canvas entirely.
@@ -607,13 +684,22 @@ export class ElectronicsModal {
     if (!this.circuit.battery && n > 0) msg += " · add a battery";
     const un = this.routed.unreachable.length;
     if (un > 0 && this.circuit.battery) msg += ` · ${un} unreachable`;
+    if (this.circuit.leds[this.selected]) {
+      const fixed = this.circuit.leds[this.selected]!.flip !== undefined;
+      msg += ` · LED ${this.selected + 1} selected — R to turn it round, Delete to remove`;
+      msg += fixed ? " (orientation fixed — R again to let the router choose)" : " (router chooses)";
+    } else if (n > 0) {
+      msg += " · click an LED to select it";
+    }
     this.statusEl.textContent = msg;
   }
 }
 
 function cloneCircuit(c: Circuit): Circuit {
   return {
-    leds: c.leds.map((l) => ({ a: l.a, b: l.b })),
+    // `flip` travels with the LED: it is the author's decision about which way round the part goes, and a
+    // clone that dropped it would lose the rotation the moment the circuit reached the store.
+    leds: c.leds.map((l) => (l.flip === undefined ? { a: l.a, b: l.b } : { a: l.a, b: l.b, flip: l.flip })),
     battery: c.battery ? { face: c.battery.face } : null,
   };
 }

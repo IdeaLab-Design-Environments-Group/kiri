@@ -14,7 +14,7 @@
  */
 import type { FoldFile } from "./fold-file.js";
 import type { Vec2 } from "./electronics.js";
-import type { Trace2D } from "./electronics-routing.js";
+import { type Trace2D, landingWidth } from "./electronics-routing.js";
 
 const MARGIN = 8; // mm — must match the FKLD SVG export or the layers import misaligned
 
@@ -33,7 +33,7 @@ const FRAME_BUFFER = 5;
 /** Below this the strips are not worth cutting: a blade will not track it and copper tape is not sold that
  *  narrow. Reported rather than silently widened, since widening would break registration with the preview
  *  and could make separate strips touch. */
-const MIN_CUTTABLE_MM = 6.5;
+const MIN_CUTTABLE_MM = 3;
 
 /** Cut colours. Distinct so a cutter treats each net as its own layer. */
 const PWR_FILL = "#ff0000";
@@ -103,6 +103,8 @@ export function buildCopperSvgExport(
   traces: Trace2D[],
   tapeW: number,
   baseName = "kiri",
+  /** LED pads, so a run can be narrowed where it lands between an LED's legs. */
+  pads: { pwr: Vec2; gnd: Vec2 }[] = [],
 ): CopperSvgExport {
   const { w, h, T } = sheetFrame(fold);
 
@@ -110,7 +112,7 @@ export function buildCopperSvgExport(
     const runs = traces.filter((t) => t.net === net && t.pts.length >= 2);
     const paths: string[] = [];
     for (const t of runs) {
-      const ring = outlineStrip(t.pts, tapeW);
+      const ring = outlineStrip(t.pts, widthsFor(t, tapeW, pads));
       if (ring.length < 3) continue;
       paths.push(`<path d="${ringPath(ring.map(T))}" />`);
     }
@@ -135,25 +137,62 @@ export function buildCopperSvgExport(
 }
 
 /**
+ * The tape's width at each point of a run.
+ *
+ * Full width along the way, narrowed only where it lands on an LED pad whose partner leg is close enough that a
+ * full-width strip would reach across the chip. The two nets would otherwise meet under the part and short it,
+ * and a vinyl cutter could not weed the gap between them.
+ */
+function widthsFor(t: Trace2D, tapeW: number, pads: { pwr: Vec2; gnd: Vec2 }[]): number[] {
+  return t.pts.map((p) => {
+    let w = tapeW;
+    for (const pad of pads) {
+      const own = t.net === "pwr" ? pad.pwr : pad.gnd;
+      const mate = t.net === "pwr" ? pad.gnd : pad.pwr;
+      if (Math.hypot(p.x - own.x, p.y - own.y) > tapeW) continue; // not landing here
+      w = Math.min(w, landingWidth(own, mate, tapeW));
+    }
+    return w;
+  });
+}
+
+/**
  * The closed outline of a strip of tape laid along `pts`.
  *
  * Walks one side of the centreline out and the other back, so the result is a single ring: the shape to cut.
  * Corners are mitred, capped so a sharp turn produces a blunt corner rather than a long spike.
  */
-export function outlineStrip(pts: Vec2[], width: number): Vec2[] {
+export function outlineStrip(pts: Vec2[], width: number | number[]): Vec2[] {
   const clean = dedupe(pts);
-  if (clean.length < 2 || width <= 0) return [];
-  const half = width / 2;
-  const left = offsetSide(clean, half);
-  const right = offsetSide(clean, -half);
+  if (clean.length < 2) return [];
+  // A width per point, so a run can narrow where it lands between an LED's legs and stay full width elsewhere.
+  const widths = Array.isArray(width)
+    ? matchLength(width, pts, clean)
+    : clean.map(() => width);
+  if (widths.every((w) => w <= 0)) return [];
+  const left = offsetSide(clean, widths.map((w) => w / 2));
+  const right = offsetSide(clean, widths.map((w) => -w / 2));
   return [...left, ...right.reverse()];
 }
 
+/** Carry per-point widths through `dedupe`, which may have dropped repeated points. */
+function matchLength(widths: number[], original: Vec2[], clean: Vec2[]): number[] {
+  const out: number[] = [];
+  let j = 0;
+  for (const p of clean) {
+    while (j < original.length && (original[j]!.x !== p.x || original[j]!.y !== p.y)) j++;
+    out.push(widths[Math.min(j, widths.length - 1)] ?? widths[widths.length - 1] ?? 0);
+    j++;
+  }
+  return out;
+}
+
 /** Offset a polyline to one side by `off` (signed), mitring at the joins. */
-function offsetSide(pts: Vec2[], off: number): Vec2[] {
+function offsetSide(pts: Vec2[], offs: number[]): Vec2[] {
   const out: Vec2[] = [];
   const miterLimit = 2;
   for (let i = 0; i < pts.length; i++) {
+    const off = offs[i] ?? offs[offs.length - 1] ?? 0;
     const prev = i > 0 ? pts[i - 1]! : null;
     const next = i < pts.length - 1 ? pts[i + 1]! : null;
     const dIn = prev ? unit(sub(pts[i]!, prev)) : unit(sub(next!, pts[i]!));
@@ -229,6 +268,14 @@ export interface CopperCarrierExport {
    * goes and is snipped at the pad, so it is counted rather than passed off as clean.
    */
   padTabs: number;
+  /**
+   * Tabs whose route out passes over a pad or a terminal.
+   *
+   * Only the fallback can produce one: when no candidate anchor, wall or sideways step gets clear of the
+   * components and the other net, the shortest is used anyway rather than leaving the trace loose. Such a tab
+   * is stuck down on top of a part and cuts into it when snipped, so it is counted and shown.
+   */
+  componentTabs: number;
   /** Tab centrelines in sheet coordinates, so a preview can draw exactly what will be cut. */
   tabPaths: Vec2[][];
   /** The frame's window and outer edge in sheet coordinates, likewise. */
@@ -290,6 +337,7 @@ export function buildCopperCarrierExport(
   let tabs = 0;
   let crossingTabs = 0;
   let padTabs = 0;
+  let componentTabs = 0;
   const tabPaths: Vec2[][] = [];
   rings.forEach(({ net, ring }, ri) => {
     if (ring.length < 3) return;
@@ -302,13 +350,14 @@ export function buildCopperCarrierExport(
     const { index, side } = choice;
     if (!choice.clear) crossingTabs++;
     if (choice.onComponent) padTabs++;
+    if (choice.overComponent) componentTabs++;
     tabPaths.push(choice.path);
     // Open the ring: drop the vertex the tab attaches at, so the trace stays joined to its tab.
     const open = ring.slice(index + 1).concat(ring.slice(0, index));
     if (open.length >= 2) cuts.push(openPath(open));
     // The tab's two sides: its centreline offset either way, so a bent tab keeps its width around the corner.
-    const s1 = offsetSide(choice.path, tapeW / 2);
-    const s2 = offsetSide(choice.path, -tapeW / 2);
+    const s1 = offsetSide(choice.path, choice.path.map(() => tapeW / 2));
+    const s2 = offsetSide(choice.path, choice.path.map(() => -tapeW / 2));
     const q1 = onWindow(s1[s1.length - 1]!, side, win);
     const q2 = onWindow(s2[s2.length - 1]!, side, win);
     s1[s1.length - 1] = q1;
@@ -340,6 +389,7 @@ export function buildCopperCarrierExport(
     counts: { traces: runs.length, tabs },
     crossingTabs,
     padTabs,
+    componentTabs,
     tabPaths,
     frame: { window: win, outer: { x0: ox0, y0: oy0, x1: ox1, y1: oy1 } },
     widthMm: tapeW,
@@ -384,7 +434,14 @@ function pickTab(
   win: Win,
   tapeW: number,
   avoid: Vec2[],
-): { index: number; side: Side; path: Vec2[]; clear: boolean; onComponent: boolean } | null {
+): {
+  index: number;
+  side: Side;
+  path: Vec2[];
+  clear: boolean;
+  onComponent: boolean;
+  overComponent: boolean;
+} | null {
   /** Whether a ring point is too close to a pad or terminal to tab onto. */
   const onComponent = (p: Vec2): boolean =>
     avoid.some((q) => Math.hypot(p.x - q.x, p.y - q.y) < tapeW * PAD_CLEAR);
@@ -424,7 +481,7 @@ function pickTab(
   }
   candidates.sort((a, b) => a.reach - b.reach || a.index - b.index);
 
-  let fallback: { index: number; side: Side; path: Vec2[] } | null = null;
+  let fallback: { index: number; side: Side; path: Vec2[]; over?: boolean } | null = null;
   for (const c of candidates) {
     const a = ring[c.index]!;
     const across = perpTo(c.side);
@@ -433,16 +490,41 @@ function pickTab(
       : { x: a.x + across.x * c.step * tapeW, y: a.y + across.y * c.step * tapeW };
     const end = onWindow(bend ?? a, c.side, win);
     const path = bend ? [a, bend, end] : [a, end];
-    if (!fallback) fallback = { index: c.index, side: c.side, path };
+    if (!fallback) fallback = { index: c.index, side: c.side, path, over: false };
+    // A tab may not run *over* a pad or a terminal on its way out, not merely start off one. Keeping the anchor
+    // clear was not enough: the run itself passed across components on the way to the wall, where it would be
+    // stuck down on top of the part and cut into it when snipped.
+    const overComponent = avoid.some((q) => {
+      for (let k = 1; k < path.length; k++) {
+        if (ptSegDist(q, path[k - 1]!, path[k]!) < tapeW * PAD_CLEAR) return true;
+      }
+      return false;
+    });
+    if (overComponent) {
+      // Remember the shortest one anyway: if nothing at all is clear, a tab over a part still beats a trace
+      // left loose in the window.
+      if (!fallback) fallback = { index: c.index, side: c.side, path, over: true };
+      continue;
+    }
     const blocked = others.some((o) => {
       for (let k = 1; k < path.length; k++) {
         if (segNearRing(path[k - 1]!, path[k]!, o, tapeW)) return true;
       }
       return false;
     });
-    if (!blocked) return { index: c.index, side: c.side, path, clear: true, onComponent: forcedOntoComponent };
+    if (!blocked) {
+      return {
+        index: c.index, side: c.side, path,
+        clear: true, onComponent: forcedOntoComponent, overComponent: false,
+      };
+    }
   }
-  return fallback ? { ...fallback, clear: false, onComponent: forcedOntoComponent } : null;
+  return fallback
+    ? {
+        index: fallback.index, side: fallback.side, path: fallback.path,
+        clear: false, onComponent: forcedOntoComponent, overComponent: !!fallback.over,
+      }
+    : null;
 }
 
 /** Whether the tab segment a-q comes within a tape width of any edge of `ring`. */

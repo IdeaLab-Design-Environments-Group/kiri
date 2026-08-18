@@ -1,0 +1,3 @@
+
+# Scratch git worktrees used by background agents — never part of the repo.
+.claude/worktrees/

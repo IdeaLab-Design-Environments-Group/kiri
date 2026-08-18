@@ -837,6 +837,13 @@ body {
 .el-led-pwr { fill: #ee3b30; stroke: #fff; stroke-width: 1; vector-effect: non-scaling-stroke; }
 .el-led-gnd { fill: #2b2f36; stroke: #fff; stroke-width: 1; vector-effect: non-scaling-stroke; }
 .el-led-body.el-led-orphan { stroke: #e6a3a3; }
+/* The selected LED, which R turns round. */
+.el-led-selected {
+  fill: none;
+  stroke: #1f6feb;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
 .el-led-pwr.el-led-orphan,
 .el-led-gnd.el-led-orphan { stroke: #d24545; stroke-width: 1.6; }
 /* Battery = two terminal squares: a red PWR (+) and a dark GND (−), matching the tape colours. */

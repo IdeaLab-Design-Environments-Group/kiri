@@ -4,6 +4,8 @@ import { AppStore } from "../../../src/model/app-store.js";
 import { canSimulate } from "../../../src/sim/scene.js";
 import type { FoldFile, LoadedModel } from "../../../src/model/fold-file.js";
 import { PatternGrid, presetWaterbomb } from "../../../src/model/pattern-grid.js";
+import { readFileSync } from "node:fs";
+import { flatFaces, gapGraph, ledOf } from "../../../src/model/electronics.js";
 
 class ConvertPanelMock {
   factsCalls: [string, string][][] = [];
@@ -79,9 +81,15 @@ class SimModalMock {
   materialListener: ((m: unknown) => void) | null = null;
   detailListener: ((d: number) => void) | null = null;
   gapListener: ((g: number) => void) | null = null;
+  traces: unknown[] = [];
 
   setProvider(provider: SimProvider): void {
     this.provider = provider;
+  }
+
+  /** The copper handed to the 3D view, so a test can assert it follows the circuit. */
+  setTraces(traces: unknown[]): void {
+    this.traces = traces;
   }
 
   setEnabled(enabled: boolean): void {
@@ -436,5 +444,31 @@ describe("controller/app-controller", () => {
     expect(payload).not.toBeNull();
     expect(payload!.files.some((f) => f.filename.includes("cut"))).toBe(true);
     expect(exporter.enabledCalls.at(-1)).toBe(true); // Export button enabled for a displayed pattern
+  });
+
+  it("hands the planned copper to the 3D view, pinned to the mesh", () => {
+    // The simulation draws the copper on the folded model, so the controller has to route the circuit and pin
+    // it to the mesh -- the Electronics modal may never have been opened.
+    const { controller, store, sim } = setup();
+    const fold = JSON.parse(
+      readFileSync(new URL("../../../public/examples/house.fkld", import.meta.url).pathname, "utf8"),
+    );
+    store.update({ model: { kind: "fold", name: "house.fkld", object: fold } });
+    expect(sim.traces).toEqual([]); // nothing placed yet
+
+    const faces = flatFaces(fold);
+    const gaps = gapGraph(fold, faces).gaps;
+    const led = ledOf(gaps[0]!.faceA, gaps[0]!.faceB);
+    controller.updateCircuit({ leds: [led], battery: { face: 0 } });
+
+    // The whole electronics layer, not just the copper: the pads and the chip footprints go on the model too.
+    const kinds = new Set((sim.traces as { kind: string }[]).map((m) => m.kind));
+    expect(kinds.has("pwr") || kinds.has("gnd")).toBe(true);
+    expect(kinds.has("led-pwr")).toBe(true);
+    expect(kinds.has("batt-pwr")).toBe(true);
+    for (const m of sim.traces as { tris: unknown[] }[]) {
+      expect(m.tris.length % 3).toBe(0); // triangles, in threes
+      expect(m.tris.length).toBeGreaterThan(0);
+    }
   });
 });
