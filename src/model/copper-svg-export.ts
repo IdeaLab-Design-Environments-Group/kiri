@@ -15,6 +15,7 @@
 import type { FoldFile } from "./fold-file.js";
 import type { Vec2 } from "./electronics.js";
 import { type Trace2D, landingWidth } from "./electronics-routing.js";
+import { printScale } from "./print-scale.js";
 
 const MARGIN = 8; // mm — must match the FKLD SVG export or the layers import misaligned
 
@@ -98,6 +99,15 @@ export interface SheetFrame {
   /** The pattern's bounding box in sheet coordinates — the carrier frame's window. */
   window: { x0: number; y0: number; x1: number; y1: number };
   T: (p: Vec2) => Vec2;
+  /**
+   * Millimetres of sheet per unit of pattern — see {@link printScale}.
+   *
+   * Anything measured in flat units has to be multiplied by this before it is used against sheet
+   * coordinates. Tape widths and clearances are the ones that matter: they come from the router in the
+   * pattern's units, and comparing them raw against millimetres is how a 0.1-unit strip ends up being
+   * treated as a tenth of a millimetre of copper.
+   */
+  scale: number;
 }
 
 /** Work out the sheet exactly as {@link buildFkldSvgExport} does, so every layer registers.
@@ -119,8 +129,11 @@ export function sheetFrame(fold: FoldFile, mirror: Mirror = NO_MIRROR): SheetFra
     minX = minY = 0;
     maxX = maxY = 1;
   }
-  const w = maxX - minX + 2 * MARGIN;
-  const h = maxY - minY + 2 * MARGIN;
+  // Pattern units to millimetres first, then the margin — which is a real 8mm border on the cut sheet, not
+  // eight of whatever the pattern happens to be measured in.
+  const k = printScale(fold);
+  const w = (maxX - minX) * k + 2 * MARGIN;
+  const h = (maxY - minY) * k + 2 * MARGIN;
   // Shift to a positive origin with a margin and flip Y (FOLD is y-up, SVG is y-down), then apply the
   // requested mirror. The window is unchanged either way: the margin is equal on opposite sides, so it
   // reflects onto itself.
@@ -128,8 +141,9 @@ export function sheetFrame(fold: FoldFile, mirror: Mirror = NO_MIRROR): SheetFra
     w,
     h,
     window: { x0: MARGIN, y0: MARGIN, x1: w - MARGIN, y1: h - MARGIN },
+    scale: k,
     T: (p: Vec2): Vec2 =>
-      mirrorPoint({ x: p.x - minX + MARGIN, y: maxY - p.y + MARGIN }, w, h, mirror),
+      mirrorPoint({ x: (p.x - minX) * k + MARGIN, y: (maxY - p.y) * k + MARGIN }, w, h, mirror),
   };
 }
 
@@ -142,7 +156,10 @@ export function buildCopperSvgExport(
   pads: { pwr: Vec2; gnd: Vec2 }[] = [],
   mirror: Mirror = NO_MIRROR,
 ): CopperSvgExport {
-  const { w, h, T } = sheetFrame(fold, mirror);
+  const { w, h, T, scale } = sheetFrame(fold, mirror);
+  // What will actually be cut, in millimetres. The outlines are built in flat units and mapped through T,
+  // which scales them, so the strips come out this wide without anything else being done to them.
+  const tapeMm = tapeW * scale;
 
   const layer = (net: "pwr" | "gnd"): { body: string; count: number } => {
     const runs = traces.filter((t) => t.net === net && t.pts.length >= 2);
@@ -162,8 +179,8 @@ export function buildCopperSvgExport(
     `  <g id="gnd" fill="${GND_FILL}" stroke="none" fill-rule="nonzero">\n    ${gnd.body}\n  </g>`;
 
   return {
-    widthMm: tapeW,
-    tooNarrow: tapeW < MIN_CUTTABLE_MM,
+    widthMm: tapeMm,
+    tooNarrow: tapeMm < MIN_CUTTABLE_MM,
     filename: `${baseName}-copper${mirrorSuffix(mirror)}.svg`,
     svg:
       `<svg xmlns="http://www.w3.org/2000/svg" width="${fmt(w)}mm" height="${fmt(h)}mm" ` +
@@ -353,7 +370,10 @@ export function buildCopperCarrierExport(
   keepOff: Vec2[] = [],
   mirror: Mirror = NO_MIRROR,
 ): CopperCarrierExport {
-  const { w, h, window: win, T } = sheetFrame(fold, mirror);
+  const { w, h, window: win, T, scale } = sheetFrame(fold, mirror);
+  // Everything below works in sheet millimetres, so the tape width has to be converted out of the pattern's
+  // units first -- tabs, clearances and spacing are all measured against it.
+  const tape = tapeW * scale;
   const runs = traces.filter((t) => t.pts.length >= 2);
 
   const cuts: string[] = [];
@@ -373,7 +393,7 @@ export function buildCopperCarrierExport(
   // tape and a crowded window, corners alone leave most runs with no clear line out to a wall.
   const rings = runs.map((t) => ({
     net: t.net,
-    ring: densify(outlineStrip(t.pts, tapeW).map(T), tapeW),
+    ring: densify(outlineStrip(t.pts, tapeW).map(T), tape),
   }));
   // A tab must grip the trace, not the component. Anchoring on a pad puts the tab exactly where the LED sits
   // and means snipping it cuts at the pad; the same goes for a battery terminal. Those spots are excluded, so a
@@ -391,7 +411,7 @@ export function buildCopperCarrierExport(
     // overlap freely -- one net, one potential -- so treating them as obstacles left every candidate blocked,
     // which is why neither more anchors nor bent tabs changed anything.
     const others = rings.filter((r, i) => i !== ri && r.net !== net).map((r) => r.ring);
-    const choice = pickTab(ring, others, win, tapeW, avoid);
+    const choice = pickTab(ring, others, win, tape, avoid);
     if (!choice) return;
     const { index, side } = choice;
     if (!choice.clear) crossingTabs++;
@@ -402,8 +422,8 @@ export function buildCopperCarrierExport(
     const open = ring.slice(index + 1).concat(ring.slice(0, index));
     if (open.length >= 2) cuts.push(openPath(open));
     // The tab's two sides: its centreline offset either way, so a bent tab keeps its width around the corner.
-    const s1 = offsetSide(choice.path, choice.path.map(() => tapeW / 2));
-    const s2 = offsetSide(choice.path, choice.path.map(() => -tapeW / 2));
+    const s1 = offsetSide(choice.path, choice.path.map(() => tape / 2));
+    const s2 = offsetSide(choice.path, choice.path.map(() => -tape / 2));
     const q1 = onWindow(s1[s1.length - 1]!, side, win);
     const q2 = onWindow(s2[s2.length - 1]!, side, win);
     s1[s1.length - 1] = q1;
@@ -438,8 +458,8 @@ export function buildCopperCarrierExport(
     componentTabs,
     tabPaths,
     frame: { window: win, outer: { x0: ox0, y0: oy0, x1: ox1, y1: oy1 } },
-    widthMm: tapeW,
-    tooNarrow: tapeW < MIN_CUTTABLE_MM,
+    widthMm: tape,
+    tooNarrow: tape < MIN_CUTTABLE_MM,
   };
 }
 

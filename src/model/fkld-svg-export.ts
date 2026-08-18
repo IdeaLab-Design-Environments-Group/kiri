@@ -14,6 +14,7 @@
  */
 import { createZip } from "@kirigami/model/zip.js";
 import type { FoldFile } from "./fold-file.js";
+import { printScale } from "./print-scale.js";
 
 const CUT_COLOR = "#000000";
 const SCORE_COLOR = "#0000ff";
@@ -67,9 +68,17 @@ export function buildFkldSvgExport(
     if (p.x > maxX) maxX = p.x;
     if (p.y > maxY) maxY = p.y;
   }
-  const w = maxX - minX + 2 * MARGIN;
-  const h = maxY - minY + 2 * MARGIN;
-  const T = (i: number): P => ({ x: pts[i]!.x - minX + MARGIN, y: maxY - pts[i]!.y + MARGIN });
+  // Pattern units to millimetres before the margin is added. A pattern with no scale of its own is cut at
+  // the size the STL export prints it (see `printScale`) -- without this, a shape authored 4 units across
+  // was declared a 4mm sheet inside a 16mm margin, and the copper planned for it came out a tenth of a
+  // millimetre wide.
+  const k = printScale(fold);
+  const w = (maxX - minX) * k + 2 * MARGIN;
+  const h = (maxY - minY) * k + 2 * MARGIN;
+  const T = (i: number): P => ({
+    x: (pts[i]!.x - minX) * k + MARGIN,
+    y: (maxY - pts[i]!.y) * k + MARGIN,
+  });
 
   // Classify edges into the cut layer (boundary B = full-sheet silhouette; cut C = interior
   // slits/darts/vents) and the score layer (M,V); F is excluded. B and C are kept SEPARATE so the

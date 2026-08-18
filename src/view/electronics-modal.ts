@@ -33,6 +33,7 @@ import {
   buildCopperSvgExport,
   mirrorPoint,
 } from "../model/copper-svg-export.js";
+import { printScale } from "../model/print-scale.js";
 import {
   type RoutedCircuit,
   type Terminals,
@@ -409,11 +410,19 @@ export class ElectronicsModal {
     this.content = { w: Math.max(maxX - minX, 1e-3), h: Math.max(maxY - minY, 1e-3) };
   }
 
+  /** Millimetres of sheet per unit of pattern, as the export uses. The canvas works in sheet millimetres
+   *  so that the carrier -- whose geometry is read straight out of the export -- lands on the traces drawn
+   *  beside it. A uniform scale changes nothing on screen, since the view is fitted to its own contents. */
+  private scale(): number {
+    return this.fold ? printScale(this.fold) : 1;
+  }
+
   /** The sheet the preview shares with the export: the pattern plus a margin on every side. */
   private sheet(): { w: number; h: number } {
+    const k = this.scale();
     return {
-      w: this.bounds.maxX - this.bounds.minX + 2 * MARGIN,
-      h: this.bounds.maxY - this.bounds.minY + 2 * MARGIN,
+      w: (this.bounds.maxX - this.bounds.minX) * k + 2 * MARGIN,
+      h: (this.bounds.maxY - this.bounds.minY) * k + 2 * MARGIN,
     };
   }
 
@@ -423,8 +432,9 @@ export class ElectronicsModal {
    *  end up with a board that is right in the editor and reversed on the mat. */
   private tp(p: Vec2): Vec2 {
     const { w, h } = this.sheet();
+    const k = this.scale();
     return mirrorPoint(
-      { x: p.x - this.bounds.minX + MARGIN, y: this.bounds.maxY - p.y + MARGIN },
+      { x: (p.x - this.bounds.minX) * k + MARGIN, y: (this.bounds.maxY - p.y) * k + MARGIN },
       w,
       h,
       this.mirror,
@@ -439,7 +449,11 @@ export class ElectronicsModal {
     // the shift and flip. Without this a click would land on the unmirrored twin of the tile under the cursor.
     const sheet = this.sheet();
     const s = mirrorPoint(w, sheet.w, sheet.h, this.mirror);
-    return { x: s.x + this.bounds.minX - MARGIN, y: this.bounds.maxY + MARGIN - s.y };
+    const k = this.scale();
+    return {
+      x: (s.x - MARGIN) / k + this.bounds.minX,
+      y: this.bounds.maxY - (s.y - MARGIN) / k,
+    };
   }
 
   /** Pointer client coords → world (content/viewBox) space via the live screen CTM. */
@@ -557,7 +571,7 @@ export class ElectronicsModal {
       // piece of tape, and the joins are mitred corners in it.
       if (t.pts.length < 2) continue;
       const d = "M " + t.pts.map((p, k) => (k === 0 ? "" : "L ") + ptStr(this.tp(p))).join(" ");
-      parts.push(`<path d="${d}" class="${cls}" stroke-width="${fmt(this.tapeW())}" />`);
+      parts.push(`<path d="${d}" class="${cls}" stroke-width="${fmt(this.tapeW() * this.scale())}" />`);
     }
     // Each LED is two distinct pads straddling its hinge — a PWR (+) pad toward face `a` and a GND (−)
     // pad toward face `b` — bridged by the LED chip. An LED whose gap no longer exists has nowhere to
@@ -608,7 +622,7 @@ export class ElectronicsModal {
         const term = this.defaultTerminals(f.centroid, f.poly);
         // The size the router settled on, which may be smaller than the wanted one where the tile is tight —
         // the drawn pad and the planned pad have to be the same pad.
-        const rSq = term.half;
+        const rSq = term.half * this.scale();
         const sq = (p: Vec2, cls: string, sign: string): void => {
           const c = this.tp(p);
           parts.push(
@@ -648,7 +662,7 @@ export class ElectronicsModal {
     for (const path of out.tabPaths) {
       if (path.length < 2) continue;
       const d = "M " + path.map((p, i) => (i === 0 ? "" : "L ") + ptStr(p)).join(" ");
-      parts.push(`<path d="${d}" class="el-carrier-tab" fill="none" stroke-width="${fmt(this.tapeW())}" />`);
+      parts.push(`<path d="${d}" class="el-carrier-tab" fill="none" stroke-width="${fmt(this.tapeW() * this.scale())}" />`);
     }
     return parts;
   }
@@ -718,7 +732,7 @@ export class ElectronicsModal {
 
   /** Marker radius scaled to the pattern so it reads at any model size. */
   private markerR(): number {
-    return this.diag() * 0.012;
+    return this.diag() * 0.012 * this.scale();
   }
 
   /** The battery's two terminals. Shared with the router so the copper lands on the drawn squares. */

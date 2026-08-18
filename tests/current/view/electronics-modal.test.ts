@@ -24,14 +24,12 @@ function grid2x2(): FoldFile {
   } as unknown as FoldFile;
 }
 
-/** Drive a tap at a flat-pattern point: the mock CTM is the identity, so world == client coords. */
+/** Drive a tap at a flat-pattern point: the mock CTM is the identity, so world == client coords.
+ *  The point is put through the modal's own flat-to-world transform rather than a copy of it -- a copy
+ *  goes stale the moment that transform gains a term, and then taps land on the wrong tile. */
 function tapFlat(modal: any, flat: { x: number; y: number }): void {
   const svg = modal.svg;
-  const b = modal.bounds;
-  const MARGIN = 8;
-  // Inverse of `clientToFlat`.
-  const clientX = flat.x - b.minX + MARGIN;
-  const clientY = b.maxY + MARGIN - flat.y;
+  const { x: clientX, y: clientY } = modal.tp(flat);
   svg.dispatch("pointerdown", { button: 0, clientX, clientY, pointerId: 1 });
   svg.dispatch("pointerup", { button: 0, clientX, clientY, pointerId: 1 });
 }
@@ -86,20 +84,20 @@ describe("view/electronics-modal", () => {
     )].map((m) => ({ x: Number(m[1]) + Number(m[3]) / 2, y: Number(m[2]) + Number(m[4]) / 2 }));
     expect(rects).toHaveLength(2);
 
-    // Same separation as the router's own terminals — the transform to sheet coords is a flip plus a
-    // translation, so distance is preserved and no coordinate mapping is needed here.
+    // Same separation as the router's own terminals, converted to the millimetres the canvas draws in:
+    // the transform is a flip, a translation and the pattern's print scale, so distance is preserved up
+    // to that scale.
     const faces = flatFaces(fold);
     const term = batteryTerminals(faces[0]!.centroid, patternDiag(faces), faces[0]!.poly, tapeWidthFor(faces));
-    const want = Math.hypot(term.pwr.x - term.gnd.x, term.pwr.y - term.gnd.y);
+    const want =
+      Math.hypot(term.pwr.x - term.gnd.x, term.pwr.y - term.gnd.y) * modal.scale();
     const got = Math.hypot(rects[0]!.x - rects[1]!.x, rects[0]!.y - rects[1]!.y);
     // The markup is written through fmt(), which rounds to 3 decimals, so compare at that precision. The
     // regression this guards against is a ~36x discrepancy, nowhere near the rounding floor.
     expect(Math.abs(got - want), `pad spacing ${got} vs router ${want}`).toBeLessThan(2e-3);
 
     // And both are on the sheet, which is what actually failed on screen.
-    const MARGIN = 8;
-    const b = modal.bounds;
-    const w = b.maxX - b.minX + 2 * MARGIN, h = b.maxY - b.minY + 2 * MARGIN;
+    const { w, h } = modal.sheet();
     for (const r of rects) {
       expect(r.x, "battery pad off the sheet in x").toBeGreaterThanOrEqual(0);
       expect(r.x, "battery pad off the sheet in x").toBeLessThanOrEqual(w);

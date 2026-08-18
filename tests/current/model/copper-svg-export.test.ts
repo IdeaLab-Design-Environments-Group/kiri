@@ -117,18 +117,19 @@ describe("model/copper-svg-export", () => {
     expect(buildCopperSvgExport(fold, traces, tapeW, "puffin").filename).toBe("puffin-copper.svg");
   });
 
-  it("flags strips too narrow to cut instead of handing over an uncuttable file", () => {
-    // church is 19mm across, so a strip at the preview width is 0.3mm -- no blade tracks that, and no copper
-    // tape is that narrow. The file is still produced, dimensionally faithful, but the caller is told.
+  it("reports the width the strips are actually cut at, not the pattern's own units", () => {
+    // church carries no scale -- it is 19 units across -- so it is cut at the print sheet, where the
+    // router's 0.3-unit tape is a real 3.25mm. Reporting the raw 0.3 called a perfectly cuttable file
+    // uncuttable, and it was: the sheet was declared 19mm wide, with a 5mm carrier border round it.
     const small = planned("church.fkld");
-    const outSmall = buildCopperSvgExport(small.fold, small.traces, small.tapeW);
-    expect(outSmall.widthMm).toBeLessThan(1.5);
-    expect(outSmall.tooNarrow).toBe(true);
+    const out = buildCopperSvgExport(small.fold, small.traces, small.tapeW);
+    expect(out.widthMm).toBeCloseTo(3.25, 2);
+    expect(out.tooNarrow).toBe(false);
 
-    // The same pattern at a real scale is fine.
-    const outReal = buildCopperSvgExport(small.fold, small.traces, 8);
-    expect(outReal.tooNarrow).toBe(false);
-    expect(outReal.widthMm).toBe(8);
+    // Copper that really is too narrow is still refused rather than handed over.
+    const thin = buildCopperSvgExport(small.fold, small.traces, small.tapeW / 4);
+    expect(thin.widthMm).toBeLessThan(3);
+    expect(thin.tooNarrow).toBe(true);
   });
 
   it("produces nothing to cut when nothing is planned", () => {
@@ -291,8 +292,11 @@ describe("model/copper-svg-export", () => {
       const { fold, traces, tapeW } = planned("church.fkld");
       const out = buildCopperCarrierExport(fold, traces, tapeW, "puffin");
       expect(out.filename).toBe("puffin-copper-carrier.svg");
-      expect(out.tooNarrow).toBe(true); // church is 19mm across
-      expect(buildCopperCarrierExport(fold, traces, 8).tooNarrow).toBe(false);
+      // church is scale-less, so it is cut at the print sheet and its tape is a real 3.25mm.
+      expect(out.widthMm).toBeCloseTo(3.25, 2);
+      expect(out.tooNarrow).toBe(false);
+      // Genuinely uncuttable copper is still reported as such.
+      expect(buildCopperCarrierExport(fold, traces, tapeW / 4).tooNarrow).toBe(true);
     });
   });
 
@@ -429,6 +433,46 @@ describe("model/copper-svg-export", () => {
           expect(p.x).toBeLessThanOrEqual(w);
           expect(p.y).toBeLessThanOrEqual(h);
         }
+      }
+    });
+  });
+
+  describe("scale-less patterns", () => {
+    it("cuts a pattern with no scale of its own at the print sheet, not at its own units", () => {
+      // house is authored 4 units across. Taken as 4mm, the carrier came out as a 5mm border around a 4mm
+      // window -- a frame three times the size of the circuit inside it -- cut from strips a tenth of a
+      // millimetre wide. It is the same pattern the STL export prints at 130mm, so that is the size it is cut.
+      const { fold, traces, tapeW, keepOff } = planned("house.fkld");
+      const f = sheetFrame(fold);
+      const winW = f.window.x1 - f.window.x0;
+      expect(winW).toBeCloseTo(130, 0);
+
+      const out = buildCopperCarrierExport(fold, traces, tapeW, "k", keepOff);
+      const outerW = out.frame.outer.x1 - out.frame.outer.x0;
+      // The border is a border, not the bulk of the file.
+      expect(winW / outerW).toBeGreaterThan(0.8);
+      // And the copper is copper tape you can buy.
+      expect(out.widthMm).toBeCloseTo(3.25, 2);
+      expect(out.tooNarrow).toBe(false);
+    });
+
+    it("leaves a pattern that already has a scale alone", () => {
+      // puffin is authored at 182mm. Scaling it would cut it at a size nobody asked for.
+      const { fold } = planned("puffin.fkld");
+      expect(sheetFrame(fold).scale).toBe(1);
+      const w = sheetFrame(fold).window;
+      expect(w.x1 - w.x0).toBeCloseTo(181.7, 0);
+    });
+
+    it("keeps the copper registered with the cut and score layers", () => {
+      // Both files scale, or the copper lands on a pattern of a different size. This is the invariant that
+      // lets the layers be imported and cut without being nudged into place by hand.
+      for (const name of ["house.fkld", "puffin.fkld"]) {
+        const { fold, traces, tapeW } = planned(name);
+        const copper = buildCopperSvgExport(fold, traces, tapeW);
+        const main = buildFkldSvgExport(fold, "base")!;
+        const box = (svg: string): string => svg.match(/viewBox="([^"]+)"/)![1]!;
+        expect(box(copper.svg), name).toBe(box(main.combined.svg));
       }
     });
   });
