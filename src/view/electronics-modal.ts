@@ -27,7 +27,12 @@ import {
   pointInFace,
   tilePolys,
 } from "../model/electronics.js";
-import { buildCopperCarrierExport, buildCopperSvgExport } from "../model/copper-svg-export.js";
+import {
+  type Mirror,
+  buildCopperCarrierExport,
+  buildCopperSvgExport,
+  mirrorPoint,
+} from "../model/copper-svg-export.js";
 import {
   type RoutedCircuit,
   type Terminals,
@@ -57,9 +62,12 @@ export class ElectronicsModal {
   private readonly statusEl: HTMLElement;
   private readonly toolButtons = new Map<Tool, HTMLButtonElement>();
   private readonly viewButtons = new Map<ViewMode, HTMLButtonElement>();
+  private readonly mirrorButtons = new Map<keyof Mirror, HTMLButtonElement>();
 
   private tool: Tool = "led";
   private viewMode: ViewMode = "strips";
+  /** Which way the cut is flipped — off by default, so the file matches the design unless asked otherwise. */
+  private mirror: Mirror = { x: false, y: false };
   /** Index into `circuit.leds` of the LED under the cursor's last tap, or -1. */
   private selected = -1;
   private fold: FoldFile | null = null;
@@ -108,6 +116,10 @@ export class ElectronicsModal {
               <button type="button" class="el-view" data-view="traces" title="Show the copper as separate strips">Strips</button>
               <button type="button" class="el-view" data-view="carrier" title="Show the copper as one carrier frame holding every trace in place">Carrier</button>
             </span>
+            <span class="el-group el-mirror-modes">
+              <button type="button" class="el-mirror" data-axis="x" title="Mirror the cut left-right — for cutting through the backing or laying the tape adhesive side up" aria-pressed="false">Mirror ⇄</button>
+              <button type="button" class="el-mirror" data-axis="y" title="Mirror the cut top-bottom" aria-pressed="false">Mirror ⇅</button>
+            </span>
             <span class="el-group">
               <button type="button" class="el-export" title="Download the copper as separate strips to cut">Export SVG</button>
               <button type="button" class="el-export-carrier" title="Download one carrier frame holding every trace in place: align it, stick the traces down, snip the tabs">Export carrier</button>
@@ -150,6 +162,11 @@ export class ElectronicsModal {
       const mode = btn.dataset.view as ViewMode;
       btn.addEventListener("click", () => this.selectView(mode));
       this.viewButtons.set(mode, btn);
+    }
+    for (const btn of this.overlay.querySelectorAll<HTMLButtonElement>(".el-mirror")) {
+      const axis = btn.dataset.axis === "y" ? "y" : "x";
+      btn.addEventListener("click", () => this.toggleMirror(axis));
+      this.mirrorButtons.set(axis, btn);
     }
     this.overlay.querySelector(".el-zoom-in")!.addEventListener("click", () => this.zoomBy(1.25));
     this.overlay.querySelector(".el-zoom-out")!.addEventListener("click", () => this.zoomBy(0.8));
@@ -228,6 +245,14 @@ export class ElectronicsModal {
     this.render();
   }
 
+  /** Flip the cut about one axis, or unflip it. The circuit itself is untouched — the same LEDs on the same
+   *  tiles, drawn and cut from the other side. */
+  private toggleMirror(axis: keyof Mirror): void {
+    this.mirror = { ...this.mirror, [axis]: !this.mirror[axis] };
+    this.syncButtons();
+    this.render();
+  }
+
   private selectTool(tool: Tool): void {
     this.tool = tool;
     for (const [t, btn] of this.toolButtons) btn.classList.toggle("is-active", t === tool);
@@ -243,6 +268,10 @@ export class ElectronicsModal {
   private syncButtons(): void {
     for (const [t, btn] of this.toolButtons) btn.classList.toggle("is-active", t === this.tool);
     for (const [m, btn] of this.viewButtons) btn.classList.toggle("is-active", m === this.viewMode);
+    for (const [axis, btn] of this.mirrorButtons) {
+      btn.classList.toggle("is-active", this.mirror[axis]);
+      btn.setAttribute("aria-pressed", this.mirror[axis] ? "true" : "false");
+    }
   }
 
   private onCanvasClick(e: MouseEvent): void {
@@ -291,13 +320,15 @@ export class ElectronicsModal {
       this.statusEl.textContent = "Nothing to export — place a battery and at least one LED first";
       return;
     }
-    const out = buildCopperSvgExport(this.fold, this.routed.traces, this.tapeW(), "kiri", this.routed.pads);
+    const out = buildCopperSvgExport(
+      this.fold, this.routed.traces, this.tapeW(), "kiri", this.routed.pads, this.mirror,
+    );
     this.download(out.filename, out.svg);
     const { pwr, gnd } = out.counts;
     const w = Math.round(out.widthMm * 100) / 100;
     let msg =
       `Exported ${out.filename} — ${pwr} PWR strip${pwr === 1 ? "" : "s"}, ` +
-      `${gnd} GND strip${gnd === 1 ? "" : "s"}, ${w}mm wide`;
+      `${gnd} GND strip${gnd === 1 ? "" : "s"}, ${w}mm wide${this.mirrorNote()}`;
     // The strip width follows the pattern, and a flat pattern need not be at a physical scale.
     if (out.tooNarrow) msg += " — too narrow to cut; scale the pattern up before cutting";
     this.statusEl.textContent = msg;
@@ -378,16 +409,37 @@ export class ElectronicsModal {
     this.content = { w: Math.max(maxX - minX, 1e-3), h: Math.max(maxY - minY, 1e-3) };
   }
 
-  /** Flat mm → world (content) space: shift to a positive margin, flip Y like the export. */
+  /** The sheet the preview shares with the export: the pattern plus a margin on every side. */
+  private sheet(): { w: number; h: number } {
+    return {
+      w: this.bounds.maxX - this.bounds.minX + 2 * MARGIN,
+      h: this.bounds.maxY - this.bounds.minY + 2 * MARGIN,
+    };
+  }
+
+  /** Flat mm → world (content) space: shift to a positive margin, flip Y like the export, then apply the
+   *  same mirror the export will. The canvas has to show the mirrored layout, not merely export one: this is
+   *  where the LEDs get placed, and placing them against an unmirrored picture of a mirrored cut is how you
+   *  end up with a board that is right in the editor and reversed on the mat. */
   private tp(p: Vec2): Vec2 {
-    return { x: p.x - this.bounds.minX + MARGIN, y: this.bounds.maxY - p.y + MARGIN };
+    const { w, h } = this.sheet();
+    return mirrorPoint(
+      { x: p.x - this.bounds.minX + MARGIN, y: this.bounds.maxY - p.y + MARGIN },
+      w,
+      h,
+      this.mirror,
+    );
   }
 
   /** Pointer client coords → flat mm (accounts for the live viewBox, so pan/zoom-safe). */
   private clientToFlat(e: MouseEvent): Vec2 | null {
     const w = this.clientToWorld(e);
     if (!w) return null;
-    return { x: w.x + this.bounds.minX - MARGIN, y: this.bounds.maxY + MARGIN - w.y };
+    // Undo the mirror first — reflection is its own inverse, so the same call takes it back off — then undo
+    // the shift and flip. Without this a click would land on the unmirrored twin of the tile under the cursor.
+    const sheet = this.sheet();
+    const s = mirrorPoint(w, sheet.w, sheet.h, this.mirror);
+    return { x: s.x + this.bounds.minX - MARGIN, y: this.bounds.maxY + MARGIN - s.y };
   }
 
   /** Pointer client coords → world (content/viewBox) space via the live screen CTM. */
@@ -580,7 +632,9 @@ export class ElectronicsModal {
    *  needs no conversion. */
   private carrierParts(): string[] {
     if (!this.fold) return [];
-    const out = buildCopperCarrierExport(this.fold, this.routed.traces, this.tapeW(), "kiri", this.keepOff());
+    const out = buildCopperCarrierExport(
+      this.fold, this.routed.traces, this.tapeW(), "kiri", this.keepOff(), this.mirror,
+    );
     const ring = (r: { x0: number; y0: number; x1: number; y1: number }): string => {
       const c = [
         { x: r.x0, y: r.y0 }, { x: r.x1, y: r.y0 }, { x: r.x1, y: r.y1 }, { x: r.x0, y: r.y1 },
@@ -623,14 +677,14 @@ export class ElectronicsModal {
       return;
     }
     const out = buildCopperCarrierExport(
-      this.fold, this.routed.traces, this.tapeW(), "kiri", this.keepOff(),
+      this.fold, this.routed.traces, this.tapeW(), "kiri", this.keepOff(), this.mirror,
     );
     this.download(out.filename, out.svg);
     const w = Math.round(out.widthMm * 100) / 100;
     let msg =
       `Exported ${out.filename} — one frame holding ${out.counts.traces} trace` +
       `${out.counts.traces === 1 ? "" : "s"}, ${out.counts.tabs} tab` +
-      `${out.counts.tabs === 1 ? "" : "s"} to snip, ${w}mm wide`;
+      `${out.counts.tabs === 1 ? "" : "s"} to snip, ${w}mm wide${this.mirrorNote()}`;
     if (out.padTabs > 0) {
       msg += ` — ${out.padTabs} tab${out.padTabs === 1 ? "" : "s"} grip a pad (run too short to grip elsewhere)`;
     }
@@ -642,6 +696,13 @@ export class ElectronicsModal {
     }
     if (out.tooNarrow) msg += " — too narrow to cut; scale the pattern up before cutting";
     this.statusEl.textContent = msg;
+  }
+
+  /** Says so when the file just saved is a mirror image, since the shape alone will not tell you. */
+  private mirrorNote(): string {
+    if (!this.mirror.x && !this.mirror.y) return "";
+    const axes = [this.mirror.x ? "left-right" : "", this.mirror.y ? "top-bottom" : ""].filter(Boolean);
+    return ` — mirrored ${axes.join(" and ")}`;
   }
 
   private download(filename: string, svg: string): void {

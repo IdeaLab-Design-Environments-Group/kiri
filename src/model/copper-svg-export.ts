@@ -30,6 +30,35 @@ const FRAME_BUFFER = 5;
 
 
 
+/**
+ * Which way, if either, the cut is flipped.
+ *
+ * Copper tape is cut face up and laid face down as often as not: cutting it through the backing, or laying a
+ * strip adhesive-side up so the copper faces the paper, reverses the pattern, and a circuit cut the wrong way
+ * round is scrap — the LEDs land on the mirror image of where they belong. Both axes are offered because which
+ * one is needed depends on how the sheet goes onto the mat, which the file cannot know.
+ */
+export interface Mirror {
+  /** Flip left-right, across the sheet's vertical centreline. */
+  x: boolean;
+  /** Flip top-bottom. Note the base transform already flips Y once, to get from FOLD's y-up to SVG's y-down;
+   *  this is a second flip on top of that, not that one. */
+  y: boolean;
+}
+
+/** Cut as designed. */
+export const NO_MIRROR: Mirror = { x: false, y: false };
+
+/**
+ * Reflect a point already in sheet coordinates.
+ *
+ * The mirror is taken about the *sheet's* centre rather than the pattern's, so every layer of a job — strips,
+ * carrier, and the editor's own preview — reflects about the same line and stays registered with the others.
+ */
+export function mirrorPoint(p: Vec2, w: number, h: number, m: Mirror): Vec2 {
+  return { x: m.x ? w - p.x : p.x, y: m.y ? h - p.y : p.y };
+}
+
 /** Below this the strips are not worth cutting: a blade will not track it and copper tape is not sold that
  *  narrow. Reported rather than silently widened, since widening would break registration with the preview
  *  and could make separate strips touch. */
@@ -71,8 +100,12 @@ export interface SheetFrame {
   T: (p: Vec2) => Vec2;
 }
 
-/** Work out the sheet exactly as {@link buildFkldSvgExport} does, so every layer registers. */
-export function sheetFrame(fold: FoldFile): SheetFrame {
+/** Work out the sheet exactly as {@link buildFkldSvgExport} does, so every layer registers.
+ *
+ *  `mirror` reflects the finished sheet. It is applied here, at the single transform every layer goes through,
+ *  rather than at each shape: mirroring the geometry piecemeal would let one layer flip without another, and
+ *  the whole point of the shared frame is that they cannot drift apart. */
+export function sheetFrame(fold: FoldFile, mirror: Mirror = NO_MIRROR): SheetFrame {
   const coords = (fold.vertices_coords ?? []) as unknown[][];
   const pts: Vec2[] = coords.map((c) => ({ x: Number(c[0]) || 0, y: Number(c[1]) || 0 }));
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -88,13 +121,15 @@ export function sheetFrame(fold: FoldFile): SheetFrame {
   }
   const w = maxX - minX + 2 * MARGIN;
   const h = maxY - minY + 2 * MARGIN;
-  // Shift to a positive origin with a margin and flip Y (FOLD is y-up, SVG is y-down). A vertical flip only —
-  // it never mirrors the cut left/right.
+  // Shift to a positive origin with a margin and flip Y (FOLD is y-up, SVG is y-down), then apply the
+  // requested mirror. The window is unchanged either way: the margin is equal on opposite sides, so it
+  // reflects onto itself.
   return {
     w,
     h,
     window: { x0: MARGIN, y0: MARGIN, x1: w - MARGIN, y1: h - MARGIN },
-    T: (p: Vec2): Vec2 => ({ x: p.x - minX + MARGIN, y: maxY - p.y + MARGIN }),
+    T: (p: Vec2): Vec2 =>
+      mirrorPoint({ x: p.x - minX + MARGIN, y: maxY - p.y + MARGIN }, w, h, mirror),
   };
 }
 
@@ -105,8 +140,9 @@ export function buildCopperSvgExport(
   baseName = "kiri",
   /** LED pads, so a run can be narrowed where it lands between an LED's legs. */
   pads: { pwr: Vec2; gnd: Vec2 }[] = [],
+  mirror: Mirror = NO_MIRROR,
 ): CopperSvgExport {
-  const { w, h, T } = sheetFrame(fold);
+  const { w, h, T } = sheetFrame(fold, mirror);
 
   const layer = (net: "pwr" | "gnd"): { body: string; count: number } => {
     const runs = traces.filter((t) => t.net === net && t.pts.length >= 2);
@@ -128,7 +164,7 @@ export function buildCopperSvgExport(
   return {
     widthMm: tapeW,
     tooNarrow: tapeW < MIN_CUTTABLE_MM,
-    filename: `${baseName}-copper.svg`,
+    filename: `${baseName}-copper${mirrorSuffix(mirror)}.svg`,
     svg:
       `<svg xmlns="http://www.w3.org/2000/svg" width="${fmt(w)}mm" height="${fmt(h)}mm" ` +
       `viewBox="0 0 ${fmt(w)} ${fmt(h)}">\n${body}\n</svg>\n`,
@@ -243,6 +279,15 @@ function unit(a: Vec2): Vec2 {
   return l < 1e-12 ? { x: 1, y: 0 } : { x: a.x / l, y: a.y / l };
 }
 
+/** Names a mirrored file as mirrored, and by which axis.
+ *
+ *  A mirrored cut and a straight one are the same shape seen from opposite sides, so on disk they are told
+ *  apart only by their names — and cutting the wrong one wastes the tape and the LEDs' positions with it. */
+function mirrorSuffix(m: Mirror): string {
+  if (!m.x && !m.y) return "";
+  return `-mirrored-${m.x ? "x" : ""}${m.y ? "y" : ""}`;
+}
+
 const fmt = (n: number): string => (Number.isFinite(n) ? String(Math.round(n * 1000) / 1000) : "0");
 
 // ---- carrier frame ----------------------------------------------------------
@@ -306,8 +351,9 @@ export function buildCopperCarrierExport(
   baseName = "kiri",
   /** Pads and battery terminals, in flat coordinates. Tabs are kept off them. */
   keepOff: Vec2[] = [],
+  mirror: Mirror = NO_MIRROR,
 ): CopperCarrierExport {
-  const { w, h, window: win, T } = sheetFrame(fold);
+  const { w, h, window: win, T } = sheetFrame(fold, mirror);
   const runs = traces.filter((t) => t.pts.length >= 2);
 
   const cuts: string[] = [];
@@ -382,7 +428,7 @@ export function buildCopperCarrierExport(
     `\n  </g>`;
 
   return {
-    filename: `${baseName}-copper-carrier.svg`,
+    filename: `${baseName}-copper-carrier${mirrorSuffix(mirror)}.svg`,
     svg:
       `<svg xmlns="http://www.w3.org/2000/svg" width="${fmt(w)}mm" height="${fmt(h)}mm" ` +
       `viewBox="0 0 ${fmt(w)} ${fmt(h)}">\n${body}\n</svg>\n`,

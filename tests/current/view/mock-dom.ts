@@ -139,8 +139,14 @@ export class MockElement {
       const child = new MockElement(tag);
       const classMatch = /class="([^"]+)"/.exec(attrs);
       if (classMatch) child.className = classMatch[1];
-      const dataKMatch = /data-k="([^"]+)"/.exec(attrs);
-      if (dataKMatch) child.dataset.k = dataKMatch[1];
+      // Every data-* attribute, as the real DOM does. Picking them out one by one silently gave two
+      // buttons the same dataset key, so a view keyed on data-axis / data-view saw one control, not two.
+      const dataRe = /data-([a-z0-9-]+)="([^"]*)"/gi;
+      let dataMatch: RegExpExecArray | null;
+      while ((dataMatch = dataRe.exec(attrs))) {
+        const key = dataMatch[1]!.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
+        child.dataset[key] = dataMatch[2]!;
+      }
       const typeMatch = /type="([^"]+)"/.exec(attrs);
       if (typeMatch) child.type = typeMatch[1];
       const minMatch = /min="([^"]+)"/.exec(attrs);

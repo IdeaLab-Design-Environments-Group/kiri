@@ -262,4 +262,86 @@ describe("view/electronics-modal", () => {
     svg.dispatch("pointerup", { button: 0, clientX: 90, clientY: 90, pointerId: 1 });
     expect(edits).toHaveLength(base); // no new edit: the drag panned
   });
+
+  describe("mirroring", () => {
+    /** Tap at a client point, which the identity mock CTM makes a world point. */
+    const tapWorld = (modal: any, x: number, y: number): void => {
+      modal.svg.dispatch("pointerdown", { button: 0, clientX: x, clientY: y, pointerId: 1 });
+      modal.svg.dispatch("pointerup", { button: 0, clientX: x, clientY: y, pointerId: 1 });
+    };
+
+    it("draws the mirrored layout, not just exports one", () => {
+      // Placing parts against an unmirrored picture of a mirrored cut is how a board comes out right on
+      // screen and reversed on the mat, so the canvas has to flip with the file.
+      const { modal } = openOn(grid2x2());
+      modal.selectTool("battery");
+      tapFlat(modal, { x: 0.5, y: 0.5 });
+      const plain = modal.svg.innerHTML;
+
+      modal.toggleMirror("x");
+      expect(modal.svg.innerHTML).not.toBe(plain);
+
+      // Reflection is its own inverse: flipping back restores exactly what was there.
+      modal.toggleMirror("x");
+      expect(modal.svg.innerHTML).toBe(plain);
+    });
+
+    it("still places parts where the cursor is once the view is mirrored", () => {
+      // The regression this guards: `tp` mirrors while `clientToFlat` does not, so every click lands on the
+      // unmirrored twin of the tile under the cursor -- the battery appears across the pattern from the tap.
+      const { modal, edits } = openOn(grid2x2());
+      modal.selectTool("battery");
+
+      // Face 0 in the unmirrored view, tapped through the plain transform.
+      tapFlat(modal, { x: 0.5, y: 0.5 });
+      const target = modal.tp({ x: 0.5, y: 0.5 });
+      expect((edits[edits.length - 1] as any).battery).toEqual({ face: 0 });
+
+      modal.toggleMirror("x");
+      // Same tile, now drawn somewhere else. Tap where it is drawn now.
+      const moved = modal.tp({ x: 0.5, y: 0.5 });
+      expect(moved.x).not.toBeCloseTo(target.x, 6);
+      const before = edits.length;
+      tapWorld(modal, moved.x, moved.y);
+
+      // Tapping the battery's own tile toggles it off -- which only happens if the click resolved to face 0.
+      expect(edits).toHaveLength(before + 1);
+      expect((edits[before] as any).battery).toBeNull();
+    });
+
+    it("shows which way it is flipped, and says so on the file it saves", () => {
+      const { modal } = openOn(grid2x2());
+      const btnX = modal.overlay.querySelector(".el-mirror");
+      expect(btnX.classList.contains("is-active")).toBe(false);
+
+      btnX.dispatch("click", {});
+      expect(btnX.classList.contains("is-active")).toBe(true);
+      expect(btnX.getAttribute("aria-pressed")).toBe("true");
+
+      // And the saved file is named and reported as mirrored.
+      const anchors: any[] = [];
+      const origCreate = (globalThis as any).document.createElement.bind((globalThis as any).document);
+      (globalThis as any).document.createElement = (tag: string) => {
+        const el = origCreate(tag);
+        if (tag === "a") anchors.push(el);
+        return el;
+      };
+      (globalThis as any).URL = { createObjectURL: () => "blob:x", revokeObjectURL: () => {} };
+      (globalThis as any).Blob = class {};
+
+      modal.selectTool("battery");
+      tapFlat(modal, { x: 0.5, y: 0.5 });
+      modal.selectTool("led");
+      tapFlat(modal, modal.gaps[0].point);
+      modal.overlay.querySelector(".el-export").dispatch("click", {});
+
+      expect(anchors).toHaveLength(1);
+      expect(anchors[0].download).toBe("kiri-copper-mirrored-x.svg");
+      expect(modal.statusEl.textContent).toContain("mirrored left-right");
+
+      (globalThis as any).document.createElement = origCreate;
+      delete (globalThis as any).URL;
+      delete (globalThis as any).Blob;
+    });
+  });
 });

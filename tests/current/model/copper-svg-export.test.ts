@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildCopperCarrierExport,
   buildCopperSvgExport,
+  mirrorPoint,
   outlineStrip,
   sheetFrame,
 } from "../../../src/model/copper-svg-export.js";
@@ -328,6 +329,107 @@ describe("model/copper-svg-export", () => {
       expect(outlineStrip([{ x: 1, y: 1 }], 2)).toEqual([]);
       expect(outlineStrip([{ x: 1, y: 1 }, { x: 1, y: 1 }], 2)).toEqual([]);
       expect(outlineStrip([{ x: 0, y: 0 }, { x: 5, y: 0 }], 0)).toEqual([]);
+    });
+  });
+
+  describe("mirroring", () => {
+    /** Every coordinate in an SVG's path data, in the order it is written.
+     *  Path data only -- the fill colours are hex digits and the header carries the sheet size, and either
+     *  would put this out of step with the geometry it is meant to be reading. */
+    const coords = (svg: string): number[] =>
+      (svg.match(/ d="([^"]*)"/g) ?? [])
+        .flatMap((d) => (d.match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number));
+
+    it("reflects the sheet about its own centre, leaving the window where it was", () => {
+      // About the SHEET's centre, not the pattern's: the carrier frame, the strips and the preview each go
+      // through this one transform, so they only stay registered if they all reflect about the same line.
+      const { fold } = planned("house.fkld");
+      const plain = sheetFrame(fold);
+      const flipped = sheetFrame(fold, { x: true, y: false });
+
+      for (const p of [{ x: 0, y: 0 }, { x: 3, y: 7 }, { x: -2, y: 1.5 }]) {
+        expect(flipped.T(p).x).toBeCloseTo(plain.w - plain.T(p).x, 9);
+        expect(flipped.T(p).y).toBeCloseTo(plain.T(p).y, 9);
+      }
+      // The margin is equal on opposite sides, so the window reflects onto itself.
+      expect(flipped.window).toEqual(plain.window);
+      expect(flipped.w).toBe(plain.w);
+      expect(flipped.h).toBe(plain.h);
+    });
+
+    it("mirrors the cut file itself, not just the frame it sits in", () => {
+      // The failure this guards against is a file that reports itself mirrored while the copper inside it is
+      // unchanged -- which cuts a circuit that is the reverse of what was asked for.
+      const { fold, traces, tapeW } = planned("house.fkld");
+      const plain = buildCopperSvgExport(fold, traces, tapeW);
+      const flipped = buildCopperSvgExport(fold, traces, tapeW, "kiri", [], { x: true, y: false });
+      const { w, h } = sheetFrame(fold);
+
+      const a = coords(plain.svg);
+      const b = coords(flipped.svg);
+      expect(b).toHaveLength(a.length);
+      expect(b).not.toEqual(a); // it really moved
+
+      // Same points, each reflected: the shapes are unchanged, seen from the other side.
+      expect(a.length % 2).toBe(0);
+      for (let i = 0; i + 1 < a.length; i += 2) {
+        const m = mirrorPoint({ x: a[i]!, y: a[i + 1]! }, w, h, { x: true, y: false });
+        expect(b[i]!).toBeCloseTo(m.x, 2);
+        expect(b[i + 1]!).toBeCloseTo(m.y, 2);
+      }
+      // Mirroring cuts the same tape into the same number of strips.
+      expect(flipped.counts).toEqual(plain.counts);
+      expect(flipped.widthMm).toBe(plain.widthMm);
+    });
+
+    it("mirrors on either axis, and on both at once", () => {
+      const { fold } = planned("house.fkld");
+      const { w, h } = sheetFrame(fold);
+      const p = { x: 2, y: 3 };
+      const base = sheetFrame(fold).T(p);
+
+      expect(sheetFrame(fold, { x: false, y: true }).T(p).x).toBeCloseTo(base.x, 9);
+      expect(sheetFrame(fold, { x: false, y: true }).T(p).y).toBeCloseTo(h - base.y, 9);
+      const both = sheetFrame(fold, { x: true, y: true }).T(p);
+      expect(both.x).toBeCloseTo(w - base.x, 9);
+      expect(both.y).toBeCloseTo(h - base.y, 9);
+    });
+
+    it("names a mirrored file as mirrored, and by which axis", () => {
+      // A mirrored cut and a straight one are the same shape from opposite sides; on disk the name is the
+      // only thing telling them apart, and cutting the wrong one wastes the tape.
+      const { fold, traces, tapeW, keepOff } = planned("house.fkld");
+      expect(buildCopperSvgExport(fold, traces, tapeW, "puffin").filename).toBe("puffin-copper.svg");
+      expect(
+        buildCopperSvgExport(fold, traces, tapeW, "puffin", [], { x: true, y: false }).filename,
+      ).toBe("puffin-copper-mirrored-x.svg");
+      expect(
+        buildCopperSvgExport(fold, traces, tapeW, "puffin", [], { x: true, y: true }).filename,
+      ).toBe("puffin-copper-mirrored-xy.svg");
+      expect(
+        buildCopperCarrierExport(fold, traces, tapeW, "puffin", keepOff, { x: false, y: true }).filename,
+      ).toBe("puffin-copper-carrier-mirrored-y.svg");
+    });
+
+    it("keeps the mirrored carrier inside its own frame", () => {
+      // The carrier only works if it lifts off the mat in one piece, so the mirrored file has to be as
+      // well-formed as the plain one -- everything inside the frame, nothing pushed off the sheet.
+      const { fold, traces, tapeW, keepOff } = planned("house.fkld");
+      const m = { x: true, y: false };
+      const out = buildCopperCarrierExport(fold, traces, tapeW, "kiri", keepOff, m);
+      const { w, h, window: win } = sheetFrame(fold, m);
+
+      expect(out.frame.window).toEqual(win);
+      expect(out.counts.traces).toBeGreaterThan(0);
+      expect(out.counts.tabs).toBeGreaterThan(0);
+      for (const path of out.tabPaths) {
+        for (const p of path) {
+          expect(p.x).toBeGreaterThanOrEqual(0);
+          expect(p.y).toBeGreaterThanOrEqual(0);
+          expect(p.x).toBeLessThanOrEqual(w);
+          expect(p.y).toBeLessThanOrEqual(h);
+        }
+      }
     });
   });
 });
