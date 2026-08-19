@@ -577,12 +577,10 @@ describe("model/copper-svg-export", () => {
       const { fold, traces, tapeW, keepOff, pads } = planned("house.fkld", 3);
       const faces = flatFaces(fold);
       const term = batteryTerminals(faces[0]!.centroid, patternDiag(faces), faces[0]!.poly, tapeW);
-      return buildCopperCarrierExport(
-        fold, traces, tapeW, "k", keepOff, undefined, undefined, pads, term,
-      );
+      return buildCopperCarrierExport(fold, traces, tapeW, "k", keepOff, undefined, undefined, pads);
     };
 
-    it("says which run is which net, and where the parts go", () => {
+    it("says which run is which net", () => {
       // The strips file tells you all this by colouring PWR apart from GND. The carrier is one piece of
       // copper, so it is one layer of one colour, and black outlines alone cannot say which run is positive
       // or which way round the LED goes.
@@ -593,13 +591,13 @@ describe("model/copper-svg-export", () => {
       );
       expect(ann).toContain("#ff0000");   // PWR
       expect(ann).toContain("#222222");   // GND
-      expect(ann).toContain("#d8b24a");   // the LED chip bridging its two pads
       // Filled copper, the same shapes the strips file cuts -- not a line standing in for it.
       expect(ann).toMatch(/fill="#ff0000" fill-rule="nonzero"/);
-      expect(ann).toContain(">+<");
-      expect(ann).toContain(">\u2212<");
-      // One pad marker per net per placed LED.
-      expect((ann.match(/<circle /g) ?? []).length).toBe(2 * 3);
+      // The copper and nothing else. Pad and terminal markers drawn over a strip merge with it into one
+      // shape wider than the tape, and the cut line, which follows the strip alone, then looks misplaced.
+      expect(ann).not.toContain("<circle");
+      expect(ann).not.toContain("<text");
+      expect(ann).not.toContain("#d8b24a");
     });
 
     it("keeps the annotation out of the cut, so it can be switched off", () => {
@@ -624,12 +622,17 @@ describe("model/copper-svg-export", () => {
       const { fold, traces, tapeW, pads } = planned("house.fkld", 3);
       const faces = flatFaces(fold);
       const term = batteryTerminals(faces[0]!.centroid, patternDiag(faces), faces[0]!.poly, tapeW);
-      const plain = buildCopperCarrierExport(fold, traces, tapeW, "k", [], undefined, undefined, pads, term);
+      const plain = buildCopperCarrierExport(fold, traces, tapeW, "k", [], undefined, undefined, pads);
       const flipped = buildCopperCarrierExport(
-        fold, traces, tapeW, "k", [], { x: true, y: false }, undefined, pads, term,
+        fold, traces, tapeW, "k", [], { x: true, y: false }, undefined, pads,
       );
+      // The first x in the annotation's first filled ring.
       const cx = (svg: string): number =>
-        Number(svg.slice(svg.indexOf('<g id="annotation"')).match(/<circle cx="([\d.-]+)"/)![1]);
+        Number(
+          svg
+            .slice(svg.indexOf('<g id="annotation"'))
+            .match(/<path d="M ([\d.-]+)/)![1],
+        );
       const { w } = sheetFrame(fold);
       expect(cx(flipped.svg)).toBeCloseTo(w - cx(plain.svg), 2);
     });

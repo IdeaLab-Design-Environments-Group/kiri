@@ -68,11 +68,6 @@ const MIN_CUTTABLE_MM = 3;
 /** Cut colours. Distinct so a cutter treats each net as its own layer. */
 const PWR_FILL = "#ff0000";
 const GND_FILL = "#222222";
-/** The LED's body, as the editor's canvas draws it. Annotation only — never cut. */
-const LED_BODY = "#d8b24a";
-
-/** An LED the router could not reach keeps its zeroed pads; there is nothing to mark. */
-const unplaced = (p: Vec2): boolean => p.x === 0 && p.y === 0;
 
 export interface CopperSvgExport {
   filename: string;
@@ -331,10 +326,13 @@ function unit(a: Vec2): Vec2 {
  * the parts go. The carrier could not: it is one piece of copper, which means one layer of one colour, and
  * black outlines alone do not say which run is positive, where the LED sits, or which way round it goes.
  *
- * So the strips file is drawn underneath it. The annotation group holds exactly what that file holds — each
- * run filled in its net's colour, at the width it is cut — with the LED pads and the battery's + and −
- * terminals on top. The carrier's black cut lines then draw over it, so the file reads as the strips export
- * with the frame and its tabs added: the same shapes, in the same colours, in the same places.
+ * So the strips file is drawn underneath it: each run filled in its net's colour, at the width it is cut,
+ * and nothing else. The carrier's black cut lines then draw over it, so the file reads as the strips export
+ * with the frame and its tabs added — the same shapes, in the same colours, in the same places.
+ *
+ * Only the copper. Pad and terminal markers were tried here and taken out again: drawn over the strip they
+ * merge with it into one red blob wider than the tape, and the cut line, which follows the strip alone, then
+ * reads as an outline that does not fit its own shape.
  *
  * **This layer is not meant to be cut.** It is kept out of `carrier` precisely so it can be switched off or
  * deleted in the cutting software; a cutter set to follow every path in the file would cut these too, which
@@ -343,9 +341,7 @@ function unit(a: Vec2): Vec2 {
 function annotationLayer(
   traces: Trace2D[],
   pads: { pwr: Vec2; gnd: Vec2 }[],
-  terminals: { pwr: Vec2; gnd: Vec2; half: number } | null,
   tapeW: number,
-  scale: number,
   T: (p: Vec2) => Vec2,
 ): string {
   const parts: string[] = [];
@@ -358,38 +354,6 @@ function annotationLayer(
     if (ring.length < 3) continue;
     const colour = t.net === "pwr" ? PWR_FILL : GND_FILL;
     parts.push(`<path d="${ringPath(ring.map(T))}" fill="${colour}" fill-rule="nonzero" />`);
-  }
-
-  // Where each LED goes, and which way round: the chip body bridging its two pads, PWR marked, GND marked.
-  const tape = tapeW * scale;
-  const r = tape * 0.3;
-  for (const pad of pads) {
-    if (unplaced(pad.pwr) && unplaced(pad.gnd)) continue;
-    const a = T(pad.pwr), b = T(pad.gnd);
-    parts.push(
-      `<line x1="${fmt(a.x)}" y1="${fmt(a.y)}" x2="${fmt(b.x)}" y2="${fmt(b.y)}" ` +
-        `stroke="${LED_BODY}" stroke-width="${fmt(r * 0.9)}" stroke-linecap="round" />`,
-    );
-    parts.push(`<circle cx="${fmt(a.x)}" cy="${fmt(a.y)}" r="${fmt(r)}" fill="${PWR_FILL}" />`);
-    parts.push(`<circle cx="${fmt(b.x)}" cy="${fmt(b.y)}" r="${fmt(r)}" fill="${GND_FILL}" />`);
-  }
-
-  // The battery, with its two terminals told apart — the one thing you cannot get wrong twice.
-  if (terminals) {
-    const half = terminals.half * scale;
-    const pad = (p: Vec2, fill: string, sign: string): void => {
-      const c = T(p);
-      parts.push(
-        `<rect x="${fmt(c.x - half)}" y="${fmt(c.y - half)}" width="${fmt(2 * half)}" ` +
-          `height="${fmt(2 * half)}" rx="${fmt(half * 0.22)}" fill="${fill}" />`,
-      );
-      parts.push(
-        `<text x="${fmt(c.x)}" y="${fmt(c.y)}" fill="#ffffff" font-size="${fmt(half * 1.4)}" ` +
-          `text-anchor="middle" dominant-baseline="central" font-family="sans-serif">${sign}</text>`,
-      );
-    };
-    pad(terminals.pwr, PWR_FILL, "+");
-    pad(terminals.gnd, GND_FILL, "\u2212");
   }
 
   if (!parts.length) return "";
@@ -473,8 +437,6 @@ export function buildCopperCarrierExport(
   /** LED pads, so a run narrows where it lands between an LED's legs — exactly as the strips file does.
    *  Without them the carrier meets itself under the chip and shorts the two nets together. */
   pads: { pwr: Vec2; gnd: Vec2 }[] = [],
-  /** The battery's two terminals, for the annotation layer. */
-  terminals: { pwr: Vec2; gnd: Vec2; half: number } | null = null,
 ): CopperCarrierExport {
   const { w, h, window: win, T, scale } = sheetFrame(fold, mirror, sheetMm);
   // Everything below works in sheet millimetres, so the tape width has to be converted out of the pattern's
@@ -553,7 +515,7 @@ export function buildCopperCarrierExport(
     cuts.map((d) => `<path d="${d}" />`).join("\n    ") +
     `\n  </g>`;
   // Underneath, so the black cut lines stay visible on top of the copper they cut around.
-  const body = annotationLayer(traces, pads, terminals, tapeW, scale, T) + cutLayer;
+  const body = annotationLayer(traces, pads, tapeW, T) + cutLayer;
 
   return {
     filename: `${baseName}-copper-carrier${mirrorSuffix(mirror)}.svg`,
