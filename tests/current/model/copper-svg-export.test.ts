@@ -563,4 +563,62 @@ describe("model/copper-svg-export", () => {
       expect(withPads.counts.traces).toBe(without.counts.traces);
     });
   });
+
+  describe("annotation", () => {
+    const built = () => {
+      const { fold, traces, tapeW, keepOff, pads } = planned("house.fkld", 3);
+      const faces = flatFaces(fold);
+      const term = batteryTerminals(faces[0]!.centroid, patternDiag(faces), faces[0]!.poly, tapeW);
+      return buildCopperCarrierExport(
+        fold, traces, tapeW, "k", keepOff, undefined, undefined, pads, term,
+      );
+    };
+
+    it("says which run is which net, and where the parts go", () => {
+      // The strips file tells you all this by colouring PWR apart from GND. The carrier is one piece of
+      // copper, so it is one layer of one colour, and black outlines alone cannot say which run is positive
+      // or which way round the LED goes.
+      const svg = built().svg;
+      const ann = svg.slice(svg.indexOf('<g id="annotation"'));
+      expect(ann).toContain("#ff0000");   // PWR
+      expect(ann).toContain("#222222");   // GND
+      expect(ann).toContain("#d8b24a");   // the LED chip bridging its two pads
+      expect(ann).toContain(">+<");
+      expect(ann).toContain(">\u2212<");
+      // One pad marker per net per placed LED.
+      expect((ann.match(/<circle /g) ?? []).length).toBe(2 * 3);
+    });
+
+    it("keeps the annotation out of the cut, so it can be switched off", () => {
+      // Every path in the carrier group is cut. An annotation cut along a trace would sever the trace it
+      // names, so it lives in its own group and never in that one.
+      const svg = built().svg;
+      const cut = svg.slice(svg.indexOf('<g id="carrier"'), svg.indexOf('<g id="annotation"'));
+      expect(cut).not.toContain("#ff0000");
+      expect(cut).not.toContain("#d8b24a");
+      expect(cut).not.toContain("<circle");
+      expect(cut).not.toContain("<text");
+    });
+
+    it("is left out entirely when there is nothing to annotate", () => {
+      const { fold, tapeW } = planned("house.fkld");
+      expect(buildCopperCarrierExport(fold, [], tapeW).svg).not.toContain('id="annotation"');
+    });
+
+    it("mirrors with the cut it annotates", () => {
+      // It goes through the same transform, so a mirrored file cannot end up with its marks on the
+      // unmirrored side — which would put the + on the wrong terminal.
+      const { fold, traces, tapeW, pads } = planned("house.fkld", 3);
+      const faces = flatFaces(fold);
+      const term = batteryTerminals(faces[0]!.centroid, patternDiag(faces), faces[0]!.poly, tapeW);
+      const plain = buildCopperCarrierExport(fold, traces, tapeW, "k", [], undefined, undefined, pads, term);
+      const flipped = buildCopperCarrierExport(
+        fold, traces, tapeW, "k", [], { x: true, y: false }, undefined, pads, term,
+      );
+      const cx = (svg: string): number =>
+        Number(svg.slice(svg.indexOf('<g id="annotation"')).match(/<circle cx="([\d.-]+)"/)![1]);
+      const { w } = sheetFrame(fold);
+      expect(cx(flipped.svg)).toBeCloseTo(w - cx(plain.svg), 2);
+    });
+  });
 });

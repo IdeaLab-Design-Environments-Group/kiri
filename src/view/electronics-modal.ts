@@ -686,7 +686,7 @@ export class ElectronicsModal {
     if (!this.fold) return [];
     const out = buildCopperCarrierExport(
       this.fold, this.routed.traces, this.tapeW(), "kiri", this.keepOff(), this.mirror, this.sheetMm,
-      this.routed.pads,
+      this.routed.pads, this.batteryTerminals(),
     );
     const ring = (r: { x0: number; y0: number; x1: number; y1: number }): string => {
       const c = [
@@ -704,6 +704,13 @@ export class ElectronicsModal {
       parts.push(`<path d="${d}" class="el-carrier-tab" fill="none" stroke-width="${fmt(this.tapeW() * this.scale())}" />`);
     }
     return parts;
+  }
+
+  /** The battery's terminals, or null when no battery is placed — for the carrier's annotation layer. */
+  private batteryTerminals(): { pwr: Vec2; gnd: Vec2; half: number } | null {
+    const batt = this.circuit.battery;
+    const face = batt ? this.faces[batt.face] : null;
+    return face ? this.defaultTerminals(face.centroid, face.poly) : null;
   }
 
   /** Pads and battery terminals — the spots a carrier tab must not grip, since a tab there sits under the
@@ -731,7 +738,7 @@ export class ElectronicsModal {
     }
     const out = buildCopperCarrierExport(
       this.fold, this.routed.traces, this.tapeW(), "kiri", this.keepOff(), this.mirror, this.sheetMm,
-      this.routed.pads,
+      this.routed.pads, this.batteryTerminals(),
     );
     this.download(out.filename, out.svg);
     const w = Math.round(out.widthMm * 100) / 100;
