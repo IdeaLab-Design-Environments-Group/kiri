@@ -124,6 +124,18 @@ class ExportModalMock {
     this.stlProvider = provider;
   }
 
+  /** The print size every layer is cut at, and the router plans to. */
+  printSize = 130;
+  printSizeHandler: ((mm: number) => void) | null = null;
+
+  onPrintSize(handler: (mm: number) => void): void {
+    this.printSizeHandler = handler;
+  }
+
+  printSizeMm(): number {
+    return this.printSize;
+  }
+
   setEnabled(enabled: boolean): void {
     this.enabledCalls.push(enabled);
   }

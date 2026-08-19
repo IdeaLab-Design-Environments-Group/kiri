@@ -115,7 +115,13 @@ export interface SheetFrame {
  *  `mirror` reflects the finished sheet. It is applied here, at the single transform every layer goes through,
  *  rather than at each shape: mirroring the geometry piecemeal would let one layer flip without another, and
  *  the whole point of the shared frame is that they cannot drift apart. */
-export function sheetFrame(fold: FoldFile, mirror: Mirror = NO_MIRROR): SheetFrame {
+export function sheetFrame(
+  fold: FoldFile,
+  mirror: Mirror = NO_MIRROR,
+  /** The sheet a scale-less pattern is cut at. Must be the size the router planned for, or the tape is no
+   *  longer 3.25mm: the two derivations cancel only when they agree on it. */
+  sheetMm?: number,
+): SheetFrame {
   const coords = (fold.vertices_coords ?? []) as unknown[][];
   const pts: Vec2[] = coords.map((c) => ({ x: Number(c[0]) || 0, y: Number(c[1]) || 0 }));
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -131,7 +137,7 @@ export function sheetFrame(fold: FoldFile, mirror: Mirror = NO_MIRROR): SheetFra
   }
   // Pattern units to millimetres first, then the margin — which is a real 8mm border on the cut sheet, not
   // eight of whatever the pattern happens to be measured in.
-  const k = printScale(fold);
+  const k = printScale(fold, sheetMm);
   const w = (maxX - minX) * k + 2 * MARGIN;
   const h = (maxY - minY) * k + 2 * MARGIN;
   // Shift to a positive origin with a margin and flip Y (FOLD is y-up, SVG is y-down), then apply the
@@ -155,8 +161,9 @@ export function buildCopperSvgExport(
   /** LED pads, so a run can be narrowed where it lands between an LED's legs. */
   pads: { pwr: Vec2; gnd: Vec2 }[] = [],
   mirror: Mirror = NO_MIRROR,
+  sheetMm?: number,
 ): CopperSvgExport {
-  const { w, h, T, scale } = sheetFrame(fold, mirror);
+  const { w, h, T, scale } = sheetFrame(fold, mirror, sheetMm);
   // What will actually be cut, in millimetres. The outlines are built in flat units and mapped through T,
   // which scales them, so the strips come out this wide without anything else being done to them.
   const tapeMm = tapeW * scale;
@@ -369,8 +376,9 @@ export function buildCopperCarrierExport(
   /** Pads and battery terminals, in flat coordinates. Tabs are kept off them. */
   keepOff: Vec2[] = [],
   mirror: Mirror = NO_MIRROR,
+  sheetMm?: number,
 ): CopperCarrierExport {
-  const { w, h, window: win, T, scale } = sheetFrame(fold, mirror);
+  const { w, h, window: win, T, scale } = sheetFrame(fold, mirror, sheetMm);
   // Everything below works in sheet millimetres, so the tape width has to be converted out of the pattern's
   // units first -- tabs, clearances and spacing are all measured against it.
   const tape = tapeW * scale;

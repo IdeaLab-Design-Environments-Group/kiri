@@ -144,7 +144,7 @@ export const PRINT_SHEET_MM = DEFAULT_PRINT_SIZE;
  * would make the tape coarser than the file intends, which measurably degrades routing on the large
  * patterns (akde-decagon picks up crossing tabs, puffin picks up copper over a chip).
  */
-export function tapeWidthFor(faces: FlatFace[]): number {
+export function tapeWidthFor(faces: FlatFace[], sheetMm: number = PRINT_SHEET_MM): number {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const f of faces) {
     for (const p of f.poly) {
@@ -158,7 +158,7 @@ export function tapeWidthFor(faces: FlatFace[]): number {
   const longest = Math.max(maxX - minX, maxY - minY);
   if (!(longest > 0)) return TAPE_MM;
   // Both axes under the sheet ⇔ the longest is: scale-less, so the tape is a fraction of the assumed sheet.
-  return longest < PRINT_SHEET_MM ? (TAPE_MM * longest) / PRINT_SHEET_MM : TAPE_MM;
+  return longest < sheetMm ? (TAPE_MM * longest) / sheetMm : TAPE_MM;
 }
 
 /**
@@ -371,6 +371,10 @@ export function planRoutes(
   faces: FlatFace[],
   gaps: GapEdge[],
   circuit: Circuit,
+  /** The sheet a scale-less pattern is cut at. Every clearance the router works to is derived from the tape
+   *  width, which is derived from this, so routing a pattern for a bigger sheet really does give it more
+   *  room -- the tape is the same 3.25mm of copper on a larger piece of paper. */
+  sheetMm: number = PRINT_SHEET_MM,
 ): RoutedCircuit {
   const pads: PadPair[] = circuit.leds.map(() => ({ pwr: { x: 0, y: 0 }, gnd: { x: 0, y: 0 } }));
   const unreachable: number[] = [];
@@ -381,7 +385,7 @@ export function planRoutes(
   }
 
   const diag = patternDiag(faces);
-  const tapeW = tapeWidthFor(faces); // the tape in THIS pattern's units — see tapeWidthFor
+  const tapeW = tapeWidthFor(faces, sheetMm); // the tape in THIS pattern's units — see tapeWidthFor
   const centre = faces[battery.face]!.centroid;
   const term = batteryTerminals(centre, diag, faces[battery.face]!.poly, tapeW);
 

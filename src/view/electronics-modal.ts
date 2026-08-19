@@ -69,6 +69,9 @@ export class ElectronicsModal {
   private viewMode: ViewMode = "strips";
   /** Which way the cut is flipped — off by default, so the file matches the design unless asked otherwise. */
   private mirror: Mirror = { x: false, y: false };
+  /** The sheet a scale-less pattern is cut at, from the export menu's print size. Held here because both
+   *  the routing and every dimension drawn are derived from it. */
+  private sheetMm: number | undefined;
   /** Index into `circuit.leds` of the LED under the cursor's last tap, or -1. */
   private selected = -1;
   private fold: FoldFile | null = null;
@@ -226,6 +229,14 @@ export class ElectronicsModal {
     if (!this.overlay.hidden) this.render();
   }
 
+  /** Set the size the pattern is printed and cut at. Re-plans: the tape is the same 3.25mm of copper
+   *  whatever the sheet, so a bigger sheet is relatively narrower tape and a different route. */
+  setPrintSize(mm: number): void {
+    if (mm === this.sheetMm) return;
+    this.sheetMm = mm;
+    if (!this.overlay.hidden) this.emit();
+  }
+
   open(): void {
     this.selectTool(this.tool);
     this.syncButtons();
@@ -322,7 +333,7 @@ export class ElectronicsModal {
       return;
     }
     const out = buildCopperSvgExport(
-      this.fold, this.routed.traces, this.tapeW(), "kiri", this.routed.pads, this.mirror,
+      this.fold, this.routed.traces, this.tapeW(), "kiri", this.routed.pads, this.mirror, this.sheetMm,
     );
     this.download(out.filename, out.svg);
     const { pwr, gnd } = out.counts;
@@ -414,7 +425,7 @@ export class ElectronicsModal {
    *  so that the carrier -- whose geometry is read straight out of the export -- lands on the traces drawn
    *  beside it. A uniform scale changes nothing on screen, since the view is fitted to its own contents. */
   private scale(): number {
-    return this.fold ? printScale(this.fold) : 1;
+    return this.fold ? printScale(this.fold, this.sheetMm) : 1;
   }
 
   /** The sheet the preview shares with the export: the pattern plus a margin on every side. */
@@ -538,7 +549,7 @@ export class ElectronicsModal {
 
   /** Re-plan copper for the current circuit. Cheap enough to do on every edit. */
   private replan(): void {
-    this.routed = this.fold ? planRoutes(this.faces, this.gaps, this.circuit) : EMPTY_ROUTE;
+    this.routed = this.fold ? planRoutes(this.faces, this.gaps, this.circuit, this.sheetMm) : EMPTY_ROUTE;
   }
 
   private render(): void {
@@ -647,7 +658,7 @@ export class ElectronicsModal {
   private carrierParts(): string[] {
     if (!this.fold) return [];
     const out = buildCopperCarrierExport(
-      this.fold, this.routed.traces, this.tapeW(), "kiri", this.keepOff(), this.mirror,
+      this.fold, this.routed.traces, this.tapeW(), "kiri", this.keepOff(), this.mirror, this.sheetMm,
     );
     const ring = (r: { x0: number; y0: number; x1: number; y1: number }): string => {
       const c = [
@@ -691,7 +702,7 @@ export class ElectronicsModal {
       return;
     }
     const out = buildCopperCarrierExport(
-      this.fold, this.routed.traces, this.tapeW(), "kiri", this.keepOff(), this.mirror,
+      this.fold, this.routed.traces, this.tapeW(), "kiri", this.keepOff(), this.mirror, this.sheetMm,
     );
     this.download(out.filename, out.svg);
     const w = Math.round(out.widthMm * 100) / 100;
@@ -745,7 +756,7 @@ export class ElectronicsModal {
 
   /** Tape width. Shared with the router, so the strips drawn are the strips it planned clearances for. */
   private tapeW(): number {
-    return tapeWidthFor(this.faces);
+    return tapeWidthFor(this.faces, this.sheetMm);
   }
 
   private diag(): number {

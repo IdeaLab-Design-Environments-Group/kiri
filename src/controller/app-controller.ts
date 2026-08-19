@@ -66,7 +66,15 @@ export class AppController {
     // SVG export targets the same source — "what you see is what you cut" (black=cut, blue=score).
     this.exporter.setProvider(() => {
       const { model, viewerShown } = this.store.getState();
-      return resolveSvgExport(model, viewerShown);
+      return resolveSvgExport(model, viewerShown, this.exporter.printSizeMm());
+    });
+    // One print size for every file. The cut, score and copper layers are all cut at it and the router
+    // plans to it, so an edit has to re-plan the circuit, not just resize the sheet: the tape stays 3.25mm
+    // of real copper, which is relatively narrower on a bigger sheet and routes differently.
+    this.exporter.onPrintSize((mm) => {
+      this.electronics.setPrintSize(mm);
+      // Re-render so the copper on the 3D model is re-planned at the new size too.
+      this.render(this.store.getState());
     });
     // STL export of the printed tiles (pinched hexagons, matched to the sim render). Height from the
     // menu; gap from the sim's shared `simTileGap` so export and sim match; `DEFAULT_PRINT_SIZE`
@@ -134,8 +142,9 @@ export class AppController {
     try {
       const faces = flatFaces(fold);
       const gaps = gapGraph(fold, faces).gaps;
-      const routed = planRoutes(faces, gaps, circuit);
-      const tapeW = tapeWidthFor(faces);
+      const sheetMm = this.exporter.printSizeMm();
+      const routed = planRoutes(faces, gaps, circuit, sheetMm);
+      const tapeW = tapeWidthFor(faces, sheetMm);
       const face = circuit.battery ? faces[circuit.battery.face] : null;
       const term = face
         ? batteryTerminals(face.centroid, patternDiag(faces), face.poly, tapeW)

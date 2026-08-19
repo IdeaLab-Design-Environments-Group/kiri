@@ -24,6 +24,7 @@ export class ExportModal {
   private readonly combinedBtn: HTMLButtonElement;
   private readonly stlBtn: HTMLButtonElement;
   private readonly stlSizeInput: HTMLInputElement;
+  private printSizeHandler: (mm: number) => void = () => {};
   private readonly stlHeightInput: HTMLInputElement;
   private readonly stlHeightUnit: HTMLElement;
   private readonly stlDetailInput: HTMLInputElement;
@@ -85,6 +86,8 @@ export class ExportModal {
     this.combinedBtn = this.overlay.querySelector(".export-combined-btn")!;
     this.stlBtn = this.overlay.querySelector(".export-stl-btn")!;
     this.stlSizeInput = this.overlay.querySelector(".export-stl-size")!;
+    // Announce edits as they happen: the copper is planned and cut at this size, so it must not go stale.
+    this.stlSizeInput.addEventListener("change", () => this.printSizeHandler(this.printSizeMm()));
     this.stlHeightInput = this.overlay.querySelector(".export-stl-height")!;
     this.stlHeightUnit = this.overlay.querySelector(".export-stl-unit")!;
     this.stlDetailInput = this.overlay.querySelector(".export-stl-detail")!;
@@ -111,6 +114,22 @@ export class ExportModal {
 
   setStlProvider(provider: StlProvider): void {
     this.stlProvider = provider;
+  }
+
+  /**
+   * Register a handler told whenever the print size changes.
+   *
+   * The size is not the STL's alone: the cut, score and copper layers are all cut at it, and the router
+   * plans to it, so everything downstream has to hear about an edit rather than reading it at download time.
+   */
+  onPrintSize(handler: (mm: number) => void): void {
+    this.printSizeHandler = handler;
+  }
+
+  /** The print size currently in the box, or the default when it is empty or nonsense. */
+  printSizeMm(): number {
+    const raw = parseFloat(this.stlSizeInput.value);
+    return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_PRINT_SIZE;
   }
 
   /** Enable/disable the Export button (only when there's a cuttable pattern on screen). */

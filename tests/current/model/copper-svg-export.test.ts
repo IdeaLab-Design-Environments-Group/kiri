@@ -39,6 +39,13 @@ function ledsOn(gaps: ReturnType<typeof load>["gaps"], max: number): Led[] {
   return leds;
 }
 
+/** The same fixture as `planned`, but routed for a chosen sheet size. */
+function plannedAt(name: string, sheetMm: number, n = 6) {
+  const { fold, faces, gaps } = load(name);
+  const circuit: Circuit = { leds: ledsOn(gaps, n), battery: { face: 0 } };
+  return { fold, faces, gaps, circuit, sheetMm };
+}
+
 function planned(name: string, n = 6) {
   const { fold, faces, gaps } = load(name);
   const circuit: Circuit = { leds: ledsOn(gaps, n), battery: { face: 0 } };
@@ -474,6 +481,39 @@ describe("model/copper-svg-export", () => {
         const box = (svg: string): string => svg.match(/viewBox="([^"]+)"/)![1]!;
         expect(box(copper.svg), name).toBe(box(main.combined.svg));
       }
+    });
+  });
+
+  describe("print size", () => {
+    it("cuts at the size asked for, keeping the tape a real 3.25mm", () => {
+      // The tape width and the sheet scale are derived from the same number and cancel: 3.25mm of copper is
+      // 3.25mm of copper whatever size the paper is. They only cancel if both are told the same size, which
+      // is the mistake this pins -- scaling the sheet but not the router leaves the tape wrong by the ratio.
+      const { fold, faces, gaps, circuit } = plannedAt("house.fkld", 260);
+      const tapeW = tapeWidthFor(faces, 260);
+      const r = planRoutes(faces, gaps, circuit, 260);
+      const out = buildCopperSvgExport(fold, r.traces, tapeW, "k", r.pads, undefined, 260);
+
+      expect(out.widthMm).toBeCloseTo(3.25, 2);
+      const f = sheetFrame(fold, undefined, 260);
+      expect(f.window.x1 - f.window.x0).toBeCloseTo(260, 0);
+      expect(out.svg).toContain(`width="${Math.round(f.w * 1000) / 1000}mm"`);
+    });
+
+    it("carries the size into the carrier and the cut layer too, so they stay registered", () => {
+      const { fold, faces, gaps, circuit } = plannedAt("house.fkld", 260);
+      const tapeW = tapeWidthFor(faces, 260);
+      const r = planRoutes(faces, gaps, circuit, 260);
+      const carrier = buildCopperCarrierExport(fold, r.traces, tapeW, "k", [], undefined, 260);
+      const main = buildFkldSvgExport(fold, "k", 260)!;
+      const box = (svg: string): string => svg.match(/viewBox="([^"]+)"/)![1]!;
+      expect(box(carrier.svg)).toBe(box(main.combined.svg));
+      expect(carrier.widthMm).toBeCloseTo(3.25, 2);
+    });
+
+    it("defaults to the print sheet when no size is given", () => {
+      const { fold } = planned("house.fkld");
+      expect(sheetFrame(fold).w).toBeCloseTo(sheetFrame(fold, undefined, 130).w, 6);
     });
   });
 });

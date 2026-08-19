@@ -49,6 +49,9 @@ const fmt = (n: number): string => (Number.isFinite(n) ? String(Math.round(n * 1
 export function buildFkldSvgExport(
   fold: FoldFile,
   baseName = "kirigami",
+  /** The sheet a scale-less pattern is cut at — the same size the copper layers use, so all four files
+   *  import at one size and register against each other. */
+  sheetMm?: number,
 ): SvgExportPayload | null {
   const coords = fold.vertices_coords;
   const edges = fold.edges_vertices;
@@ -72,7 +75,7 @@ export function buildFkldSvgExport(
   // the size the STL export prints it (see `printScale`) -- without this, a shape authored 4 units across
   // was declared a 4mm sheet inside a 16mm margin, and the copper planned for it came out a tenth of a
   // millimetre wide.
-  const k = printScale(fold);
+  const k = printScale(fold, sheetMm);
   const w = (maxX - minX) * k + 2 * MARGIN;
   const h = (maxY - minY) * k + 2 * MARGIN;
   const T = (i: number): P => ({

@@ -12,10 +12,12 @@ import type { ShownModel } from "./sim-scene-service.js";
 export function resolveSvgExport(
   model: LoadedModel | null,
   shown: ShownModel | null,
+  /** The print size chosen for the STL, so a pattern cut for folding is the size it was printed. */
+  sheetMm?: number,
 ): SvgExportPayload | null {
   const src = shown ?? (model?.kind === "fold" ? { object: model.object, name: model.name } : null);
   if (!src) return null;
-  return buildFkldSvgExport(src.object, baseName(src.name));
+  return buildFkldSvgExport(src.object, baseName(src.name), sheetMm);
 }
 
 function baseName(name: string): string {

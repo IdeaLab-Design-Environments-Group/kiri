@@ -14,7 +14,7 @@ describe("services/svg-export-service", () => {
 
     const out = resolveSvgExport(model, shown);
 
-    expect(buildFkldSvgExport).toHaveBeenCalledWith(shown.object, "viewer");
+    expect(buildFkldSvgExport).toHaveBeenCalledWith(shown.object, "viewer", undefined);
     expect(out).toEqual({ object: shown.object, name: "viewer" });
   });
 
@@ -25,7 +25,7 @@ describe("services/svg-export-service", () => {
 
     const out = resolveSvgExport(model, null);
 
-    expect(buildFkldSvgExport).toHaveBeenCalledWith(model.object, "loaded");
+    expect(buildFkldSvgExport).toHaveBeenCalledWith(model.object, "loaded", undefined);
     expect(out).toEqual({ object: model.object, name: "loaded" });
   });
 
