@@ -331,9 +331,10 @@ function unit(a: Vec2): Vec2 {
  * the parts go. The carrier could not: it is one piece of copper, which means one layer of one colour, and
  * black outlines alone do not say which run is positive, where the LED sits, or which way round it goes.
  *
- * So the information is added beside the cut rather than in it — a separate group, thin, in the canvas's own
- * colours: a centreline down each run in its net's colour, each LED's two pads with the chip bridging them,
- * and the battery's terminals marked + and −.
+ * So the strips file is drawn underneath it. The annotation group holds exactly what that file holds — each
+ * run filled in its net's colour, at the width it is cut — with the LED pads and the battery's + and −
+ * terminals on top. The carrier's black cut lines then draw over it, so the file reads as the strips export
+ * with the frame and its tabs added: the same shapes, in the same colours, in the same places.
  *
  * **This layer is not meant to be cut.** It is kept out of `carrier` precisely so it can be switched off or
  * deleted in the cutting software; a cutter set to follow every path in the file would cut these too, which
@@ -343,28 +344,24 @@ function annotationLayer(
   traces: Trace2D[],
   pads: { pwr: Vec2; gnd: Vec2 }[],
   terminals: { pwr: Vec2; gnd: Vec2; half: number } | null,
-  tape: number,
+  tapeW: number,
   scale: number,
   T: (p: Vec2) => Vec2,
 ): string {
   const parts: string[] = [];
-  const hair = Math.max(tape * 0.08, 0.1); // thin enough to read as a mark, not as a strip
 
-  // Which run is which net. A centreline rather than an outline: it lies inside the copper it names, so it
-  // cannot be mistaken for an edge to cut to.
+  // The copper itself, exactly as the strips file draws it: the same outline, filled in its net's colour.
+  // Not a centreline standing in for it -- a line down the middle cannot show the width being cut, and it
+  // was the width that was in question.
   for (const t of traces) {
-    if (t.pts.length < 2) continue;
+    const ring = stripOutline(t, tapeW, pads);
+    if (ring.length < 3) continue;
     const colour = t.net === "pwr" ? PWR_FILL : GND_FILL;
-    const d =
-      "M " +
-      t.pts
-        .map((p) => T(p))
-        .map((p, i) => (i === 0 ? "" : "L ") + `${fmt(p.x)} ${fmt(p.y)}`)
-        .join(" ");
-    parts.push(`<path d="${d}" fill="none" stroke="${colour}" stroke-width="${fmt(hair)}" />`);
+    parts.push(`<path d="${ringPath(ring.map(T))}" fill="${colour}" fill-rule="nonzero" />`);
   }
 
   // Where each LED goes, and which way round: the chip body bridging its two pads, PWR marked, GND marked.
+  const tape = tapeW * scale;
   const r = tape * 0.3;
   for (const pad of pads) {
     if (unplaced(pad.pwr) && unplaced(pad.gnd)) continue;
@@ -384,10 +381,10 @@ function annotationLayer(
       const c = T(p);
       parts.push(
         `<rect x="${fmt(c.x - half)}" y="${fmt(c.y - half)}" width="${fmt(2 * half)}" ` +
-          `height="${fmt(2 * half)}" fill="none" stroke="${fill}" stroke-width="${fmt(hair)}" />`,
+          `height="${fmt(2 * half)}" rx="${fmt(half * 0.22)}" fill="${fill}" />`,
       );
       parts.push(
-        `<text x="${fmt(c.x)}" y="${fmt(c.y)}" fill="${fill}" font-size="${fmt(half * 1.4)}" ` +
+        `<text x="${fmt(c.x)}" y="${fmt(c.y)}" fill="#ffffff" font-size="${fmt(half * 1.4)}" ` +
           `text-anchor="middle" dominant-baseline="central" font-family="sans-serif">${sign}</text>`,
       );
     };
@@ -551,11 +548,12 @@ export function buildCopperCarrierExport(
     }
   }
 
-  const body =
+  const cutLayer =
     `  <g id="carrier" fill="none" stroke="#000000" stroke-width="0.25">\n    ` +
     cuts.map((d) => `<path d="${d}" />`).join("\n    ") +
-    `\n  </g>\n` +
-    annotationLayer(traces, pads, terminals, tape, scale, T);
+    `\n  </g>`;
+  // Underneath, so the black cut lines stay visible on top of the copper they cut around.
+  const body = annotationLayer(traces, pads, terminals, tapeW, scale, T) + cutLayer;
 
   return {
     filename: `${baseName}-copper-carrier${mirrorSuffix(mirror)}.svg`,

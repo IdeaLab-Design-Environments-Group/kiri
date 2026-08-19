@@ -62,6 +62,14 @@ function planned(name: string, n = 6) {
   return { fold, faces, traces: r.traces, tapeW: tapeWidthFor(faces), keepOff, pads: r.pads };
 }
 
+/** Just the carrier's cut geometry. The file also carries a non-cut annotation layer, which is drawn with
+ *  closed filled shapes -- so anything asserting what gets CUT has to look only in here. */
+function cutLayer(svg: string): string {
+  const from = svg.indexOf('<g id="carrier"');
+  expect(from).toBeGreaterThanOrEqual(0);
+  return svg.slice(from, svg.indexOf("</g>", from));
+}
+
 /** Distance from a point to a segment. */
 function ptSeg(p: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }): number {
   const abx = b.x - a.x, aby = b.y - a.y;
@@ -156,8 +164,8 @@ describe("model/copper-svg-export", () => {
       const out = buildCopperCarrierExport(fold, traces, tapeW);
       expect(out.counts.traces).toBeGreaterThan(0);
       expect(out.counts.tabs).toBe(out.counts.traces); // one tab each, nothing left loose
-      // Exactly one closed path: the frame's outer edge. Everything else is open.
-      const closed = (out.svg.match(/ Z"/g) ?? []).length;
+      // Exactly one closed path in the cut: the frame's outer edge. Everything else is open.
+      const closed = (cutLayer(out.svg).match(/ Z"/g) ?? []).length;
       expect(closed).toBe(1);
     });
 
@@ -285,7 +293,7 @@ describe("model/copper-svg-export", () => {
       const out = buildCopperCarrierExport(fold, traces, tapeW);
       const { w, h, window: win } = sheetFrame(fold);
       // The outer rectangle is the first path, and sits 5mm outside the window on every side.
-      const first = out.svg.match(/<path d="M ([^"]+) Z"/)![1]!.match(/-?[\d.]+/g)!.map(Number);
+      const first = cutLayer(out.svg).match(/<path d="M ([^"]+) Z"/)![1]!.match(/-?[\d.]+/g)!.map(Number);
       // The file rounds to 3 decimals, so compare at that precision.
       expect(first[0]).toBeCloseTo(win.x0 - 5, 3);
       expect(first[1]).toBeCloseTo(win.y0 - 5, 3);
@@ -579,10 +587,15 @@ describe("model/copper-svg-export", () => {
       // copper, so it is one layer of one colour, and black outlines alone cannot say which run is positive
       // or which way round the LED goes.
       const svg = built().svg;
-      const ann = svg.slice(svg.indexOf('<g id="annotation"'));
+      const ann = svg.slice(
+        svg.indexOf('<g id="annotation"'),
+        svg.indexOf('<g id="carrier"'),
+      );
       expect(ann).toContain("#ff0000");   // PWR
       expect(ann).toContain("#222222");   // GND
       expect(ann).toContain("#d8b24a");   // the LED chip bridging its two pads
+      // Filled copper, the same shapes the strips file cuts -- not a line standing in for it.
+      expect(ann).toMatch(/fill="#ff0000" fill-rule="nonzero"/);
       expect(ann).toContain(">+<");
       expect(ann).toContain(">\u2212<");
       // One pad marker per net per placed LED.
@@ -593,7 +606,7 @@ describe("model/copper-svg-export", () => {
       // Every path in the carrier group is cut. An annotation cut along a trace would sever the trace it
       // names, so it lives in its own group and never in that one.
       const svg = built().svg;
-      const cut = svg.slice(svg.indexOf('<g id="carrier"'), svg.indexOf('<g id="annotation"'));
+      const cut = cutLayer(svg);
       expect(cut).not.toContain("#ff0000");
       expect(cut).not.toContain("#d8b24a");
       expect(cut).not.toContain("<circle");
