@@ -6,9 +6,10 @@ import {
   mirrorPoint,
   outlineStrip,
   sheetFrame,
+  stripOutline,
 } from "../../../src/model/copper-svg-export.js";
 import { buildFkldSvgExport } from "../../../src/model/fkld-svg-export.js";
-import { flatFaces, gapGraph, ledOf, type Circuit, type Led } from "../../../src/model/electronics.js";
+import { flatFaces, gapGraph, ledOf, type Circuit, type Led, type Vec2 } from "../../../src/model/electronics.js";
 import {
   batteryTerminals,
   patternDiag,
@@ -58,7 +59,7 @@ function planned(name: string, n = 6) {
     term.pwr,
     term.gnd,
   ];
-  return { fold, faces, traces: r.traces, tapeW: tapeWidthFor(faces), keepOff };
+  return { fold, faces, traces: r.traces, tapeW: tapeWidthFor(faces), keepOff, pads: r.pads };
 }
 
 /** Distance from a point to a segment. */
@@ -514,6 +515,52 @@ describe("model/copper-svg-export", () => {
     it("defaults to the print sheet when no size is given", () => {
       const { fold } = planned("house.fkld");
       expect(sheetFrame(fold).w).toBeCloseTo(sheetFrame(fold, undefined, 130).w, 6);
+    });
+  });
+
+  describe("the gap under an LED", () => {
+    it("narrows a run where it lands between an LED's legs", () => {
+      // A run passing over a pad whose partner leg is closer than the tape is wide has to pinch in, or the
+      // two nets meet under the chip and short it.
+      const t = { net: "pwr" as const, pts: [{ x: 0, y: 0 }, { x: 10, y: 0 }] };
+      const pads = [{ pwr: { x: 10, y: 0 }, gnd: { x: 11, y: 0 } }];
+      const wide = outlineStrip(t.pts, 3.25);
+      const pinched = stripOutline(t, 3.25, pads);
+      const spread = (ring: { x: number; y: number }[]): number => {
+        const ys = ring.filter((p) => Math.abs(p.x - 10) < 1e-6).map((p) => p.y);
+        return Math.max(...ys) - Math.min(...ys);
+      };
+      expect(spread(wide)).toBeCloseTo(3.25, 6);
+      expect(spread(pinched)).toBeLessThan(3.25);
+      expect(spread(pinched)).toBeGreaterThan(0);
+    });
+
+    it("cuts the carrier to the same shape as the strips, so it does not short the LEDs", () => {
+      // The carrier laid every run at full width because it was never given the pads: all six of puffin's
+      // LEDs had the two nets meeting under the chip, while the strips file for the same circuit left a
+      // clean gap. One outline definition now feeds both files.
+      const { fold, traces, tapeW, keepOff, pads } = planned("puffin.fkld");
+      const near = (ps: { x: number; y: number }[][], qs: { x: number; y: number }[][]): number => {
+        let m = Infinity;
+        for (const a of ps) for (const b of qs) for (const p of a) for (const q of b) {
+          m = Math.min(m, Math.hypot(p.x - q.x, p.y - q.y));
+        }
+        return m;
+      };
+      const rings = (ps: { pwr: Vec2; gnd: Vec2 }[], net: "pwr" | "gnd") =>
+        traces.filter((t) => t.net === net).map((t) => stripOutline(t, tapeW, ps));
+
+      const before = near(rings([], "pwr"), rings([], "gnd"));
+      const after = near(rings(pads, "pwr"), rings(pads, "gnd"));
+      expect(after).toBeGreaterThan(before);
+
+      // And the carrier really does use them — the file changes when they are supplied.
+      const without = buildCopperCarrierExport(fold, traces, tapeW, "k", keepOff);
+      const withPads = buildCopperCarrierExport(
+        fold, traces, tapeW, "k", keepOff, undefined, undefined, pads,
+      );
+      expect(withPads.svg).not.toBe(without.svg);
+      expect(withPads.counts.traces).toBe(without.counts.traces);
     });
   });
 });

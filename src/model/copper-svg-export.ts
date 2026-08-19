@@ -172,7 +172,7 @@ export function buildCopperSvgExport(
     const runs = traces.filter((t) => t.net === net && t.pts.length >= 2);
     const paths: string[] = [];
     for (const t of runs) {
-      const ring = outlineStrip(t.pts, widthsFor(t, tapeW, pads));
+      const ring = stripOutline(t, tapeW, pads);
       if (ring.length < 3) continue;
       paths.push(`<path d="${ringPath(ring.map(T))}" />`);
     }
@@ -194,6 +194,22 @@ export function buildCopperSvgExport(
       `viewBox="0 0 ${fmt(w)} ${fmt(h)}">\n${body}\n</svg>\n`,
     counts: { pwr: pwr.count, gnd: gnd.count },
   };
+}
+
+/**
+ * The outline of one run of tape: the shape that will be cut.
+ *
+ * The single definition of what a run looks like. The strips file, the carrier and the editor's canvas all
+ * draw this, so the gap that keeps the two nets apart under a chip cannot exist in one and not another --
+ * which it did: the carrier laid every run at full width, shorting all six of puffin's LEDs while the strips
+ * file for the same circuit had a clean 1.14mm between them.
+ */
+export function stripOutline(
+  t: Trace2D,
+  tapeW: number,
+  pads: { pwr: Vec2; gnd: Vec2 }[] = [],
+): Vec2[] {
+  return outlineStrip(t.pts, widthsFor(t, tapeW, pads));
 }
 
 /**
@@ -377,6 +393,9 @@ export function buildCopperCarrierExport(
   keepOff: Vec2[] = [],
   mirror: Mirror = NO_MIRROR,
   sheetMm?: number,
+  /** LED pads, so a run narrows where it lands between an LED's legs — exactly as the strips file does.
+   *  Without them the carrier meets itself under the chip and shorts the two nets together. */
+  pads: { pwr: Vec2; gnd: Vec2 }[] = [],
 ): CopperCarrierExport {
   const { w, h, window: win, T, scale } = sheetFrame(fold, mirror, sheetMm);
   // Everything below works in sheet millimetres, so the tape width has to be converted out of the pattern's
@@ -401,7 +420,7 @@ export function buildCopperCarrierExport(
   // tape and a crowded window, corners alone leave most runs with no clear line out to a wall.
   const rings = runs.map((t) => ({
     net: t.net,
-    ring: densify(outlineStrip(t.pts, tapeW).map(T), tape),
+    ring: densify(stripOutline(t, tapeW, pads).map(T), tape),
   }));
   // A tab must grip the trace, not the component. Anchoring on a pad puts the tab exactly where the LED sits
   // and means snipping it cuts at the pad; the same goes for a battery terminal. Those spots are excluded, so a

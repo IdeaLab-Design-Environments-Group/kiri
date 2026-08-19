@@ -32,6 +32,7 @@ import {
   buildCopperCarrierExport,
   buildCopperSvgExport,
   mirrorPoint,
+  stripOutline,
 } from "../model/copper-svg-export.js";
 import { printScale } from "../model/print-scale.js";
 import {
@@ -601,8 +602,14 @@ export class ElectronicsModal {
       // single continuous strip read as a row of loose rectangles -- which is what it is not: each run is one
       // piece of tape, and the joins are mitred corners in it.
       if (t.pts.length < 2) continue;
-      const d = "M " + t.pts.map((p, k) => (k === 0 ? "" : "L ") + ptStr(this.tp(p))).join(" ");
-      parts.push(`<path d="${d}" class="${cls}" stroke-width="${fmt(this.tapeW() * this.scale())}" />`);
+      // The outline that will be cut, not a stroke down the middle of it. Drawing the centreline at a
+      // constant width hid the one thing the cut file has to get right -- the narrowing that keeps the two
+      // nets apart under a chip -- so the canvas showed clean tape where the copper actually met.
+      const ring = stripOutline(t, this.tapeW(), this.routed.pads);
+      if (ring.length < 3) continue;
+      const d =
+        "M " + ring.map((p, k) => (k === 0 ? "" : "L ") + ptStr(this.tp(p))).join(" ") + " Z";
+      parts.push(`<path d="${d}" class="${cls}" />`);
     }
     // Each LED is two distinct pads straddling its hinge — a PWR (+) pad toward face `a` and a GND (−)
     // pad toward face `b` — bridged by the LED chip. An LED whose gap no longer exists has nowhere to
@@ -679,6 +686,7 @@ export class ElectronicsModal {
     if (!this.fold) return [];
     const out = buildCopperCarrierExport(
       this.fold, this.routed.traces, this.tapeW(), "kiri", this.keepOff(), this.mirror, this.sheetMm,
+      this.routed.pads,
     );
     const ring = (r: { x0: number; y0: number; x1: number; y1: number }): string => {
       const c = [
@@ -723,6 +731,7 @@ export class ElectronicsModal {
     }
     const out = buildCopperCarrierExport(
       this.fold, this.routed.traces, this.tapeW(), "kiri", this.keepOff(), this.mirror, this.sheetMm,
+      this.routed.pads,
     );
     this.download(out.filename, out.svg);
     const w = Math.round(out.widthMm * 100) / 100;
