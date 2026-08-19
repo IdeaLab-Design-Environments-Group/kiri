@@ -1,33 +1,33 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FoldScene } from "../../../src/sim/index.js";
 import { installDom, MockElement } from "./mock-dom.js";
+import type { SimView } from "../../../src/view/sim-view.js";
 
-const canvasInstances: Array<{
-  mount: MockElement;
-  start: ReturnType<typeof vi.fn>;
-  stop: ReturnType<typeof vi.fn>;
-  setScene: ReturnType<typeof vi.fn>;
-  setFoldPercent: ReturnType<typeof vi.fn>;
-  setTileDetail: ReturnType<typeof vi.fn>;
-  warmToTarget: ReturnType<typeof vi.fn>;
-}> = [];
+/** The stand-in 3D view. Typed against `SimView`, so a method the modal starts calling cannot be missing
+ *  here -- which is exactly what happened: the modal grew `setTileGap`, `setOverlay` and
+ *  `setOverlayVisible`, this did not, and the resulting TypeError was swallowed by the `try` around the
+ *  scene load. The viewer failed silently, and this test was what hid it. */
+class MockCanvas implements SimView {
+  readonly mount: MockElement;
+  readonly start = vi.fn();
+  readonly stop = vi.fn();
+  readonly setScene = vi.fn();
+  readonly setFoldPercent = vi.fn();
+  readonly setTileDetail = vi.fn();
+  readonly setTileGap = vi.fn();
+  readonly setOverlay = vi.fn();
+  readonly setOverlayVisible = vi.fn();
+  readonly warmToTarget = vi.fn();
 
-vi.mock("../../../src/view/sim-canvas.js", () => ({
-  SimCanvas: class {
-    readonly mount: MockElement;
-    readonly start = vi.fn();
-    readonly stop = vi.fn();
-    readonly setScene = vi.fn();
-    readonly setFoldPercent = vi.fn();
-    readonly setTileDetail = vi.fn();
-    readonly warmToTarget = vi.fn();
+  constructor(mount: MockElement) {
+    this.mount = mount;
+    canvasInstances.push(this);
+  }
+}
 
-    constructor(mount: MockElement) {
-      this.mount = mount;
-      canvasInstances.push(this);
-    }
-  },
-}));
+const canvasInstances: MockCanvas[] = [];
+
+vi.mock("../../../src/view/sim-canvas.js", () => ({ SimCanvas: MockCanvas }));
 
 describe("view/sim-modal", () => {
   beforeEach(() => {

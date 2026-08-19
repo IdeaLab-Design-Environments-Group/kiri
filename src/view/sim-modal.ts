@@ -1,7 +1,7 @@
 import type { FoldScene, SimMaterial } from "../sim/index.js";
 import { DEFAULT_MAX_SUBDIV, TILE_INSET_FRAC } from "../model/tile-subdiv.js";
 import type { AnchoredMesh } from "../model/trace-anchor.js";
-import type { SimCanvas } from "./sim-canvas.js";
+import type { SimView } from "./sim-view.js";
 
 /** Returns a ready fold scene when the sim opens, or null when no model is loaded. */
 export type SimSceneProvider = () => { scene: FoldScene; title: string } | null;
@@ -32,7 +32,7 @@ export class SimModal {
   private readonly elecControl: HTMLElement;
   private readonly elecToggle: HTMLInputElement;
   private provider: SimSceneProvider | null = null;
-  private canvas: SimCanvas | null = null;
+  private canvas: SimView | null = null;
   private material: SimMaterial = "vinyl";
   private detail = DEFAULT_MAX_SUBDIV;
   private gap = TILE_INSET_FRAC;
@@ -48,7 +48,12 @@ export class SimModal {
     this.trigger.disabled = true;
     this.trigger.addEventListener("click", () => {
       this.open().catch((err) => {
-        this.statusEl.textContent = "Failed to load the 3D viewer.";
+        // Say what went wrong and that trying again is worth it. The 3D code is a separate chunk fetched on
+        // first open, so this is nearly always the fetch: a dev server restarted underneath the page, a
+        // rebuild that moved the chunk, a dropped connection. The old message said none of that and offered
+        // nothing to do about it, on the one failure that a second click actually fixes.
+        this.statusEl.textContent =
+          `Could not load the 3D viewer: ${(err as Error).message ?? err}. Click again to retry.`;
         console.error(err);
       });
     });
@@ -213,12 +218,15 @@ export class SimModal {
     this.overlay.hidden = false;
     if (!this.canvas) {
       this.statusEl.textContent = "Loading 3D viewer…";
-      const { SimCanvas } = await import("./sim-canvas.js");
+      const Canvas = await loadSimCanvas(this.reloads++);
+      this.canvas = new Canvas(this.mount);
       if (this.overlay.hidden) return;
-      this.canvas = new SimCanvas(this.mount);
     }
     this.loadWorld();
   }
+
+  /** How many times the chunk has been re-fetched — see {@link loadSimCanvas}. */
+  private reloads = 0;
 
   close(): void {
     this.overlay.hidden = true;
@@ -264,4 +272,19 @@ export class SimModal {
     this.foldValue.textContent = `${pct}%`;
     this.canvas?.setFoldPercent(pct / 100);
   }
+}
+
+/**
+ * Fetch the 3D chunk, retrying past a cached failure.
+ *
+ * A dynamic import that fails is remembered by the browser: the module map keeps the rejection against that
+ * specifier, so importing it again returns the same failure without going near the network, and clicking the
+ * button a second time could never work. Re-requesting under a fresh query gets a new module record and a real
+ * second attempt — which is what fixes the common case, a chunk that moved while the page stayed open.
+ */
+async function loadSimCanvas(attempt: number): Promise<new (mount: HTMLElement) => SimView> {
+  const mod = await (attempt === 0
+    ? import("./sim-canvas.js")
+    : import(/* @vite-ignore */ `./sim-canvas.js?reload=${attempt}`));
+  return (mod as { SimCanvas: new (mount: HTMLElement) => SimView }).SimCanvas;
 }

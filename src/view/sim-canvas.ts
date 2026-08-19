@@ -4,6 +4,7 @@ import type { FoldNet, FoldScene, FoldSolver, SimMaterial } from "../sim/index.j
 import { kineticDamp, removeRigidBodyMotion } from "../sim/index.js";
 import { DEFAULT_MAX_SUBDIV, MAX_TILE_GAP, MIN_TILE_GAP, TILE_INSET_FRAC } from "../model/tile-subdiv.js";
 import type { AnchoredMesh } from "../model/trace-anchor.js";
+import type { SimView } from "./sim-view.js";
 
 /**
  * Three.js viewport for the forward fold — renders the FoldNet as lit triangle faces plus
@@ -68,7 +69,7 @@ const OVERLAY_COLOURS: Record<AnchoredMesh["kind"], number> = {
   mark: 0xffffff,
 };
 
-export class SimCanvas {
+export class SimCanvas implements SimView {
   private readonly scene = new THREE.Scene();
   private readonly camera: THREE.PerspectiveCamera;
   private readonly ambient = new THREE.AmbientLight(0xffffff, 0.65);
