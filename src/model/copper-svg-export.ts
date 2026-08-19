@@ -294,6 +294,62 @@ function offsetSide(pts: Vec2[], offs: number[]): Vec2[] {
   return out;
 }
 
+/**
+ * A closed ring, opened by exactly `width` centred on `ring[index]` — the span the tab bridges.
+ *
+ * Measured along the ring rather than by dropping vertices. Dropping one drops the two segments either side
+ * of it, and the ring has been densified to about a tape width per segment, so the outline came away open
+ * over some three tape widths where the tab covers one: the copper was left joined along a stretch that
+ * looked, correctly, like an outline that had failed to close.
+ */
+export function openAround(ring: Vec2[], index: number, width: number): Vec2[] {
+  const n = ring.length;
+  if (n < 3) return ring.slice();
+  // Arc length to each vertex, once round.
+  const seg: number[] = [];
+  let total = 0;
+  for (let i = 0; i < n; i++) {
+    const a = ring[i]!, b = ring[(i + 1) % n]!;
+    const l = Math.hypot(b.x - a.x, b.y - a.y);
+    seg.push(l);
+    total += l;
+  }
+  if (!(total > 0)) return ring.slice();
+  // Half the tab either side of the attachment point; a tab wider than the whole ring would leave nothing
+  // to cut, so it is capped well short of that.
+  const half = Math.min(width / 2, total / 4);
+  const at = (i: number): number => {
+    let s = 0;
+    for (let k = 0; k < i; k++) s += seg[k]!;
+    return s;
+  };
+  const wrap = (s: number): number => ((s % total) + total) % total;
+  const pointAt = (s: number): Vec2 => {
+    let t = wrap(s);
+    for (let i = 0; i < n; i++) {
+      if (t <= seg[i]! || i === n - 1) {
+        const a = ring[i]!, b = ring[(i + 1) % n]!;
+        const f = seg[i]! > 0 ? Math.min(t / seg[i]!, 1) : 0;
+        return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
+      }
+      t -= seg[i]!;
+    }
+    return ring[0]!;
+  };
+
+  const s0 = wrap(at(index) + half);  // the far side of the tab: where the cut resumes
+  const s1 = wrap(at(index) - half);  // the near side: where it stops
+  const out: Vec2[] = [pointAt(s0)];
+  // Every vertex strictly between s0 and s1, walking forward and wrapping once.
+  for (let k = 1; k <= n; k++) {
+    const i = (index + k) % n;
+    const si = wrap(at(i) - s0);
+    if (si > 0 && si < wrap(s1 - s0)) out.push(ring[i]!);
+  }
+  out.push(pointAt(s1));
+  return out;
+}
+
 function ringPath(ring: Vec2[]): string {
   return "M " + ring.map((p, i) => (i === 0 ? "" : "L ") + `${fmt(p.x)} ${fmt(p.y)}`).join(" ") + " Z";
 }
@@ -486,8 +542,8 @@ export function buildCopperCarrierExport(
     if (choice.onComponent) padTabs++;
     if (choice.overComponent) componentTabs++;
     tabPaths.push(choice.path);
-    // Open the ring: drop the vertex the tab attaches at, so the trace stays joined to its tab.
-    const open = ring.slice(index + 1).concat(ring.slice(0, index));
+    // Open the ring across the tab's footprint, and no more.
+    const open = openAround(ring, index, tape);
     if (open.length >= 2) cuts.push(openPath(open));
     // The tab's two sides: its centreline offset either way, so a bent tab keeps its width around the corner.
     const s1 = offsetSide(choice.path, choice.path.map(() => tape / 2));

@@ -4,6 +4,7 @@ import {
   buildCopperCarrierExport,
   buildCopperSvgExport,
   mirrorPoint,
+  openAround,
   outlineStrip,
   sheetFrame,
   stripOutline,
@@ -635,6 +636,103 @@ describe("model/copper-svg-export", () => {
         );
       const { w } = sheetFrame(fold);
       expect(cx(flipped.svg)).toBeCloseTo(w - cx(plain.svg), 2);
+    });
+  });
+
+  it("leaves each trace joined to the carrier over one tab width, no more", () => {
+    // What the file looks like: the black outline should close around each strip apart from the short span
+    // its tab bridges. Opening it by a whole densified vertex left three tape widths uncut, and the export
+    // read as outlines that had failed to close. Measured on the emitted geometry, since that is what is cut.
+    for (const name of ["house.fkld", "puffin.fkld"]) {
+      const { fold, traces, tapeW, keepOff, pads } = planned(name, 3);
+      const out = buildCopperCarrierExport(
+        fold, traces, tapeW, "k", keepOff, undefined, undefined, pads,
+      );
+      const { T, scale } = sheetFrame(fold);
+      const tape = tapeW * scale;
+
+      const cuts = [...cutLayer(out.svg).matchAll(/<path d="([^"]+)"/g)].map((m) => {
+        const n = m[1]!.replace(/[MLZ]/g, " ").trim().split(/\s+/).map(Number);
+        const pts: Vec2[] = [];
+        for (let i = 0; i + 1 < n.length; i += 2) pts.push({ x: n[i]!, y: n[i + 1]! });
+        return pts;
+      });
+      const toSeg = (p: Vec2, a: Vec2, b: Vec2): number => {
+        const l2 = (b.x - a.x) ** 2 + (b.y - a.y) ** 2;
+        if (l2 < 1e-18) return Math.hypot(p.x - a.x, p.y - a.y);
+        const t = Math.max(0, Math.min(1, ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / l2));
+        return Math.hypot(p.x - (a.x + t * (b.x - a.x)), p.y - (a.y + t * (b.y - a.y)));
+      };
+
+      for (const t of traces) {
+        const ring = stripOutline(t, tapeW, pads).map(T);
+        if (ring.length < 3) continue;
+        const step = tape / 20;
+        let uncut = 0;
+        for (let k = 0; k < ring.length; k++) {
+          const a = ring[k]!, b = ring[(k + 1) % ring.length]!;
+          const L = Math.hypot(b.x - a.x, b.y - a.y);
+          for (let d = step / 2; d < L; d += step) {
+            const p = { x: a.x + ((b.x - a.x) * d) / L, y: a.y + ((b.y - a.y) * d) / L };
+            const covered = cuts.some((path) =>
+              path.some((_, i) => i > 0 && toSeg(p, path[i - 1]!, path[i]!) < tape * 0.02),
+            );
+            if (!covered) uncut += step;
+          }
+        }
+        expect(uncut / tape, `${name} ${t.net}: uncut span in tab widths`).toBeLessThan(1.6);
+      }
+    }
+  }, { timeout: 30000 });
+
+  describe("openAround", () => {
+    /** A 12x12 square ring, densified so its vertices are a unit apart — as the carrier's rings are. */
+    const square = (): Vec2[] => {
+      const r: Vec2[] = [];
+      for (let x = 0; x < 12; x++) r.push({ x, y: 0 });
+      for (let y = 0; y < 12; y++) r.push({ x: 12, y });
+      for (let x = 12; x > 0; x--) r.push({ x, y: 12 });
+      for (let y = 12; y > 0; y--) r.push({ x: 0, y });
+      return r;
+    };
+    const length = (pts: Vec2[]): number => {
+      let s = 0;
+      for (let i = 1; i < pts.length; i++) s += Math.hypot(pts[i]!.x - pts[i - 1]!.x, pts[i]!.y - pts[i - 1]!.y);
+      return s;
+    };
+
+    it("leaves exactly the tab's width uncut, not a whole vertex", () => {
+      // Dropping the vertex the tab attaches at drops the two segments either side of it. The rings are
+      // densified to about a tape width per segment, so the outline came away open over three tape widths
+      // where the tab bridges one, and the copper stayed joined along a stretch that read as a failed cut.
+      const ring = square();
+      const perimeter = 48;
+      for (const width of [1, 3.25, 5]) {
+        const open = openAround(ring, 7, width);
+        expect(length(open), `open by ${width}`).toBeCloseTo(perimeter - width, 6);
+      }
+    });
+
+    it("opens the ring centred on the attachment point", () => {
+      const ring = square();
+      const open = openAround(ring, 7, 3);
+      // The cut stops 1.5 before ring[7] and resumes 1.5 after it: the ends straddle it.
+      expect(open[0]).toEqual({ x: 8.5, y: 0 });
+      expect(open[open.length - 1]).toEqual({ x: 5.5, y: 0 });
+    });
+
+    it("keeps every other vertex of the ring", () => {
+      const ring = square();
+      const open = openAround(ring, 7, 3);
+      // 48 vertices, minus the three the 3-wide opening spans, plus the two new cut ends.
+      expect(open).toHaveLength(ring.length - 3 + 2);
+    });
+
+    it("refuses to open a ring away entirely", () => {
+      // A tab wider than the trace it holds would leave nothing joined and nothing cut.
+      const ring = square();
+      expect(length(openAround(ring, 0, 1000))).toBeGreaterThan(0);
+      expect(openAround([{ x: 0, y: 0 }, { x: 1, y: 1 }], 0, 1)).toHaveLength(2);
     });
   });
 });
