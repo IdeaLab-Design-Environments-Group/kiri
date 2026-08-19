@@ -664,9 +664,21 @@ describe("model/copper-svg-export", () => {
         return Math.hypot(p.x - (a.x + t * (b.x - a.x)), p.y - (a.y + t * (b.y - a.y)));
       };
 
+      const insideRing = (p: Vec2, ring: Vec2[]): boolean => {
+        let w = false;
+        for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+          const a = ring[i]!, b = ring[j]!;
+          if ((a.y > p.y) !== (b.y > p.y) && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) w = !w;
+        }
+        return w;
+      };
       for (const t of traces) {
         const ring = stripOutline(t, tapeW, pads).map(T);
         if (ring.length < 3) continue;
+        const others = traces
+          .filter((o) => o !== t)
+          .map((o) => stripOutline(o, tapeW, pads).map(T))
+          .filter((r) => r.length >= 3);
         const step = tape / 20;
         let uncut = 0;
         for (let k = 0; k < ring.length; k++) {
@@ -677,11 +689,74 @@ describe("model/copper-svg-export", () => {
             const covered = cuts.some((path) =>
               path.some((_, i) => i > 0 && toSeg(p, path[i - 1]!, path[i]!) < tape * 0.02),
             );
-            if (!covered) uncut += step;
+            // A stretch buried inside another strip of the same net is not cut, and must not be: the two
+            // are one piece of copper there. Only the outside of the shape has to be accounted for.
+            const buried = others.some((ring) => insideRing(p, ring));
+            if (!covered && !buried) uncut += step;
           }
         }
         expect(uncut / tape, `${name} ${t.net}: uncut span in tab widths`).toBeLessThan(1.6);
       }
+    }
+  }, { timeout: 30000 });
+
+  it("never cuts through the copper, where runs of one net overlap", () => {
+    // Two runs of a net meet at a junction and overlap on purpose — one net, one potential. Each was still
+    // outlined all the way round, so one run's cut line crossed the other's strip and the blade would have
+    // severed it: 848mm of cut running through copper across these circuits, 224mm on one.
+    const insideRing = (p: Vec2, ring: Vec2[]): boolean => {
+      let w = false;
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const a = ring[i]!, b = ring[j]!;
+        if ((a.y > p.y) !== (b.y > p.y) && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) w = !w;
+      }
+      return w;
+    };
+    const toSeg = (p: Vec2, a: Vec2, b: Vec2): number => {
+      const l2 = (b.x - a.x) ** 2 + (b.y - a.y) ** 2;
+      if (l2 < 1e-18) return Math.hypot(p.x - a.x, p.y - a.y);
+      const t = Math.max(0, Math.min(1, ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / l2));
+      return Math.hypot(p.x - (a.x + t * (b.x - a.x)), p.y - (a.y + t * (b.y - a.y)));
+    };
+
+    for (const name of ["akde-square-pyramid.fkld", "puffin.fkld"]) {
+      const { fold, traces, tapeW, keepOff, pads } = planned(name, 3);
+      const out = buildCopperCarrierExport(
+        fold, traces, tapeW, "k", keepOff, undefined, undefined, pads,
+      );
+      const { T, scale } = sheetFrame(fold);
+      const tape = tapeW * scale;
+      const rings = traces.map((t) => stripOutline(t, tapeW, pads).map(T)).filter((r) => r.length >= 3);
+      const cuts = [...cutLayer(out.svg).matchAll(/<path d="([^"]+)"/g)].map((m) => {
+        const n = m[1]!.replace(/[MLZ]/g, " ").trim().split(/\s+/).map(Number);
+        const pts: Vec2[] = [];
+        for (let i = 0; i + 1 < n.length; i += 2) pts.push({ x: n[i]!, y: n[i + 1]! });
+        return pts;
+      });
+
+      let through = 0;
+      for (const path of cuts) {
+        for (let i = 1; i < path.length; i++) {
+          const a = path[i - 1]!, b = path[i]!;
+          const L = Math.hypot(b.x - a.x, b.y - a.y);
+          const steps = Math.max(1, Math.ceil(L / (tape / 10)));
+          for (let k = 0; k < steps; k++) {
+            const f = (k + 0.5) / steps;
+            const p = { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
+            const buried = rings.some((ring) => {
+              if (!insideRing(p, ring)) return false;
+              for (let q = 0; q < ring.length; q++) {
+                if (toSeg(p, ring[q]!, ring[(q + 1) % ring.length]!) < tape * 0.05) return false;
+              }
+              return true;
+            });
+            if (buried) through += L / steps;
+          }
+        }
+      }
+      // Not zero: a hair of tolerance either side of a boundary is unavoidable. Two tape widths in total
+      // across a whole sheet is a rounding artefact; the defect was two orders of magnitude larger.
+      expect(through, `${name}: mm of cut line running through copper`).toBeLessThan(2 * tape);
     }
   }, { timeout: 30000 });
 

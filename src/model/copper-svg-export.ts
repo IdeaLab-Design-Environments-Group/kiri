@@ -302,6 +302,99 @@ function offsetSide(pts: Vec2[], offs: number[]): Vec2[] {
  * over some three tape widths where the tab covers one: the copper was left joined along a stretch that
  * looked, correctly, like an outline that had failed to close.
  */
+/**
+ * The parts of a cut that are not buried in copper, as separate paths.
+ *
+ * Two runs of one net meet at a junction and overlap on purpose — one net, one potential, and the tape is
+ * laid over itself by hand. But each run was still outlined all the way round, so where they overlapped one
+ * run's cut line crossed the other's strip, and the blade would have severed it. Across the bundled circuits
+ * that came to 848mm of cut running through copper, 224mm on a single one.
+ *
+ * Cutting only what is outside every strip leaves the outside of the merged shape: a boundary that carries
+ * on across the join rather than stopping at it. Nothing is unioned or re-derived — each edge is split where
+ * it enters copper and the buried part is dropped.
+ *
+ * `skin` keeps a strip's own boundary: it runs along itself, and a point on it must count as outside or
+ * every outline would delete itself.
+ */
+function clipOutside(
+  cut: { pts: Vec2[]; closed: boolean },
+  solids: Vec2[][],
+  skin: number,
+): string[] {
+  const pts = cut.closed ? [...cut.pts, cut.pts[0]!] : cut.pts;
+  if (pts.length < 2) return [];
+
+  const buried = (p: Vec2): boolean =>
+    solids.some((ring) => {
+      if (!pointInRing(p, ring)) return false;
+      // On the boundary of the strip it belongs to, not inside it.
+      for (let i = 0; i < ring.length; i++) {
+        if (ptSegDist(p, ring[i]!, ring[(i + 1) % ring.length]!) < skin) return false;
+      }
+      return true;
+    });
+
+  const out: string[] = [];
+  let run: Vec2[] = [];
+  let clipped = false;
+  const flush = (): void => {
+    if (run.length >= 2) out.push(openPath(run));
+    run = [];
+  };
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1]!, b = pts[i]!;
+    // Split where the edge crosses into or out of copper, so the cut stops at the copper's edge rather
+    // than at whichever sample happened to land there.
+    const ts = [0, ...crossingsAlong(a, b, solids), 1].sort((x, y) => x - y);
+    for (let k = 1; k < ts.length; k++) {
+      const t0 = ts[k - 1]!, t1 = ts[k]!;
+      if (t1 - t0 < 1e-9) continue;
+      const at = (t: number): Vec2 => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+      const p0 = at(t0), p1 = at(t1);
+      if (buried(at((t0 + t1) / 2))) {
+        clipped = true;
+        flush();
+      }
+      else {
+        if (!run.length) run.push(p0);
+        run.push(p1);
+      }
+    }
+  }
+  // A closed cut that lost nothing stays closed. The frame's outer edge is the one that matters: it is cut
+  // all the way round, and reopening it would leave the sheet joined to the waste around it.
+  if (cut.closed && !clipped) return [ringPath(cut.pts)];
+  flush();
+  return out;
+}
+
+/** Where segment ab crosses any solid's edge, as fractions along ab. */
+function crossingsAlong(a: Vec2, b: Vec2, solids: Vec2[][]): number[] {
+  const ts: number[] = [];
+  for (const ring of solids) {
+    for (let i = 0; i < ring.length; i++) {
+      const c = ring[i]!, d = ring[(i + 1) % ring.length]!;
+      const den = (b.x - a.x) * (d.y - c.y) - (b.y - a.y) * (d.x - c.x);
+      if (Math.abs(den) < 1e-12) continue;
+      const t = ((c.x - a.x) * (d.y - c.y) - (c.y - a.y) * (d.x - c.x)) / den;
+      const u = ((c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x)) / den;
+      if (t > 0 && t < 1 && u >= 0 && u <= 1) ts.push(t);
+    }
+  }
+  return ts;
+}
+
+/** Even-odd containment. */
+function pointInRing(p: Vec2, ring: Vec2[]): boolean {
+  let win = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const a = ring[i]!, b = ring[j]!;
+    if ((a.y > p.y) !== (b.y > p.y) && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) win = !win;
+  }
+  return win;
+}
+
 export function openAround(ring: Vec2[], index: number, width: number): Vec2[] {
   const n = ring.length;
   if (n < 3) return ring.slice();
@@ -500,11 +593,17 @@ export function buildCopperCarrierExport(
   const tape = tapeW * scale;
   const runs = traces.filter((t) => t.pts.length >= 2);
 
-  const cuts: string[] = [];
+  // Geometry, not markup: the cuts are clipped against the copper before they are written out.
+  const cuts: { pts: Vec2[]; closed: boolean }[] = [];
   // The frame's outer edge: a plain closed rectangle, cut all the way round.
   const ox0 = win.x0 - FRAME_BUFFER, oy0 = win.y0 - FRAME_BUFFER;
   const ox1 = win.x1 + FRAME_BUFFER, oy1 = win.y1 + FRAME_BUFFER;
-  cuts.push(rectPath(ox0, oy0, ox1, oy1));
+  cuts.push({
+    pts: [
+      { x: ox0, y: oy0 }, { x: ox1, y: oy0 }, { x: ox1, y: oy1 }, { x: ox0, y: oy1 },
+    ],
+    closed: true,
+  });
 
   // Each trace: its outline, opened where its tab attaches, plus the tab's two sides.
   //
@@ -544,7 +643,7 @@ export function buildCopperCarrierExport(
     tabPaths.push(choice.path);
     // Open the ring across the tab's footprint, and no more.
     const open = openAround(ring, index, tape);
-    if (open.length >= 2) cuts.push(openPath(open));
+    if (open.length >= 2) cuts.push({ pts: open, closed: false });
     // The tab's two sides: its centreline offset either way, so a bent tab keeps its width around the corner.
     const s1 = offsetSide(choice.path, choice.path.map(() => tape / 2));
     const s2 = offsetSide(choice.path, choice.path.map(() => -tape / 2));
@@ -552,7 +651,7 @@ export function buildCopperCarrierExport(
     const q2 = onWindow(s2[s2.length - 1]!, side, win);
     s1[s1.length - 1] = q1;
     s2[s2.length - 1] = q2;
-    cuts.push(openPath(s1), openPath(s2));
+    cuts.push({ pts: s1, closed: false }, { pts: s2, closed: false });
     // The window edge must break across the tab's footprint, or the tab is severed from the frame.
     const [from, to] = alongSide(side, q1, q2);
     gaps.push({ side, from, to });
@@ -562,13 +661,19 @@ export function buildCopperCarrierExport(
   // The window edge, cut in the spans between tabs.
   for (const side of SIDES) {
     for (const seg of sideSpans(side, win, gaps.filter((g) => g.side === side))) {
-      cuts.push(openPath(seg));
+      cuts.push({ pts: seg, closed: false });
     }
   }
 
+  // Drop every stretch of cut that lies buried in copper. Two runs of one net meet at a junction and
+  // overlap by design -- one net, one potential -- but each was still outlined in full, so one run's cut
+  // ran clean through the other's strip and the blade would sever it. What is left is the outside of the
+  // copper: a boundary that carries on across the join instead of stopping at it.
+  const solid = rings.map((r) => r.ring);
+  const drawn = cuts.flatMap((c) => clipOutside(c, solid, tape * 0.05));
   const cutLayer =
     `  <g id="carrier" fill="none" stroke="#000000" stroke-width="0.25">\n    ` +
-    cuts.map((d) => `<path d="${d}" />`).join("\n    ") +
+    drawn.map((d) => `<path d="${d}" />`).join("\n    ") +
     `\n  </g>`;
   // Underneath, so the black cut lines stay visible on top of the copper they cut around.
   const body = annotationLayer(traces, pads, tapeW, T) + cutLayer;
