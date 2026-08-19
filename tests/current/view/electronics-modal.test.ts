@@ -3,6 +3,7 @@ import { ElectronicsModal } from "../../../src/view/electronics-modal.js";
 import type { FoldFile } from "../../../src/model/fold-file.js";
 import { flatFaces } from "../../../src/model/electronics.js";
 import { batteryTerminals, patternDiag, tapeWidthFor } from "../../../src/model/electronics-routing.js";
+import { printScale } from "../../../src/model/print-scale.js";
 import { installDom } from "./mock-dom.js";
 
 /** A 2x2 grid of unit quads: four faces, hinges between neighbours. */
@@ -259,6 +260,34 @@ describe("view/electronics-modal", () => {
     svg.dispatch("pointermove", { button: 0, clientX: 90, clientY: 90, pointerId: 1 });
     svg.dispatch("pointerup", { button: 0, clientX: 90, clientY: 90, pointerId: 1 });
     expect(edits).toHaveLength(base); // no new edit: the drag panned
+  });
+
+  it("frames the whole drawing on a pattern the print size scales up", () => {
+    // A scale-less pattern is cut at the print sheet, so everything the canvas draws is multiplied by
+    // printScale -- 65x for this 2-unit fixture, ~33x for house and ~40x for church. The box used for framing
+    // and for the zoom clamp held the raw pattern extent instead, so Fit set a 2mm viewBox over a 130mm
+    // drawing: an empty corner of the sheet, with the zoom-out clamp too tight to ever find the copper again.
+    const fold = grid2x2();
+    const { modal } = openOn(fold);
+    const k = printScale(fold);
+    expect(k, "fixture must actually exercise the scaling").toBeGreaterThan(1);
+
+    const MARGIN = 8;
+    const b = modal.bounds;
+    // Where `tp()` puts the pattern: scaled by k, offset by the margin.
+    const drawnW = (b.maxX - b.minX) * k, drawnH = (b.maxY - b.minY) * k;
+
+    const box = (): number[] => (modal.svg.getAttribute("viewBox") as string).split(" ").map(Number);
+    modal.overlay.querySelector(".el-fit").dispatch("click", {});
+    const [vx, vy, vw, vh] = box();
+    expect(vx, "Fit crops the left of the drawing").toBeLessThanOrEqual(MARGIN);
+    expect(vy, "Fit crops the top of the drawing").toBeLessThanOrEqual(MARGIN);
+    expect(vx + vw, "Fit crops the right of the drawing").toBeGreaterThanOrEqual(MARGIN + drawnW);
+    expect(vy + vh, "Fit crops the bottom of the drawing").toBeGreaterThanOrEqual(MARGIN + drawnH);
+
+    // And zooming out can still reach the whole sheet: the clamp measures against the same box.
+    for (let i = 0; i < 30; i++) modal.zoomBy(1 / 1.12);
+    expect(box()[2], "zoom-out clamped tighter than the drawing").toBeGreaterThanOrEqual(drawnW);
   });
 
   describe("mirroring", () => {

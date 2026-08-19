@@ -83,8 +83,7 @@ export class ElectronicsModal {
   private circuit: Circuit = { leds: [], battery: null };
   private routed: RoutedCircuit = EMPTY_ROUTE;
 
-  // Pan/zoom: `content` is the full pattern box (mm + margin); `view` is the visible window into it.
-  private content = { w: 1, h: 1 };
+  // Pan/zoom: `contentBox()` is the drawn pattern box in sheet mm; `view` is the visible window into it.
   private view = { x: 0, y: 0, w: 1, h: 1 };
   private pan: { x: number; y: number; moved: number } | null = null;
 
@@ -233,7 +232,12 @@ export class ElectronicsModal {
    *  whatever the sheet, so a bigger sheet is relatively narrower tape and a different route. */
   setPrintSize(mm: number): void {
     if (mm === this.sheetMm) return;
+    const was = this.scale();
     this.sheetMm = mm;
+    // Everything drawn is scaled by `scale()`, so when that moves the framing has to move with it or the view
+    // keeps a window sized for the old sheet. Only when it actually moves: on a pattern already at a physical
+    // size the print size scales nothing, and refitting would discard the user's pan and zoom for no reason.
+    if (this.scale() !== was) this.fitView();
     if (!this.overlay.hidden) this.emit();
   }
 
@@ -416,9 +420,23 @@ export class ElectronicsModal {
       maxX = maxY = 1;
     }
     this.bounds = { minX, minY, maxX, maxY };
-    // Content is the PATTERN extent (no margin) so framing/zoom are relative to the pattern, not to
-    // an absolute mm margin — kirigamized models can be a few mm across while AKDE models are ~80mm.
-    this.content = { w: Math.max(maxX - minX, 1e-3), h: Math.max(maxY - minY, 1e-3) };
+  }
+
+  /** The drawn pattern box, in the sheet millimetres `tp()` works in — the extent to frame and to clamp the
+   *  zoom against. No margin, so framing and zoom stay relative to the pattern rather than to an absolute mm
+   *  border: kirigamized models can be a few mm across while AKDE models are ~380mm.
+   *
+   *  Derived, not stored. It has to agree with `tp()`, and `tp()` scales by the print size, which arrives
+   *  after the bounds are computed (`setPrintSize`) and changes again whenever the export menu does. A stored
+   *  box was the bug: it held the raw pattern extent while the canvas drew that extent times `scale()`, so on
+   *  a scale-less pattern -- house at 4 units, cut at 130mm -- Fit framed a 4mm window of a 130mm drawing,
+   *  showing an empty corner of the sheet, and the zoom-out clamp would not open up far enough to find it. */
+  private contentBox(): { w: number; h: number } {
+    const k = this.scale();
+    return {
+      w: Math.max((this.bounds.maxX - this.bounds.minX) * k, 1e-3),
+      h: Math.max((this.bounds.maxY - this.bounds.minY) * k, 1e-3),
+    };
   }
 
   /** Millimetres of sheet per unit of pattern, as the export uses. The canvas works in sheet millimetres
@@ -482,9 +500,10 @@ export class ElectronicsModal {
 
   /** Reset the view to frame the whole pattern with a small relative pad (uniform at any mm scale). */
   private fitView(): void {
-    const pad = Math.max(this.content.w, this.content.h) * 0.06;
+    const content = this.contentBox();
+    const pad = Math.max(content.w, content.h) * 0.06;
     // The pattern occupies the world rect [MARGIN, MARGIN, content.w, content.h] (see `tp`).
-    this.view = { x: MARGIN - pad, y: MARGIN - pad, w: this.content.w + 2 * pad, h: this.content.h + 2 * pad };
+    this.view = { x: MARGIN - pad, y: MARGIN - pad, w: content.w + 2 * pad, h: content.h + 2 * pad };
     this.applyViewBox();
   }
 
@@ -499,8 +518,9 @@ export class ElectronicsModal {
     const v = this.view;
     const c = about ?? { x: v.x + v.w / 2, y: v.y + v.h / 2 };
     // Clamp so we never zoom past ~50× in or past the whole content (with slack) out.
-    const minW = Math.max(this.content.w, this.content.h) / 50;
-    const maxW = Math.max(this.content.w, this.content.h) * 1.5;
+    const content = this.contentBox();
+    const minW = Math.max(content.w, content.h) / 50;
+    const maxW = Math.max(content.w, content.h) * 1.5;
     let nw = v.w / factor;
     nw = Math.min(maxW, Math.max(minW, nw));
     const scale = nw / v.w;
