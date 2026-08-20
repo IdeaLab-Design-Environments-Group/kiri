@@ -212,7 +212,12 @@ describe("model/copper-svg-export", () => {
       const { fold, traces, tapeW, pads } = planned("church.fkld");
       const out = buildCopperCarrierExport(fold, traces, tapeW, "k", [], undefined, undefined, pads);
       expect(out.counts.traces).toBeGreaterThan(0);
-      expect(out.counts.tabs).toBe(out.counts.traces); // one tab each, nothing left loose
+      // At least one grip each, so nothing is left loose in the window. Long runs earn a second: held at a
+      // single point a long trace still swings about it and a corner can lift before it is pressed down.
+      expect(out.counts.tabs).toBeGreaterThanOrEqual(out.counts.traces);
+      expect(out.counts.tabs).toBeLessThanOrEqual(out.counts.traces * 2);
+      // And a long run really does get the second one — a range alone would pass with one grip each.
+      expect(out.counts.tabs).toBeGreaterThan(out.counts.traces);
       const { T } = sheetFrame(fold);
       const area = (r: Vec2[]): number => {
         let a = 0;

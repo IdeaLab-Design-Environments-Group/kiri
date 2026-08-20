@@ -26,6 +26,18 @@ const MARGIN = 8; // mm — must match the FKLD SVG export or the layers import 
  *  runs were fully excluded and had to fall back onto a pad. At 1.0 it is 1. */
 const PAD_CLEAR = 1.0;
 
+/**
+ * How much of a run's outline earns it another tab, in millimetres of perimeter.
+ *
+ * One grip per run leaves a long trace free to swing about it, and a corner can lift off the mat before it is
+ * pressed down. A second costs a tape width of extra cut and a second snip by hand, which is why this is
+ * generous rather than tight: on the bundled circuits it is the long runs that gain one, not every run.
+ */
+const TAB_EVERY_MM = 60;
+
+/** However long a run is, this many grips at most: each is a place the copper stays joined to the waste. */
+const MAX_TABS_PER_RUN = 2;
+
 /** Width of the carrier frame's border, outside the pattern window. */
 const FRAME_BUFFER = 5;
 
@@ -472,6 +484,86 @@ function pointInRing(p: Vec2, ring: Vec2[]): boolean {
   return wind !== 0;
 }
 
+/**
+ * A closed ring, opened by `width` at each of several attachment points — one arc per gap between them.
+ *
+ * The single-tab case is {@link openAround}. With more than one tab the ring is no longer one arc but
+ * several, and each has to be emitted once for the whole ring rather than once per tab: opening it separately
+ * for each would emit a near-complete ring per tab, and the boundary would be cut two and three times over.
+ *
+ * Openings that overlap are merged, so two tabs landing within a tape width of each other leave one gap
+ * rather than a sliver of cut between them.
+ */
+export function openAtMany(
+  ring: Vec2[],
+  indices: number[],
+  width: number,
+): { arcs: Vec2[][]; openings: { from: Vec2; to: Vec2 }[] } {
+  const n = ring.length;
+  if (n < 3 || !indices.length) return { arcs: [ring.slice()], openings: [] };
+  const seg: number[] = [];
+  let total = 0;
+  for (let i = 0; i < n; i++) {
+    const a = ring[i]!, b = ring[(i + 1) % n]!;
+    const l = Math.hypot(b.x - a.x, b.y - a.y);
+    seg.push(l);
+    total += l;
+  }
+  if (!(total > 0)) return { arcs: [ring.slice()], openings: [] };
+  const at = (i: number): number => {
+    let acc = 0;
+    for (let k = 0; k < i; k++) acc += seg[k]!;
+    return acc;
+  };
+  const wrap = (v: number): number => ((v % total) + total) % total;
+  const pointAt = (v: number): Vec2 => {
+    let t = wrap(v);
+    for (let i = 0; i < n; i++) {
+      if (t <= seg[i]! || i === n - 1) {
+        const a = ring[i]!, b = ring[(i + 1) % n]!;
+        const f = seg[i]! > 0 ? Math.min(t / seg[i]!, 1) : 0;
+        return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
+      }
+      t -= seg[i]!;
+    }
+    return ring[0]!;
+  };
+  // Never open away more than half the ring in total, however many tabs land on it.
+  // Independent of how many tabs there are: a tab that turns out to be redundant is dropped later, and if
+  // the width depended on the count the survivors' openings would move when it did — leaving their sides
+  // landed on points the arcs were no longer cut at, and the boundary unable to close.
+  const half = Math.min(width / 2, total / 8);
+  // Reported back in the caller's own order, so each tab can land its sides on the very points its opening
+  // was cut at. Landing them on separately-computed points is what left the boundary unable to close: the
+  // two halves differed, and the ends missed each other by the difference.
+  const openings = indices.map((i) => ({
+    from: pointAt(at(i) - half),
+    to: pointAt(at(i) + half),
+  }));
+  const cuts = indices
+    .map((i) => ({ from: wrap(at(i) - half), to: wrap(at(i) + half) }))
+    .sort((a, b) => a.from - b.from);
+
+  const arcs: Vec2[][] = [];
+  for (let k = 0; k < cuts.length; k++) {
+    const start = cuts[k]!.to;
+    const end = cuts[(k + 1) % cuts.length]!.from;
+    const span = wrap(end - start);
+    if (span < 1e-9) continue; // the two openings meet: no copper edge between them to cut
+    // In order ALONG the arc, not in ring-index order: an arc starts wherever its opening ended, so walking
+    // the vertices from index 0 hands them over out of sequence and the outline doubles back on itself.
+    const between = [];
+    for (let i = 0; i < n; i++) {
+      const d = wrap(at(i) - start);
+      if (d > 1e-9 && d < span) between.push({ d, p: ring[i]! });
+    }
+    between.sort((x, y) => x.d - y.d);
+    const arc: Vec2[] = [pointAt(start), ...between.map((b) => b.p), pointAt(end)];
+    if (arc.length >= 2) arcs.push(arc);
+  }
+  return { arcs, openings };
+}
+
 export function openAround(ring: Vec2[], index: number, width: number): Vec2[] {
   const n = ring.length;
   if (n < 3) return ring.slice();
@@ -880,8 +972,11 @@ export function buildCopperCarrierExport(
   const tabPaths: Vec2[][] = [];
   const quads: Vec2[][] = [];
   /** Each tab as built, held back until every quad exists — whether a tab is redundant depends on the rest. */
+  /** Held per RING, not per tab: a ring with two tabs is two arcs, and they are the ring's, not either
+   *  tab's. Emitting an opened ring per tab would cut most of the boundary twice over. */
   const held: {
-    ring: Vec2[]; quad: Vec2[]; open: Vec2[]; s1: Vec2[]; s2: Vec2[]; side: Side; q1: Vec2; q2: Vec2;
+    ring: Vec2[];
+    tabs: { index: number; quad: Vec2[]; s1: Vec2[]; s2: Vec2[]; side: Side; q1: Vec2; q2: Vec2 }[];
   }[] = [];
   rings.forEach(({ net, ring }, ri) => {
     if (ring.length < 3) return;
@@ -889,23 +984,59 @@ export function buildCopperCarrierExport(
     // overlap freely -- one net, one potential -- so treating them as obstacles left every candidate blocked,
     // which is why neither more anchors nor bent tabs changed anything.
     const others = rings.filter((r, i) => i !== ri && r.net !== net).map((r) => r.ring);
-    const choice = pickTab(ring, others, win, tape, avoid);
-    if (!choice) return;
+    // How many supports this run earns. A long run held at one point still swings about it and can lift a
+    // corner off the mat; a second grip costs a tab's width of extra cut and stops that. Kept modest --
+    // every tab is a place the copper stays joined to the waste and has to be snipped by hand.
+    let perimeter = 0;
+    for (let i = 0; i < ring.length; i++) {
+      const a = ring[i]!, b = ring[(i + 1) % ring.length]!;
+      perimeter += Math.hypot(b.x - a.x, b.y - a.y);
+    }
+    const want = Math.max(1, Math.min(MAX_TABS_PER_RUN, 1 + Math.floor(perimeter / TAB_EVERY_MM)));
+
+    // Each further tab is asked for with the ones already placed added to what it must keep clear of, so it
+    // lands somewhere else along the run rather than beside its neighbour.
+    const picks: { index: number; side: Side; path: Vec2[] }[] = [];
+    const taken = [...avoid];
+    for (let t = 0; t < want; t++) {
+      const choice = pickTab(ring, others, win, tape, taken);
+      if (!choice) break;
+      // The first grip is taken as it comes — a run has to be held even where the only spot is a poor one.
+      // An extra is a convenience, so it is only worth having if it is clean: taking a compromised one would
+      // trade a support nobody asked for against a tab that cuts into a part.
+      if (t > 0 && (!choice.clear || choice.onComponent || choice.overComponent)) break;
+      if (!choice.clear) crossingTabs++;
+      if (choice.onComponent) padTabs++;
+      if (choice.overComponent) componentTabs++;
+      tabPaths.push(choice.path);
+      taken.push(ring[choice.index]!);
+      picks.push({ index: choice.index, side: choice.side, path: choice.path });
+    }
+    if (!picks.length) return;
+
+    // Cut the openings once, for the whole set, and land every tab on the very points its own was cut at.
+    const { openings } = openAtMany(ring, picks.map((p) => p.index), tape);
+    const mine: { index: number; quad: Vec2[]; s1: Vec2[]; s2: Vec2[]; side: Side; q1: Vec2; q2: Vec2 }[] = [];
+    picks.forEach((p, k) => buildTab(p, openings[k] ?? null, mine));
+    held.push({ ring, tabs: mine });
+    tabs += mine.length;
+  });
+
+  /** The sides of one tab, landed on its opening and run out to the wall. */
+  function buildTab(
+    choice: { index: number; side: Side; path: Vec2[] },
+    opening: { from: Vec2; to: Vec2 } | null,
+    into: { index: number; quad: Vec2[]; s1: Vec2[]; s2: Vec2[]; side: Side; q1: Vec2; q2: Vec2 }[],
+  ): void {
     const { index, side } = choice;
-    if (!choice.clear) crossingTabs++;
-    if (choice.onComponent) padTabs++;
-    if (choice.overComponent) componentTabs++;
-    tabPaths.push(choice.path);
-    // Open the ring across the tab's footprint, and no more.
-    const open = openAround(ring, index, tape);
     // The tab's two sides: its centreline offset either way, so a bent tab keeps its width around the corner.
     const s1 = offsetSide(choice.path, choice.path.map(() => tape / 2));
     const s2 = offsetSide(choice.path, choice.path.map(() => -tape / 2));
     // Land the tab's sides exactly where the outline stopped. Offsetting the tab's centreline puts them
     // near those points but not on them, which left the cut in pieces: a blade lifting off and dropping
     // back on a fraction of a millimetre away, and a sliver between the two that tears rather than cuts.
-    if (open.length >= 2) {
-      const a = open[0]!, b = open[open.length - 1]!;
+    if (opening) {
+      const a = opening.to, b = opening.from;
       const gap = (p: Vec2, q: Vec2): number => Math.hypot(p.x - q.x, p.y - q.y);
       const straight = gap(s1[0]!, a) + gap(s2[0]!, b) <= gap(s1[0]!, b) + gap(s2[0]!, a);
       s1[0] = straight ? a : b;
@@ -915,17 +1046,16 @@ export function buildCopperCarrierExport(
     const q2 = onWindow(s2[s2.length - 1]!, side, win);
     s1[s1.length - 1] = q1;
     s2[s2.length - 1] = q2;
+    const quad = [...s1, ...s2.slice().reverse()];
+    quads.push(quad);
+    into.push({ index, quad, s1, s2, side, q1, q2 });
+  }
     // Clipped against every other run, but not against the one they grip: a tab side starts *on* its own
     // ring, and leaving at a shallow angle its first step reads as inside — dropped, the tab would come away
     // from the trace it holds and the boundary would stand open across the whole tab footprint.
     // The tab as a shape, not just its two sides: two tabs landing close on one wall overlap, and the buried
     // halves of their sides have to go the same way a run buried in another run's strip does. Without it those
     // sides ran on to a window edge that had already been broken across both, and ended on nothing.
-    const quad = [...s1, ...s2.slice().reverse()];
-    quads.push(quad);
-    held.push({ ring, quad, open, s1, s2, side, q1, q2 });
-    tabs++;
-  });
 
   // Every piece of copper inside the window: the runs and the tabs holding them.
   const solid = [...rings.map((r) => r.ring), ...quads];
@@ -938,21 +1068,34 @@ export function buildCopperCarrierExport(
   // and where it runs through the copper that swallowed the tab, the clip below drops that stretch and the
   // two boundaries carry on as one.
   for (const h of held) {
-    const sides = [h.s1, h.s2].map((pts) => clipOutside({ pts, closed: false, self: [h.ring, h.quad] }, solid));
-    if (sides.every((f) => f.length === 0)) {
-      cuts.push({ pts: h.ring, closed: true, self: [h.ring, h.quad] });
+    // Which of this ring's tabs actually survive. A buried one clips away to nothing and must not open the
+    // ring, or the opening it was meant to bridge stands in the boundary with nothing crossing it.
+    const live = h.tabs.filter((t) => {
+      const sides = [t.s1, t.s2].map((pts) =>
+        clipOutside({ pts, closed: false, self: [h.ring, t.quad] }, solid),
+      );
+      return !sides.every((f) => f.length === 0);
+    });
+    if (!live.length) {
+      cuts.push({ pts: h.ring, closed: true, self: [h.ring, ...h.tabs.map((t) => t.quad)] });
       continue;
     }
-    // Clipped against every other shape, but not against the two it is the boundary of: a tab side starts *on*
-    // its ring and runs along its own quad, and either would otherwise delete it.
-    cuts.push(
-      { pts: h.s1, closed: false, self: [h.ring, h.quad] },
-      { pts: h.s2, closed: false, self: [h.ring, h.quad] },
-    );
-    if (h.open.length >= 2) cuts.push({ pts: h.open, closed: false, self: [h.ring, h.quad] });
-    // The window edge must break across the tab's footprint, or the tab is severed from the frame.
-    const [from, to] = alongSide(h.side, h.q1, h.q2);
-    gaps.push({ side: h.side, from, to });
+    for (const t of live) {
+      // Clipped against every other shape, but not against the two it is the boundary of: a tab side starts
+      // *on* its ring and runs along its own quad, and either would otherwise delete it.
+      cuts.push(
+        { pts: t.s1, closed: false, self: [h.ring, t.quad] },
+        { pts: t.s2, closed: false, self: [h.ring, t.quad] },
+      );
+      // The window edge must break across the tab's footprint, or the tab is severed from the frame.
+      const [from, to] = alongSide(t.side, t.q1, t.q2);
+      gaps.push({ side: t.side, from, to });
+    }
+    // The ring, opened once for the whole set: with two tabs it is two arcs, and they belong to the ring.
+    const selves = [h.ring, ...live.map((t) => t.quad)];
+    for (const arc of openAtMany(h.ring, live.map((t) => t.index), tape).arcs) {
+      if (arc.length >= 2) cuts.push({ pts: arc, closed: false, self: selves });
+    }
   }
 
   // The window edge, cut in the spans between tabs.
