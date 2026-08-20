@@ -16,6 +16,7 @@ import type { FoldFile } from "./fold-file.js";
 import type { Vec2 } from "./electronics.js";
 import { type Trace2D, landingWidth } from "./electronics-routing.js";
 import { printScale } from "./print-scale.js";
+import { R_1206, slide_switch } from "./footprints.generated.js";
 
 const MARGIN = 8; // mm — must match the FKLD SVG export or the layers import misaligned
 
@@ -85,17 +86,18 @@ const PWR_FILL = "#ff0000";
 const GND_FILL = "#222222";
 
 /**
- * The switch's body, in millimetres: **8,5 [.335] long by 3,5 [.138] wide**, from the C&K JS series drawing
- * for JS102011SCQN — the SPDT surface-mount part.
+ * The parts' own copper, from fab-modules `pcb.py` by way of `ocaml/footprints.ml`.
  *
- * Real millimetres, not a multiple of the tape or of what an LED is drawn at. A resistor's drawn size is a
- * convention, since which resistor you fit is up to you; this is a named part with one size, and drawing it
- * at anything else would show a footprint that does not exist.
+ * A named part is the size it is. Every pad, pitch and hole below is that library's, so nothing here is a
+ * guess at a footprint or a shape scaled to whatever the tape happens to be.
  */
-const SWITCH_BODY_MM = { length: 8.5, width: 3.5 };
-
-/** Its terminals: 0,5 [.020] wide. */
-const SWITCH_PIN_MM = 0.5;
+const SWITCH = {
+  fp: slide_switch,
+  /** Centre to centre between adjacent pads: the copper is broken by exactly this. */
+  pitch: slide_switch.pads[1]!.cx - slide_switch.pads[0]!.cx,
+  /** How far the housing stands clear of the pad row — the pads' own offset from the part's origin. */
+  offset: slide_switch.pads[0]!.cy,
+};
 
 /** A resistor: a black body, with grey leads reaching either way onto the copper it bridges. */
 const RES_BODY = "#111111";
@@ -712,6 +714,9 @@ export interface ResistorShape {
   leads: { a: Vec2; b: Vec2; width: number }[];
   /** The body, square across the run. */
   body: { x: number; y: number; w: number; h: number; angle: number; cx: number; cy: number };
+  /** Mounting holes, where the part has them. Drawn, never cut: a hole through the pattern is the user's
+   *  decision, not the exporter's. */
+  holes?: { c: Vec2; r: number }[];
 }
 
 /**
@@ -762,42 +767,51 @@ export function resistorShape(
 }
 
 /**
- * Where a 1x03 switch's pins and body go, given the break between its second pin and its third.
+ * Where the switch's pads, body and mounting holes go, given the break its middle pads bridge.
  *
- * Three pins on 0.1in centres. The break is one pitch, so pin 2 sits on the copper at one end of it and pin 3
- * on the copper at the other — and pin 1 sits a further pitch back, beside pin 2. Two on one side, one on the
- * other, which is what a header in a rail looks like.
+ * Three pads at the part's own pitch. The break is one pitch, so pad 2 sits on the copper at one end of it
+ * and pad 3 on the copper at the other, with pad 1 a further pitch back beside pad 2 — two on one side, one
+ * on the other.
+ *
+ * The body is offset the part's `.1in` clear of the pad row rather than drawn over it. That is where it
+ * really sits: the legs reach out to the copper and the housing stands beside them. Drawn centred on the
+ * rail it covered the very tape it is soldered to.
  */
 export function switchShape(a: Vec2, b: Vec2, tape: number, cross = tape): ResistorShape | null {
+  void tape; void cross;                 // a named part is its own size, not the tape's
   const dx = b.x - a.x, dy = b.y - a.y;
   const L = Math.hypot(dx, dy);
   if (L < 1e-9) return null;
   const ux = dx / L, uy = dy / L;
-  const px = -uy, py = ux;
-  const half = cross * 0.5;
-  const foot = SWITCH_PIN_MM;            // the terminal's own width, along the run
-  // Pin 1 is a pitch back from pin 2, on the same side of the break. `L` is that pitch.
-  const pin = (p: Vec2, along: number): { a: Vec2; b: Vec2; width: number } => {
+  const px = -uy, py = ux;               // across the run, towards the body
+  // A pad, at its own size: a bar `h` long across the run, `w` thick along it.
+  const pad = (p: Vec2, along: number, spec: { w: number; h: number }): { a: Vec2; b: Vec2; width: number } => {
     const c = { x: p.x + ux * along, y: p.y + uy * along };
+    const half = spec.h / 2;
     return {
       a: { x: c.x - px * half, y: c.y - py * half },
       b: { x: c.x + px * half, y: c.y + py * half },
-      width: foot,
+      width: spec.w,
     };
   };
-  // Centred on the middle terminal, which is where the part's own drawing centres its body.
-  const mid = { x: a.x, y: a.y };
-  const bodyL = SWITCH_BODY_MM.length;
-  const bodyW = SWITCH_BODY_MM.width;
+  // The housing, a pad row's offset to one side, centred on the middle pad.
+  const cx = a.x + px * SWITCH.offset;
+  const cy = a.y + py * SWITCH.offset;
+  // Long enough to carry all three pads, deep enough to reach past its mounting holes.
+  const p0 = SWITCH.fp.pads[0]!;
+  const bodyL = 2 * SWITCH.pitch + p0.w;
+  const bodyW = SWITCH.offset;
   return {
-    // Terminal 1 and terminal 2 behind the break, terminal 3 in front of it — at the pitch, exactly. The
-    // break is one pitch wide, so terminals 2 and 3 land on the two cut edges themselves; nudging them clear
-    // of the gap would put terminal 3 a pin's width out of step with the other two.
-    leads: [pin(a, -L), pin(a, 0), pin(b, 0)],
+    leads: [pad(a, -L, p0), pad(a, 0, p0), pad(b, 0, p0)],
     body: {
-      x: mid.x - bodyL / 2, y: mid.y - bodyW / 2, w: bodyL, h: bodyW,
-      angle: (Math.atan2(dy, dx) * 180) / Math.PI, cx: mid.x, cy: mid.y,
+      x: cx - bodyL / 2, y: cy - bodyW / 2, w: bodyL, h: bodyW,
+      angle: (Math.atan2(dy, dx) * 180) / Math.PI, cx, cy,
     },
+    // The two mounting holes, on the body's own centre line.
+    holes: SWITCH.fp.holes.map((h) => ({
+      c: { x: cx + ux * h.cx + px * h.cy, y: cy + uy * h.cx + py * h.cy },
+      r: h.r,
+    })),
   };
 }
 
@@ -812,6 +826,11 @@ function partMarks(sh: ResistorShape, bodyFill: string): string[] {
     `<rect x="${fmt(body.x)}" y="${fmt(body.y)}" width="${fmt(body.w)}" ` +
       `height="${fmt(body.h)}" rx="${fmt(body.h * 0.18)}" fill="${bodyFill}" ` +
       `transform="rotate(${fmt(body.angle)} ${fmt(body.cx)} ${fmt(body.cy)})" />`,
+    ...(sh.holes ?? []).map(
+      (h) =>
+        `<circle cx="${fmt(h.c.x)}" cy="${fmt(h.c.y)}" r="${fmt(h.r)}" fill="none" ` +
+        `stroke="${RES_LEAD}" stroke-width="${fmt(h.r * 0.5)}" />`,
+    ),
   ];
 }
 

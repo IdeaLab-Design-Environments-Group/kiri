@@ -37,6 +37,7 @@ import {
   switchShape,
 } from "../model/copper-svg-export.js";
 import { printScale } from "../model/print-scale.js";
+import { LED_1206 } from "../model/footprints.generated.js";
 import {
   type RoutedCircuit,
   type Terminals,
@@ -883,12 +884,25 @@ export class ElectronicsModal {
   /** How wide a part is drawn across its run: an LED's two pads span this, so a resistor beside one comes
    *  out the same size rather than to its own scale. */
   private partSize(): number {
-    return this.markerR() * 0.62 * 2;
+    return this.ledPad() * 2;
   }
 
-  /** Marker radius scaled to the pattern so it reads at any model size. */
+  /**
+   * An LED pad's radius, in sheet millimetres: the 1206 footprint's own pad, from `pcb.py` by way of
+   * `ocaml/footprints.ml` — `.064 x .068in`, so 1.63 by 1.73mm. Taken as a radius across the smaller of the
+   * two, since the pad is drawn round.
+   *
+   * A real part at a real size, rather than a marker scaled to the pattern. It stays legible because the
+   * canvas is in millimetres and fits itself to the sheet: on a big pattern the part is genuinely small,
+   * which is the truth of it.
+   */
+  private ledPad(): number {
+    return Math.min(LED_1206.pads[0]!.w, LED_1206.pads[0]!.h) / 2;
+  }
+
+  /** Marker radius: the LED's pad, with the ring and chip drawn in proportion to it. */
   private markerR(): number {
-    return this.diag() * 0.012 * this.scale();
+    return this.ledPad() / 0.62;
   }
 
   /** The battery's two terminals. Shared with the router so the copper lands on the drawn squares. */

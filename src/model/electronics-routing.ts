@@ -46,6 +46,7 @@ import {
   pointInFace,
 } from "./electronics.js";
 import { DEFAULT_PRINT_SIZE } from "./stl-export.js";
+import { R_1206, slide_switch } from "./footprints.generated.js";
 
 /** One continuous strip of copper tape: a centreline polyline plus which net it carries. */
 export interface Trace2D {
@@ -975,23 +976,23 @@ export function planRoutes(
 }
 
 /**
- * A through-hole resistor's body, in millimetres — the length of copper it replaces.
+ * The copper a 1206 resistor replaces, in millimetres: the bare span between its two pads.
  *
- * The break is the body, not the whole part: the leads stick out past it and are taped down onto the copper
- * either side, which is what holds it and what carries the current.
+ * From fab-modules `pcb.py` (`class R_1206`) by way of `ocaml/footprints.ml` — pads .064 wide on .12
+ * centres, so 1.42mm of pattern between them. It was 6.5 before, a through-hole body I had picked myself;
+ * the part in the library is a 1206, and its gap is a quarter of that.
  */
-export const RESISTOR_MM = 6.5;
+export const RESISTOR_MM =
+  R_1206.pads[1]!.cx - R_1206.pads[0]!.cx - R_1206.pads[0]!.w;
 
 /**
- * The switch's terminal pitch, in millimetres: **2,5 [.098]** from the C&K JS series drawing for
- * JS102011SCQN, the SPDT surface-mount part. Three terminals, so 5,0 across all of them.
+ * The switch's pad pitch, in millimetres — from `pcb.py`'s `slide_switch` (C&K AYZ0102AGRLC) by way of
+ * `ocaml/footprints.ml`. Three pads, so twice this across the lot.
  *
- * The break is one pitch wide and falls between the second terminal and the third, so two sit on one side of
- * it and one on the other.
- *
- * Not 2.54: a 0.1in header and this are near neighbours but not the same part, and the datasheet says 2,5.
+ * The break is one pitch and falls between the second pad and the third, so two sit on one side of it and
+ * one on the other.
  */
-export const SWITCH_PITCH_MM = 2.5;
+export const SWITCH_PITCH_MM = slide_switch.pads[1]!.cx - slide_switch.pads[0]!.cx;
 
 /**
  * Break the run each resistor sits on.

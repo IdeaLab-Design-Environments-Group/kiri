@@ -4,6 +4,7 @@ import { flatFaces, gapGraph, ledOf, type Circuit } from "../../../src/model/ele
 import {
   RESISTOR_MM,
   SWITCH_PITCH_MM,
+  breakRuns,
   planRoutes,
   tapeWidthFor,
   totalLength,
@@ -100,23 +101,18 @@ describe("model/resistor", () => {
   });
 
   it("leaves a run too short to hold one alone", () => {
-    // Breaking a run shorter than the body would take all its copper and strand whatever it feeds. Better a
-    // resistor whose leads need bending than a branch that quietly loses its supply.
-    const { faces, gaps, base, plain, k } = fixture();
-    const short = plain.traces
-      .map((t) => {
-        let len = 0;
-        for (let i = 1; i < t.pts.length; i++) len += Math.hypot(t.pts[i]!.x - t.pts[i - 1]!.x, t.pts[i]!.y - t.pts[i - 1]!.y);
-        return { t, len: len * k };
-      })
-      .find((r) => r.len < RESISTOR_MM);
-    expect(short, "the fixture needs a run shorter than the body").toBeTruthy();
+    // Breaking a run shorter than the part would take all its copper and strand whatever it feeds. Better a
+    // part whose leads need bending than a branch that quietly loses its supply. Tested on `breakRuns`
+    // directly: with a 1206's 1.42mm gap no bundled run is short enough to show it.
+    const run = { net: "pwr" as const, pts: [{ x: 0, y: 0 }, { x: 1, y: 0 }] };
+    const wide = breakRuns([run], [{ x: 0.5, y: 0 }], 4); // a part four times the run's length
+    expect(wide.traces).toEqual([run]);
+    expect(wide.placed).toEqual([]);
 
-    const at = short!.t.pts[Math.floor(short!.t.pts.length / 2)]!;
-    const r = planRoutes(faces, gaps, { ...base, resistors: [at] });
-    const before = plain.traces.filter((t) => t.net === short!.t.net).length;
-    expect(r.traces.filter((t) => t.net === short!.t.net)).toHaveLength(before);
-    expect(r.resistors).toHaveLength(0); // nothing drawn, because nothing was broken
+    // One that does fit still breaks it.
+    const fits = breakRuns([run], [{ x: 0.5, y: 0 }], 0.4);
+    expect(fits.traces).toHaveLength(2);
+    expect(fits.placed).toHaveLength(1);
   });
 
   it("lays its contacts across the tape, not along it", () => {
@@ -206,8 +202,9 @@ describe("model/switch", () => {
   });
 
   it("is the size the datasheet says", () => {
-    // C&K JS series, JS102011SCQN (SPDT surface mount): body 8,5 [.335] x 3,5 [.138], terminals at 2,5
-    // [.098]. Real millimetres — this is a named part with one size, not a drawing convention.
+    // fab-modules pcb.py, class slide_switch (C&K AYZ0102AGRLC): pads .039 x .047in on .098in centres,
+    // offset .1in from the origin, plus two .034in mounting holes at ±.059in. Real millimetres from the
+    // library, not a size invented to look right.
     const { faces, gaps, base, mid, tapeW, k } = fixture();
     const r = planRoutes(faces, gaps, { ...base, switches: [mid] });
     const { a, b } = r.switches[0]!;
@@ -218,19 +215,28 @@ describe("model/switch", () => {
     expect(chord).toBeGreaterThan(0);
     expect(chord).toBeLessThanOrEqual(SWITCH_PITCH_MM + 1e-9);
 
-    // Sheet coordinates are millimetres, so the body is measured directly.
+    // Sheet coordinates are millimetres, so the part is measured directly.
     const sh = switchShape({ x: 0, y: 0 }, { x: SWITCH_PITCH_MM, y: 0 }, tapeW * k)!;
-    expect(sh.body.w).toBeCloseTo(8.5, 6);
-    expect(sh.body.h).toBeCloseTo(3.5, 6);
+    // Pads .039 x .047in, from pcb.py's slide_switch.
+    for (const l of sh.leads) {
+      expect(l.width).toBeCloseTo(0.039 * 25.4, 4);
+      expect(Math.hypot(l.b.x - l.a.x, l.b.y - l.a.y)).toBeCloseTo(0.047 * 25.4, 4);
+    }
+    // Two mounting holes, .034in across at ±.059in — the part's own.
+    expect(sh.holes).toHaveLength(2);
+    for (const h of sh.holes!) expect(h.r).toBeCloseTo((0.034 * 25.4) / 2, 4);
+    expect(Math.hypot(sh.holes![1]!.c.x - sh.holes![0]!.c.x, sh.holes![1]!.c.y - sh.holes![0]!.c.y))
+      .toBeCloseTo(0.118 * 25.4, 4);
+    // The housing stands clear of the pad row by the pads' own .1in offset, rather than over the copper.
+    expect(Math.hypot(sh.body.cy - 0, sh.body.cx - SWITCH_PITCH_MM / 2)).toBeGreaterThan(0.09 * 25.4);
 
     // Three terminals at one pitch, so 5,0 across all of them.
     const along = sh.leads.map((l) => (l.a.x + l.b.x) / 2).sort((x, y) => x - y);
     expect(along[1]! - along[0]!).toBeCloseTo(SWITCH_PITCH_MM, 6);
     expect(along[2]! - along[1]!).toBeCloseTo(SWITCH_PITCH_MM, 6);
-    expect(along[2]! - along[0]!).toBeCloseTo(5.0, 6);
+    expect(along[2]! - along[0]!).toBeCloseTo(2 * SWITCH_PITCH_MM, 6);
 
-    // And each terminal is its own 0,5 wide, not the tape's width.
-    for (const l of sh.leads) expect(l.width).toBeCloseTo(0.5, 6);
+
   });
 
   it("takes a switch and a resistor on the same circuit", () => {

@@ -1,3 +1,8 @@
 
 # Scratch git worktrees used by background agents — never part of the repo.
 .claude/worktrees/
+
+# OCaml build artefacts from the footprint generator; the generated TS is committed, these are not.
+ocaml/*.cm*
+ocaml/*.o
+ocaml/footprints
