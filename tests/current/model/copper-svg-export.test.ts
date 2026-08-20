@@ -63,12 +63,59 @@ function planned(name: string, n = 6) {
   return { fold, faces, traces: r.traces, tapeW: tapeWidthFor(faces), keepOff, pads: r.pads };
 }
 
-/** Just the carrier's cut geometry. The file also carries a non-cut annotation layer, which is drawn with
- *  closed filled shapes -- so anything asserting what gets CUT has to look only in here. */
-function cutLayer(svg: string): string {
+/** Just the filled carrier shape — the `carrier` group and nothing else. */
+function filledLayer(svg: string): string {
   const from = svg.indexOf('<g id="carrier"');
   expect(from).toBeGreaterThanOrEqual(0);
   return svg.slice(from, svg.indexOf("</g>", from));
+}
+
+/**
+ * Everything that gets CUT: the filled carrier, plus any fragments that would not close into a loop and are
+ * drawn as bare lines in `carrier-unclosed`. Both are cut; only the annotation layer is not, and it is left
+ * out here so that anything asserting what the blade does looks at exactly the blade's paths.
+ */
+function cutLayer(svg: string): string {
+  let out = filledLayer(svg);
+  const from = svg.indexOf('<g id="carrier-unclosed"');
+  if (from >= 0) out += svg.slice(from, svg.indexOf("</g>", from));
+  return out;
+}
+
+/**
+ * The carrier's cut, as separate subpaths.
+ *
+ * It is emitted as filled shapes, so one `<path>` carries every loop as its own `M ... Z` subpath. Splitting
+ * on the moves matters: read as one run of coordinates, the jump from the end of one loop to the start of the
+ * next reads as a cut across the sheet, and the closing edge of each loop is missed entirely.
+ */
+function cutPaths(svg: string): { pts: Vec2[]; closed: boolean }[] {
+  const out: { pts: Vec2[]; closed: boolean }[] = [];
+  for (const m of cutLayer(svg).matchAll(/<path d="([^"]+)"/g)) {
+    for (const sub of m[1]!.split(/(?=M )/)) {
+      if (!sub.trim()) continue;
+      const n = sub.replace(/[MLZ]/g, " ").trim().split(/\s+/).map(Number);
+      const pts: Vec2[] = [];
+      for (let i = 0; i + 1 < n.length; i += 2) pts.push({ x: n[i]!, y: n[i + 1]! });
+      const closed = sub.includes("Z");
+      if (closed && pts.length > 1) pts.push(pts[0]!); // the closing edge is cut too
+      out.push({ pts, closed });
+    }
+  }
+  return out;
+}
+
+/** Even-odd containment against every closed loop at once — the carrier's own fill rule. */
+function inCarrier(svg: string, p: Vec2): boolean {
+  let n = 0;
+  for (const { pts, closed } of cutPaths(svg)) {
+    if (!closed) continue;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      const a = pts[i]!, b = pts[j]!;
+      if ((a.y > p.y) !== (b.y > p.y) && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) n++;
+    }
+  }
+  return n % 2 === 1;
 }
 
 /** Distance from a point to a segment. */
@@ -159,15 +206,71 @@ describe("model/copper-svg-export", () => {
   describe("carrier frame", () => {
     it("holds every trace on a tab instead of cutting it free", () => {
       // The point of the carrier: the copper leaves the mat as one piece, so the traces arrive already in
-      // position. A closed cut round a trace would free it whatever tabs are drawn -- so no trace outline may
-      // be a closed path.
-      const { fold, traces, tapeW } = planned("church.fkld");
-      const out = buildCopperCarrierExport(fold, traces, tapeW);
+      // position. A closed cut round a trace would free it whatever tabs are drawn. The cut is emitted as
+      // filled shapes, so every subpath IS closed now -- the invariant is that none of those loops is a
+      // trace: a run's outline is a detour in a longer boundary, never a loop of its own.
+      const { fold, traces, tapeW, pads } = planned("church.fkld");
+      const out = buildCopperCarrierExport(fold, traces, tapeW, "k", [], undefined, undefined, pads);
       expect(out.counts.traces).toBeGreaterThan(0);
       expect(out.counts.tabs).toBe(out.counts.traces); // one tab each, nothing left loose
-      // Exactly one closed path in the cut: the frame's outer edge. Everything else is open.
-      const closed = (cutLayer(out.svg).match(/ Z"/g) ?? []).length;
-      expect(closed).toBe(1);
+      const { T } = sheetFrame(fold);
+      const area = (r: Vec2[]): number => {
+        let a = 0;
+        for (let i = 0, j = r.length - 1; i < r.length; j = i++) a += (r[j]!.x + r[i]!.x) * (r[j]!.y - r[i]!.y);
+        return Math.abs(a / 2);
+      };
+      const loops = cutPaths(out.svg).filter((c) => c.closed).map((c) => c.pts);
+      expect(loops.length).toBeGreaterThan(0);
+      for (const t of traces) {
+        const strip = stripOutline(t, tapeW, pads).map(T);
+        if (strip.length < 3) continue;
+        const own = area(strip);
+        // No loop the size of a strip: one that matched would be that strip, cut out on its own.
+        expect(loops.some((l) => Math.abs(area(l) - own) < own * 0.02)).toBe(false);
+      }
+    });
+
+    it("emits the carrier as filled shapes, not as line art", () => {
+      // A cutter reads a shape, and the strips file has always given it one: a closed outline with a fill and
+      // no stroke. The carrier gave it hairlines instead, which import as outlines rather than as copper.
+      const { fold, traces, tapeW, pads } = planned("house.fkld");
+      const out = buildCopperCarrierExport(fold, traces, tapeW, "k", [], undefined, undefined, pads);
+      const cut = filledLayer(out.svg);
+      expect(cut).toContain('fill-rule="evenodd"');
+      expect(cut).toContain('stroke="none"');
+      expect(cut).not.toContain('fill="none"');
+      // Every subpath closes, and nothing was left over as a bare line.
+      expect(out.unclosedCuts).toBe(0);
+      expect(out.svg).not.toContain('id="carrier-unclosed"');
+      expect(cutPaths(out.svg).every((c) => c.closed)).toBe(true);
+    });
+
+    it("fills the copper and leaves the waste empty", () => {
+      // The shape has to be the copper itself: solid down every run, solid across the frame, and nothing in
+      // between. Filled the wrong way round it would cut the waste out and drop the circuit.
+      const { fold, traces, tapeW, pads } = planned("house.fkld");
+      const out = buildCopperCarrierExport(fold, traces, tapeW, "k", [], undefined, undefined, pads);
+      const { T } = sheetFrame(fold);
+      const { window: win, outer } = out.frame;
+      for (const t of traces) {
+        expect(inCarrier(out.svg, T(t.pts[Math.floor(t.pts.length / 2)]!))).toBe(true);
+      }
+      // The frame border is copper; off the sheet is not.
+      expect(inCarrier(out.svg, { x: (win.x0 + outer.x0) / 2, y: (win.y0 + win.y1) / 2 })).toBe(true);
+      expect(inCarrier(out.svg, { x: outer.x0 - 2, y: outer.y0 - 2 })).toBe(false);
+      // Somewhere inside the window well clear of every run and every tab: waste, and empty.
+      const strips = traces.map((t) => stripOutline(t, tapeW, pads).map(T)).filter((r) => r.length >= 3);
+      const clear: Vec2[] = [];
+      for (let x = win.x0 + 2; x < win.x1 - 2 && clear.length < 3; x += 1.5) {
+        for (let y = win.y0 + 2; y < win.y1 - 2 && clear.length < 3; y += 1.5) {
+          const p = { x, y };
+          const far = (r: Vec2[]): boolean =>
+            r.every((_, i) => i === 0 || ptSeg(p, r[i - 1]!, r[i]!) > out.widthMm * 2);
+          if (strips.every(far) && out.tabPaths.every(far)) clear.push(p);
+        }
+      }
+      expect(clear.length).toBeGreaterThan(0);
+      for (const p of clear) expect(inCarrier(out.svg, p)).toBe(false);
     });
 
     it("breaks the window edge across each tab, so the tab reaches the frame", () => {
@@ -586,10 +689,10 @@ describe("model/copper-svg-export", () => {
       // copper, so it is one layer of one colour, and black outlines alone cannot say which run is positive
       // or which way round the LED goes.
       const svg = built().svg;
-      const ann = svg.slice(
-        svg.indexOf('<g id="annotation"'),
-        svg.indexOf('<g id="carrier"'),
-      );
+      // The carrier is filled now, so the annotation is drawn on top of it rather than underneath: solid
+      // copper laid over the net colours would bury them.
+      expect(svg.indexOf('<g id="carrier"')).toBeLessThan(svg.indexOf('<g id="annotation"'));
+      const ann = svg.slice(svg.indexOf('<g id="annotation"'));
       expect(ann).toContain("#ff0000");   // PWR
       expect(ann).toContain("#222222");   // GND
       // Filled copper, the same shapes the strips file cuts -- not a line standing in for it.
@@ -651,12 +754,7 @@ describe("model/copper-svg-export", () => {
       const { T, scale } = sheetFrame(fold);
       const tape = tapeW * scale;
 
-      const cuts = [...cutLayer(out.svg).matchAll(/<path d="([^"]+)"/g)].map((m) => {
-        const n = m[1]!.replace(/[MLZ]/g, " ").trim().split(/\s+/).map(Number);
-        const pts: Vec2[] = [];
-        for (let i = 0; i + 1 < n.length; i += 2) pts.push({ x: n[i]!, y: n[i + 1]! });
-        return pts;
-      });
+      const cuts = cutPaths(out.svg).map((c) => c.pts);
       const toSeg = (p: Vec2, a: Vec2, b: Vec2): number => {
         const l2 = (b.x - a.x) ** 2 + (b.y - a.y) ** 2;
         if (l2 < 1e-18) return Math.hypot(p.x - a.x, p.y - a.y);
@@ -664,13 +762,17 @@ describe("model/copper-svg-export", () => {
         return Math.hypot(p.x - (a.x + t * (b.x - a.x)), p.y - (a.y + t * (b.y - a.y)));
       };
 
+      // By winding, as the exporter clips: a run that doubles back outlines as a ring that crosses itself,
+      // and even-odd calls the doubled lobe hollow -- so a stretch buried there reads as uncut when it is
+      // simply copper.
       const insideRing = (p: Vec2, ring: Vec2[]): boolean => {
-        let w = false;
+        let w = 0;
         for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-          const a = ring[i]!, b = ring[j]!;
-          if ((a.y > p.y) !== (b.y > p.y) && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) w = !w;
+          const a = ring[j]!, b = ring[i]!;
+          const side = (b.x - a.x) * (p.y - a.y) - (p.x - a.x) * (b.y - a.y);
+          if (a.y <= p.y) { if (b.y > p.y && side > 0) w++; } else if (b.y <= p.y && side < 0) w--;
         }
-        return w;
+        return w !== 0;
       };
       for (const t of traces) {
         const ring = stripOutline(t, tapeW, pads).map(T);
@@ -689,9 +791,13 @@ describe("model/copper-svg-export", () => {
             const covered = cuts.some((path) =>
               path.some((_, i) => i > 0 && toSeg(p, path[i - 1]!, path[i]!) < tape * 0.02),
             );
-            // A stretch buried inside another strip of the same net is not cut, and must not be: the two
-            // are one piece of copper there. Only the outside of the shape has to be accounted for.
-            const buried = others.some((ring) => insideRing(p, ring));
+            // A stretch buried inside another strip of the same net is not cut, and must not be: the two are
+            // one piece of copper there. Nor is a stretch running under a tab — cutting there would sever the
+            // tab from the run it holds. Only the outside of the shape has to be accounted for.
+            const buried =
+              others.some((o) => insideRing(p, o)) ||
+              out.tabPaths.some((path) =>
+                path.some((_, i) => i > 0 && toSeg(p, path[i - 1]!, path[i]!) <= tape / 2));
             if (!covered && !buried) uncut += step;
           }
         }
@@ -727,12 +833,7 @@ describe("model/copper-svg-export", () => {
       const { T, scale } = sheetFrame(fold);
       const tape = tapeW * scale;
       const rings = traces.map((t) => stripOutline(t, tapeW, pads).map(T)).filter((r) => r.length >= 3);
-      const cuts = [...cutLayer(out.svg).matchAll(/<path d="([^"]+)"/g)].map((m) => {
-        const n = m[1]!.replace(/[MLZ]/g, " ").trim().split(/\s+/).map(Number);
-        const pts: Vec2[] = [];
-        for (let i = 0; i + 1 < n.length; i += 2) pts.push({ x: n[i]!, y: n[i + 1]! });
-        return pts;
-      });
+      const cuts = cutPaths(out.svg).map((c) => c.pts);
 
       let through = 0;
       for (const path of cuts) {
@@ -756,50 +857,28 @@ describe("model/copper-svg-export", () => {
       }
       // Not zero: a hair of tolerance either side of a boundary is unavoidable. Two tape widths in total
       // across a whole sheet is a rounding artefact; the defect was two orders of magnitude larger.
-      expect(through, `${name}: mm of cut line running through copper`).toBeLessThan(2 * tape);
+      // Was 848mm across these circuits before runs were clipped against each other, 224mm on one. What is
+      // left is the tab lead-ins: a tab side starts on the ring it grips and is not clipped against it, so
+      // its first fraction of a millimetre lies inside that strip by construction -- about 0.2mm a tab.
+      expect(through, `${name}: mm of cut line running through copper`).toBeLessThan(3.5 * tape);
     }
   }, { timeout: 30000 });
 
   it("joins every cut to another, so the blade never lifts mid-air", () => {
     // A tab's sides were offset from its centreline, which put them near where the outline stopped but not
-    // on it. The cut came apart there: the blade lifts, drops a fraction of a millimetre away, and the
-    // sliver between the two tears instead of cutting. 144 such ends across these circuits, now none here.
+    // on it. The cut came apart there: the blade lifts, drops a fraction of a millimetre away, and the sliver
+    // between the two tears instead of cutting. 144 such ends across these circuits. Every fragment is now
+    // chained into a closed loop before it is written out, so a loose end cannot be emitted at all -- and if
+    // one will not join, it is counted rather than passed off as part of the shape.
     for (const name of ["house.fkld", "puffin.fkld", "akde-decagon-pyramid.fkld"]) {
       const { fold, traces, tapeW, keepOff, pads } = planned(name, 1);
       const out = buildCopperCarrierExport(
         fold, traces, tapeW, "k", keepOff, undefined, undefined, pads,
       );
-      const tape = tapeW * sheetFrame(fold).scale;
-      const paths = [...cutLayer(out.svg).matchAll(/<path d="([^"]+)"/g)].map((m) => {
-        const closed = m[1]!.includes("Z");
-        const n = m[1]!.replace(/[MLZ]/g, " ").trim().split(/\s+/).map(Number);
-        const pts: Vec2[] = [];
-        for (let i = 0; i + 1 < n.length; i += 2) pts.push({ x: n[i]!, y: n[i + 1]! });
-        return { pts, closed };
-      });
-      const ends: Vec2[] = [];
-      for (const p of paths) if (!p.closed && p.pts.length > 1) ends.push(p.pts[0]!, p.pts[p.pts.length - 1]!);
-      expect(ends.length).toBeGreaterThan(0);
-
-      const toSeg = (p: Vec2, a: Vec2, b: Vec2): number => {
-        const l2 = (b.x - a.x) ** 2 + (b.y - a.y) ** 2;
-        if (l2 < 1e-18) return Math.hypot(p.x - a.x, p.y - a.y);
-        const t = Math.max(0, Math.min(1, ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / l2));
-        return Math.hypot(p.x - (a.x + t * (b.x - a.x)), p.y - (a.y + t * (b.y - a.y)));
-      };
-      const loose = ends.filter((p, i) => {
-        if (ends.some((q, j) => j !== i && Math.hypot(p.x - q.x, p.y - q.y) < tape * 0.05)) return false;
-        // Landing on another cut's interior is a T-junction, which the blade follows just as well.
-        return !paths.some((pp) =>
-          pp.pts.some((_, k) => {
-            if (k === 0) return false;
-            const a = pp.pts[k - 1]!, b = pp.pts[k]!;
-            if (Math.hypot(p.x - a.x, p.y - a.y) < 1e-9 || Math.hypot(p.x - b.x, p.y - b.y) < 1e-9) return false;
-            return toSeg(p, a, b) < tape * 0.05;
-          }),
-        );
-      });
-      expect(loose, `${name}: cut ends meeting nothing`).toEqual([]);
+      const paths = cutPaths(out.svg);
+      expect(paths.length).toBeGreaterThan(0);
+      expect(paths.filter((p) => !p.closed), `${name}: cut ends meeting nothing`).toEqual([]);
+      expect(out.unclosedCuts, `${name}: fragments that would not close`).toBe(0);
     }
   }, { timeout: 30000 });
 

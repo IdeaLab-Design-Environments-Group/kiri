@@ -31,6 +31,7 @@ const FRAME_BUFFER = 5;
 
 
 
+
 /**
  * Which way, if either, the cut is flipped.
  *
@@ -66,6 +67,8 @@ export function mirrorPoint(p: Vec2, w: number, h: number, m: Mirror): Vec2 {
 const MIN_CUTTABLE_MM = 3;
 
 /** Cut colours. Distinct so a cutter treats each net as its own layer. */
+/** The carrier is one piece of copper, so it gets one colour — copper, with the nets drawn on top of it. */
+const CARRIER_FILL = "#b87333";
 const PWR_FILL = "#ff0000";
 const GND_FILL = "#222222";
 
@@ -330,32 +333,29 @@ function offsetSide(pts: Vec2[], offs: number[]): Vec2[] {
  * on across the join rather than stopping at it. Nothing is unioned or re-derived — each edge is split where
  * it enters copper and the buried part is dropped.
  *
- * `skin` keeps a strip's own boundary: it runs along itself, and a point on it must count as outside or
- * every outline would delete itself.
+ * `self` is the ring this cut is the boundary of, if any — skipped, because a strip's own outline runs along
+ * itself and would otherwise delete itself. It is matched by identity rather than by a distance tolerance:
+ * a tolerance keeps a little of each ring past the crossing, by a different amount on each side, and the two
+ * boundaries then stop short of one another by up to a tape width. Stroked that is invisible, but the
+ * fragments are chained back into closed loops ({@link stitchLoops}), and a loop cannot close across a gap.
+ * Sub-spans are classified by their midpoints, which are strictly inside or strictly outside, so no tolerance
+ * is needed for the rest.
  */
 function clipOutside(
-  cut: { pts: Vec2[]; closed: boolean },
+  cut: { pts: Vec2[]; closed: boolean; self?: Vec2[][] },
   solids: Vec2[][],
-  skin: number,
-): string[] {
+): { pts: Vec2[]; closed: boolean }[] {
   const pts = cut.closed ? [...cut.pts, cut.pts[0]!] : cut.pts;
   if (pts.length < 2) return [];
 
   const buried = (p: Vec2): boolean =>
-    solids.some((ring) => {
-      if (!pointInRing(p, ring)) return false;
-      // On the boundary of the strip it belongs to, not inside it.
-      for (let i = 0; i < ring.length; i++) {
-        if (ptSegDist(p, ring[i]!, ring[(i + 1) % ring.length]!) < skin) return false;
-      }
-      return true;
-    });
+    solids.some((ring) => !cut.self?.includes(ring) && pointInRing(p, ring));
 
-  const out: string[] = [];
+  const out: { pts: Vec2[]; closed: boolean }[] = [];
   let run: Vec2[] = [];
   let clipped = false;
   const flush = (): void => {
-    if (run.length >= 2) out.push(openPath(run));
+    if (run.length >= 2) out.push({ pts: run, closed: false });
     run = [];
   };
   for (let i = 1; i < pts.length; i++) {
@@ -380,9 +380,59 @@ function clipOutside(
   }
   // A closed cut that lost nothing stays closed. The frame's outer edge is the one that matters: it is cut
   // all the way round, and reopening it would leave the sheet joined to the waste around it.
-  if (cut.closed && !clipped) return [ringPath(cut.pts)];
+  if (cut.closed && !clipped) return [{ pts: cut.pts, closed: true }];
   flush();
   return out;
+}
+
+/**
+ * Chain open cut fragments back into the closed loops they are pieces of.
+ *
+ * The carrier's cuts are *built* as fragments — a window edge broken across each tab, each tab's two sides,
+ * each trace outline opened where its tab attaches — but they are pieces of one continuous boundary: the edge
+ * of the copper. Follow it from a window edge, up one side of a tab, round the trace, back down the other
+ * side, on along the window edge, and it closes. Stroked, the fragments look right and cut right; **filled**,
+ * they are nothing, because an open path has no inside. So they are joined end to end here.
+ *
+ * Endpoints coincide by construction (a tab's sides are landed exactly on the ends of the ring it opens, and
+ * on the window; a crossing point is cut at from both sides), so a tight tolerance chains them. Anything that
+ * still will not close is handed back as `open` rather than dropped — a cut that vanished silently is worse
+ * than one drawn as a line.
+ */
+function stitchLoops(frags: Vec2[][], tol: number): { loops: Vec2[][]; open: Vec2[][] } {
+  const items = frags.map(dedupe).filter((f) => f.length >= 2);
+  const used = items.map(() => false);
+  const loops: Vec2[][] = [];
+  const open: Vec2[][] = [];
+  const near = (a: Vec2, b: Vec2): boolean => Math.hypot(a.x - b.x, a.y - b.y) <= tol;
+
+  for (let i = 0; i < items.length; i++) {
+    if (used[i]) continue;
+    used[i] = true;
+    let chain = items[i]!.slice();
+    for (let grew = true; grew; ) {
+      grew = false;
+      if (chain.length > 2 && near(chain[0]!, chain[chain.length - 1]!)) break;
+      const head = chain[0]!, tail = chain[chain.length - 1]!;
+      for (let j = 0; j < items.length; j++) {
+        if (used[j]) continue;
+        const f = items[j]!;
+        const a = f[0]!, b = f[f.length - 1]!;
+        // Four ways a fragment can extend the chain: onto either end, either way round.
+        if (near(tail, a)) chain = chain.concat(f.slice(1));
+        else if (near(tail, b)) chain = chain.concat(f.slice(0, -1).reverse());
+        else if (near(head, b)) chain = f.slice(0, -1).concat(chain);
+        else if (near(head, a)) chain = f.slice(1).reverse().concat(chain);
+        else continue;
+        used[j] = true;
+        grew = true;
+        break;
+      }
+    }
+    if (chain.length > 3 && near(chain[0]!, chain[chain.length - 1]!)) loops.push(dedupe(chain.slice(0, -1)));
+    else open.push(chain);
+  }
+  return { loops, open };
 }
 
 /** Where segment ab crosses any solid's edge, as fractions along ab. */
@@ -401,14 +451,25 @@ function crossingsAlong(a: Vec2, b: Vec2, solids: Vec2[][]): number[] {
   return ts;
 }
 
-/** Even-odd containment. */
+/**
+ * Containment by **winding number**, not even-odd.
+ *
+ * A run that doubles back on itself — a hairpin round a tile, which the router plans freely — outlines as a
+ * ring that crosses itself, and the lobe where it overlaps is wound twice. Even-odd calls that lobe *outside*
+ * the strip, so the cut kept the buried line there and dropped the line that was really on the outside; the
+ * boundary then stood open by a millimetre or two at each crossing and would not close. Winding counts the
+ * overlap as the solid copper it is: three of akde-hex's twelve runs self-intersect, nine crossings in all.
+ */
 function pointInRing(p: Vec2, ring: Vec2[]): boolean {
-  let win = false;
+  let wind = 0;
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-    const a = ring[i]!, b = ring[j]!;
-    if ((a.y > p.y) !== (b.y > p.y) && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) win = !win;
+    const a = ring[j]!, b = ring[i]!;
+    const side = (b.x - a.x) * (p.y - a.y) - (p.x - a.x) * (b.y - a.y);
+    if (a.y <= p.y) {
+      if (b.y > p.y && side > 0) wind++;
+    } else if (b.y <= p.y && side < 0) wind--;
   }
-  return win;
+  return wind !== 0;
 }
 
 export function openAround(ring: Vec2[], index: number, width: number): Vec2[] {
@@ -491,9 +552,9 @@ function unit(a: Vec2): Vec2 {
  * the parts go. The carrier could not: it is one piece of copper, which means one layer of one colour, and
  * black outlines alone do not say which run is positive, where the LED sits, or which way round it goes.
  *
- * So the strips file is drawn underneath it: each run filled in its net's colour, at the width it is cut,
- * and nothing else. The carrier's black cut lines then draw over it, so the file reads as the strips export
- * with the frame and its tabs added — the same shapes, in the same colours, in the same places.
+ * So the strips file is drawn on top of it: each run filled in its net's colour, at the width it is cut, and
+ * nothing else. The carrier is solid copper underneath, so the file reads as the strips export with the frame
+ * and its tabs added — the same shapes, in the same colours, in the same places, on the piece they arrive on.
  *
  * Only the copper. Pad and terminal markers were tried here and taken out again: drawn over the strip they
  * merge with it into one red blob wider than the tape, and the cut line, which follows the strip alone, then
@@ -723,6 +784,14 @@ export interface CopperCarrierExport {
   componentTabs: number;
   /** Tab centrelines in sheet coordinates, so a preview can draw exactly what will be cut. */
   tabPaths: Vec2[][];
+  /**
+   * Cut fragments that could not be chained into a closed loop.
+   *
+   * Expected to be zero: the carrier's boundary is continuous, so every fragment has a neighbour at each end.
+   * A non-zero count means some stretch is drawn as a bare line instead of bounding filled copper — it still
+   * cuts, but that part of the shape has no inside, so it is reported rather than passed off as solid.
+   */
+  unclosedCuts: number;
   /** The frame's window and outer edge in sheet coordinates, likewise. */
   frame: { window: Win; outer: Win };
   widthMm: number;
@@ -738,11 +807,16 @@ export interface CopperCarrierExport {
  * away — every trace is already where it belongs, so nothing has to be placed by hand.
  *
  * That imposes one hard requirement on the file: **the copper must come off the mat as a single piece.** A cut
- * line all the way around a trace would free it whatever tabs are drawn, so the outlines here are *open* —
- * each ring stops short of its tab, the tab's two sides run out to the window edge, and the window edge itself
- * breaks where a tab lands. The remaining uncut spans are the tabs. This is why the traces are stroked cut
- * lines rather than the filled shapes {@link buildCopperSvgExport} emits: there, each strip is meant to come
- * away on its own.
+ * line all the way around a trace would free it whatever tabs are drawn, so no trace gets an outline of its
+ * own — each ring stops short of its tab, the tab's two sides run out to the window edge, and the window edge
+ * itself breaks where a tab lands. The remaining uncut spans are the tabs.
+ *
+ * Those pieces are then chained back into the closed loops they belong to ({@link stitchLoops}) and emitted
+ * **filled**, like {@link buildCopperSvgExport}'s strips: the outer rectangle, and one inner loop that runs
+ * along the window and detours around every trace by way of its tab. Filled `evenodd`, that is the copper —
+ * frame, tabs and traces solid, the waste inside the window empty. The cut is the same line either way; a
+ * shape additionally says which side of it the copper is on, which is what a cutter reads, and it is why no
+ * trace can come away on its own here: its outline is not a loop, it is a detour in a bigger one.
  */
 export function buildCopperCarrierExport(
   fold: FoldFile,
@@ -770,7 +844,7 @@ export function buildCopperCarrierExport(
   const runs = traces.filter((t) => t.pts.length >= 2);
 
   // Geometry, not markup: the cuts are clipped against the copper before they are written out.
-  const cuts: { pts: Vec2[]; closed: boolean }[] = [];
+  const cuts: { pts: Vec2[]; closed: boolean; self?: Vec2[][] }[] = [];
   // The frame's outer edge: a plain closed rectangle, cut all the way round.
   const ox0 = win.x0 - FRAME_BUFFER, oy0 = win.y0 - FRAME_BUFFER;
   const ox1 = win.x1 + FRAME_BUFFER, oy1 = win.y1 + FRAME_BUFFER;
@@ -804,6 +878,11 @@ export function buildCopperCarrierExport(
   let padTabs = 0;
   let componentTabs = 0;
   const tabPaths: Vec2[][] = [];
+  const quads: Vec2[][] = [];
+  /** Each tab as built, held back until every quad exists — whether a tab is redundant depends on the rest. */
+  const held: {
+    ring: Vec2[]; quad: Vec2[]; open: Vec2[]; s1: Vec2[]; s2: Vec2[]; side: Side; q1: Vec2; q2: Vec2;
+  }[] = [];
   rings.forEach(({ net, ring }, ri) => {
     if (ring.length < 3) return;
     // Only the *other* net's runs are obstacles. Runs of the same net meet at junctions by design and may
@@ -819,7 +898,6 @@ export function buildCopperCarrierExport(
     tabPaths.push(choice.path);
     // Open the ring across the tab's footprint, and no more.
     const open = openAround(ring, index, tape);
-    if (open.length >= 2) cuts.push({ pts: open, closed: false });
     // The tab's two sides: its centreline offset either way, so a bent tab keeps its width around the corner.
     const s1 = offsetSide(choice.path, choice.path.map(() => tape / 2));
     const s2 = offsetSide(choice.path, choice.path.map(() => -tape / 2));
@@ -837,12 +915,45 @@ export function buildCopperCarrierExport(
     const q2 = onWindow(s2[s2.length - 1]!, side, win);
     s1[s1.length - 1] = q1;
     s2[s2.length - 1] = q2;
-    cuts.push({ pts: s1, closed: false }, { pts: s2, closed: false });
-    // The window edge must break across the tab's footprint, or the tab is severed from the frame.
-    const [from, to] = alongSide(side, q1, q2);
-    gaps.push({ side, from, to });
+    // Clipped against every other run, but not against the one they grip: a tab side starts *on* its own
+    // ring, and leaving at a shallow angle its first step reads as inside — dropped, the tab would come away
+    // from the trace it holds and the boundary would stand open across the whole tab footprint.
+    // The tab as a shape, not just its two sides: two tabs landing close on one wall overlap, and the buried
+    // halves of their sides have to go the same way a run buried in another run's strip does. Without it those
+    // sides ran on to a window edge that had already been broken across both, and ended on nothing.
+    const quad = [...s1, ...s2.slice().reverse()];
+    quads.push(quad);
+    held.push({ ring, quad, open, s1, s2, side, q1, q2 });
     tabs++;
   });
+
+  // Every piece of copper inside the window: the runs and the tabs holding them.
+  const solid = [...rings.map((r) => r.ring), ...quads];
+
+  // A tab can come out buried: `pickTab` treats only the *other* net as an obstacle, so a tab may lie inside
+  // a run of its own net, which is copper it is already fused to. Both its sides then clip away to nothing,
+  // and the opening they were meant to bridge is left standing in the ring with nothing crossing it — a gap
+  // in the boundary a tape width wide, exactly where a closing straight line would seal the run into a loop
+  // of its own and free it. The tab is redundant there, so the ring is simply not opened: it is cut whole,
+  // and where it runs through the copper that swallowed the tab, the clip below drops that stretch and the
+  // two boundaries carry on as one.
+  for (const h of held) {
+    const sides = [h.s1, h.s2].map((pts) => clipOutside({ pts, closed: false, self: [h.ring, h.quad] }, solid));
+    if (sides.every((f) => f.length === 0)) {
+      cuts.push({ pts: h.ring, closed: true, self: [h.ring, h.quad] });
+      continue;
+    }
+    // Clipped against every other shape, but not against the two it is the boundary of: a tab side starts *on*
+    // its ring and runs along its own quad, and either would otherwise delete it.
+    cuts.push(
+      { pts: h.s1, closed: false, self: [h.ring, h.quad] },
+      { pts: h.s2, closed: false, self: [h.ring, h.quad] },
+    );
+    if (h.open.length >= 2) cuts.push({ pts: h.open, closed: false, self: [h.ring, h.quad] });
+    // The window edge must break across the tab's footprint, or the tab is severed from the frame.
+    const [from, to] = alongSide(h.side, h.q1, h.q2);
+    gaps.push({ side: h.side, from, to });
+  }
 
   // The window edge, cut in the spans between tabs.
   for (const side of SIDES) {
@@ -855,14 +966,41 @@ export function buildCopperCarrierExport(
   // overlap by design -- one net, one potential -- but each was still outlined in full, so one run's cut
   // ran clean through the other's strip and the blade would sever it. What is left is the outside of the
   // copper: a boundary that carries on across the join instead of stopping at it.
-  const solid = rings.map((r) => r.ring);
-  const drawn = cuts.flatMap((c) => clipOutside(c, solid, tape * 0.05));
+  const drawn = cuts.flatMap((c) => clipOutside(c, solid));
+
+  // Close the boundary back up, and emit the carrier as the solid shape it is rather than as loose lines.
+  //
+  // The fragments above are pieces of one continuous edge, so chaining them gives the outer rectangle plus the
+  // inner loop that runs along the window and detours around every trace by way of its tab. Filled `evenodd`,
+  // that pair *is* the copper: frame, tabs and traces solid, the waste inside the window empty. The same
+  // geometry either way -- what changes is that the file now says which side of each line the copper is on,
+  // which is what the strips file has always said and what a cutter reads a shape from.
+  const preClosed = drawn.filter((d) => d.closed).map((d) => d.pts);
+  // One tight pass: every endpoint either was built to coincide with its neighbour's, or is a crossing point
+  // that both sides were cut at, so they agree to within rounding. A looser pass would only paper over a gap
+  // that is real, and a gap that is real is a cut that does not bound anything.
+  // Tight first: every endpoint either was built to coincide with its neighbour's, or is a crossing point
+  // both sides were cut at, so they agree to within rounding. Then one bounded pass at a tenth of a tape
+  // width, which closes a near-tangential graze -- a tab side that just clips another run leaves entry and
+  // exit a fraction of a millimetre apart, and one of the two can fall below the sliver threshold. Joining
+  // ends that close moves the cut by less than the line it used to be drawn as. Anything further apart is a
+  // real gap and is left open and counted, not quietly bridged.
+  const tight = stitchLoops(drawn.filter((d) => !d.closed).map((d) => d.pts), 1e-6);
+  const closing = stitchLoops(tight.open, tape * 0.1);
+  const stitched = { loops: [...tight.loops, ...closing.loops], open: closing.open };
+  const loops = [...preClosed, ...stitched.loops];
   const cutLayer =
-    `  <g id="carrier" fill="none" stroke="#000000" stroke-width="0.25">\n    ` +
-    drawn.map((d) => `<path d="${d}" />`).join("\n    ") +
-    `\n  </g>`;
-  // Underneath, so the black cut lines stay visible on top of the copper they cut around.
-  const body = annotationLayer(traces, pads, resistors, switches, tapeW, scale, T, partMm) + cutLayer;
+    `  <g id="carrier" fill="${CARRIER_FILL}" stroke="none" fill-rule="evenodd">\n    ` +
+    `<path d="${loops.map(ringPath).join(" ")}" />` +
+    `\n  </g>` +
+    // Anything that would not close is still cut -- drawn as a line, and counted, rather than dropped.
+    (stitched.open.length
+      ? `\n  <g id="carrier-unclosed" fill="none" stroke="#000000" stroke-width="0.25">\n    ` +
+        stitched.open.map((o) => `<path d="${openPath(o)}" />`).join("\n    ") +
+        `\n  </g>`
+      : "");
+  // On top of the carrier now that the carrier is filled: underneath it, the solid copper would bury it.
+  const body = cutLayer + "\n" + annotationLayer(traces, pads, resistors, switches, tapeW, scale, T, partMm);
 
   return {
     filename: `${baseName}-copper-carrier${mirrorSuffix(mirror)}.svg`,
@@ -874,6 +1012,7 @@ export function buildCopperCarrierExport(
     padTabs,
     componentTabs,
     tabPaths,
+    unclosedCuts: stitched.open.length,
     frame: { window: win, outer: { x0: ox0, y0: oy0, x1: ox1, y1: oy1 } },
     widthMm: tape,
     tooNarrow: tape < MIN_CUTTABLE_MM,
