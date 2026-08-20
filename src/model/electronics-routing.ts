@@ -65,9 +65,17 @@ export interface RoutedCircuit {
   pads: PadPair[];
   /** Indices of LEDs that could not be reached (no gap, or no battery). */
   unreachable: number[];
+  /** Where each resistor ended up: the two ends of the break its leads bridge. */
+  resistors: ResistorSpan[];
 }
 
-export const EMPTY_ROUTE: RoutedCircuit = { traces: [], pads: [], unreachable: [] };
+/** The gap a resistor bridges — `a` and `b` are the cut ends of the PWR run, where its leads land. */
+export interface ResistorSpan {
+  a: Vec2;
+  b: Vec2;
+}
+
+export const EMPTY_ROUTE: RoutedCircuit = { traces: [], pads: [], unreachable: [], resistors: [] };
 
 /** How much dearer it is to travel through a hinge that has an LED on it than an empty one. Large enough to
  *  route around whenever there is any alternative, finite so that a dead-end tile stays reachable. */
@@ -381,7 +389,7 @@ export function planRoutes(
   const battery: Battery | null = circuit.battery;
   if (!battery || !faces[battery.face]) {
     circuit.leds.forEach((_, i) => unreachable.push(i));
-    return { traces: [], pads, unreachable };
+    return { traces: [], pads, unreachable, resistors: [] };
   }
 
   const diag = patternDiag(faces);
@@ -406,7 +414,7 @@ export function planRoutes(
       legFaces: [gap.faceA, gap.faceB],
     });
   });
-  if (!targets.length) return { traces: [], pads, unreachable };
+  if (!targets.length) return { traces: [], pads, unreachable, resistors: [] };
 
   // Drop LEDs the battery cannot reach across the material. Their tiles sit on a separate island of the
   // pattern, and the only way to "reach" them would be a straight line through empty space -- which is what
@@ -422,7 +430,7 @@ export function planRoutes(
     targets.splice(i, 1);
   }
   unreachable.sort((a, b) => a - b);
-  if (!targets.length) return { traces: [], pads, unreachable };
+  if (!targets.length) return { traces: [], pads, unreachable, resistors: [] };
 
   // The tour: the order the bus passes the LEDs. Nearest-neighbour from the battery, then 2-opt.
   // 2-opt is what earns the no-crossing guarantee: a self-crossing tour is always strictly longer than
@@ -950,7 +958,102 @@ export function planRoutes(
     pads[t.slot] = flip[i] ? { pwr: l1, gnd: l0 } : { pwr: l0, gnd: l1 };
   }
 
-  return { traces: best, pads, unreachable };
+  const broken = breakForResistors(best, circuit.resistors ?? [], tapeW);
+  return { traces: broken.traces, pads, unreachable, resistors: broken.placed };
+}
+
+/**
+ * A through-hole resistor's body, in millimetres — the length of copper it replaces.
+ *
+ * The break is the body, not the whole part: the leads stick out past it and are taped down onto the copper
+ * either side, which is what holds it and what carries the current.
+ */
+export const RESISTOR_MM = 6.5;
+
+/**
+ * Break each PWR run where a resistor sits.
+ *
+ * A resistor's two ends are both on `+`. Copper running underneath it therefore shorts it out, and the LEDs
+ * see the full battery — so the run is genuinely cut in two here rather than narrowed, which is all an LED
+ * needs. Each half comes back as an ordinary run, so everything downstream — the strips file, the carrier and
+ * its tabs, the canvas, the folded model — handles it without knowing resistors exist.
+ *
+ * A resistor is snapped to the nearest point on a PWR run: it is stored as a point in the pattern, and the
+ * routes underneath it are re-planned whenever the circuit changes.
+ */
+export function breakForResistors(
+  traces: Trace2D[],
+  resistors: { x: number; y: number }[],
+  tapeW: number,
+): { traces: Trace2D[]; placed: ResistorSpan[] } {
+  const placed: ResistorSpan[] = [];
+  if (!resistors.length) return { traces, placed };
+  // The body in the pattern's own units: the tape is TAPE_MM wide and `tapeW` units, so this follows it.
+  const body = (RESISTOR_MM * tapeW) / TAPE_MM;
+  let out = traces;
+  for (const r of resistors) {
+    let bestRun = -1, bestSeg = -1, bestT = 0, bestD = Infinity;
+    out.forEach((t, ti) => {
+      if (t.net !== "pwr") return; // both ends on +, so it can only sit on a PWR run
+      for (let i = 1; i < t.pts.length; i++) {
+        const a = t.pts[i - 1]!, b = t.pts[i]!;
+        const l2 = dist2(a, b);
+        if (l2 < 1e-18) continue;
+        const u = Math.max(0, Math.min(1, ((r.x - a.x) * (b.x - a.x) + (r.y - a.y) * (b.y - a.y)) / l2));
+        const p = { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u };
+        const d = Math.hypot(r.x - p.x, r.y - p.y);
+        if (d < bestD) { bestD = d; bestRun = ti; bestSeg = i; bestT = u; }
+      }
+    });
+    if (bestRun < 0) continue; // no PWR copper to sit on — nothing to break
+    const split = splitRun(out, bestRun, bestSeg, bestT, body);
+    out = split.traces;
+    if (split.span) placed.push(split.span);
+  }
+  return { traces: out, placed };
+}
+
+/** Split run `ri` at a point, leaving `body` of bare pattern between the two halves. */
+function splitRun(
+  traces: Trace2D[],
+  ri: number,
+  seg: number,
+  t: number,
+  body: number,
+): { traces: Trace2D[]; span: ResistorSpan | null } {
+  const run = traces[ri]!;
+  const a = run.pts[seg - 1]!, b = run.pts[seg]!;
+  const at = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+  // Walk back and forward along the run by half the body, so the gap is centred on the resistor.
+  const head = [...run.pts.slice(0, seg), at];
+  const tail = [at, ...run.pts.slice(seg)];
+  const first = trimEnd(head, body / 2);
+  const second = trimEnd([...tail].reverse(), body / 2).reverse();
+  const kept: Trace2D[] = [];
+  for (const pts of [first, second]) if (pts.length >= 2) kept.push({ net: run.net, pts });
+  // A run too short to break either side keeps its copper rather than vanishing: better a resistor that
+  // needs its leads bent than a branch that silently loses its supply.
+  if (kept.length < 2) return { traces, span: null };
+  const span = { a: first[first.length - 1]!, b: second[0]! };
+  return { traces: [...traces.slice(0, ri), ...kept, ...traces.slice(ri + 1)], span };
+}
+
+/** Drop `back` of length from the end of a polyline. */
+function trimEnd(pts: Vec2[], back: number): Vec2[] {
+  let left = back;
+  const out = [...pts];
+  while (out.length >= 2) {
+    const a = out[out.length - 2]!, b = out[out.length - 1]!;
+    const l = len(sub(b, a));
+    if (l > left) {
+      const f = (l - left) / l;
+      out[out.length - 1] = { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
+      return out;
+    }
+    left -= l;
+    out.pop();
+  }
+  return out;
 }
 
 /**

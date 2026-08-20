@@ -32,6 +32,7 @@ import {
   buildCopperCarrierExport,
   buildCopperSvgExport,
   mirrorPoint,
+  resistorShape,
   stripOutline,
 } from "../model/copper-svg-export.js";
 import { printScale } from "../model/print-scale.js";
@@ -48,7 +49,7 @@ import type { FoldFile } from "../model/fold-file.js";
 const SVG_NS = "http://www.w3.org/2000/svg";
 const MARGIN = 8; // mm — must match the SVG export so preview ↔ export register
 
-type Tool = "led" | "battery";
+type Tool = "led" | "battery" | "resistor";
 
 /** How the copper is shown, matching the two ways it can be cut.
  *
@@ -112,6 +113,7 @@ export class ElectronicsModal {
             <span class="el-group">
               <button type="button" class="el-tool" data-tool="led" title="Add an LED — click a gap between two tiles">LED</button>
               <button type="button" class="el-tool" data-tool="battery" title="Place the battery — click a tile">Battery</button>
+              <button type="button" class="el-tool" data-tool="resistor" title="Add a series resistor — click on a PWR run. The copper is broken there, so the resistor is not shorted out by the tape">Resistor</button>
             </span>
             <span class="el-group">
               <button type="button" class="el-clear" title="Remove all LEDs, the battery and routes">Clear</button>
@@ -143,6 +145,7 @@ export class ElectronicsModal {
               <span class="el-key el-key-pwr">▬ PWR</span>
               <span class="el-key el-key-gnd">▬ GND</span>
               <span class="el-key el-key-batt">▮ Battery</span>
+              <span class="el-key el-key-res">▬ Resistor</span>
             </p>
             <span class="sim-status el-status"></span>
           </div>
@@ -294,6 +297,23 @@ export class ElectronicsModal {
   private onCanvasClick(e: MouseEvent): void {
     const flat = this.clientToFlat(e);
     if (!flat) return;
+    if (this.tool === "resistor") {
+      // Both ends of a resistor land on +, so it can only sit on a PWR run. The click is stored as a point
+      // and snapped to the nearest one when the plan is built — the routes move whenever the circuit does.
+      const near = this.nearestOnPwr(flat);
+      if (!near || near.dist > this.pickRadius()) return;
+      const existing = this.circuit.resistors ?? [];
+      // Clicking an existing one takes it off again, as clicking the battery's own tile does.
+      const hit = existing.findIndex((r) => Math.hypot(r.x - flat.x, r.y - flat.y) <= this.pickRadius() / 2);
+      this.circuit = {
+        ...this.circuit,
+        resistors: hit >= 0
+          ? existing.filter((_, i) => i !== hit)
+          : [...existing, { x: near.point.x, y: near.point.y }],
+      };
+      this.emit();
+      return;
+    }
     if (this.tool === "battery") {
       // Toggle the single battery on/off the clicked face (it tapes onto a gray tile).
       const face = pointInFace(this.faces, flat);
@@ -325,6 +345,24 @@ export class ElectronicsModal {
     this.emit();
   }
 
+  /** The nearest point on any PWR run to `p` — where a resistor would break the copper. */
+  private nearestOnPwr(p: Vec2): { point: Vec2; dist: number } | null {
+    let best: { point: Vec2; dist: number } | null = null;
+    for (const t of this.routed.traces) {
+      if (t.net !== "pwr") continue;
+      for (let i = 1; i < t.pts.length; i++) {
+        const a = t.pts[i - 1]!, b = t.pts[i]!;
+        const l2 = (b.x - a.x) ** 2 + (b.y - a.y) ** 2;
+        if (l2 < 1e-18) continue;
+        const u = Math.max(0, Math.min(1, ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / l2));
+        const q = { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u };
+        const d = Math.hypot(p.x - q.x, p.y - q.y);
+        if (!best || d < best.dist) best = { point: q, dist: d };
+      }
+    }
+    return best;
+  }
+
   /** How close (flat mm) a click must land to a hinge to drop an LED there. */
   private pickRadius(): number {
     const diag = Math.hypot(this.bounds.maxX - this.bounds.minX, this.bounds.maxY - this.bounds.minY);
@@ -338,7 +376,7 @@ export class ElectronicsModal {
       return;
     }
     const out = buildCopperSvgExport(
-      this.fold, this.routed.traces, this.tapeW(), "kiri", this.routed.pads, this.mirror, this.sheetMm,
+      this.fold, this.routed.traces, this.tapeW(), "kiri", this.routed.pads, this.mirror, this.sheetMm, this.routed.resistors,
     );
     this.download(out.filename, out.svg);
     const { pwr, gnd } = out.counts;
@@ -611,6 +649,20 @@ export class ElectronicsModal {
         "M " + ring.map((p, k) => (k === 0 ? "" : "L ") + ptStr(this.tp(p))).join(" ") + " Z";
       parts.push(`<path d="${d}" class="${cls}" />`);
     }
+    // The resistors, over the breaks they bridge: grey leads onto the copper either side, black body across
+    // the bare pattern between them, where there is deliberately no copper at all.
+    for (const r of this.routed.resistors) {
+      // The same shape the cut files draw, so the canvas cannot drift from them.
+      const sh = resistorShape(this.tp(r.a), this.tp(r.b), this.tapeW() * this.scale());
+      if (!sh) continue;
+      const { lead, body } = sh;
+      parts.push(
+        `<line x1="${fmt(lead.a.x)}" y1="${fmt(lead.a.y)}" x2="${fmt(lead.b.x)}" y2="${fmt(lead.b.y)}" class="el-res-lead" stroke-width="${fmt(lead.width)}" />`,
+      );
+      parts.push(
+        `<rect x="${fmt(body.x)}" y="${fmt(body.y)}" width="${fmt(body.w)}" height="${fmt(body.h)}" rx="${fmt(body.h * 0.18)}" class="el-res-body" transform="rotate(${fmt(body.angle)} ${fmt(body.cx)} ${fmt(body.cy)})" />`,
+      );
+    }
     // Each LED is two distinct pads straddling its hinge — a PWR (+) pad toward face `a` and a GND (−)
     // pad toward face `b` — bridged by the LED chip. An LED whose gap no longer exists has nowhere to
     // sit and is drawn as an orphan.
@@ -686,7 +738,7 @@ export class ElectronicsModal {
     if (!this.fold) return [];
     const out = buildCopperCarrierExport(
       this.fold, this.routed.traces, this.tapeW(), "kiri", this.keepOff(), this.mirror, this.sheetMm,
-      this.routed.pads,
+      this.routed.pads, this.routed.resistors,
     );
     const ring = (r: { x0: number; y0: number; x1: number; y1: number }): string => {
       const c = [
@@ -731,7 +783,7 @@ export class ElectronicsModal {
     }
     const out = buildCopperCarrierExport(
       this.fold, this.routed.traces, this.tapeW(), "kiri", this.keepOff(), this.mirror, this.sheetMm,
-      this.routed.pads,
+      this.routed.pads, this.routed.resistors,
     );
     this.download(out.filename, out.svg);
     const w = Math.round(out.widthMm * 100) / 100;

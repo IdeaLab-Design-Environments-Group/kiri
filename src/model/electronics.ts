@@ -50,8 +50,27 @@ export interface Vec2 {
  */export interface Circuit {
   leds: Led[];
   battery: Battery | null;
+  /** Series resistors on the PWR net. Optional so circuits saved before they existed still load. */
+  resistors?: Resistor[];
 }
-export const EMPTY_CIRCUIT: Circuit = { leds: [], battery: null };
+
+/**
+ * A resistor, in series on the PWR net.
+ *
+ * Both its ends land on `+`, unlike an LED, which straddles the two nets — so the copper underneath has to be
+ * **broken**, not merely narrowed. A resistor bridging unbroken tape is shorted out by the tape and does
+ * nothing at all, which is the one way to get this wrong and not see it until the LEDs burn out.
+ *
+ * Stored as a point in the flat pattern rather than as a position along a run: the routes are re-planned
+ * whenever the circuit changes, and a run index would name a different piece of copper afterwards. The point
+ * is snapped to the nearest PWR run each time the plan is built.
+ */
+export interface Resistor {
+  x: number;
+  y: number;
+}
+
+export const EMPTY_CIRCUIT: Circuit = { leds: [], battery: null, resistors: [] };
 /** A single flat face: its polygon (mm) and centroid (mm). */export interface FlatFace {
   /** Vertex indices into `vertices_coords`. */
   verts: number[];
