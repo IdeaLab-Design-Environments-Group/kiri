@@ -124,6 +124,9 @@ export class AppController {
     // the modal has nothing pushed back to it — it draws the placement it was given.
     this.electronics.setEnabled(!!simObject);
     this.electronics.setPattern(simObject);
+    // The sim's Gap slider is the one gap in the build: the Electronics tool lays components on the same
+    // tiles that get printed, so it re-derives its tiles and gaps whenever that slider moves.
+    this.electronics.setTileGap(state.simTileGap);
     this.sim.setTraces(this.tracesForSim(simObject));
   }
 
@@ -137,11 +140,13 @@ export class AppController {
    *  Routed here rather than read back from the Electronics modal: the modal may never have been opened, and
    *  the copper belongs on the model either way. */
   private tracesForSim(fold: FoldFile | null): AnchoredMesh[] {
-    const circuit = this.store.getState().circuit ?? EMPTY_CIRCUIT;
+    const { circuit: stored, simTileGap } = this.store.getState();
+    const circuit = stored ?? EMPTY_CIRCUIT;
     if (!fold || (!circuit.leds.length && !circuit.battery)) return [];
     try {
       const faces = flatFaces(fold);
-      const gaps = gapGraph(fold, faces).gaps;
+      // Same gap as the Electronics tool and the printed tiles — the legs have to land where the pads are.
+      const gaps = gapGraph(fold, faces, simTileGap).gaps;
       const sheetMm = this.exporter.printSizeMm();
       const routed = planRoutes(faces, gaps, circuit, sheetMm);
       const tapeW = tapeWidthFor(faces, sheetMm);
