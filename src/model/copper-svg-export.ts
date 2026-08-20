@@ -84,6 +84,19 @@ const CARRIER_FILL = "#b87333";
 const PWR_FILL = "#ff0000";
 const GND_FILL = "#222222";
 
+/**
+ * The switch's body, in millimetres: **8,5 [.335] long by 3,5 [.138] wide**, from the C&K JS series drawing
+ * for JS102011SCQN — the SPDT surface-mount part.
+ *
+ * Real millimetres, not a multiple of the tape or of what an LED is drawn at. A resistor's drawn size is a
+ * convention, since which resistor you fit is up to you; this is a named part with one size, and drawing it
+ * at anything else would show a footprint that does not exist.
+ */
+const SWITCH_BODY_MM = { length: 8.5, width: 3.5 };
+
+/** Its terminals: 0,5 [.020] wide. */
+const SWITCH_PIN_MM = 0.5;
+
 /** A resistor: a black body, with grey leads reaching either way onto the copper it bridges. */
 const RES_BODY = "#111111";
 const RES_LEAD = "#8b93a1";
@@ -762,7 +775,7 @@ export function switchShape(a: Vec2, b: Vec2, tape: number, cross = tape): Resis
   const ux = dx / L, uy = dy / L;
   const px = -uy, py = ux;
   const half = cross * 0.5;
-  const foot = cross * 0.45;             // how far along the run each pin's contact reaches
+  const foot = SWITCH_PIN_MM;            // the terminal's own width, along the run
   // Pin 1 is a pitch back from pin 2, on the same side of the break. `L` is that pitch.
   const pin = (p: Vec2, along: number): { a: Vec2; b: Vec2; width: number } => {
     const c = { x: p.x + ux * along, y: p.y + uy * along };
@@ -772,13 +785,17 @@ export function switchShape(a: Vec2, b: Vec2, tape: number, cross = tape): Resis
       width: foot,
     };
   };
-  const mid = { x: (a.x + b.x) / 2 - ux * (L / 2), y: (a.y + b.y) / 2 - uy * (L / 2) };
-  const bodyL = 3 * L;                   // three positions at one pitch each
+  // Centred on the middle terminal, which is where the part's own drawing centres its body.
+  const mid = { x: a.x, y: a.y };
+  const bodyL = SWITCH_BODY_MM.length;
+  const bodyW = SWITCH_BODY_MM.width;
   return {
-    // Pin 1 and pin 2 behind the break, pin 3 in front of it.
-    leads: [pin(a, -L - foot / 2), pin(a, -foot / 2), pin(b, foot / 2)],
+    // Terminal 1 and terminal 2 behind the break, terminal 3 in front of it — at the pitch, exactly. The
+    // break is one pitch wide, so terminals 2 and 3 land on the two cut edges themselves; nudging them clear
+    // of the gap would put terminal 3 a pin's width out of step with the other two.
+    leads: [pin(a, -L), pin(a, 0), pin(b, 0)],
     body: {
-      x: mid.x - bodyL / 2, y: mid.y - cross * 0.85 / 2, w: bodyL, h: cross * 0.85,
+      x: mid.x - bodyL / 2, y: mid.y - bodyW / 2, w: bodyL, h: bodyW,
       angle: (Math.atan2(dy, dx) * 180) / Math.PI, cx: mid.x, cy: mid.y,
     },
   };

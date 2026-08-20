@@ -983,12 +983,15 @@ export function planRoutes(
 export const RESISTOR_MM = 6.5;
 
 /**
- * A 1x03 header's pin pitch, in millimetres — 0.1in, the standard the part number implies.
+ * The switch's terminal pitch, in millimetres: **2,5 [.098]** from the C&K JS series drawing for
+ * JS102011SCQN, the SPDT surface-mount part. Three terminals, so 5,0 across all of them.
  *
- * The break is one pitch wide: it falls between the second pin and the third, so two pins sit on one side of
+ * The break is one pitch wide and falls between the second terminal and the third, so two sit on one side of
  * it and one on the other.
+ *
+ * Not 2.54: a 0.1in header and this are near neighbours but not the same part, and the datasheet says 2,5.
  */
-export const SWITCH_PITCH_MM = 2.54;
+export const SWITCH_PITCH_MM = 2.5;
 
 /**
  * Break the run each resistor sits on.

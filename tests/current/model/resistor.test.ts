@@ -191,15 +191,46 @@ describe("model/switch", () => {
     const ux = (b.x - a.x) / Math.hypot(b.x - a.x, b.y - a.y);
     const uy = (b.y - a.y) / Math.hypot(b.x - a.x, b.y - a.y);
     const along = (p: { x: number; y: number }): number => (p.x - a.x) * ux + (p.y - a.y) * uy;
+    const span = Math.hypot(b.x - a.x, b.y - a.y);
     const sides = sh.leads.map((l) => along({ x: (l.a.x + l.b.x) / 2, y: (l.a.y + l.b.y) / 2 }));
-    expect(sides.filter((d) => d < 0)).toHaveLength(2);
-    expect(sides.filter((d) => d > 0)).toHaveLength(1);
+    // The break is exactly one pitch, so terminals 2 and 3 sit on its two cut edges: two at or behind the
+    // near edge, one at the far one.
+    expect(sides.filter((d) => d <= 1e-9)).toHaveLength(2);
+    expect(sides.filter((d) => d >= span - 1e-9)).toHaveLength(1);
 
     // And it is drawn on the file, not cut into it.
     const out = buildCopperSvgExport(
       fold, r.traces, tapeW, "k", r.pads, undefined, undefined, r.resistors, undefined, r.switches,
     );
     expect(out.svg).toContain('id="parts"');
+  });
+
+  it("is the size the datasheet says", () => {
+    // C&K JS series, JS102011SCQN (SPDT surface mount): body 8,5 [.335] x 3,5 [.138], terminals at 2,5
+    // [.098]. Real millimetres — this is a named part with one size, not a drawing convention.
+    const { faces, gaps, base, mid, tapeW, k } = fixture();
+    const r = planRoutes(faces, gaps, { ...base, switches: [mid] });
+    const { a, b } = r.switches[0]!;
+
+    // One pitch of copper comes out. Measured along the run, not across it: the run bends inside the break,
+    // so the straight line between the cut ends is shorter than the copper removed and can only be shorter.
+    const chord = Math.hypot(a.x - b.x, a.y - b.y) * k;
+    expect(chord).toBeGreaterThan(0);
+    expect(chord).toBeLessThanOrEqual(SWITCH_PITCH_MM + 1e-9);
+
+    // Sheet coordinates are millimetres, so the body is measured directly.
+    const sh = switchShape({ x: 0, y: 0 }, { x: SWITCH_PITCH_MM, y: 0 }, tapeW * k)!;
+    expect(sh.body.w).toBeCloseTo(8.5, 6);
+    expect(sh.body.h).toBeCloseTo(3.5, 6);
+
+    // Three terminals at one pitch, so 5,0 across all of them.
+    const along = sh.leads.map((l) => (l.a.x + l.b.x) / 2).sort((x, y) => x - y);
+    expect(along[1]! - along[0]!).toBeCloseTo(SWITCH_PITCH_MM, 6);
+    expect(along[2]! - along[1]!).toBeCloseTo(SWITCH_PITCH_MM, 6);
+    expect(along[2]! - along[0]!).toBeCloseTo(5.0, 6);
+
+    // And each terminal is its own 0,5 wide, not the tape's width.
+    for (const l of sh.leads) expect(l.width).toBeCloseTo(0.5, 6);
   });
 
   it("takes a switch and a resistor on the same circuit", () => {
