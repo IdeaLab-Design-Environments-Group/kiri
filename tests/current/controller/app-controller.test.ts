@@ -6,6 +6,7 @@ import type { FoldFile, LoadedModel } from "../../../src/model/fold-file.js";
 import { PatternGrid, presetWaterbomb } from "../../../src/model/pattern-grid.js";
 import { readFileSync } from "node:fs";
 import { flatFaces, gapGraph, ledOf } from "../../../src/model/electronics.js";
+import { TILE_INSET_FRAC } from "../../../src/model/tile-subdiv.js";
 
 class ConvertPanelMock {
   factsCalls: [string, string][][] = [];
@@ -163,6 +164,7 @@ class ElectronicsModalMock {
   editHandler: ((circuit: unknown) => void) | null = null;
   enabledCalls: boolean[] = [];
   patternCalls: unknown[] = [];
+  gapCalls: number[] = [];
   previewCalls: unknown[] = [];
 
   onEdit(handler: (circuit: unknown) => void): void {
@@ -173,6 +175,9 @@ class ElectronicsModalMock {
   }
   setPattern(fold: unknown): void {
     this.patternCalls.push(fold);
+  }
+  setTileGap(gap: number): void {
+    this.gapCalls.push(gap);
   }
   setPreview(routed: unknown): void {
     this.previewCalls.push(routed);
@@ -482,5 +487,35 @@ describe("controller/app-controller", () => {
       expect(m.tris.length % 3).toBe(0); // triangles, in threes
       expect(m.tris.length).toBeGreaterThan(0);
     }
+  });
+
+  it("drives the Electronics tool's gap from the sim's Gap slider", () => {
+    // One gap in the build: the tiles the Electronics tool lays components on are the tiles that get
+    // printed, so moving the sim's slider has to move them too -- not just the 3D render and the STL.
+    const { store, sim, electronics } = setup();
+    store.update({ model: { kind: "fold", name: "p.fkld", object: makeFold() } });
+
+    expect(electronics.gapCalls.at(-1)).toBe(TILE_INSET_FRAC); // the shared default, before any drag
+
+    sim.gapListener?.(0.3);
+    expect(store.getState().simTileGap).toBe(0.3);
+    expect(electronics.gapCalls.at(-1)).toBe(0.3);
+  });
+
+  it("routes the copper on the model at the sim's gap, not the default", () => {
+    // The legs land on the pinched tile pads, and those move with the gap. Routing at the default while the
+    // tiles are drawn at 45% would put the copper where the tile is not.
+    const { controller, store, sim } = setup();
+    const fold = JSON.parse(
+      readFileSync(new URL("../../../public/examples/house.fkld", import.meta.url).pathname, "utf8"),
+    );
+    store.update({ model: { kind: "fold", name: "house.fkld", object: fold } });
+    const faces = flatFaces(fold);
+    const gaps = gapGraph(fold, faces).gaps;
+    controller.updateCircuit({ leds: [ledOf(gaps[0]!.faceA, gaps[0]!.faceB)], battery: { face: 0 } });
+
+    const atDefault = JSON.stringify(sim.traces);
+    sim.gapListener?.(0.45); // widest gap: the tiles shrink hard, so the pads must move
+    expect(JSON.stringify(sim.traces)).not.toBe(atDefault);
   });
 });

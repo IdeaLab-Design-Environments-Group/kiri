@@ -53,6 +53,38 @@ describe("view/electronics-modal", () => {
     delete (globalThis as any).window;
   });
 
+  it("redraws the tiles and the leg pads when the sim's Gap slider moves", () => {
+    // The gray tiles here ARE the printed tiles, and the diamonds between them are the gaps an LED
+    // bridges. Leaving them at the default while the sim shows 40% would have the tool laying parts on
+    // a build that no longer exists.
+    const { modal } = openOn(grid2x2());
+    modal.selectTool("led");
+    tapFlat(modal, { x: 1, y: 0.5 }); // the hinge between faces 0 and 1
+    const placed = modal.circuit.leds.length;
+    expect(placed).toBe(1);
+
+    const narrowTiles = modal.tiles.map((t: any) => t.ring.map((p: any) => [p.x, p.y]));
+    const narrowLegs = modal.gaps.map((g: any) => [g.legA.x, g.legA.y]);
+    const before = modal.svg.innerHTML;
+
+    modal.setTileGap(0.4); // the sim slider at 40%
+
+    expect(modal.tiles.map((t: any) => t.ring.map((p: any) => [p.x, p.y]))).not.toEqual(narrowTiles);
+    expect(modal.gaps.map((g: any) => [g.legA.x, g.legA.y])).not.toEqual(narrowLegs);
+    expect(modal.svg.innerHTML).not.toBe(before); // and it is on screen, not just in the fields
+    // The LED is stored as the pair of faces it straddles, so a wider gap moves it -- it does not lose it.
+    expect(modal.circuit.leds).toHaveLength(placed);
+  });
+
+  it("ignores a gap change that is not a change", () => {
+    const { modal, edits } = openOn(grid2x2());
+    const before = modal.svg.innerHTML;
+    const n = edits.length;
+    modal.setTileGap(modal.tileGap);
+    expect(modal.svg.innerHTML).toBe(before);
+    expect(edits).toHaveLength(n); // no edit emitted: the circuit never changed
+  });
+
   it("draws a placed battery immediately, without the controller pushing anything back", () => {
     const { modal, edits } = openOn(grid2x2());
     const before = modal.svg.innerHTML;

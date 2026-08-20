@@ -45,6 +45,7 @@ import {
   batteryTerminals,
   planRoutes,
 } from "../model/electronics-routing.js";
+import { TILE_INSET_FRAC } from "../model/tile-subdiv.js";
 import type { FoldFile } from "../model/fold-file.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -75,6 +76,10 @@ export class ElectronicsModal {
   /** The sheet a scale-less pattern is cut at, from the export menu's print size. Held here because both
    *  the routing and every dimension drawn are derived from it. */
   private sheetMm: number | undefined;
+  /** Inter-tile gap (shrink-toward-centroid fraction), driven by the sim's Gap slider. The tiles drawn
+   *  here and the gaps an LED bridges are the same geometry the printed build is cut at, so this has to
+   *  track that slider or the placement surface disagrees with what gets printed. */
+  private tileGap = TILE_INSET_FRAC;
   /** Index into `circuit.leds` of the LED under the cursor's last tap, or -1. */
   private selected = -1;
   private fold: FoldFile | null = null;
@@ -224,15 +229,40 @@ export class ElectronicsModal {
   setPattern(fold: FoldFile | null): void {
     if (fold === this.fold) return;
     this.fold = fold;
-    this.faces = fold ? flatFaces(fold) : [];
-    this.tiles = fold ? tilePolys(fold, this.faces) : [];
-    this.gaps = fold ? gapGraph(fold, this.faces).gaps : [];
-    this.points = fold ? flatPoints(fold) : [];
+    this.rebuildGeometry();
     this.circuit = { leds: [], battery: null };
     this.computeBounds();
     this.fitView();
     this.syncButtons();
     if (!this.overlay.hidden) this.render();
+  }
+
+  /**
+   * Set the inter-tile gap, from the sim's Gap slider (via the store).
+   *
+   * The gray tiles and the diamonds between them are derived from it, and those diamonds are the gaps an
+   * LED bridges — so a wider gap moves every leg pad and every tile edge the router keeps clear of. Held
+   * in lock-step with the sim and the STL export: one gap, one build.
+   *
+   * Components survive the change: an LED is stored as the pair of faces it straddles, not as a point, so
+   * it stays on its gap and simply re-lands on the new leg pads.
+   */
+  setTileGap(gap: number): void {
+    if (gap === this.tileGap) return;
+    this.tileGap = gap;
+    this.rebuildGeometry();
+    // Redraw, don't `emit()`: the circuit itself did not change, and this is called from the controller's
+    // own render pass -- emitting would re-enter the store mid-render for a component list that is identical.
+    if (!this.overlay.hidden) this.render();
+  }
+
+  /** Derive the drawn/clickable geometry from the current pattern and gap. */
+  private rebuildGeometry(): void {
+    const fold = this.fold;
+    this.faces = fold ? flatFaces(fold) : [];
+    this.tiles = fold ? tilePolys(fold, this.faces, this.tileGap) : [];
+    this.gaps = fold ? gapGraph(fold, this.faces, this.tileGap).gaps : [];
+    this.points = fold ? flatPoints(fold) : [];
   }
 
   /** Set the size the pattern is printed and cut at. Re-plans: the tape is the same 3.25mm of copper
