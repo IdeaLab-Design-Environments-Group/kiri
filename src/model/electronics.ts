@@ -50,8 +50,10 @@ export interface Vec2 {
  */export interface Circuit {
   leds: Led[];
   battery: Battery | null;
-  /** Series resistors on the PWR net. Optional so circuits saved before they existed still load. */
+  /** Series resistors. Optional so circuits saved before they existed still load. */
   resistors?: Resistor[];
+  /** Switches — a 1x03 header, likewise in series on a rail. */
+  switches?: Switch[];
 }
 
 /**
@@ -70,7 +72,22 @@ export interface Resistor {
   y: number;
 }
 
-export const EMPTY_CIRCUIT: Circuit = { leds: [], battery: null, resistors: [] };
+/**
+ * A switch, in series on a rail: a 1x03 header at 0.1in pitch.
+ *
+ * Three pins in a row. The copper is broken between the second and the third, so two pins land on one side of
+ * the break and one on the other — the break is a single pitch, and a jumper across the pair that spans it
+ * closes the circuit.
+ *
+ * Stored as a point, for the same reason a resistor is: the routes underneath are re-planned whenever the
+ * circuit changes, so an index along a run would name different copper afterwards.
+ */
+export interface Switch {
+  x: number;
+  y: number;
+}
+
+export const EMPTY_CIRCUIT: Circuit = { leds: [], battery: null, resistors: [], switches: [] };
 /** A single flat face: its polygon (mm) and centroid (mm). */export interface FlatFace {
   /** Vertex indices into `vertices_coords`. */
   verts: number[];

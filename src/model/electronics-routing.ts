@@ -66,16 +66,21 @@ export interface RoutedCircuit {
   /** Indices of LEDs that could not be reached (no gap, or no battery). */
   unreachable: number[];
   /** Where each resistor ended up: the two ends of the break its leads bridge. */
-  resistors: ResistorSpan[];
+  resistors: PartSpan[];
+  /** Likewise each switch: the break between its second pin and its third. */
+  switches: PartSpan[];
 }
 
-/** The gap a resistor bridges — `a` and `b` are the cut ends of the PWR run, where its leads land. */
-export interface ResistorSpan {
+/** The gap a part bridges — `a` and `b` are the cut ends of the run, where its contacts land. */
+export interface PartSpan {
   a: Vec2;
   b: Vec2;
 }
 
-export const EMPTY_ROUTE: RoutedCircuit = { traces: [], pads: [], unreachable: [], resistors: [] };
+/** @deprecated the same thing; kept so existing callers read naturally. */
+export type ResistorSpan = PartSpan;
+
+export const EMPTY_ROUTE: RoutedCircuit = { traces: [], pads: [], unreachable: [], resistors: [], switches: [] };
 
 /** How much dearer it is to travel through a hinge that has an LED on it than an empty one. Large enough to
  *  route around whenever there is any alternative, finite so that a dead-end tile stays reachable. */
@@ -389,7 +394,7 @@ export function planRoutes(
   const battery: Battery | null = circuit.battery;
   if (!battery || !faces[battery.face]) {
     circuit.leds.forEach((_, i) => unreachable.push(i));
-    return { traces: [], pads, unreachable, resistors: [] };
+    return { traces: [], pads, unreachable, resistors: [], switches: [] };
   }
 
   const diag = patternDiag(faces);
@@ -414,7 +419,7 @@ export function planRoutes(
       legFaces: [gap.faceA, gap.faceB],
     });
   });
-  if (!targets.length) return { traces: [], pads, unreachable, resistors: [] };
+  if (!targets.length) return { traces: [], pads, unreachable, resistors: [], switches: [] };
 
   // Drop LEDs the battery cannot reach across the material. Their tiles sit on a separate island of the
   // pattern, and the only way to "reach" them would be a straight line through empty space -- which is what
@@ -430,7 +435,7 @@ export function planRoutes(
     targets.splice(i, 1);
   }
   unreachable.sort((a, b) => a - b);
-  if (!targets.length) return { traces: [], pads, unreachable, resistors: [] };
+  if (!targets.length) return { traces: [], pads, unreachable, resistors: [], switches: [] };
 
   // The tour: the order the bus passes the LEDs. Nearest-neighbour from the battery, then 2-opt.
   // 2-opt is what earns the no-crossing guarantee: a self-crossing tour is always strictly longer than
@@ -958,8 +963,15 @@ export function planRoutes(
     pads[t.slot] = flip[i] ? { pwr: l1, gnd: l0 } : { pwr: l0, gnd: l1 };
   }
 
-  const broken = breakForResistors(best, circuit.resistors ?? [], tapeW);
-  return { traces: broken.traces, pads, unreachable, resistors: broken.placed };
+  const withRes = breakForResistors(best, circuit.resistors ?? [], tapeW);
+  const withSw = breakRuns(withRes.traces, circuit.switches ?? [], (SWITCH_PITCH_MM * tapeW) / TAPE_MM);
+  return {
+    traces: withSw.traces,
+    pads,
+    unreachable,
+    resistors: withRes.placed,
+    switches: withSw.placed,
+  };
 }
 
 /**
@@ -969,6 +981,14 @@ export function planRoutes(
  * either side, which is what holds it and what carries the current.
  */
 export const RESISTOR_MM = 6.5;
+
+/**
+ * A 1x03 header's pin pitch, in millimetres — 0.1in, the standard the part number implies.
+ *
+ * The break is one pitch wide: it falls between the second pin and the third, so two pins sit on one side of
+ * it and one on the other.
+ */
+export const SWITCH_PITCH_MM = 2.54;
 
 /**
  * Break the run each resistor sits on.
@@ -987,12 +1007,27 @@ export function breakForResistors(
   resistors: { x: number; y: number }[],
   tapeW: number,
 ): { traces: Trace2D[]; placed: ResistorSpan[] } {
-  const placed: ResistorSpan[] = [];
-  if (!resistors.length) return { traces, placed };
   // The body in the pattern's own units: the tape is TAPE_MM wide and `tapeW` units, so this follows it.
-  const body = (RESISTOR_MM * tapeW) / TAPE_MM;
+  return breakRuns(traces, resistors, (RESISTOR_MM * tapeW) / TAPE_MM);
+}
+
+/**
+ * Break each run where a part sits, leaving `gap` of bare pattern for it to bridge.
+ *
+ * Shared by resistors and switches, which differ only in how much copper they take out: a resistor's body,
+ * or one pin pitch of a header. Each half comes back as an ordinary run, so nothing downstream needs to know
+ * either exists.
+ */
+export function breakRuns(
+  traces: Trace2D[],
+  parts: { x: number; y: number }[],
+  gap: number,
+): { traces: Trace2D[]; placed: PartSpan[] } {
+  const placed: PartSpan[] = [];
+  if (!parts.length) return { traces, placed };
+  const body = gap;
   let out = traces;
-  for (const r of resistors) {
+  for (const r of parts) {
     let bestRun = -1, bestSeg = -1, bestT = 0, bestD = Infinity;
     out.forEach((t, ti) => {
       for (let i = 1; i < t.pts.length; i++) {

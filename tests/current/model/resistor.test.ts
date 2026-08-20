@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { flatFaces, gapGraph, ledOf, type Circuit } from "../../../src/model/electronics.js";
 import {
   RESISTOR_MM,
+  SWITCH_PITCH_MM,
   planRoutes,
   tapeWidthFor,
   totalLength,
@@ -11,6 +12,7 @@ import {
   buildCopperCarrierExport,
   buildCopperSvgExport,
   resistorShape,
+  switchShape,
 } from "../../../src/model/copper-svg-export.js";
 import { printScale } from "../../../src/model/print-scale.js";
 
@@ -164,5 +166,48 @@ describe("model/resistor", () => {
     const same = planRoutes(faces, gaps, { ...base, resistors: [] });
     expect(same.traces).toEqual(plain.traces);
     expect(same.resistors).toEqual([]);
+  });
+});
+
+describe("model/switch", () => {
+  it("breaks the rail by one pin pitch, and puts two pins one side and one the other", () => {
+    // A 1x03 header at 0.1in centres. The break falls between the second pin and the third, so pins 1 and 2
+    // land on the copper behind it and pin 3 on the copper in front — which is what a header in a rail is.
+    const { fold, faces, gaps, base, plain, mid, tapeW, k } = fixture();
+    const r = planRoutes(faces, gaps, { ...base, switches: [mid] });
+
+    expect(r.switches).toHaveLength(1);
+    const removed = (totalLength(plain.traces) - totalLength(r.traces)) * k;
+    expect(removed).toBeCloseTo(SWITCH_PITCH_MM, 1);
+
+    const { a, b } = r.switches[0]!;
+    const sh = switchShape(a, b, tapeW)!;
+    expect(sh.leads).toHaveLength(3);
+
+    // Two contacts behind the break, one in front — measured along the run.
+    const ux = (b.x - a.x) / Math.hypot(b.x - a.x, b.y - a.y);
+    const uy = (b.y - a.y) / Math.hypot(b.x - a.x, b.y - a.y);
+    const along = (p: { x: number; y: number }): number => (p.x - a.x) * ux + (p.y - a.y) * uy;
+    const sides = sh.leads.map((l) => along({ x: (l.a.x + l.b.x) / 2, y: (l.a.y + l.b.y) / 2 }));
+    expect(sides.filter((d) => d < 0)).toHaveLength(2);
+    expect(sides.filter((d) => d > 0)).toHaveLength(1);
+
+    // And it is drawn on the file, not cut into it.
+    const out = buildCopperSvgExport(
+      fold, r.traces, tapeW, "k", r.pads, undefined, undefined, r.resistors, undefined, r.switches,
+    );
+    expect(out.svg).toContain('id="parts"');
+  });
+
+  it("takes a switch and a resistor on the same circuit", () => {
+    const { faces, gaps, base, plain, mid, k } = fixture(3);
+    const pwr = plain.traces.filter((t) => t.net === "pwr");
+    const other = pwr[pwr.length - 1]!;
+    const at = other.pts[Math.floor(other.pts.length / 2)]!;
+    const r = planRoutes(faces, gaps, { ...base, resistors: [mid], switches: [at] });
+    expect(r.resistors).toHaveLength(1);
+    expect(r.switches).toHaveLength(1);
+    const removed = (totalLength(plain.traces) - totalLength(r.traces)) * k;
+    expect(removed).toBeCloseTo(RESISTOR_MM + SWITCH_PITCH_MM, 1);
   });
 });

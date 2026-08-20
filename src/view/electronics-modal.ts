@@ -34,6 +34,7 @@ import {
   mirrorPoint,
   resistorShape,
   stripOutline,
+  switchShape,
 } from "../model/copper-svg-export.js";
 import { printScale } from "../model/print-scale.js";
 import {
@@ -49,7 +50,7 @@ import type { FoldFile } from "../model/fold-file.js";
 const SVG_NS = "http://www.w3.org/2000/svg";
 const MARGIN = 8; // mm — must match the SVG export so preview ↔ export register
 
-type Tool = "led" | "battery" | "resistor";
+type Tool = "led" | "battery" | "resistor" | "switch";
 
 /** How the copper is shown, matching the two ways it can be cut.
  *
@@ -114,6 +115,7 @@ export class ElectronicsModal {
               <button type="button" class="el-tool" data-tool="led" title="Add an LED — click a gap between two tiles">LED</button>
               <button type="button" class="el-tool" data-tool="battery" title="Place the battery — click a tile">Battery</button>
               <button type="button" class="el-tool" data-tool="resistor" title="Add a series resistor — click on either rail. The copper is broken there, so the tape does not short the resistor out">Resistor</button>
+              <button type="button" class="el-tool" data-tool="switch" title="Add a 1x03 switch — click either rail. The copper is broken by one pin pitch: two pins land one side of it, one the other">Switch</button>
             </span>
             <span class="el-group">
               <button type="button" class="el-clear" title="Remove all LEDs, the battery and routes">Clear</button>
@@ -146,6 +148,7 @@ export class ElectronicsModal {
               <span class="el-key el-key-gnd">▬ GND</span>
               <span class="el-key el-key-batt">▮ Battery</span>
               <span class="el-key el-key-res">▬ Resistor</span>
+              <span class="el-key el-key-res">▤ Switch</span>
             </p>
             <span class="sim-status el-status"></span>
           </div>
@@ -297,17 +300,18 @@ export class ElectronicsModal {
   private onCanvasClick(e: MouseEvent): void {
     const flat = this.clientToFlat(e);
     if (!flat) return;
-    if (this.tool === "resistor") {
+    if (this.tool === "resistor" || this.tool === "switch") {
       // The click is stored as a point and snapped to the nearest run when the plan is built — the routes
       // move whenever the circuit does, so an index along one would name different copper afterwards.
       const near = this.nearestOnRail(flat);
       if (!near || near.dist > this.pickRadius()) return;
-      const existing = this.circuit.resistors ?? [];
+      const key = this.tool === "switch" ? "switches" : "resistors";
+      const existing = (this.tool === "switch" ? this.circuit.switches : this.circuit.resistors) ?? [];
       // Clicking an existing one takes it off again, as clicking the battery's own tile does.
       const hit = existing.findIndex((r) => Math.hypot(r.x - flat.x, r.y - flat.y) <= this.pickRadius() / 2);
       this.circuit = {
         ...this.circuit,
-        resistors: hit >= 0
+        [key]: hit >= 0
           ? existing.filter((_, i) => i !== hit)
           : [...existing, { x: near.point.x, y: near.point.y }],
       };
@@ -376,7 +380,7 @@ export class ElectronicsModal {
       return;
     }
     const out = buildCopperSvgExport(
-      this.fold, this.routed.traces, this.tapeW(), "kiri", this.routed.pads, this.mirror, this.sheetMm, this.routed.resistors, this.partSize(),
+      this.fold, this.routed.traces, this.tapeW(), "kiri", this.routed.pads, this.mirror, this.sheetMm, this.routed.resistors, this.partSize(), this.routed.switches,
     );
     this.download(out.filename, out.svg);
     const { pwr, gnd } = out.counts;
@@ -665,6 +669,19 @@ export class ElectronicsModal {
         `<rect x="${fmt(body.x)}" y="${fmt(body.y)}" width="${fmt(body.w)}" height="${fmt(body.h)}" rx="${fmt(body.h * 0.18)}" class="el-res-body" transform="rotate(${fmt(body.angle)} ${fmt(body.cx)} ${fmt(body.cy)})" />`,
       );
     }
+    for (const w of this.routed.switches) {
+      const sh = switchShape(this.tp(w.a), this.tp(w.b), this.tapeW() * this.scale(), this.partSize());
+      if (!sh) continue;
+      for (const l of sh.leads) {
+        parts.push(
+          `<line x1="${fmt(l.a.x)}" y1="${fmt(l.a.y)}" x2="${fmt(l.b.x)}" y2="${fmt(l.b.y)}" class="el-res-lead" stroke-width="${fmt(l.width)}" />`,
+        );
+      }
+      const bd = sh.body;
+      parts.push(
+        `<rect x="${fmt(bd.x)}" y="${fmt(bd.y)}" width="${fmt(bd.w)}" height="${fmt(bd.h)}" rx="${fmt(bd.h * 0.18)}" class="el-res-body" transform="rotate(${fmt(bd.angle)} ${fmt(bd.cx)} ${fmt(bd.cy)})" />`,
+      );
+    }
     // Each LED is two distinct pads straddling its hinge — a PWR (+) pad toward face `a` and a GND (−)
     // pad toward face `b` — bridged by the LED chip. An LED whose gap no longer exists has nowhere to
     // sit and is drawn as an orphan.
@@ -740,7 +757,7 @@ export class ElectronicsModal {
     if (!this.fold) return [];
     const out = buildCopperCarrierExport(
       this.fold, this.routed.traces, this.tapeW(), "kiri", this.keepOff(), this.mirror, this.sheetMm,
-      this.routed.pads, this.routed.resistors, this.partSize(),
+      this.routed.pads, this.routed.resistors, this.partSize(), this.routed.switches,
     );
     const ring = (r: { x0: number; y0: number; x1: number; y1: number }): string => {
       const c = [
@@ -785,7 +802,7 @@ export class ElectronicsModal {
     }
     const out = buildCopperCarrierExport(
       this.fold, this.routed.traces, this.tapeW(), "kiri", this.keepOff(), this.mirror, this.sheetMm,
-      this.routed.pads, this.routed.resistors, this.partSize(),
+      this.routed.pads, this.routed.resistors, this.partSize(), this.routed.switches,
     );
     this.download(out.filename, out.svg);
     const w = Math.round(out.widthMm * 100) / 100;
@@ -879,6 +896,7 @@ function cloneCircuit(c: Circuit): Circuit {
     // Likewise the resistors: a clone that dropped them would draw one on the canvas and lose it the moment
     // the circuit reached the store — gone from the folded model, and from the next render back.
     resistors: (c.resistors ?? []).map((r) => ({ x: r.x, y: r.y })),
+    switches: (c.switches ?? []).map((r) => ({ x: r.x, y: r.y })),
   };
 }
 

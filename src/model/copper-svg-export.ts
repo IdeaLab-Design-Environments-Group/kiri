@@ -170,6 +170,8 @@ export function buildCopperSvgExport(
   resistors: { a: Vec2; b: Vec2 }[] = [],
   /** How wide across to draw a part, so a resistor matches an LED. Defaults to the tape's width. */
   partMm?: number,
+  /** Where each switch bridges a break — drawn, never cut. */
+  switches: { a: Vec2; b: Vec2 }[] = [],
 ): CopperSvgExport {
   const { w, h, T, scale } = sheetFrame(fold, mirror, sheetMm);
   // What will actually be cut, in millimetres. The outlines are built in flat units and mapped through T,
@@ -189,7 +191,10 @@ export function buildCopperSvgExport(
 
   const pwr = layer("pwr");
   const gnd = layer("gnd");
-  const parts = resistors.flatMap((r) => resistorMarks(r, tapeMm, T, partMm));
+  const parts = [
+    ...resistors.flatMap((r) => resistorMarks(r, tapeMm, T, partMm)),
+    ...switches.flatMap((r) => switchMarks(r, tapeMm, T, partMm)),
+  ];
   const body =
     `  <g id="pwr" fill="${PWR_FILL}" stroke="none" fill-rule="nonzero">\n    ${pwr.body}\n  </g>\n` +
     `  <g id="gnd" fill="${GND_FILL}" stroke="none" fill-rule="nonzero">\n    ${gnd.body}\n  </g>` +
@@ -502,6 +507,7 @@ function annotationLayer(
   traces: Trace2D[],
   pads: { pwr: Vec2; gnd: Vec2 }[],
   resistors: { a: Vec2; b: Vec2 }[],
+  switches: { a: Vec2; b: Vec2 }[],
   tapeW: number,
   scale: number,
   T: (p: Vec2) => Vec2,
@@ -522,6 +528,7 @@ function annotationLayer(
   // The resistors, over the breaks they bridge. Drawn after the copper so a part reads as sitting on top of
   // the tape, which is how it goes down.
   for (const r of resistors) parts.push(...resistorMarks(r, tapeW * scale, T, partMm));
+  for (const r of switches) parts.push(...switchMarks(r, tapeW * scale, T, partMm));
 
   if (!parts.length) return "";
   return `  <g id="annotation" stroke-linejoin="round">\n    ${parts.join("\n    ")}\n  </g>\n`;
@@ -586,6 +593,66 @@ export function resistorShape(
       angle: (Math.atan2(dy, dx) * 180) / Math.PI, cx: mid.x, cy: mid.y,
     },
   };
+}
+
+/**
+ * Where a 1x03 switch's pins and body go, given the break between its second pin and its third.
+ *
+ * Three pins on 0.1in centres. The break is one pitch, so pin 2 sits on the copper at one end of it and pin 3
+ * on the copper at the other — and pin 1 sits a further pitch back, beside pin 2. Two on one side, one on the
+ * other, which is what a header in a rail looks like.
+ */
+export function switchShape(a: Vec2, b: Vec2, tape: number, cross = tape): ResistorShape | null {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const L = Math.hypot(dx, dy);
+  if (L < 1e-9) return null;
+  const ux = dx / L, uy = dy / L;
+  const px = -uy, py = ux;
+  const half = cross * 0.5;
+  const foot = cross * 0.45;             // how far along the run each pin's contact reaches
+  // Pin 1 is a pitch back from pin 2, on the same side of the break. `L` is that pitch.
+  const pin = (p: Vec2, along: number): { a: Vec2; b: Vec2; width: number } => {
+    const c = { x: p.x + ux * along, y: p.y + uy * along };
+    return {
+      a: { x: c.x - px * half, y: c.y - py * half },
+      b: { x: c.x + px * half, y: c.y + py * half },
+      width: foot,
+    };
+  };
+  const mid = { x: (a.x + b.x) / 2 - ux * (L / 2), y: (a.y + b.y) / 2 - uy * (L / 2) };
+  const bodyL = 3 * L;                   // three positions at one pitch each
+  return {
+    // Pin 1 and pin 2 behind the break, pin 3 in front of it.
+    leads: [pin(a, -L - foot / 2), pin(a, -foot / 2), pin(b, foot / 2)],
+    body: {
+      x: mid.x - bodyL / 2, y: mid.y - cross * 0.85 / 2, w: bodyL, h: cross * 0.85,
+      angle: (Math.atan2(dy, dx) * 180) / Math.PI, cx: mid.x, cy: mid.y,
+    },
+  };
+}
+
+function partMarks(sh: ResistorShape, bodyFill: string): string[] {
+  const { leads, body } = sh;
+  return [
+    ...leads.map(
+      (l) =>
+        `<line x1="${fmt(l.a.x)}" y1="${fmt(l.a.y)}" x2="${fmt(l.b.x)}" y2="${fmt(l.b.y)}" ` +
+        `stroke="${RES_LEAD}" stroke-width="${fmt(l.width)}" stroke-linecap="butt" />`,
+    ),
+    `<rect x="${fmt(body.x)}" y="${fmt(body.y)}" width="${fmt(body.w)}" ` +
+      `height="${fmt(body.h)}" rx="${fmt(body.h * 0.18)}" fill="${bodyFill}" ` +
+      `transform="rotate(${fmt(body.angle)} ${fmt(body.cx)} ${fmt(body.cy)})" />`,
+  ];
+}
+
+function switchMarks(
+  r: { a: Vec2; b: Vec2 },
+  tape: number,
+  T: (p: Vec2) => Vec2,
+  cross?: number,
+): string[] {
+  const sh = switchShape(T(r.a), T(r.b), tape, cross);
+  return sh ? partMarks(sh, RES_BODY) : [];
 }
 
 function resistorMarks(
@@ -693,6 +760,8 @@ export function buildCopperCarrierExport(
   resistors: { a: Vec2; b: Vec2 }[] = [],
   /** How wide across to draw a part, so a resistor matches an LED. Defaults to the tape's width. */
   partMm?: number,
+  /** Where each switch bridges a break — drawn, never cut. */
+  switches: { a: Vec2; b: Vec2 }[] = [],
 ): CopperCarrierExport {
   const { w, h, window: win, T, scale } = sheetFrame(fold, mirror, sheetMm);
   // Everything below works in sheet millimetres, so the tape width has to be converted out of the pattern's
@@ -793,7 +862,7 @@ export function buildCopperCarrierExport(
     drawn.map((d) => `<path d="${d}" />`).join("\n    ") +
     `\n  </g>`;
   // Underneath, so the black cut lines stay visible on top of the copper they cut around.
-  const body = annotationLayer(traces, pads, resistors, tapeW, scale, T, partMm) + cutLayer;
+  const body = annotationLayer(traces, pads, resistors, switches, tapeW, scale, T, partMm) + cutLayer;
 
   return {
     filename: `${baseName}-copper-carrier${mirrorSuffix(mirror)}.svg`,
