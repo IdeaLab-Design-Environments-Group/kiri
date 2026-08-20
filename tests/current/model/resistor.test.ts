@@ -125,6 +125,10 @@ describe("model/resistor", () => {
     const { a, b } = r.resistors[0]!;
     const sh = resistorShape(a, b, tapeW)!;
     expect(sh.leads).toHaveLength(2);
+    // And the body reaches both of them: drawn shorter than the break, the part came out as three
+    // disconnected pieces with bare pattern showing between the black and each grey contact.
+    const span = Math.hypot(b.x - a.x, b.y - a.y);
+    expect(sh.body.w).toBeGreaterThanOrEqual(span);
     const run = { x: b.x - a.x, y: b.y - a.y };
     const runLen = Math.hypot(run.x, run.y);
     for (const l of sh.leads) {

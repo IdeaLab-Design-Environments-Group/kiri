@@ -555,7 +555,9 @@ export function resistorShape(a: Vec2, b: Vec2, tape: number): ResistorShape | n
   const over = tape * 0.5;               // how far each contact reaches back onto the tape
   const half = tape * 0.5;               // and how far across it — the tape's full width
   const bodyW = tape * 0.75;             // a quarter-watt body is about 2.4mm across 3.25mm tape
-  const bodyL = L * 0.8;
+  // The body spans the whole break and laps a little onto each contact. At four fifths of the gap it fell
+  // short of both, leaving the part drawn as three pieces with bare pattern showing between them.
+  const bodyL = L + over * 0.5;
   const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
   // A contact at each cut end, lying across the tape rather than along it: that is the shape of the join,
   // a band of lead pressed down over the full width of the copper, not a line running down the middle.
