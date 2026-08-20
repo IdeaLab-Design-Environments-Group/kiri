@@ -376,7 +376,7 @@ export class ElectronicsModal {
       return;
     }
     const out = buildCopperSvgExport(
-      this.fold, this.routed.traces, this.tapeW(), "kiri", this.routed.pads, this.mirror, this.sheetMm, this.routed.resistors,
+      this.fold, this.routed.traces, this.tapeW(), "kiri", this.routed.pads, this.mirror, this.sheetMm, this.routed.resistors, this.partSize(),
     );
     this.download(out.filename, out.svg);
     const { pwr, gnd } = out.counts;
@@ -653,7 +653,7 @@ export class ElectronicsModal {
     // the bare pattern between them, where there is deliberately no copper at all.
     for (const r of this.routed.resistors) {
       // The same shape the cut files draw, so the canvas cannot drift from them.
-      const sh = resistorShape(this.tp(r.a), this.tp(r.b), this.tapeW() * this.scale());
+      const sh = resistorShape(this.tp(r.a), this.tp(r.b), this.tapeW() * this.scale(), this.partSize());
       if (!sh) continue;
       const { leads, body } = sh;
       for (const l of leads) {
@@ -740,7 +740,7 @@ export class ElectronicsModal {
     if (!this.fold) return [];
     const out = buildCopperCarrierExport(
       this.fold, this.routed.traces, this.tapeW(), "kiri", this.keepOff(), this.mirror, this.sheetMm,
-      this.routed.pads, this.routed.resistors,
+      this.routed.pads, this.routed.resistors, this.partSize(),
     );
     const ring = (r: { x0: number; y0: number; x1: number; y1: number }): string => {
       const c = [
@@ -785,7 +785,7 @@ export class ElectronicsModal {
     }
     const out = buildCopperCarrierExport(
       this.fold, this.routed.traces, this.tapeW(), "kiri", this.keepOff(), this.mirror, this.sheetMm,
-      this.routed.pads, this.routed.resistors,
+      this.routed.pads, this.routed.resistors, this.partSize(),
     );
     this.download(out.filename, out.svg);
     const w = Math.round(out.widthMm * 100) / 100;
@@ -822,6 +822,12 @@ export class ElectronicsModal {
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
+  }
+
+  /** How wide a part is drawn across its run: an LED's two pads span this, so a resistor beside one comes
+   *  out the same size rather than to its own scale. */
+  private partSize(): number {
+    return this.markerR() * 0.62 * 2;
   }
 
   /** Marker radius scaled to the pattern so it reads at any model size. */

@@ -168,6 +168,8 @@ export function buildCopperSvgExport(
   sheetMm?: number,
   /** Where each resistor bridges a break in the PWR run. Drawn on the parts layer, never cut. */
   resistors: { a: Vec2; b: Vec2 }[] = [],
+  /** How wide across to draw a part, so a resistor matches an LED. Defaults to the tape's width. */
+  partMm?: number,
 ): CopperSvgExport {
   const { w, h, T, scale } = sheetFrame(fold, mirror, sheetMm);
   // What will actually be cut, in millimetres. The outlines are built in flat units and mapped through T,
@@ -187,7 +189,7 @@ export function buildCopperSvgExport(
 
   const pwr = layer("pwr");
   const gnd = layer("gnd");
-  const parts = resistors.flatMap((r) => resistorMarks(r, tapeMm, T));
+  const parts = resistors.flatMap((r) => resistorMarks(r, tapeMm, T, partMm));
   const body =
     `  <g id="pwr" fill="${PWR_FILL}" stroke="none" fill-rule="nonzero">\n    ${pwr.body}\n  </g>\n` +
     `  <g id="gnd" fill="${GND_FILL}" stroke="none" fill-rule="nonzero">\n    ${gnd.body}\n  </g>` +
@@ -503,6 +505,7 @@ function annotationLayer(
   tapeW: number,
   scale: number,
   T: (p: Vec2) => Vec2,
+  partMm?: number,
 ): string {
   const parts: string[] = [];
 
@@ -518,7 +521,7 @@ function annotationLayer(
 
   // The resistors, over the breaks they bridge. Drawn after the copper so a part reads as sitting on top of
   // the tape, which is how it goes down.
-  for (const r of resistors) parts.push(...resistorMarks(r, tapeW * scale, T));
+  for (const r of resistors) parts.push(...resistorMarks(r, tapeW * scale, T, partMm));
 
   if (!parts.length) return "";
   return `  <g id="annotation" stroke-linejoin="round">\n    ${parts.join("\n    ")}\n  </g>\n`;
@@ -546,15 +549,22 @@ export interface ResistorShape {
  * part down and carries the current. Drawn only to the edge of the gap they would show a part touching
  * nothing.
  */
-export function resistorShape(a: Vec2, b: Vec2, tape: number): ResistorShape | null {
+export function resistorShape(
+  a: Vec2,
+  b: Vec2,
+  tape: number,
+  /** The part's width across the run. Defaults to the tape's, but the canvas passes the size it draws an
+   *  LED at, so the two parts come out the same size beside each other. */
+  cross = tape,
+): ResistorShape | null {
   const dx = b.x - a.x, dy = b.y - a.y;
   const L = Math.hypot(dx, dy);
   if (L < 1e-9) return null;
   const ux = dx / L, uy = dy / L;
   const px = -uy, py = ux;               // across the run
   const over = tape * 0.5;               // how far each contact reaches back onto the tape
-  const half = tape * 0.5;               // and how far across it — the tape's full width
-  const bodyW = tape * 0.75;             // a quarter-watt body is about 2.4mm across 3.25mm tape
+  const half = cross * 0.5;              // and how far across it
+  const bodyW = cross * 0.85;            // the body, a little inside its contacts
   // The body spans the whole break and laps a little onto each contact. At four fifths of the gap it fell
   // short of both, leaving the part drawn as three pieces with bare pattern showing between them.
   const bodyL = L + over * 0.5;
@@ -578,8 +588,13 @@ export function resistorShape(a: Vec2, b: Vec2, tape: number): ResistorShape | n
   };
 }
 
-function resistorMarks(r: { a: Vec2; b: Vec2 }, tape: number, T: (p: Vec2) => Vec2): string[] {
-  const sh = resistorShape(T(r.a), T(r.b), tape);
+function resistorMarks(
+  r: { a: Vec2; b: Vec2 },
+  tape: number,
+  T: (p: Vec2) => Vec2,
+  cross?: number,
+): string[] {
+  const sh = resistorShape(T(r.a), T(r.b), tape, cross);
   if (!sh) return [];
   const { leads, body } = sh;
   const bodyL = body.w, bodyW = body.h, ang = body.angle;
@@ -676,6 +691,8 @@ export function buildCopperCarrierExport(
   pads: { pwr: Vec2; gnd: Vec2 }[] = [],
   /** Where each resistor bridges a break in the PWR run — drawn, never cut. */
   resistors: { a: Vec2; b: Vec2 }[] = [],
+  /** How wide across to draw a part, so a resistor matches an LED. Defaults to the tape's width. */
+  partMm?: number,
 ): CopperCarrierExport {
   const { w, h, window: win, T, scale } = sheetFrame(fold, mirror, sheetMm);
   // Everything below works in sheet millimetres, so the tape width has to be converted out of the pattern's
@@ -776,7 +793,7 @@ export function buildCopperCarrierExport(
     drawn.map((d) => `<path d="${d}" />`).join("\n    ") +
     `\n  </g>`;
   // Underneath, so the black cut lines stay visible on top of the copper they cut around.
-  const body = annotationLayer(traces, pads, resistors, tapeW, scale, T) + cutLayer;
+  const body = annotationLayer(traces, pads, resistors, tapeW, scale, T, partMm) + cutLayer;
 
   return {
     filename: `${baseName}-copper-carrier${mirrorSuffix(mirror)}.svg`,

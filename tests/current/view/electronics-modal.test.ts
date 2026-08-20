@@ -396,6 +396,31 @@ describe("view/electronics-modal", () => {
       expect(modal.svg.innerHTML).toContain("el-res-lead");
     });
 
+    it("is drawn the same size as an LED beside it", () => {
+      // Sized from the tape it broke, a resistor came out to its own scale and read as the bigger part.
+      // Both now span what an LED's two pads span, so they match on any pattern.
+      const { modal } = openOn(grid2x2());
+      modal.selectTool("battery");
+      tapFlat(modal, { x: 0.5, y: 0.5 });
+      modal.selectTool("led");
+      tapFlat(modal, modal.gaps[0].point);
+      const run = modal.routed.traces[0];
+      modal.selectTool("resistor");
+      tapFlat(modal, run.pts[Math.floor(run.pts.length / 2)]);
+
+      const html = modal.svg.innerHTML as string;
+      // An LED pad is a circle of radius rPad; the part spans two of them.
+      const ledPad = /<circle[^>]*r="([\d.]+)"[^>]*class="el-led-pwr/.exec(html);
+      expect(ledPad, "no LED pad drawn").toBeTruthy();
+      const across = 2 * Number(ledPad![1]);
+
+      // The resistor's contacts are drawn across the run at exactly that span.
+      const lead = /<line x1="([\d.-]+)" y1="([\d.-]+)" x2="([\d.-]+)" y2="([\d.-]+)" class="el-res-lead"/.exec(html);
+      expect(lead, "no resistor contact drawn").toBeTruthy();
+      const span = Math.hypot(Number(lead![3]) - Number(lead![1]), Number(lead![4]) - Number(lead![2]));
+      expect(span).toBeCloseTo(across, 3);
+    });
+
     it("takes one off when it is tapped again", () => {
       const { modal } = openOn(grid2x2());
       modal.selectTool("battery");
