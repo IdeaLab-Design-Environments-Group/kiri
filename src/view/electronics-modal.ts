@@ -819,6 +819,15 @@ export class ElectronicsModal {
     if (out.crossingTabs > 0) {
       msg += ` — warning: ${out.crossingTabs} tab${out.crossingTabs === 1 ? "" : "s"} cross another trace`;
     }
+    if (out.unclosedCuts > 0) {
+      // The carrier is cut as a solid shape. Where a stretch of its edge would not close into a loop it is
+      // drawn as a plain line instead: it still cuts, but that part arrives as line art rather than copper,
+      // and in software that reads shapes it will look like an outline. Worth saying, since the file opens
+      // looking almost right.
+      msg +=
+        ` — ${out.unclosedCuts} cut${out.unclosedCuts === 1 ? "" : "s"} could not be closed into a shape` +
+        ` and ${out.unclosedCuts === 1 ? "is" : "are"} drawn as ${out.unclosedCuts === 1 ? "a line" : "lines"}`;
+    }
     if (out.tooNarrow) msg += " — too narrow to cut; scale the pattern up before cutting";
     this.statusEl.textContent = msg;
   }

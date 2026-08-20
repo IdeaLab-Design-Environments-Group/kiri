@@ -156,7 +156,10 @@ describe("model/resistor", () => {
     const carrier = buildCopperCarrierExport(
       fold, r.traces, tapeW, "k", [], undefined, undefined, r.pads, r.resistors,
     );
-    const cut = carrier.svg.slice(carrier.svg.indexOf('<g id="carrier"'));
+    // The carrier group only: it is filled copper now, and the annotation that names the parts is drawn on
+    // top of it — so slicing to the end of the file would sweep the annotation in and prove nothing.
+    const from = carrier.svg.indexOf('<g id="carrier"');
+    const cut = carrier.svg.slice(from, carrier.svg.indexOf("</g>", from));
     expect(cut).not.toContain("#8b93a1");
     expect(cut).not.toContain("#111111");
   });
