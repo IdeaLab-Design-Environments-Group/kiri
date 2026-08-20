@@ -371,4 +371,46 @@ describe("view/electronics-modal", () => {
       delete (globalThis as any).Blob;
     });
   });
+
+  describe("resistors", () => {
+    it("places one on the nearest rail, and draws it straight away", () => {
+      const { modal, edits } = openOn(grid2x2());
+      modal.selectTool("battery");
+      tapFlat(modal, { x: 0.5, y: 0.5 });
+      modal.selectTool("led");
+      tapFlat(modal, modal.gaps[0].point);
+      expect(modal.routed.traces.length).toBeGreaterThan(0);
+
+      // Somewhere on a run of copper.
+      const run = modal.routed.traces[0];
+      const at = run.pts[Math.floor(run.pts.length / 2)];
+      const base = edits.length;
+      modal.selectTool("resistor");
+      tapFlat(modal, at);
+
+      const circuit = edits[edits.length - 1] as any;
+      expect(edits.length).toBeGreaterThan(base);
+      expect(circuit.resistors).toHaveLength(1);
+      // On screen, not merely in the circuit: nothing else re-renders the modal.
+      expect(modal.svg.innerHTML).toContain("el-res-body");
+      expect(modal.svg.innerHTML).toContain("el-res-lead");
+    });
+
+    it("takes one off when it is tapped again", () => {
+      const { modal } = openOn(grid2x2());
+      modal.selectTool("battery");
+      tapFlat(modal, { x: 0.5, y: 0.5 });
+      modal.selectTool("led");
+      tapFlat(modal, modal.gaps[0].point);
+      const run = modal.routed.traces[0];
+      const at = run.pts[Math.floor(run.pts.length / 2)];
+
+      modal.selectTool("resistor");
+      tapFlat(modal, at);
+      expect(modal.circuit.resistors).toHaveLength(1);
+      tapFlat(modal, modal.circuit.resistors[0]);
+      expect(modal.circuit.resistors).toHaveLength(0);
+      expect(modal.svg.innerHTML).not.toContain("el-res-body");
+    });
+  });
 });

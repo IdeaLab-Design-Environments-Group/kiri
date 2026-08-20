@@ -971,15 +971,16 @@ export function planRoutes(
 export const RESISTOR_MM = 6.5;
 
 /**
- * Break each PWR run where a resistor sits.
+ * Break the run each resistor sits on.
  *
- * A resistor's two ends are both on `+`. Copper running underneath it therefore shorts it out, and the LEDs
- * see the full battery — so the run is genuinely cut in two here rather than narrowed, which is all an LED
- * needs. Each half comes back as an ordinary run, so everything downstream — the strips file, the carrier and
- * its tabs, the canvas, the folded model — handles it without knowing resistors exist.
+ * Both of a resistor's ends land on the same rail, so copper running underneath it shorts it out and the LEDs
+ * see the full battery — the run is genuinely cut in two rather than narrowed, which is all an LED needs.
+ * Either rail will do: a resistor in series limits the current the same on the way out as on the way back.
  *
- * A resistor is snapped to the nearest point on a PWR run: it is stored as a point in the pattern, and the
- * routes underneath it are re-planned whenever the circuit changes.
+ * Each half comes back as an ordinary run, so everything downstream — the strips file, the carrier and its
+ * tabs, the canvas, the folded model — handles it without knowing resistors exist. The resistor is snapped to
+ * the nearest run: it is stored as a point in the pattern, and the routes under it are re-planned whenever
+ * the circuit changes.
  */
 export function breakForResistors(
   traces: Trace2D[],
@@ -994,7 +995,6 @@ export function breakForResistors(
   for (const r of resistors) {
     let bestRun = -1, bestSeg = -1, bestT = 0, bestD = Infinity;
     out.forEach((t, ti) => {
-      if (t.net !== "pwr") return; // both ends on +, so it can only sit on a PWR run
       for (let i = 1; i < t.pts.length; i++) {
         const a = t.pts[i - 1]!, b = t.pts[i]!;
         const l2 = dist2(a, b);

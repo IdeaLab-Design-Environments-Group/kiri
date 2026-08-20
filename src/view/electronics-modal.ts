@@ -113,7 +113,7 @@ export class ElectronicsModal {
             <span class="el-group">
               <button type="button" class="el-tool" data-tool="led" title="Add an LED — click a gap between two tiles">LED</button>
               <button type="button" class="el-tool" data-tool="battery" title="Place the battery — click a tile">Battery</button>
-              <button type="button" class="el-tool" data-tool="resistor" title="Add a series resistor — click on a PWR run. The copper is broken there, so the resistor is not shorted out by the tape">Resistor</button>
+              <button type="button" class="el-tool" data-tool="resistor" title="Add a series resistor — click on either rail. The copper is broken there, so the tape does not short the resistor out">Resistor</button>
             </span>
             <span class="el-group">
               <button type="button" class="el-clear" title="Remove all LEDs, the battery and routes">Clear</button>
@@ -298,9 +298,9 @@ export class ElectronicsModal {
     const flat = this.clientToFlat(e);
     if (!flat) return;
     if (this.tool === "resistor") {
-      // Both ends of a resistor land on +, so it can only sit on a PWR run. The click is stored as a point
-      // and snapped to the nearest one when the plan is built — the routes move whenever the circuit does.
-      const near = this.nearestOnPwr(flat);
+      // The click is stored as a point and snapped to the nearest run when the plan is built — the routes
+      // move whenever the circuit does, so an index along one would name different copper afterwards.
+      const near = this.nearestOnRail(flat);
       if (!near || near.dist > this.pickRadius()) return;
       const existing = this.circuit.resistors ?? [];
       // Clicking an existing one takes it off again, as clicking the battery's own tile does.
@@ -345,11 +345,11 @@ export class ElectronicsModal {
     this.emit();
   }
 
-  /** The nearest point on any PWR run to `p` — where a resistor would break the copper. */
-  private nearestOnPwr(p: Vec2): { point: Vec2; dist: number } | null {
+  /** The nearest point on any run to `p` — where a resistor would break the copper. Either rail: a
+   *  resistor in series limits the current the same on the way out as on the way back. */
+  private nearestOnRail(p: Vec2): { point: Vec2; dist: number } | null {
     let best: { point: Vec2; dist: number } | null = null;
     for (const t of this.routed.traces) {
-      if (t.net !== "pwr") continue;
       for (let i = 1; i < t.pts.length; i++) {
         const a = t.pts[i - 1]!, b = t.pts[i]!;
         const l2 = (b.x - a.x) ** 2 + (b.y - a.y) ** 2;
@@ -655,10 +655,12 @@ export class ElectronicsModal {
       // The same shape the cut files draw, so the canvas cannot drift from them.
       const sh = resistorShape(this.tp(r.a), this.tp(r.b), this.tapeW() * this.scale());
       if (!sh) continue;
-      const { lead, body } = sh;
-      parts.push(
-        `<line x1="${fmt(lead.a.x)}" y1="${fmt(lead.a.y)}" x2="${fmt(lead.b.x)}" y2="${fmt(lead.b.y)}" class="el-res-lead" stroke-width="${fmt(lead.width)}" />`,
-      );
+      const { leads, body } = sh;
+      for (const l of leads) {
+        parts.push(
+          `<line x1="${fmt(l.a.x)}" y1="${fmt(l.a.y)}" x2="${fmt(l.b.x)}" y2="${fmt(l.b.y)}" class="el-res-lead" stroke-width="${fmt(l.width)}" />`,
+        );
+      }
       parts.push(
         `<rect x="${fmt(body.x)}" y="${fmt(body.y)}" width="${fmt(body.w)}" height="${fmt(body.h)}" rx="${fmt(body.h * 0.18)}" class="el-res-body" transform="rotate(${fmt(body.angle)} ${fmt(body.cx)} ${fmt(body.cy)})" />`,
       );
@@ -868,6 +870,9 @@ function cloneCircuit(c: Circuit): Circuit {
     // clone that dropped it would lose the rotation the moment the circuit reached the store.
     leds: c.leds.map((l) => (l.flip === undefined ? { a: l.a, b: l.b } : { a: l.a, b: l.b, flip: l.flip })),
     battery: c.battery ? { face: c.battery.face } : null,
+    // Likewise the resistors: a clone that dropped them would draw one on the canvas and lose it the moment
+    // the circuit reached the store — gone from the folded model, and from the next render back.
+    resistors: (c.resistors ?? []).map((r) => ({ x: r.x, y: r.y })),
   };
 }
 

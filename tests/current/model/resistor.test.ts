@@ -10,17 +10,31 @@ import {
 import {
   buildCopperCarrierExport,
   buildCopperSvgExport,
+  resistorShape,
 } from "../../../src/model/copper-svg-export.js";
 import { printScale } from "../../../src/model/print-scale.js";
 
 const EXAMPLES = new URL("../../../public/examples/", import.meta.url).pathname;
 
-/** house with one LED, and the midpoint of its PWR run — somewhere a resistor can sit. */
-function fixture() {
+/** house, and the midpoint of its PWR run — somewhere a resistor can sit.
+ *
+ *  One LED by default. Three when both rails need a run longer than the resistor's body: with one, house's
+ *  GND run is 5.7mm end to end and cannot take a 6.5mm part at all. */
+function fixture(leds = 1) {
   const fold = JSON.parse(readFileSync(`${EXAMPLES}house.fkld`, "utf8"));
   const faces = flatFaces(fold);
   const gaps = gapGraph(fold, faces).gaps;
-  const base: Circuit = { leds: [ledOf(gaps[0]!.faceA, gaps[0]!.faceB)], battery: { face: 0 } };
+  const seen = new Set<string>();
+  const chosen = [];
+  for (const g of gaps) {
+    const l = ledOf(g.faceA, g.faceB);
+    const key = `${l.a}_${l.b}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    chosen.push(l);
+    if (chosen.length >= leds) break;
+  }
+  const base: Circuit = { leds: chosen, battery: { face: 0 } };
   const plain = planRoutes(faces, gaps, base);
   const pwr = plain.traces.find((t) => t.net === "pwr")!;
   const mid = pwr.pts[Math.floor(pwr.pts.length / 2)]!;
@@ -59,16 +73,68 @@ describe("model/resistor", () => {
     expect(near).toBe(true);
   });
 
-  it("never sits on GND", () => {
-    // Both ends on +. Breaking a GND run would open the return path and light nothing.
-    const { faces, gaps, base, plain } = fixture();
-    const gnd = plain.traces.find((t) => t.net === "gnd")!;
-    const onGnd = gnd.pts[Math.floor(gnd.pts.length / 2)]!;
-    const r = planRoutes(faces, gaps, { ...base, resistors: [onGnd] });
-    const gndBefore = plain.traces.filter((t) => t.net === "gnd").length;
-    expect(r.traces.filter((t) => t.net === "gnd")).toHaveLength(gndBefore);
-    // It snapped to the nearest PWR run instead of being dropped.
-    expect(r.resistors).toHaveLength(1);
+  it("breaks whichever rail it is put on", () => {
+    // In series is in series: a resistor limits the current the same on the way out as on the way back, so
+    // either rail will take one.
+    // Three LEDs: with one, house's GND run is too short to hold a resistor (see the test below).
+    const { faces, gaps, base, plain, k } = fixture(3);
+    const runLength = (t: { pts: { x: number; y: number }[] }): number => {
+      let s = 0;
+      for (let i = 1; i < t.pts.length; i++) s += Math.hypot(t.pts[i]!.x - t.pts[i - 1]!.x, t.pts[i]!.y - t.pts[i - 1]!.y);
+      return s;
+    };
+    for (const net of ["pwr", "gnd"] as const) {
+      // The longest run of this net — a run shorter than the body cannot take one, see below.
+      const run = plain.traces
+        .filter((t) => t.net === net)
+        .sort((x, y) => runLength(y) - runLength(x))[0]!;
+      const at = run.pts[Math.floor(run.pts.length / 2)]!;
+      const r = planRoutes(faces, gaps, { ...base, resistors: [at] });
+      const before = plain.traces.filter((t) => t.net === net).length;
+      expect(r.traces.filter((t) => t.net === net), `${net} run split`).toHaveLength(before + 1);
+      expect(r.resistors).toHaveLength(1);
+      expect((totalLength(plain.traces) - totalLength(r.traces)) * k).toBeCloseTo(RESISTOR_MM, 1);
+    }
+  });
+
+  it("leaves a run too short to hold one alone", () => {
+    // Breaking a run shorter than the body would take all its copper and strand whatever it feeds. Better a
+    // resistor whose leads need bending than a branch that quietly loses its supply.
+    const { faces, gaps, base, plain, k } = fixture();
+    const short = plain.traces
+      .map((t) => {
+        let len = 0;
+        for (let i = 1; i < t.pts.length; i++) len += Math.hypot(t.pts[i]!.x - t.pts[i - 1]!.x, t.pts[i]!.y - t.pts[i - 1]!.y);
+        return { t, len: len * k };
+      })
+      .find((r) => r.len < RESISTOR_MM);
+    expect(short, "the fixture needs a run shorter than the body").toBeTruthy();
+
+    const at = short!.t.pts[Math.floor(short!.t.pts.length / 2)]!;
+    const r = planRoutes(faces, gaps, { ...base, resistors: [at] });
+    const before = plain.traces.filter((t) => t.net === short!.t.net).length;
+    expect(r.traces.filter((t) => t.net === short!.t.net)).toHaveLength(before);
+    expect(r.resistors).toHaveLength(0); // nothing drawn, because nothing was broken
+  });
+
+  it("lays its contacts across the tape, not along it", () => {
+    // The join is a band of lead pressed over the full width of the copper. Drawn along the run it read as
+    // a line down the middle of the tape, which is not where a lead touches.
+    const { faces, gaps, base, mid, tapeW, k } = fixture();
+    const r = planRoutes(faces, gaps, { ...base, resistors: [mid] });
+    const { a, b } = r.resistors[0]!;
+    const sh = resistorShape(a, b, tapeW)!;
+    expect(sh.leads).toHaveLength(2);
+    const run = { x: b.x - a.x, y: b.y - a.y };
+    const runLen = Math.hypot(run.x, run.y);
+    for (const l of sh.leads) {
+      const across = { x: l.b.x - l.a.x, y: l.b.y - l.a.y };
+      // Square to the run: the dot product of the two directions is nil.
+      const dot = (across.x * run.x + across.y * run.y) / (Math.hypot(across.x, across.y) * runLen);
+      expect(Math.abs(dot)).toBeLessThan(1e-9);
+      // And a tape's width across, so it covers the copper it sits on.
+      expect(Math.hypot(across.x, across.y) * k).toBeCloseTo(tapeW * k, 6);
+    }
   });
 
   it("is drawn on both cut files, and cut on neither", () => {

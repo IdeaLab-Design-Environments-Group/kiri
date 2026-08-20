@@ -532,8 +532,8 @@ function annotationLayer(
  * where there is deliberately no copper at all.
  */
 export interface ResistorShape {
-  /** The leads, running past the break onto the copper either side. */
-  lead: { a: Vec2; b: Vec2; width: number };
+  /** The two contacts, drawn across the tape at each cut end — one per lead. */
+  leads: { a: Vec2; b: Vec2; width: number }[];
   /** The body, square across the run. */
   body: { x: number; y: number; w: number; h: number; angle: number; cx: number; cy: number };
 }
@@ -551,16 +551,24 @@ export function resistorShape(a: Vec2, b: Vec2, tape: number): ResistorShape | n
   const L = Math.hypot(dx, dy);
   if (L < 1e-9) return null;
   const ux = dx / L, uy = dy / L;
-  const over = tape * 0.55;              // how far each lead lies on the tape
+  const px = -uy, py = ux;               // across the run
+  const over = tape * 0.5;               // how far each contact reaches back onto the tape
+  const half = tape * 0.5;               // and how far across it — the tape's full width
   const bodyW = tape * 0.75;             // a quarter-watt body is about 2.4mm across 3.25mm tape
   const bodyL = L * 0.8;
   const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  // A contact at each cut end, lying across the tape rather than along it: that is the shape of the join,
+  // a band of lead pressed down over the full width of the copper, not a line running down the middle.
+  const contact = (p: Vec2, dir: number): { a: Vec2; b: Vec2; width: number } => {
+    const c = { x: p.x + ux * dir * (over / 2), y: p.y + uy * dir * (over / 2) };
+    return {
+      a: { x: c.x - px * half, y: c.y - py * half },
+      b: { x: c.x + px * half, y: c.y + py * half },
+      width: over,
+    };
+  };
   return {
-    lead: {
-      a: { x: a.x - ux * over, y: a.y - uy * over },
-      b: { x: b.x + ux * over, y: b.y + uy * over },
-      width: tape * 0.42,
-    },
+    leads: [contact(a, -1), contact(b, +1)],
     body: {
       x: mid.x - bodyL / 2, y: mid.y - bodyW / 2, w: bodyL, h: bodyW,
       angle: (Math.atan2(dy, dx) * 180) / Math.PI, cx: mid.x, cy: mid.y,
@@ -571,14 +579,15 @@ export function resistorShape(a: Vec2, b: Vec2, tape: number): ResistorShape | n
 function resistorMarks(r: { a: Vec2; b: Vec2 }, tape: number, T: (p: Vec2) => Vec2): string[] {
   const sh = resistorShape(T(r.a), T(r.b), tape);
   if (!sh) return [];
-  const { lead, body } = sh;
-  const a = lead.a, b = lead.b;
+  const { leads, body } = sh;
   const bodyL = body.w, bodyW = body.h, ang = body.angle;
   const mid = { x: body.cx, y: body.cy };
   return [
-    // The leads: the full span at a little under the tape's width, so the tape still reads underneath.
-    `<line x1="${fmt(a.x)}" y1="${fmt(a.y)}" x2="${fmt(b.x)}" y2="${fmt(b.y)}" ` +
-      `stroke="${RES_LEAD}" stroke-width="${fmt(lead.width)}" stroke-linecap="butt" />`,
+    ...leads.map(
+      (l) =>
+        `<line x1="${fmt(l.a.x)}" y1="${fmt(l.a.y)}" x2="${fmt(l.b.x)}" y2="${fmt(l.b.y)}" ` +
+        `stroke="${RES_LEAD}" stroke-width="${fmt(l.width)}" stroke-linecap="butt" />`,
+    ),
     // The body, square across the run.
     `<rect x="${fmt(mid.x - bodyL / 2)}" y="${fmt(mid.y - bodyW / 2)}" width="${fmt(bodyL)}" ` +
       `height="${fmt(bodyW)}" rx="${fmt(bodyW * 0.18)}" fill="${RES_BODY}" ` +
