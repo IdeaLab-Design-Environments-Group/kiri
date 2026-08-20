@@ -647,6 +647,16 @@ export function buildCopperCarrierExport(
     // The tab's two sides: its centreline offset either way, so a bent tab keeps its width around the corner.
     const s1 = offsetSide(choice.path, choice.path.map(() => tape / 2));
     const s2 = offsetSide(choice.path, choice.path.map(() => -tape / 2));
+    // Land the tab's sides exactly where the outline stopped. Offsetting the tab's centreline puts them
+    // near those points but not on them, which left the cut in pieces: a blade lifting off and dropping
+    // back on a fraction of a millimetre away, and a sliver between the two that tears rather than cuts.
+    if (open.length >= 2) {
+      const a = open[0]!, b = open[open.length - 1]!;
+      const gap = (p: Vec2, q: Vec2): number => Math.hypot(p.x - q.x, p.y - q.y);
+      const straight = gap(s1[0]!, a) + gap(s2[0]!, b) <= gap(s1[0]!, b) + gap(s2[0]!, a);
+      s1[0] = straight ? a : b;
+      s2[0] = straight ? b : a;
+    }
     const q1 = onWindow(s1[s1.length - 1]!, side, win);
     const q2 = onWindow(s2[s2.length - 1]!, side, win);
     s1[s1.length - 1] = q1;

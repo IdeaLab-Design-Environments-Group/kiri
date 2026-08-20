@@ -760,6 +760,49 @@ describe("model/copper-svg-export", () => {
     }
   }, { timeout: 30000 });
 
+  it("joins every cut to another, so the blade never lifts mid-air", () => {
+    // A tab's sides were offset from its centreline, which put them near where the outline stopped but not
+    // on it. The cut came apart there: the blade lifts, drops a fraction of a millimetre away, and the
+    // sliver between the two tears instead of cutting. 144 such ends across these circuits, now none here.
+    for (const name of ["house.fkld", "puffin.fkld", "akde-decagon-pyramid.fkld"]) {
+      const { fold, traces, tapeW, keepOff, pads } = planned(name, 1);
+      const out = buildCopperCarrierExport(
+        fold, traces, tapeW, "k", keepOff, undefined, undefined, pads,
+      );
+      const tape = tapeW * sheetFrame(fold).scale;
+      const paths = [...cutLayer(out.svg).matchAll(/<path d="([^"]+)"/g)].map((m) => {
+        const closed = m[1]!.includes("Z");
+        const n = m[1]!.replace(/[MLZ]/g, " ").trim().split(/\s+/).map(Number);
+        const pts: Vec2[] = [];
+        for (let i = 0; i + 1 < n.length; i += 2) pts.push({ x: n[i]!, y: n[i + 1]! });
+        return { pts, closed };
+      });
+      const ends: Vec2[] = [];
+      for (const p of paths) if (!p.closed && p.pts.length > 1) ends.push(p.pts[0]!, p.pts[p.pts.length - 1]!);
+      expect(ends.length).toBeGreaterThan(0);
+
+      const toSeg = (p: Vec2, a: Vec2, b: Vec2): number => {
+        const l2 = (b.x - a.x) ** 2 + (b.y - a.y) ** 2;
+        if (l2 < 1e-18) return Math.hypot(p.x - a.x, p.y - a.y);
+        const t = Math.max(0, Math.min(1, ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / l2));
+        return Math.hypot(p.x - (a.x + t * (b.x - a.x)), p.y - (a.y + t * (b.y - a.y)));
+      };
+      const loose = ends.filter((p, i) => {
+        if (ends.some((q, j) => j !== i && Math.hypot(p.x - q.x, p.y - q.y) < tape * 0.05)) return false;
+        // Landing on another cut's interior is a T-junction, which the blade follows just as well.
+        return !paths.some((pp) =>
+          pp.pts.some((_, k) => {
+            if (k === 0) return false;
+            const a = pp.pts[k - 1]!, b = pp.pts[k]!;
+            if (Math.hypot(p.x - a.x, p.y - a.y) < 1e-9 || Math.hypot(p.x - b.x, p.y - b.y) < 1e-9) return false;
+            return toSeg(p, a, b) < tape * 0.05;
+          }),
+        );
+      });
+      expect(loose, `${name}: cut ends meeting nothing`).toEqual([]);
+    }
+  }, { timeout: 30000 });
+
   describe("openAround", () => {
     /** A 12x12 square ring, densified so its vertices are a unit apart — as the carrier's rings are. */
     const square = (): Vec2[] => {
