@@ -208,13 +208,21 @@ export function buildCopperSvgExport(
   // which scales them, so the strips come out this wide without anything else being done to them.
   const tapeMm = tapeW * scale;
 
+  // Windows to take out of the copper: an SPDT's idle throw needs bare pattern under it. Each is carried on
+  // the same path as the strip it holes, since a separate one would just lie on top; `evenodd` then reads
+  // the inner ring as a hole rather than as more copper.
+  const windows = switches
+    .map((w) => switchShape(T(w.a), T(w.b), tapeMm, partMm)?.notch)
+    .filter((n): n is Vec2[] => !!n && n.length >= 3);
+
   const layer = (net: "pwr" | "gnd"): { body: string; count: number } => {
     const runs = traces.filter((t) => t.net === net && t.pts.length >= 2);
     const paths: string[] = [];
     for (const t of runs) {
-      const ring = stripOutline(t, tapeW, pads);
+      const ring = stripOutline(t, tapeW, pads).map(T);
       if (ring.length < 3) continue;
-      paths.push(`<path d="${ringPath(ring.map(T))}" />`);
+      const mine = windows.filter((n) => pointInRing(centreOf(n), ring));
+      paths.push(`<path d="${[ringPath(ring), ...mine.map(ringPath)].join(" ")}" />`);
     }
     return { body: paths.join("\n    "), count: paths.length };
   };
@@ -226,8 +234,8 @@ export function buildCopperSvgExport(
     ...switches.flatMap((r) => switchMarks(r, tapeMm, T, partMm)),
   ];
   const body =
-    `  <g id="pwr" fill="${PWR_FILL}" stroke="none" fill-rule="nonzero">\n    ${pwr.body}\n  </g>\n` +
-    `  <g id="gnd" fill="${GND_FILL}" stroke="none" fill-rule="nonzero">\n    ${gnd.body}\n  </g>` +
+    `  <g id="pwr" fill="${PWR_FILL}" stroke="none" fill-rule="evenodd">\n    ${pwr.body}\n  </g>\n` +
+    `  <g id="gnd" fill="${GND_FILL}" stroke="none" fill-rule="evenodd">\n    ${gnd.body}\n  </g>` +
     // The parts sit on their own layer: they show where the resistor goes, and are not copper to cut.
     (parts.length ? `\n  <g id="parts">\n    ${parts.join("\n    ")}\n  </g>` : "");
 
@@ -487,6 +495,13 @@ function crossingsAlong(a: Vec2, b: Vec2, solids: Vec2[][]): number[] {
  * boundary then stood open by a millimetre or two at each crossing and would not close. Winding counts the
  * overlap as the solid copper it is: three of akde-hex's twelve runs self-intersect, nine crossings in all.
  */
+/** The average of a ring's corners — good enough to say which strip a small window sits in. */
+function centreOf(ring: Vec2[]): Vec2 {
+  let x = 0, y = 0;
+  for (const p of ring) { x += p.x; y += p.y; }
+  return { x: x / ring.length, y: y / ring.length };
+}
+
 function pointInRing(p: Vec2, ring: Vec2[]): boolean {
   let wind = 0;
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
@@ -717,6 +732,14 @@ export interface ResistorShape {
   /** Mounting holes, where the part has them. Drawn, never cut: a hole through the pattern is the user's
    *  decision, not the exporter's. */
   holes?: { c: Vec2; r: number }[];
+  /**
+   * Copper to take out from under a pin, as a closed ring in sheet coordinates.
+   *
+   * The idle throw of an SPDT needs bare pattern beneath it, or the switch is wired to nothing in one
+   * position and to the rail in both. Unlike the break, this does not sever the run: it is a window inside
+   * the strip, and the copper carries on either side of it.
+   */
+  notch?: Vec2[];
 }
 
 /**
@@ -794,9 +817,20 @@ export function switchShape(a: Vec2, b: Vec2, tape: number, cross = tape): Resis
       width: spec.w,
     };
   };
-  // The housing, a pad row's offset to one side, centred on the middle pad.
-  const cx = a.x + px * SWITCH.offset;
-  const cy = a.y + py * SWITCH.offset;
+  // Terminals at the part's own pitch, measured along its axis. Anchoring one to a cut end instead made a
+  // gap come out as the break's chord -- 2.25mm against a 2.489mm pitch, since the run bends inside the
+  // break and a chord across a bend is short. The part is rigid; the copper is what curves.
+  // Measured from the middle of the break, so terminal 1 and the common straddle it evenly: each sits a
+  // half-pitch out, which is a pad's length plus a margin clear of the cut edge.
+  const m = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  const at = (n: number): Vec2 => ({
+    x: m.x + ux * (n - 0.5) * SWITCH.pitch,
+    y: m.y + uy * (n - 0.5) * SWITCH.pitch,
+  });
+  const common = at(1);
+  // The housing, a pad row's offset to one side, centred on the common.
+  const cx = common.x + px * SWITCH.offset;
+  const cy = common.y + py * SWITCH.offset;
   // Long enough to carry all three pads, deep enough to reach past its mounting holes.
   const p0 = SWITCH.fp.pads[0]!;
   const bodyL = 2 * SWITCH.pitch + p0.w;
@@ -804,11 +838,22 @@ export function switchShape(a: Vec2, b: Vec2, tape: number, cross = tape): Resis
   // stopped short of the legs, so the housing floated beside the copper with a gap between it and the
   // terminals it belongs to. Twice the offset puts its near edge on the row and the holes in its middle.
   const bodyW = 2 * SWITCH.offset;
+  // Where the idle throw lands: a pitch past the common, still over the outgoing rail. Its copper is cut
+  // away so the part really does open the circuit in that position.
+  const idle = at(2);
+  const clear = 0.3;                     // bare pattern round the pad, so the window can be weeded
+  const nl = (p0.w + 2 * clear) / 2, nw = (p0.h + 2 * clear) / 2;
+  const corner = (dl: number, dw: number): Vec2 => ({
+    x: idle.x + ux * dl + px * dw,
+    y: idle.y + uy * dl + py * dw,
+  });
   return {
-    // At the part's own pitch, not at the gap it happens to straddle. The run bends inside the break, so the
+    // Terminal 1 on the incoming rail, the common on the outgoing one, the idle throw over the window.
+    // Spaced at the part's own pitch, not by the gap they straddle: the run bends inside the break, so the
     // straight line between the cut ends is shorter than the copper taken out -- 2.25mm against a 2.489mm
     // pitch on house. A rigid part's pins do not close up when the tape curves under them.
-    leads: [pad(a, -SWITCH.pitch, p0), pad(a, 0, p0), pad(a, SWITCH.pitch, p0)],
+    leads: [pad(at(0), 0, p0), pad(common, 0, p0), pad(idle, 0, p0)],
+    notch: [corner(-nl, -nw), corner(nl, -nw), corner(nl, nw), corner(-nl, nw)],
     body: {
       x: cx - bodyL / 2, y: cy - bodyW / 2, w: bodyL, h: bodyW,
       angle: (Math.atan2(dy, dx) * 180) / Math.PI, cx, cy,
@@ -1175,7 +1220,13 @@ export function buildCopperCarrierExport(
   const tight = stitchLoops(drawn.filter((d) => !d.closed).map((d) => d.pts), 1e-6);
   const closing = stitchLoops(tight.open, tape * 0.1);
   const stitched = { loops: [...tight.loops, ...closing.loops], open: closing.open };
-  const loops = [...preClosed, ...stitched.loops];
+  // The windows under an SPDT's idle throw. Added as loops rather than as cuts to be stitched: they are
+  // already closed, they bound nothing else, and `evenodd` reads a ring inside the copper as a hole. Passing
+  // them through the clip would only delete them, since they lie squarely inside a strip by design.
+  const windows = switches
+    .map((w) => switchShape(T(w.a), T(w.b), tape, partMm)?.notch)
+    .filter((n): n is Vec2[] => !!n && n.length >= 3);
+  const loops = [...preClosed, ...stitched.loops, ...windows];
   const cutLayer =
     `  <g id="carrier" fill="${CARRIER_FILL}" stroke="none" fill-rule="evenodd">\n    ` +
     `<path d="${loops.map(ringPath).join(" ")}" />` +

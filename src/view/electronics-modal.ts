@@ -929,6 +929,17 @@ export class ElectronicsModal {
     if (!this.circuit.battery && n > 0) msg += " · add a battery";
     const un = this.routed.unreachable.length;
     if (un > 0 && this.circuit.battery) msg += ` · ${un} unreachable`;
+    // A part that would not fit is dropped by the router, and without this it disappeared without a word:
+    // the click registered, the circuit kept it, and nothing appeared on the canvas.
+    const short = [
+      ["switch", (this.circuit.switches ?? []).length - this.routed.switches.length],
+      ["resistor", (this.circuit.resistors ?? []).length - this.routed.resistors.length],
+    ] as const;
+    for (const [what, missing] of short) {
+      if (missing > 0) {
+        msg += ` · ${missing} ${what}${missing === 1 ? "" : "s"} did not fit — that run is too short for the part`;
+      }
+    }
     if (this.circuit.leds[this.selected]) {
       const fixed = this.circuit.leds[this.selected]!.flip !== undefined;
       msg += ` · LED ${this.selected + 1} selected — R to turn it round, Delete to remove`;

@@ -965,7 +965,14 @@ export function planRoutes(
   }
 
   const withRes = breakForResistors(best, circuit.resistors ?? [], tapeW);
-  const withSw = breakRuns(withRes.traces, circuit.switches ?? [], (SWITCH_PITCH_MM * tapeW) / TAPE_MM);
+  // The switch reaches past its break: a half-pitch behind the cut, three half-pitches in front, plus half
+  // a pad at each extreme. See `SWITCH_GAP_MM`.
+  const toFlat = (mm: number): number => (mm * tapeW) / TAPE_MM;
+  const swPad = slide_switch.pads[0]!.w / 2;
+  const withSw = breakRuns(withRes.traces, circuit.switches ?? [], toFlat(SWITCH_GAP_MM), {
+    before: toFlat(SWITCH_PITCH_MM / 2 + swPad),
+    after: toFlat((3 * SWITCH_PITCH_MM) / 2 + swPad),
+  });
   return {
     traces: withSw.traces,
     pads,
@@ -993,6 +1000,16 @@ export const RESISTOR_MM =
  * one on the other.
  */
 export const SWITCH_PITCH_MM = slide_switch.pads[1]!.cx - slide_switch.pads[0]!.cx;
+
+/**
+ * The copper a switch takes out, in millimetres — narrower than its pitch, and necessarily so.
+ *
+ * Terminal 1 has to sit wholly on the incoming rail and the common wholly on the outgoing one. They are a
+ * pitch apart and each pad is `.039in` long, so between their far edges there is only `pitch - pad` of room:
+ * break a full pitch and neither lands on copper at all. A margin either side keeps a pad off the cut edge.
+ */
+export const SWITCH_GAP_MM =
+  SWITCH_PITCH_MM - slide_switch.pads[0]!.w - 2 * 0.2;
 
 /**
  * Break the run each resistor sits on.
@@ -1026,6 +1043,15 @@ export function breakRuns(
   traces: Trace2D[],
   parts: { x: number; y: number }[],
   gap: number,
+  /**
+   * Copper the part needs either side of the break's centre, beyond the break itself.
+   *
+   * A resistor straddles its gap evenly and needs no more than it. A switch does not: its terminals run on
+   * past the break, so it wants a half-pitch of copper behind the cut and three of them in front. Reserving
+   * only the gap seated the part with a terminal hanging off the end of the run, on bare pattern, where it
+   * connects to nothing.
+   */
+  reach: { before: number; after: number } = { before: gap, after: gap },
 ): { traces: Trace2D[]; placed: PartSpan[] } {
   const placed: PartSpan[] = [];
   if (!parts.length) return { traces, placed };
@@ -1048,12 +1074,16 @@ export function breakRuns(
     // Slide the part inboard if it was dropped near an end. A run has to keep a half-body either side or
     // the break takes one of its ends off entirely, and the part was simply not placed -- a click that did
     // nothing at all, with no way to tell why.
-    const moved = fitWithin(out[bestRun]!, bestSeg, bestT, body);
+    // Facing the way it was dropped if the run allows it, and turned round if only the other way fits: a
+    // part in series works the same either way about, and refusing to seat one on a short run helps nobody.
+    const forward = fitWithin(out[bestRun]!, bestSeg, bestT, reach.before, reach.after);
+    const moved = forward ?? fitWithin(out[bestRun]!, bestSeg, bestT, reach.after, reach.before);
     const split = moved
       ? splitRun(out, bestRun, moved.seg, moved.t, body)
       : { traces: out, span: null };
     out = split.traces;
-    if (split.span) placed.push(split.span);
+    // Turned round, the span is reported end-for-end, which is how the part knows which way it faces.
+    if (split.span) placed.push(forward ? split.span : { a: split.span.b, b: split.span.a });
   }
   return { traces: out, placed };
 }
@@ -1067,7 +1097,8 @@ function fitWithin(
   run: Trace2D,
   seg: number,
   t: number,
-  body: number,
+  before: number,
+  after: number,
 ): { seg: number; t: number } | null {
   const segs: number[] = [];
   let total = 0;
@@ -1076,13 +1107,12 @@ function fitWithin(
     segs.push(l);
     total += l;
   }
-  // Each half has to keep copper of its own after the break is trimmed out of it, so the run needs the
-  // body twice over: a half-body comes out either side, and a half-body is left either side to grip.
-  if (total <= 2 * body) return null;
+  // Enough copper either side of the break's centre to seat the part.
+  if (total <= before + after) return null;
   let at = 0;
   for (let i = 0; i < seg - 1; i++) at += segs[i]!;
   at += (segs[seg - 1] ?? 0) * t;
-  const want = Math.min(Math.max(at, body), total - body);
+  const want = Math.min(Math.max(at, before), total - after);
   // Back to a segment and a fraction along it.
   let acc = 0;
   for (let i = 0; i < segs.length; i++) {
