@@ -52,6 +52,14 @@ import { R_1206, slide_switch } from "./footprints.generated.js";
 export interface Trace2D {
   pts: Vec2[];
   net: "pwr" | "gnd";
+  /**
+   * Width in pattern units, where this run is not ordinary tape.
+   *
+   * Land copper under a part's terminals: a switch's pads are `.047in` across and its pitch `.098in`, so a
+   * stub reaching one at full tape width would touch the neighbouring terminal's and short the part. Left
+   * unset — which is every routed run — the tape's own width is used.
+   */
+  width?: number;
 }
 
 /** Where an LED's two pads ended up, per net. Index-aligned with `circuit.leds`. */
@@ -76,6 +84,8 @@ export interface RoutedCircuit {
 export interface PartSpan {
   a: Vec2;
   b: Vec2;
+  /** Which rail it was placed on, so land copper joins the right net. */
+  net: "pwr" | "gnd";
 }
 
 /** @deprecated the same thing; kept so existing callers read naturally. */
@@ -965,16 +975,27 @@ export function planRoutes(
   }
 
   const withRes = breakForResistors(best, circuit.resistors ?? [], tapeW);
-  // The switch reaches past its break: a half-pitch behind the cut, three half-pitches in front, plus half
-  // a pad at each extreme. See `SWITCH_GAP_MM`.
+  // Across the break the part needs only its own half-gap plus a pad either side: the terminals run square
+  // to the rail now, not along it, so a much shorter run will take one.
   const toFlat = (mm: number): number => (mm * tapeW) / TAPE_MM;
-  const swPad = slide_switch.pads[0]!.w / 2;
+  const swReach = toFlat(SWITCH_GAP_MM / 2 + slide_switch.pads[0]!.w);
   const withSw = breakRuns(withRes.traces, circuit.switches ?? [], toFlat(SWITCH_GAP_MM), {
-    before: toFlat(SWITCH_PITCH_MM / 2 + swPad),
-    after: toFlat((3 * SWITCH_PITCH_MM) / 2 + swPad),
+    before: swReach,
+    after: swReach,
   });
+  const swTraces = [
+    ...withSw.traces,
+    ...withSw.placed.flatMap((span) =>
+      switchLand(
+        span,
+        toFlat(SWITCH_PITCH_MM),
+        toFlat(slide_switch.pads[0]!.h),
+        toFlat(slide_switch.pads[0]!.w),
+      ),
+    ),
+  ];
   return {
-    traces: withSw.traces,
+    traces: swTraces,
     pads,
     unreachable,
     resistors: withRes.placed,
@@ -1002,14 +1023,14 @@ export const RESISTOR_MM =
 export const SWITCH_PITCH_MM = slide_switch.pads[1]!.cx - slide_switch.pads[0]!.cx;
 
 /**
- * The copper a switch takes out, in millimetres — narrower than its pitch, and necessarily so.
+ * The copper a switch takes out, in millimetres.
  *
- * Terminal 1 has to sit wholly on the incoming rail and the common wholly on the outgoing one. They are a
- * pitch apart and each pad is `.039in` long, so between their far edges there is only `pitch - pad` of room:
- * break a full pitch and neither lands on copper at all. A margin either side keeps a pad off the cut edge.
+ * The rail steps across the part, so the gap has to let the land reaching the live throw pass the
+ * common's without touching it: a pad's width for each, plus a margin between them. Narrower and the two
+ * lands meet beside the common, joining the incoming rail straight to the outgoing one and bypassing the
+ * switch entirely.
  */
-export const SWITCH_GAP_MM =
-  SWITCH_PITCH_MM - slide_switch.pads[0]!.w - 2 * 0.2;
+export const SWITCH_GAP_MM = 2 * slide_switch.pads[0]!.h + 0.6;
 
 /**
  * Break the run each resistor sits on.
@@ -1083,9 +1104,45 @@ export function breakRuns(
       : { traces: out, span: null };
     out = split.traces;
     // Turned round, the span is reported end-for-end, which is how the part knows which way it faces.
-    if (split.span) placed.push(forward ? split.span : { a: split.span.b, b: split.span.a });
+    if (split.span) {
+      placed.push(forward ? split.span : { a: split.span.b, b: split.span.a, net: split.span.net });
+    }
   }
   return { traces: out, placed };
+}
+
+/**
+ * The land copper under a switch: a stub to the common, and a stub across to one throw.
+ *
+ * The rail steps across the part rather than running under it. It arrives at the common, which sits in the
+ * middle of the break; the outgoing run leaves from a throw one pitch to the side. The other throw is a
+ * pitch the other way, off the copper entirely — which is what opens the circuit in that position, and it
+ * needs no window cut to do it.
+ *
+ * Both stubs are a pad's width, not the tape's: at `.098in` centres, two full-width stubs would meet
+ * between the terminals and short the part to itself.
+ */
+function switchLand(span: PartSpan, pitch: number, padW: number, padL: number): Trace2D[] {
+  const { a, b } = span;
+  const d = sub(b, a);
+  const L = len(d);
+  if (L < 1e-12) return [];
+  const u = { x: d.x / L, y: d.y / L };
+  const p = { x: -u.y, y: u.x };
+  const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; // the common, in the middle of the break
+  const live = { x: mid.x + p.x * pitch, y: mid.y + p.y * pitch };
+  // Each land runs half a pad past its terminal, so the whole pad has copper under it. Stopped dead on the
+  // centre, half of each pad sat over bare pattern and the terminal made contact along one edge if at all.
+  const over = padL / 2;
+  const commonEnd = { x: mid.x + u.x * over, y: mid.y + u.y * over };
+  const liveEnd = { x: live.x + p.x * over, y: live.y + p.y * over };
+  // Out from the far cut end, across, then back: an L. Straight from `b` to the live throw the land would
+  // cut the corner and pass within a pad's width of the common's, joining the two rails around the part.
+  const corner = { x: b.x + p.x * pitch, y: b.y + p.y * pitch };
+  return [
+    { net: span.net, pts: [a, commonEnd], width: padW },
+    { net: span.net, pts: [b, corner, liveEnd], width: padW },
+  ];
 }
 
 /**
@@ -1146,7 +1203,7 @@ function splitRun(
   // A run too short to break either side keeps its copper rather than vanishing: better a resistor that
   // needs its leads bent than a branch that silently loses its supply.
   if (kept.length < 2) return { traces, span: null };
-  const span = { a: first[first.length - 1]!, b: second[0]! };
+  const span = { a: first[first.length - 1]!, b: second[0]!, net: run.net };
   return { traces: [...traces.slice(0, ri), ...kept, ...traces.slice(ri + 1)], span };
 }
 

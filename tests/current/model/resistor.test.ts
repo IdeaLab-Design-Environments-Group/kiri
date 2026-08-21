@@ -1,9 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { flatFaces, gapGraph, ledOf, type Circuit } from "../../../src/model/electronics.js";
+import { flatFaces, gapGraph, ledOf, type Circuit, type Vec2 } from "../../../src/model/electronics.js";
 import {
   RESISTOR_MM,
-  SWITCH_GAP_MM,
   SWITCH_PITCH_MM,
   breakRuns,
   planRoutes,
@@ -14,6 +13,7 @@ import {
   buildCopperCarrierExport,
   buildCopperSvgExport,
   resistorShape,
+  stripOutline,
   switchShape,
 } from "../../../src/model/copper-svg-export.js";
 import { printScale } from "../../../src/model/print-scale.js";
@@ -171,157 +171,146 @@ describe("model/resistor", () => {
 });
 
 describe("model/switch", () => {
-  it("wires the common alone, one throw on the rail and one on bare pattern", () => {
-    // An SPDT switching a rail. The break falls between terminal 1 and the common, so terminal 1 is on the
-    // incoming copper and the common alone on the outgoing copper. The idle throw sits a pitch further on,
-    // over a window cut out of that copper — bare pattern, so that position really does open the circuit.
-    //
-    // With terminal 1 and the common on one piece, as this had them, the common is soldered to a throw for
-    // good and the part switches nothing at all.
-    const { fold, faces, gaps, base, plain, mid, tapeW, k } = fixture();
-    const r = planRoutes(faces, gaps, { ...base, switches: [mid] });
+  /** house with one LED and a switch on the middle of a rail. */
+  function withSwitch(net: "pwr" | "gnd" = "pwr", at?: (pts: Vec2[]) => Vec2) {
+    const { fold, faces, gaps, base, plain, tapeW, k } = fixture();
+    const run = plain.traces.find((t) => t.net === net)!;
+    const pick = at ?? ((p: Vec2[]) => ({
+      x: (p[0]!.x + p[p.length - 1]!.x) / 2,
+      y: (p[0]!.y + p[p.length - 1]!.y) / 2,
+    }));
+    const r = planRoutes(faces, gaps, { ...base, switches: [pick(run.pts)] });
+    return { fold, faces, gaps, base, plain, tapeW, k, r };
+  }
 
-    expect(r.switches).toHaveLength(1);
-    const removed = (totalLength(plain.traces) - totalLength(r.traces)) * k;
-    // The break is narrower than the pitch — see SWITCH_GAP_MM: terminal 1 and the common are a pitch
-    // apart and each pad is .039in long, so only `pitch - pad` of copper can come out between them.
-    expect(removed).toBeCloseTo(SWITCH_GAP_MM, 1);
-
-    const { a, b } = r.switches[0]!;
-    const sh = switchShape(a, b, tapeW)!;
-    expect(sh.leads).toHaveLength(3);
-
-    // One contact behind the break, two in front — measured along the run.
-    const ux = (b.x - a.x) / Math.hypot(b.x - a.x, b.y - a.y);
-    const uy = (b.y - a.y) / Math.hypot(b.x - a.x, b.y - a.y);
-    const along = (p: { x: number; y: number }): number => (p.x - a.x) * ux + (p.y - a.y) * uy;
-    const span = Math.hypot(b.x - a.x, b.y - a.y);
-    const sides = sh.leads.map((l) => along({ x: (l.a.x + l.b.x) / 2, y: (l.a.y + l.b.y) / 2 }));
-    // Terminal 1 behind the break; the common and the idle throw past it.
-    expect(sides.filter((d) => d <= 1e-9)).toHaveLength(1);
-    expect(sides.filter((d) => d >= span - 1e-9)).toHaveLength(2);
-
-    // And spaced at the part's own pitch, on a run that BENDS inside the break. Spacing them by the gap
-    // they straddle put them 2.25mm apart against a 2.489mm pitch: the chord across a bend is shorter than
-    // the copper taken out, and a rigid part's pins do not close up when the tape curves under them. A
-    // straight test run hides this exactly, since there the two are equal.
-    const ordered = [...sides].sort((x, y) => x - y);
-    expect(ordered[1]! - ordered[0]!).toBeCloseTo(SWITCH_PITCH_MM, 6);
-    expect(ordered[2]! - ordered[1]!).toBeCloseTo(SWITCH_PITCH_MM, 6);
-
-    // All three on the copper's centreline, not off its edge.
-    for (const l of sh.leads) {
-      const c = { x: (l.a.x + l.b.x) / 2, y: (l.a.y + l.b.y) / 2 };
-      const off = (c.x - a.x) * -uy + (c.y - a.y) * ux;
-      expect(Math.abs(off)).toBeLessThan(1e-9);
+  /** Winding containment, in sheet millimetres. */
+  const inRing = (p: Vec2, ring: Vec2[]): boolean => {
+    let w = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const a = ring[i]!, b = ring[j]!;
+      if ((a.y > p.y) !== (b.y > p.y) && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) w = !w;
     }
+    return w;
+  };
 
-    // The window sits on the idle throw — the far terminal — and nowhere near the other two.
-    expect(sh.notch).toBeTruthy();
-    const nc = sh.notch!.reduce((acc, p) => ({ x: acc.x + p.x / 4, y: acc.y + p.y / 4 }), { x: 0, y: 0 });
-    const idle = sh.leads[2]!;
-    expect(along(nc)).toBeCloseTo(along({ x: (idle.a.x + idle.b.x) / 2, y: (idle.a.y + idle.b.y) / 2 }), 6);
-    // And a full pitch clear of the common, so it isolates the idle throw and nothing else.
-    const common = sh.leads[1]!;
-    expect(along(nc) - along({ x: (common.a.x + common.b.x) / 2, y: (common.a.y + common.b.y) / 2 }))
-      .toBeCloseTo(SWITCH_PITCH_MM, 6);
-    // Big enough to clear the pad it isolates, and narrower than the tape, so copper still runs either side.
-    const w = Math.hypot(sh.notch![1]!.x - sh.notch![0]!.x, sh.notch![1]!.y - sh.notch![0]!.y);
-    const h = Math.hypot(sh.notch![2]!.x - sh.notch![1]!.x, sh.notch![2]!.y - sh.notch![1]!.y);
-    expect(w).toBeGreaterThan(sh.leads[0]!.width);
-    expect(h).toBeGreaterThan(0.047 * 25.4);
-    expect(h).toBeLessThan(tapeW * printScale(fold));
+  /** Which copper, if any, each terminal sits on — and whether the two lands touch each other. */
+  function seat(r: ReturnType<typeof withSwitch>["r"], tapeW: number, k: number) {
+    const w0 = r.switches[0]!;
+    const sh = switchShape({ x: w0.a.x * k, y: w0.a.y * k }, { x: w0.b.x * k, y: w0.b.y * k }, tapeW * k)!;
+    const rings = r.traces.map((t, i) => ({
+      i,
+      land: t.width !== undefined,
+      ring: stripOutline(t, tapeW, r.pads).map((q) => ({ x: q.x * k, y: q.y * k })),
+    }));
+    const on = sh.leads.map((l) => {
+      const c = { x: (l.a.x + l.b.x) / 2, y: (l.a.y + l.b.y) / 2 };
+      return rings.filter((rg) => inRing(c, rg.ring)).map((rg) => rg.i);
+    });
+    const lands = rings.filter((x) => x.land);
+    let clear = Infinity;
+    if (lands.length === 2) {
+      for (const a of lands[0]!.ring) {
+        for (const b of lands[1]!.ring) clear = Math.min(clear, Math.hypot(a.x - b.x, a.y - b.y));
+      }
+    }
+    return { sh, rings, lands, idle: on[0]!, common: on[1]!, live: on[2]!, clear };
+  }
 
-    // Drawn on the parts layer, and the window really is cut out of the copper: the strip that holds it is
-    // one path with a second ring inside it, filled evenodd, which is a hole rather than more copper.
-    const out = buildCopperSvgExport(
-      fold, r.traces, tapeW, "k", r.pads, undefined, undefined, r.resistors, undefined, r.switches,
-    );
-    expect(out.svg).toContain('id="parts"');
-    expect(out.svg).toContain('fill-rule="evenodd"');
-    expect(out.svg).toMatch(/<path d="M [^"]*Z M [^"]*Z"/);
+  it("steps the rail across the part: in at the common, out at one throw", () => {
+    // An SPDT switching a rail. The terminals stay in a row as pcb.py has them; the COPPER is what moves.
+    // The rail arrives at the common in the middle of the break and leaves from one throw a pitch to the
+    // side, on land of its own. The other throw is a pitch the other way, over bare pattern — which is what
+    // opens the circuit in that position.
+    //
+    // Run under the part in a line, as this was, one throw shares copper with the common: the common is
+    // soldered to a throw for good and the part switches nothing at all.
+    for (const net of ["pwr", "gnd"] as const) {
+      const { r, tapeW, k } = withSwitch(net);
+      expect(r.switches, net).toHaveLength(1);
+      const { idle, common, live, lands, clear } = seat(r, tapeW, k);
+
+      expect(idle, `${net}: the idle throw must reach no copper`).toEqual([]);
+      expect(common, `${net}: the common must sit on land`).toHaveLength(1);
+      expect(live, `${net}: the live throw must sit on land`).toHaveLength(1);
+      expect(common[0], `${net}: common and live must be separate copper`).not.toBe(live[0]);
+
+      // Two lands, and they must not meet: joined, they bridge the incoming rail straight to the outgoing
+      // one around the part, and the switch is bypassed.
+      expect(lands).toHaveLength(2);
+      expect(clear, `${net}: land clearance`).toBeGreaterThan(0.3);
+    }
+  });
+
+  it("lands on pad-sized copper, not on full tape", () => {
+    // The terminals are .098in apart. Two full-width stubs would meet between them and short the part.
+    const { r, tapeW, k } = withSwitch();
+    const lands = r.traces.filter((t) => t.width !== undefined);
+    expect(lands).toHaveLength(2);
+    for (const l of lands) {
+      expect(l.width! * k).toBeCloseTo(slide_switch.pads[0]!.h, 4);
+      expect(l.width!).toBeLessThan(tapeW);
+    }
   });
 
   it("is the size the datasheet says", () => {
     // fab-modules pcb.py, class slide_switch (C&K AYZ0102AGRLC): pads .039 x .047in on .098in centres,
-    // offset .1in from the origin, plus two .034in mounting holes at ±.059in. Real millimetres from the
-    // library, not a size invented to look right.
-    const { faces, gaps, base, mid, tapeW, k } = fixture();
-    const r = planRoutes(faces, gaps, { ...base, switches: [mid] });
-    const { a, b } = r.switches[0]!;
+    // plus two .034in mounting holes at ±.059in. Real millimetres from the library.
+    const { r, tapeW, k } = withSwitch();
+    const { sh } = seat(r, tapeW, k);
 
-    // One pitch of copper comes out. Measured along the run, not across it: the run bends inside the break,
-    // so the straight line between the cut ends is shorter than the copper removed and can only be shorter.
-    const chord = Math.hypot(a.x - b.x, a.y - b.y) * k;
-    expect(chord).toBeGreaterThan(0);
-    expect(chord).toBeLessThanOrEqual(SWITCH_PITCH_MM + 1e-9);
-
-    // Sheet coordinates are millimetres, so the part is measured directly.
-    const sh = switchShape({ x: 0, y: 0 }, { x: SWITCH_PITCH_MM, y: 0 }, tapeW * k)!;
-    // Pads .039 x .047in, from pcb.py's slide_switch.
+    expect(sh.leads).toHaveLength(3);
     for (const l of sh.leads) {
-      expect(l.width).toBeCloseTo(0.039 * 25.4, 4);
-      expect(Math.hypot(l.b.x - l.a.x, l.b.y - l.a.y)).toBeCloseTo(0.047 * 25.4, 4);
+      expect(l.width).toBeCloseTo(slide_switch.pads[0]!.w, 4);
+      expect(Math.hypot(l.b.x - l.a.x, l.b.y - l.a.y)).toBeCloseTo(slide_switch.pads[0]!.h, 4);
     }
-    // Two mounting holes, .034in across at ±.059in — the part's own.
+
+    // At the part's own pitch, and in a row.
+    const c = sh.leads.map((l) => ({ x: (l.a.x + l.b.x) / 2, y: (l.a.y + l.b.y) / 2 }));
+    expect(Math.hypot(c[1]!.x - c[0]!.x, c[1]!.y - c[0]!.y)).toBeCloseTo(SWITCH_PITCH_MM, 6);
+    expect(Math.hypot(c[2]!.x - c[1]!.x, c[2]!.y - c[1]!.y)).toBeCloseTo(SWITCH_PITCH_MM, 6);
+
     expect(sh.holes).toHaveLength(2);
     for (const h of sh.holes!) expect(h.r).toBeCloseTo((0.034 * 25.4) / 2, 4);
     expect(Math.hypot(sh.holes![1]!.c.x - sh.holes![0]!.c.x, sh.holes![1]!.c.y - sh.holes![0]!.c.y))
       .toBeCloseTo(0.118 * 25.4, 4);
-    // The housing stands clear of the pad row by the pads' own .1in offset, rather than over the copper.
-    expect(Math.hypot(sh.body.cy - 0, sh.body.cx - SWITCH_PITCH_MM / 2)).toBeGreaterThan(0.09 * 25.4);
 
-    // Three terminals at one pitch, so 5,0 across all of them.
-    const along = sh.leads.map((l) => (l.a.x + l.b.x) / 2).sort((x, y) => x - y);
-    expect(along[1]! - along[0]!).toBeCloseTo(SWITCH_PITCH_MM, 6);
-    expect(along[2]! - along[1]!).toBeCloseTo(SWITCH_PITCH_MM, 6);
-    expect(along[2]! - along[0]!).toBeCloseTo(2 * SWITCH_PITCH_MM, 6);
-
-
+    // No window to cut: the idle throw is off the copper by where it sits, not by a hole in the strip.
+    expect(sh.notch).toBeUndefined();
   });
 
-  it("places one dropped at the very end of a long enough run", () => {
+  it("places one dropped at the very end of a run, on either rail", () => {
     // A part needs copper either side of its break to seat on. Dropped near an end there was not room, and
     // it was simply not placed: a click that did nothing, with nothing to say why. It slides inboard now.
-    const { faces, gaps, base, plain, k } = fixture();
-    const run = plain.traces.find((t) => t.net === "pwr")!;
-    for (const at of [run.pts[0]!, run.pts[run.pts.length - 1]!]) {
-      const r = planRoutes(faces, gaps, { ...base, switches: [at] });
-      expect(r.switches, "at an end").toHaveLength(1);
-      expect(r.traces.filter((t) => t.net === "pwr")).toHaveLength(
-        plain.traces.filter((t) => t.net === "pwr").length + 1,
-      );
-      expect((totalLength(plain.traces) - totalLength(r.traces)) * k).toBeCloseTo(SWITCH_GAP_MM, 2);
+    for (const net of ["pwr", "gnd"] as const) {
+      for (const which of [0, -1]) {
+        const { r, tapeW, k } = withSwitch(net, (p) => (which === 0 ? p[0]! : p[p.length - 1]!));
+        expect(r.switches, `${net} at an end`).toHaveLength(1);
+        const { idle, common, live } = seat(r, tapeW, k);
+        expect(idle).toEqual([]);
+        expect(common).toHaveLength(1);
+        expect(live).toHaveLength(1);
+      }
     }
   });
 
-  it("refuses a run too short to seat the whole part", () => {
-    // The switch reaches well past its break — a half-pitch behind the cut and three in front — so a short
-    // run cannot take one however the break is placed. house's GND run is 5.7mm against the 5.97mm the part
-    // needs. Refusing is right; seating it would put a terminal off the end of the copper, on bare pattern,
-    // connected to nothing. The modal says so rather than dropping the click on the floor.
-    const { faces, gaps, base, plain, k } = fixture();
-    const gnd = plain.traces.find((t) => t.net === "gnd")!;
-    let length = 0;
-    for (let i = 1; i < gnd.pts.length; i++) {
-      length += Math.hypot(gnd.pts[i]!.x - gnd.pts[i - 1]!.x, gnd.pts[i]!.y - gnd.pts[i - 1]!.y);
-    }
-    expect(length * k).toBeLessThan(2 * SWITCH_PITCH_MM + slide_switch.pads[0]!.w);
-
-    const r = planRoutes(faces, gaps, { ...base, switches: [gnd.pts[Math.floor(gnd.pts.length / 2)]!] });
-    expect(r.switches).toHaveLength(0);
-    expect(r.traces.filter((t) => t.net === "gnd")).toHaveLength(1);
+  it("refuses a run too short to seat the part", () => {
+    // Breaking a run shorter than the part takes all its copper and strands what it feeds. Tested on
+    // `breakRuns` directly: across the break the switch is compact enough that no bundled run is too short.
+    const run = { net: "pwr" as const, pts: [{ x: 0, y: 0 }, { x: 1, y: 0 }] };
+    const tooBig = breakRuns([run], [{ x: 0.5, y: 0 }], 4, { before: 4, after: 4 });
+    expect(tooBig.traces).toEqual([run]);
+    expect(tooBig.placed).toEqual([]);
   });
 
   it("takes a switch and a resistor on the same circuit", () => {
-    const { faces, gaps, base, plain, mid, k } = fixture(3);
+    const { faces, gaps, base, plain, mid } = fixture(3);
     const pwr = plain.traces.filter((t) => t.net === "pwr");
     const other = pwr[pwr.length - 1]!;
     const at = other.pts[Math.floor(other.pts.length / 2)]!;
     const r = planRoutes(faces, gaps, { ...base, resistors: [mid], switches: [at] });
     expect(r.resistors).toHaveLength(1);
     expect(r.switches).toHaveLength(1);
-    const removed = (totalLength(plain.traces) - totalLength(r.traces)) * k;
-    expect(removed).toBeCloseTo(RESISTOR_MM + SWITCH_GAP_MM, 1);
+    // The switch's two lands are extra runs; the resistor's break makes one more.
+    expect(r.traces.filter((t) => t.width !== undefined)).toHaveLength(2);
   });
 });

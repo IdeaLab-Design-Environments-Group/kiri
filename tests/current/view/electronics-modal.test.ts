@@ -453,24 +453,29 @@ describe("view/electronics-modal", () => {
       expect(span).toBeCloseTo(across, 3);
     });
 
-    it("cuts the window under a switch's idle throw on the canvas too", () => {
-      // The export cut it and the canvas did not, so on screen the idle throw sat on unbroken tape: a
-      // circuit that switches nothing, drawn as though it worked. The strip carries the window on its own
-      // path, filled evenodd, which is a hole rather than more copper.
+    it("draws a switch's land copper on the canvas, not just in the export", () => {
+      // The rail steps across the part: a stub to the common, another across to one throw. Both are narrow
+      // land copper, not tape. The canvas has to draw them or it shows a rail with a hole in it and no way
+      // for the current to get across — a circuit that cannot work, drawn as though it does.
       const { modal } = openOn(grid2x2());
       modal.selectTool("battery");
       tapFlat(modal, { x: 0.5, y: 0.5 });
       modal.selectTool("led");
       tapFlat(modal, modal.gaps[0].point);
+      const before = modal.routed.traces.length;
       const run = modal.routed.traces.find((t: any) => t.net === "pwr");
       modal.selectTool("switch");
       tapFlat(modal, run.pts[Math.floor(run.pts.length / 2)]);
 
-      const html = modal.svg.innerHTML as string;
       expect(modal.routed.switches.length).toBeGreaterThan(0);
-      // A tape path with a second ring inside it, and the fill rule that makes that a hole.
-      expect(html).toMatch(/Z M [^"]*Z" class="el-tape/);
-      expect(html).toMatch(/class="el-tape[^"]*" fill-rule="evenodd"/);
+      const lands = modal.routed.traces.filter((t: any) => t.width !== undefined);
+      expect(lands).toHaveLength(2);
+      // The break makes one more run, and the two lands are two more again.
+      expect(modal.routed.traces.length).toBe(before + 3);
+      // Each land is narrower than the tape, and each is drawn.
+      for (const l of lands) expect(l.width).toBeLessThan(modal.tapeW());
+      expect((modal.svg.innerHTML.match(/class="el-tape/g) ?? []).length)
+        .toBe(modal.routed.traces.length);
     });
 
     it("takes one off when it is tapped again", () => {

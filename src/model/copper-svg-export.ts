@@ -263,7 +263,8 @@ export function stripOutline(
   tapeW: number,
   pads: { pwr: Vec2; gnd: Vec2 }[] = [],
 ): Vec2[] {
-  return outlineStrip(t.pts, widthsFor(t, tapeW, pads));
+  // Land copper under a part's terminals carries its own width; ordinary tape has none and takes the tape's.
+  return outlineStrip(t.pts, widthsFor(t, t.width ?? tapeW, pads));
 }
 
 /**
@@ -807,56 +808,38 @@ export function switchShape(a: Vec2, b: Vec2, tape: number, cross = tape): Resis
   if (L < 1e-9) return null;
   const ux = dx / L, uy = dy / L;
   const px = -uy, py = ux;               // across the run, towards the body
-  // A pad, at its own size: a bar `h` long across the run, `w` thick along it.
-  const pad = (p: Vec2, along: number, spec: { w: number; h: number }): { a: Vec2; b: Vec2; width: number } => {
-    const c = { x: p.x + ux * along, y: p.y + uy * along };
-    const half = spec.h / 2;
-    return {
-      a: { x: c.x - px * half, y: c.y - py * half },
-      b: { x: c.x + px * half, y: c.y + py * half },
-      width: spec.w,
-    };
-  };
-  // Terminals at the part's own pitch, measured along its axis. Anchoring one to a cut end instead made a
-  // gap come out as the break's chord -- 2.25mm against a 2.489mm pitch, since the run bends inside the
-  // break and a chord across a bend is short. The part is rigid; the copper is what curves.
-  // Measured from the middle of the break, so terminal 1 and the common straddle it evenly: each sits a
-  // half-pitch out, which is a pad's length plus a margin clear of the cut edge.
-  const m = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-  const at = (n: number): Vec2 => ({
-    x: m.x + ux * (n - 0.5) * SWITCH.pitch,
-    y: m.y + uy * (n - 0.5) * SWITCH.pitch,
+  // The part sits ACROSS the break, not along it. The rail arrives at the common, which is in the middle of
+  // the gap; the outgoing run leaves from a throw one pitch to the side, and the other throw is a pitch the
+  // other way, over bare pattern. That is what opens the circuit in that position — no window to cut, and
+  // no terminal sharing copper with the common, which is what made the switch switch nothing.
+  const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  const across = (n: number): Vec2 => ({
+    x: mid.x + px * n * SWITCH.pitch,
+    y: mid.y + py * n * SWITCH.pitch,
   });
-  const common = at(1);
-  // The housing, a pad row's offset to one side, centred on the common.
-  const cx = common.x + px * SWITCH.offset;
-  const cy = common.y + py * SWITCH.offset;
-  // Long enough to carry all three pads, deep enough to reach past its mounting holes.
+  const common = across(0);
+  const live = across(1);   // the throw the outgoing run reaches
+  const idle = across(-1);  // the throw over bare pattern
+  // The housing stands clear of the row, on the side the pads are offset from the part's origin.
+  const cx = common.x + ux * SWITCH.offset;
+  const cy = common.y + uy * SWITCH.offset;
   const p0 = SWITCH.fp.pads[0]!;
   const bodyL = 2 * SWITCH.pitch + p0.w;
-  // Deep enough to reach its own pads. At the pad row's offset it was centred over the mounting holes and
-  // stopped short of the legs, so the housing floated beside the copper with a gap between it and the
-  // terminals it belongs to. Twice the offset puts its near edge on the row and the holes in its middle.
   const bodyW = 2 * SWITCH.offset;
-  // Where the idle throw lands: a pitch past the common, still over the outgoing rail. Its copper is cut
-  // away so the part really does open the circuit in that position.
-  const idle = at(2);
-  const clear = 0.3;                     // bare pattern round the pad, so the window can be weeded
-  const nl = (p0.w + 2 * clear) / 2, nw = (p0.h + 2 * clear) / 2;
-  const corner = (dl: number, dw: number): Vec2 => ({
-    x: idle.x + ux * dl + px * dw,
-    y: idle.y + uy * dl + py * dw,
-  });
+  // A pad at its own size, drawn across the row (which runs perpendicular to the rail here).
+  const pad = (c: Vec2): { a: Vec2; b: Vec2; width: number } => {
+    const half = p0.h / 2;
+    return {
+      a: { x: c.x - ux * half, y: c.y - uy * half },
+      b: { x: c.x + ux * half, y: c.y + uy * half },
+      width: p0.w,
+    };
+  };
   return {
-    // Terminal 1 on the incoming rail, the common on the outgoing one, the idle throw over the window.
-    // Spaced at the part's own pitch, not by the gap they straddle: the run bends inside the break, so the
-    // straight line between the cut ends is shorter than the copper taken out -- 2.25mm against a 2.489mm
-    // pitch on house. A rigid part's pins do not close up when the tape curves under them.
-    leads: [pad(at(0), 0, p0), pad(common, 0, p0), pad(idle, 0, p0)],
-    notch: [corner(-nl, -nw), corner(nl, -nw), corner(nl, nw), corner(-nl, nw)],
+    leads: [pad(idle), pad(common), pad(live)],
     body: {
       x: cx - bodyL / 2, y: cy - bodyW / 2, w: bodyL, h: bodyW,
-      angle: (Math.atan2(dy, dx) * 180) / Math.PI, cx, cy,
+      angle: (Math.atan2(py, px) * 180) / Math.PI, cx, cy,
     },
     // The two mounting holes, on the body's own centre line.
     holes: SWITCH.fp.holes.map((h) => ({
