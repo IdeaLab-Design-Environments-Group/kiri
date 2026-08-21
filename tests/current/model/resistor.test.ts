@@ -189,10 +189,25 @@ describe("model/switch", () => {
     const along = (p: { x: number; y: number }): number => (p.x - a.x) * ux + (p.y - a.y) * uy;
     const span = Math.hypot(b.x - a.x, b.y - a.y);
     const sides = sh.leads.map((l) => along({ x: (l.a.x + l.b.x) / 2, y: (l.a.y + l.b.y) / 2 }));
-    // The break is exactly one pitch, so terminals 2 and 3 sit on its two cut edges: two at or behind the
-    // near edge, one at the far one.
+    // Two terminals behind the break, one past it.
     expect(sides.filter((d) => d <= 1e-9)).toHaveLength(2);
-    expect(sides.filter((d) => d >= span - 1e-9)).toHaveLength(1);
+    expect(sides.filter((d) => d > 1e-9)).toHaveLength(1);
+    void span;
+
+    // And spaced at the part's own pitch, on a run that BENDS inside the break. Spacing them by the gap
+    // they straddle put them 2.25mm apart against a 2.489mm pitch: the chord across a bend is shorter than
+    // the copper taken out, and a rigid part's pins do not close up when the tape curves under them. A
+    // straight test run hides this exactly, since there the two are equal.
+    const ordered = [...sides].sort((x, y) => x - y);
+    expect(ordered[1]! - ordered[0]!).toBeCloseTo(SWITCH_PITCH_MM, 6);
+    expect(ordered[2]! - ordered[1]!).toBeCloseTo(SWITCH_PITCH_MM, 6);
+
+    // All three on the copper's centreline, not off its edge.
+    for (const l of sh.leads) {
+      const c = { x: (l.a.x + l.b.x) / 2, y: (l.a.y + l.b.y) / 2 };
+      const off = (c.x - a.x) * -uy + (c.y - a.y) * ux;
+      expect(Math.abs(off)).toBeLessThan(1e-9);
+    }
 
     // And it is drawn on the file, not cut into it.
     const out = buildCopperSvgExport(

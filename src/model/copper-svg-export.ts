@@ -805,7 +805,10 @@ export function switchShape(a: Vec2, b: Vec2, tape: number, cross = tape): Resis
   // terminals it belongs to. Twice the offset puts its near edge on the row and the holes in its middle.
   const bodyW = 2 * SWITCH.offset;
   return {
-    leads: [pad(a, -L, p0), pad(a, 0, p0), pad(b, 0, p0)],
+    // At the part's own pitch, not at the gap it happens to straddle. The run bends inside the break, so the
+    // straight line between the cut ends is shorter than the copper taken out -- 2.25mm against a 2.489mm
+    // pitch on house. A rigid part's pins do not close up when the tape curves under them.
+    leads: [pad(a, -SWITCH.pitch, p0), pad(a, 0, p0), pad(a, SWITCH.pitch, p0)],
     body: {
       x: cx - bodyL / 2, y: cy - bodyW / 2, w: bodyL, h: bodyW,
       angle: (Math.atan2(dy, dx) * 180) / Math.PI, cx, cy,
