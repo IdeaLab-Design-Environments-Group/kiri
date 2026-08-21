@@ -668,6 +668,13 @@ export class ElectronicsModal {
     if (this.viewMode === "carrier" && this.routed.traces.length) {
       parts.push(...this.carrierParts());
     }
+    // Windows to take out of the copper: an SPDT's idle throw needs bare pattern under it, or the part is
+    // wired to the rail in both positions and switches nothing. The canvas has to cut them too — showing
+    // unbroken tape there is showing a circuit that does not exist.
+    const windows = this.routed.switches
+      .map((w) => switchShape(this.tp(w.a), this.tp(w.b), this.tapeW() * this.scale(), this.partSize())?.notch)
+      .filter((n): n is Vec2[] => !!n && n.length >= 3);
+
     // Copper tape, under the components so the pads and terminals stay readable on top of it.
     for (const t of this.routed.traces) {
       const cls = t.net === "pwr" ? "el-tape el-tape-pwr" : "el-tape el-tape-gnd";
@@ -680,9 +687,15 @@ export class ElectronicsModal {
       // nets apart under a chip -- so the canvas showed clean tape where the copper actually met.
       const ring = stripOutline(t, this.tapeW(), this.routed.pads);
       if (ring.length < 3) continue;
-      const d =
-        "M " + ring.map((p, k) => (k === 0 ? "" : "L ") + ptStr(this.tp(p))).join(" ") + " Z";
-      parts.push(`<path d="${d}" class="${cls}" />`);
+      const outer = ring.map((p) => this.tp(p));
+      const sub = (r: Vec2[]): string =>
+        "M " + r.map((p, k) => (k === 0 ? "" : "L ") + ptStr(p)).join(" ") + " Z";
+      // Any window falling inside this strip rides on its path, so `evenodd` reads it as a hole rather than
+      // as more copper. A separate path would simply lie on top and hide nothing.
+      const mine = windows.filter((n) => inRing(centreOf(n), outer));
+      parts.push(
+        `<path d="${[sub(outer), ...mine.map(sub)].join(" ")}" class="${cls}" fill-rule="evenodd" />`,
+      );
     }
     // The resistors, over the breaks they bridge: grey leads onto the copper either side, black body across
     // the bare pattern between them, where there is deliberately no copper at all.
@@ -967,3 +980,20 @@ function cloneCircuit(c: Circuit): Circuit {
 const isZero = (p: Vec2): boolean => p.x === 0 && p.y === 0;
 const fmt = (n: number): string => (Number.isFinite(n) ? String(Math.round(n * 1000) / 1000) : "0");
 const ptStr = (p: Vec2): string => `${fmt(p.x)} ${fmt(p.y)}`;
+
+/** The average of a ring's corners — good enough to say which strip a small window sits in. */
+function centreOf(ring: Vec2[]): Vec2 {
+  let x = 0, y = 0;
+  for (const p of ring) { x += p.x; y += p.y; }
+  return { x: x / ring.length, y: y / ring.length };
+}
+
+/** Winding containment, matching the export's. */
+function inRing(p: Vec2, ring: Vec2[]): boolean {
+  let w = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const a = ring[i]!, b = ring[j]!;
+    if ((a.y > p.y) !== (b.y > p.y) && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) w = !w;
+  }
+  return w;
+}

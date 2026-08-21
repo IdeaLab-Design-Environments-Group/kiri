@@ -453,6 +453,26 @@ describe("view/electronics-modal", () => {
       expect(span).toBeCloseTo(across, 3);
     });
 
+    it("cuts the window under a switch's idle throw on the canvas too", () => {
+      // The export cut it and the canvas did not, so on screen the idle throw sat on unbroken tape: a
+      // circuit that switches nothing, drawn as though it worked. The strip carries the window on its own
+      // path, filled evenodd, which is a hole rather than more copper.
+      const { modal } = openOn(grid2x2());
+      modal.selectTool("battery");
+      tapFlat(modal, { x: 0.5, y: 0.5 });
+      modal.selectTool("led");
+      tapFlat(modal, modal.gaps[0].point);
+      const run = modal.routed.traces.find((t: any) => t.net === "pwr");
+      modal.selectTool("switch");
+      tapFlat(modal, run.pts[Math.floor(run.pts.length / 2)]);
+
+      const html = modal.svg.innerHTML as string;
+      expect(modal.routed.switches.length).toBeGreaterThan(0);
+      // A tape path with a second ring inside it, and the fill rule that makes that a hole.
+      expect(html).toMatch(/Z M [^"]*Z" class="el-tape/);
+      expect(html).toMatch(/class="el-tape[^"]*" fill-rule="evenodd"/);
+    });
+
     it("takes one off when it is tapped again", () => {
       const { modal } = openOn(grid2x2());
       modal.selectTool("battery");
