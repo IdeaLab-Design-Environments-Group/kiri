@@ -704,16 +704,10 @@ function annotationLayer(
 ): string {
   const parts: string[] = [];
 
-  // The copper itself, exactly as the strips file draws it: the same outline, filled in its net's colour.
-  // Not a centreline standing in for it -- a line down the middle cannot show the width being cut, and it
-  // was the width that was in question.
-  for (const t of traces) {
-    const ring = stripOutline(t, tapeW, pads);
-    if (ring.length < 3) continue;
-    const colour = t.net === "pwr" ? PWR_FILL : GND_FILL;
-    parts.push(`<path d="${ringPath(ring.map(T))}" fill="${colour}" fill-rule="nonzero" />`);
-  }
-
+  // No copper here. The carrier IS the copper -- frame, tabs and traces are one piece, drawn as one filled
+  // shape -- so redrawing each run on top of it in its net's colour said nothing the shape did not already
+  // say and made the file read as though the nets were separate pieces laid over the frame. Only the parts
+  // are left: where they go, and which way round.
   // The resistors, over the breaks they bridge. Drawn after the copper so a part reads as sitting on top of
   // the tape, which is how it goes down.
   for (const r of resistors) parts.push(...resistorMarks(r, tapeW * scale, T, partMm));
@@ -825,10 +819,11 @@ export function switchShape(a: Vec2, b: Vec2, tape: number, cross = tape): Resis
   const idle = { x: row.x - px * SWITCH.pitch, y: row.y - py * SWITCH.pitch };
   // The housing spans both rows, centred between them.
   const cx = (a.x + row.x) / 2, cy = (a.y + row.y) / 2;
-  // Across the rail: narrower than the terminals it carries, so a leg stands proud at each end as well as
-  // along the edges. Drawn out to the pads' far corners the housing swallowed them and read as a square
-  // block; the part is a slim thing with its legs sticking out.
-  const bodyL = 2 * SWITCH.pitch - p0.w;
+  // Across the rail: out to the throws' centres. Each terminal then straddles a corner of the housing --
+  // half its width on, half off -- so it reads as attached while still standing proud. Drawn out to the
+  // pads' far edges instead the housing swallowed them; drawn short of their centres they met it at a
+  // single point and looked detached, which is what they were.
+  const bodyL = 2 * SWITCH.pitch;
   // Along the rail: exactly edge to edge between the two pad rows, so each terminal straddles the housing's
   // outline and half of it stands proud, as the legs do on the part. A pad's length deeper and every
   // terminal fell inside the outline, leaving the legs as slivers at the corners.

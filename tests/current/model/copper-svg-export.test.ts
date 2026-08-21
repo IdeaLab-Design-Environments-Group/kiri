@@ -682,42 +682,38 @@ describe("model/copper-svg-export", () => {
   });
 
   describe("annotation", () => {
-    const built = () => {
+    const built = (withParts = true) => {
       const { fold, traces, tapeW, keepOff, pads } = planned("house.fkld", 3);
-      const faces = flatFaces(fold);
-      const term = batteryTerminals(faces[0]!.centroid, patternDiag(faces), faces[0]!.poly, tapeW);
-      return buildCopperCarrierExport(fold, traces, tapeW, "k", keepOff, undefined, undefined, pads);
+      const pwr = traces.find((t) => t.net === "pwr")!;
+      const at = pwr.pts[Math.floor(pwr.pts.length / 2)]!;
+      const res = withParts ? [{ a: at, b: pwr.pts[Math.min(1, pwr.pts.length - 1)]! }] : [];
+      return buildCopperCarrierExport(
+        fold, traces, tapeW, "k", keepOff, undefined, undefined, pads, res,
+      );
     };
 
-    it("says which run is which net", () => {
-      // The strips file tells you all this by colouring PWR apart from GND. The carrier is one piece of
-      // copper, so it is one layer of one colour, and black outlines alone cannot say which run is positive
-      // or which way round the LED goes.
+    it("marks the parts and leaves the copper to the carrier", () => {
+      // The carrier IS the copper: frame, tabs and traces are one piece, cut as one filled shape. Redrawing
+      // each run on top of it in its net's colour said nothing the shape had not already said, and made the
+      // file read as though the nets were separate pieces laid over the frame.
       const svg = built().svg;
-      // The carrier is filled now, so the annotation is drawn on top of it rather than underneath: solid
-      // copper laid over the net colours would bury them.
-      expect(svg.indexOf('<g id="carrier"')).toBeLessThan(svg.indexOf('<g id="annotation"'));
+      // The annotation group follows the cut, so it draws over the copper rather than under it.
       const ann = svg.slice(svg.indexOf('<g id="annotation"'));
-      expect(ann).toContain("#ff0000");   // PWR
-      expect(ann).toContain("#222222");   // GND
-      // Filled copper, the same shapes the strips file cuts -- not a line standing in for it.
-      expect(ann).toMatch(/fill="#ff0000" fill-rule="nonzero"/);
-      // The copper and nothing else. Pad and terminal markers drawn over a strip merge with it into one
-      // shape wider than the tape, and the cut line, which follows the strip alone, then looks misplaced.
-      expect(ann).not.toContain("<circle");
-      expect(ann).not.toContain("<text");
-      expect(ann).not.toContain("#d8b24a");
+      expect(ann).not.toContain("#ff0000");   // no PWR run redrawn
+      expect(ann).not.toContain("#222222");   // nor GND
+      // What is left is the part: where it goes, and which way round.
+      expect(ann).toContain("#111111");       // its body
+      expect(ann).toContain("#c3cad6");       // its leads
     });
 
     it("keeps the annotation out of the cut, so it can be switched off", () => {
       // Every path in the carrier group is cut. An annotation cut along a trace would sever the trace it
-      // names, so it lives in its own group and never in that one.
+      // marks, so it lives in its own group and never in that one.
       const svg = built().svg;
       const cut = cutLayer(svg);
-      expect(cut).not.toContain("#ff0000");
-      expect(cut).not.toContain("#d8b24a");
+      expect(cut).not.toContain("#111111");
+      expect(cut).not.toContain("#c3cad6");
       expect(cut).not.toContain("<circle");
-      expect(cut).not.toContain("<text");
     });
 
     it("is left out entirely when there is nothing to annotate", () => {
@@ -726,22 +722,26 @@ describe("model/copper-svg-export", () => {
     });
 
     it("mirrors with the cut it annotates", () => {
-      // It goes through the same transform, so a mirrored file cannot end up with its marks on the
-      // unmirrored side — which would put the + on the wrong terminal.
+      // It goes through the same transform, so a mirrored file cannot end up with its parts on the
+      // unmirrored side, marking a component where there is no copper.
       const { fold, traces, tapeW, pads } = planned("house.fkld", 3);
-      const faces = flatFaces(fold);
-      const term = batteryTerminals(faces[0]!.centroid, patternDiag(faces), faces[0]!.poly, tapeW);
-      const plain = buildCopperCarrierExport(fold, traces, tapeW, "k", [], undefined, undefined, pads);
-      const flipped = buildCopperCarrierExport(
-        fold, traces, tapeW, "k", [], { x: true, y: false }, undefined, pads,
+      const pwr = traces.find((t) => t.net === "pwr")!;
+      const res = [{ a: pwr.pts[Math.floor(pwr.pts.length / 2)]!, b: pwr.pts[1]! }];
+      const plain = buildCopperCarrierExport(
+        fold, traces, tapeW, "k", [], undefined, undefined, pads, res,
       );
-      // The first x in the annotation's first filled ring.
-      const cx = (svg: string): number =>
-        Number(
-          svg
-            .slice(svg.indexOf('<g id="annotation"'))
-            .match(/<path d="M ([\d.-]+)/)![1],
-        );
+      const flipped = buildCopperCarrierExport(
+        fold, traces, tapeW, "k", [], { x: true, y: false }, undefined, pads, res,
+      );
+      // The first x in the annotation's first shape.
+      // A lead's MIDPOINT. Its two endpoints are no use on their own: mirroring flips the direction across
+      // the run, so the band's ends swap and `x1` of the mirrored one answers to `x2` of the other.
+      const cx = (svg: string): number => {
+        const m = svg
+          .slice(svg.indexOf('<g id="annotation"'))
+          .match(/<line[^>]*?x1="([\d.-]+)"[^>]*?x2="([\d.-]+)"/)!;
+        return (Number(m[1]) + Number(m[2])) / 2;
+      };
       const { w } = sheetFrame(fold);
       expect(cx(flipped.svg)).toBeCloseTo(w - cx(plain.svg), 2);
     });

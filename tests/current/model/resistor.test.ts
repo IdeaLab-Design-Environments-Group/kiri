@@ -330,6 +330,44 @@ describe("model/switch", () => {
     expect(gap, "gap from the idle pad's edge to the nearest copper").toBeGreaterThan(0.8);
   });
 
+  it("attaches every leg to the housing", () => {
+    // A terminal that meets the body at a single corner reads as a loose square floating beside it. Each has
+    // to overlap the outline properly. Narrower than the throws' centres, the housing caught them at its
+    // corners and only a percent or two of each pad touched it.
+    const { r, tapeW, k } = withSwitch();
+    const { sh } = seat(r, tapeW, k);
+    const b = sh.body;
+    const rad = (b.angle * Math.PI) / 180, ca = Math.cos(rad), sa = Math.sin(rad);
+    // Into the housing's own frame, where it is an axis-aligned box.
+    const local = (q: Vec2): Vec2 => {
+      const dx = q.x - b.cx, dy = q.y - b.cy;
+      return { x: dx * ca + dy * sa, y: -dx * sa + dy * ca };
+    };
+    const inside = (q: Vec2): boolean => {
+      const l = local(q);
+      return Math.abs(l.x) <= b.w / 2 && Math.abs(l.y) <= b.h / 2;
+    };
+
+    const names = ["idle", "common", "live"];
+    sh.leads.forEach((l, i) => {
+      const dx = l.b.x - l.a.x, dy = l.b.y - l.a.y;
+      const len = Math.hypot(dx, dy);
+      const ux = dx / len, uy = dy / len, px = -uy, py = ux, hw = l.width / 2;
+      let on = 0, total = 0;
+      for (let u = 0; u <= 20; u++) {
+        for (let v = -10; v <= 10; v++) {
+          const q = {
+            x: l.a.x + ux * len * (u / 20) + px * (v / 10) * hw,
+            y: l.a.y + uy * len * (u / 20) + py * (v / 10) * hw,
+          };
+          total++;
+          if (inside(q)) on++;
+        }
+      }
+      expect((100 * on) / total, `${names[i]} leg overlapping the housing, %`).toBeGreaterThan(15);
+    });
+  });
+
   it("lands on pad-sized copper, not on full tape", () => {
     // The terminals are .098in apart. Two full-width stubs would meet between them and short the part.
     const { r, tapeW, k } = withSwitch();
