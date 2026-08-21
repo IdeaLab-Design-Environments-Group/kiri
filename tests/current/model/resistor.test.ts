@@ -171,6 +171,62 @@ describe("model/resistor", () => {
   });
 });
 
+describe("model/part placement", () => {
+  it("puts a part where it was clicked, not at the end of a segment", () => {
+    // `dist2` returns the distance despite its name, so dividing by it instead of by its square made the
+    // projection `u` times too large. Clamped to 1, every part landed at the far end of whichever segment
+    // was nearest: on a straight 10-unit run, clicks at 3, 5 and 7 all produced the same break at 9.
+    const run = { net: "pwr" as const, pts: [{ x: 0, y: 0 }, { x: 10, y: 0 }] };
+    for (const x of [3, 5, 7]) {
+      const s = breakRuns([run], [{ x, y: 0 }], 1).placed[0]!;
+      expect(s.a.x, `click at ${x}`).toBeCloseTo(x - 0.5, 9);
+      expect(s.b.x, `click at ${x}`).toBeCloseTo(x + 0.5, 9);
+    }
+  });
+
+  it("lands on the click along a real, bent run", () => {
+    // Walked along the run at a tenth, a third, a half and so on: the break must straddle the point clicked.
+    // What is left is the chord across a bend inside the span, which is geometry, not drift.
+    const { faces, gaps, base, plain, k } = fixture(3);
+    const run = plain.traces.find((t) => t.net === "pwr")!;
+    const segs: number[] = [];
+    let total = 0;
+    for (let i = 1; i < run.pts.length; i++) {
+      const l = Math.hypot(run.pts[i]!.x - run.pts[i - 1]!.x, run.pts[i]!.y - run.pts[i - 1]!.y);
+      segs.push(l);
+      total += l;
+    }
+    const along = (f: number): Vec2 => {
+      let want = f * total, acc = 0;
+      for (let i = 0; i < segs.length; i++) {
+        if (want <= acc + segs[i]!) {
+          const t = (want - acc) / segs[i]!;
+          return {
+            x: run.pts[i]!.x + (run.pts[i + 1]!.x - run.pts[i]!.x) * t,
+            y: run.pts[i]!.y + (run.pts[i + 1]!.y - run.pts[i]!.y) * t,
+          };
+        }
+        acc += segs[i]!;
+      }
+      return run.pts[run.pts.length - 1]!;
+    };
+    const toSeg = (p: Vec2, a: Vec2, b: Vec2): number => {
+      const l2 = (b.x - a.x) ** 2 + (b.y - a.y) ** 2;
+      if (l2 < 1e-18) return Math.hypot(p.x - a.x, p.y - a.y);
+      const t = Math.max(0, Math.min(1, ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / l2));
+      return Math.hypot(p.x - (a.x + t * (b.x - a.x)), p.y - (a.y + t * (b.y - a.y)));
+    };
+
+    for (const f of [0.2, 0.4, 0.6, 0.8]) {
+      const click = along(f);
+      const r = planRoutes(faces, gaps, { ...base, resistors: [click] });
+      expect(r.resistors, `resistor at ${f}`).toHaveLength(1);
+      const { a, b } = r.resistors[0]!;
+      expect(toSeg(click, a, b) * k, `resistor clicked at ${f * 100}% of the run`).toBeLessThan(0.5);
+    }
+  });
+});
+
 describe("model/switch", () => {
   /** house with one LED and a switch on the middle of a rail. */
   function withSwitch(net: "pwr" | "gnd" = "pwr", at?: (pts: Vec2[]) => Vec2, leds = 3) {

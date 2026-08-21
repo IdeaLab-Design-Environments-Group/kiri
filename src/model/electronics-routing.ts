@@ -1096,9 +1096,14 @@ export function breakRuns(
     out.forEach((t, ti) => {
       for (let i = 1; i < t.pts.length; i++) {
         const a = t.pts[i - 1]!, b = t.pts[i]!;
-        const l2 = dist2(a, b);
+        // The segment's squared length, computed here rather than with `dist2`, which despite its name
+        // returns the distance. Divided by the length instead of its square, the projection came out `u`
+        // times too large and clamped to 1 on all but the shortest segments: every part landed at the end
+        // of a segment rather than where it was put.
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const l2 = dx * dx + dy * dy;
         if (l2 < 1e-18) continue;
-        const u = Math.max(0, Math.min(1, ((r.x - a.x) * (b.x - a.x) + (r.y - a.y) * (b.y - a.y)) / l2));
+        const u = Math.max(0, Math.min(1, ((r.x - a.x) * dx + (r.y - a.y) * dy) / l2));
         const p = { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u };
         const d = Math.hypot(r.x - p.x, r.y - p.y);
         if (d < bestD) { bestD = d; bestRun = ti; bestSeg = i; bestT = u; }
