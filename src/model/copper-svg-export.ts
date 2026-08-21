@@ -97,6 +97,8 @@ const SWITCH = {
   pitch: slide_switch.pads[1]!.cx - slide_switch.pads[0]!.cx,
   /** How far the housing stands clear of the pad row — the pads' own offset from the part's origin. */
   offset: slide_switch.pads[0]!.cy,
+  /** Between the two rows: the common's edge to the throws'. The break is this plus a neck. */
+  rowSep: slide_switch.pads[0]!.cy - slide_switch.pads[1]!.cy,
 };
 
 /** A resistor: a black body, with grey leads reaching either way onto the copper it bridges. */
@@ -813,15 +815,18 @@ export function switchShape(a: Vec2, b: Vec2, tape: number, cross = tape): Resis
   // neither throw by itself — one gets a land, the other is left bare, and that is what opens the circuit.
   const p0 = SWITCH.fp.pads[0]!;
   const common = a;
-  const live = { x: b.x + px * SWITCH.pitch, y: b.y + py * SWITCH.pitch };
-  const idle = { x: b.x - px * SWITCH.pitch, y: b.y - py * SWITCH.pitch };
+  // The throws sit a row's separation along from the common — not at the far cut end, which is pulled back
+  // a neck further so the idle throw lands in clear pattern rather than beside the tape.
+  const row = { x: a.x + ux * SWITCH.rowSep, y: a.y + uy * SWITCH.rowSep };
+  const live = { x: row.x + px * SWITCH.pitch, y: row.y + py * SWITCH.pitch };
+  const idle = { x: row.x - px * SWITCH.pitch, y: row.y - py * SWITCH.pitch };
   // The housing spans both rows, centred between them.
-  const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+  const cx = (a.x + row.x) / 2, cy = (a.y + row.y) / 2;
   const bodyL = 2 * SWITCH.pitch + p0.w;   // across the rail: both throws and their pads
   // Along the rail: exactly edge to edge between the two pad rows, so each terminal straddles the housing's
   // outline and half of it stands proud, as the legs do on the part. A pad's length deeper and every
   // terminal fell inside the outline, leaving the legs as slivers at the corners.
-  const bodyW = L;
+  const bodyW = SWITCH.rowSep;
   // A pad at its own size: `w` across the part's long axis, `h` along the rail.
   const pad = (c: Vec2): { a: Vec2; b: Vec2; width: number } => {
     const half = p0.h / 2;

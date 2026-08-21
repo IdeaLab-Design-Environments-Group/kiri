@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import { flatFaces, gapGraph, ledOf, type Circuit, type Vec2 } from "../../../src/model/electronics.js";
 import {
   RESISTOR_MM,
-  SWITCH_GAP_MM,
   SWITCH_PITCH_MM,
+  SWITCH_ROW_MM,
   breakRuns,
   planRoutes,
   tapeWidthFor,
@@ -233,15 +233,45 @@ describe("model/switch", () => {
       const { idle, common, live, lands, clear } = seat(r, tapeW, k);
 
       expect(idle, `${net}: the idle throw must reach no copper`).toEqual([]);
-      expect(common, `${net}: the common must sit on land`).toHaveLength(1);
-      expect(live, `${net}: the live throw must sit on land`).toHaveLength(1);
-      expect(common[0], `${net}: common and live must be separate copper`).not.toBe(live[0]);
+      expect(common.length, `${net}: the common must sit on copper`).toBeGreaterThan(0);
+      expect(live.length, `${net}: the live throw must sit on copper`).toBeGreaterThan(0);
+      expect(
+        common.some((i) => live.includes(i)),
+        `${net}: common and live must not share copper — that bypasses the switch`,
+      ).toBe(false);
 
       // Two lands, and they must not meet: joined, they bridge the incoming rail straight to the outgoing
       // one around the part, and the switch is bypassed.
       expect(lands).toHaveLength(2);
       expect(clear, `${net}: land clearance`).toBeGreaterThan(0.3);
     }
+  });
+
+  it("leaves the idle throw a real gap, not a whisker", () => {
+    // The void has to be a proper keep-out, the sort of clearance an LED's pads get — not merely "no copper
+    // exactly under the centre". The idle throw sits a pitch off the rail; with the outgoing tape ending
+    // level with the pad row, 3.25mm of tape left its pad edge 0.27mm from copper, close enough for solder
+    // to bridge. The tape is pulled back a neck beyond the row, which makes it a millimetre.
+    const { r, tapeW, k } = withSwitch();
+    const { sh, rings, idle } = seat(r, tapeW, k);
+    expect(idle, "the idle throw must reach no copper").toEqual([]);
+
+    const toSeg = (p: Vec2, a: Vec2, b: Vec2): number => {
+      const l2 = (b.x - a.x) ** 2 + (b.y - a.y) ** 2;
+      if (l2 < 1e-18) return Math.hypot(p.x - a.x, p.y - a.y);
+      const t = Math.max(0, Math.min(1, ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / l2));
+      return Math.hypot(p.x - (a.x + t * (b.x - a.x)), p.y - (a.y + t * (b.y - a.y)));
+    };
+    const c = { x: (sh.leads[0]!.a.x + sh.leads[0]!.b.x) / 2, y: (sh.leads[0]!.a.y + sh.leads[0]!.b.y) / 2 };
+    let nearest = Infinity;
+    for (const rg of rings) {
+      for (let q = 0; q < rg.ring.length; q++) {
+        nearest = Math.min(nearest, toSeg(c, rg.ring[q]!, rg.ring[(q + 1) % rg.ring.length]!));
+      }
+    }
+    // From the pad's own edge, not from its centre.
+    const gap = nearest - slide_switch.pads[0]!.h / 2;
+    expect(gap, "gap from the idle pad's edge to the nearest copper").toBeGreaterThan(0.8);
   });
 
   it("lands on pad-sized copper, not on full tape", () => {
@@ -276,7 +306,9 @@ describe("model/switch", () => {
     const dIdle = Math.hypot(common.x - idle.x, common.y - idle.y);
     const dLive = Math.hypot(common.x - live.x, common.y - live.y);
     expect(dIdle).toBeCloseTo(dLive, 6);
-    expect(dIdle).toBeCloseTo(Math.hypot(SWITCH_PITCH_MM, SWITCH_GAP_MM), 6);
+    // The rows' own separation, not the break: the break is that plus a neck, which pulls the tape back
+    // clear of the idle throw but does not move the part.
+    expect(dIdle).toBeCloseTo(Math.hypot(SWITCH_PITCH_MM, SWITCH_ROW_MM), 6);
 
     expect(sh.holes).toHaveLength(2);
     for (const h of sh.holes!) expect(h.r).toBeCloseTo((0.034 * 25.4) / 2, 4);
@@ -296,8 +328,11 @@ describe("model/switch", () => {
         expect(r.switches, `${net} at an end`).toHaveLength(1);
         const { idle, common, live } = seat(r, tapeW, k);
         expect(idle).toEqual([]);
-        expect(common).toHaveLength(1);
-        expect(live).toHaveLength(1);
+        // The common's land overlaps the rail it continues, so it may read as more than one run — what
+        // matters is that it reaches copper, and that it is not the same copper the live throw reaches.
+        expect(common.length).toBeGreaterThan(0);
+        expect(live.length).toBeGreaterThan(0);
+        expect(common.some((i) => live.includes(i))).toBe(false);
       }
     }
   });

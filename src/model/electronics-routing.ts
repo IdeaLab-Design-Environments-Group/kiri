@@ -991,6 +991,7 @@ export function planRoutes(
         toFlat(SWITCH_PITCH_MM),
         toFlat(slide_switch.pads[0]!.h),
         toFlat(slide_switch.pads[0]!.w),
+        toFlat(SWITCH_ROW_MM),
       ),
     ),
   ];
@@ -1023,13 +1024,26 @@ export const RESISTOR_MM =
 export const SWITCH_PITCH_MM = slide_switch.pads[1]!.cx - slide_switch.pads[0]!.cx;
 
 /**
- * The copper a switch takes out, in millimetres: the distance between the part's two rows of pads.
+ * The copper a switch takes out, in millimetres.
  *
  * The common is on one edge and the two throws on the other, so the rail runs straight through the part —
- * in at the common on one side, out at a throw on the other. The break is exactly the gap between those
- * edges, which is what puts a terminal on the copper at each end of it.
+ * in at the common on one side, out at a throw on the other. The break is the separation between those
+ * rows, plus a neck: the idle throw has to sit in clear pattern, and the outgoing tape is wide enough that
+ * ending it level with the pad row left only a quarter of a millimetre between the two. Pulled back by the
+ * neck, that becomes a millimetre — the sort of gap an LED's pads get.
  */
-export const SWITCH_GAP_MM = slide_switch.pads[0]!.cy - slide_switch.pads[1]!.cy;
+export const SWITCH_ROW_MM = slide_switch.pads[0]!.cy - slide_switch.pads[1]!.cy;
+
+/**
+ * How far the outgoing tape is pulled back beyond the pad row, in millimetres.
+ *
+ * The idle throw sits a pitch off the rail's centreline. At 2.489mm out against a 3.25mm tape, its pad edge
+ * cleared the copper by 0.27mm with the tape ending level with it — close enough for solder to bridge, and
+ * far tighter than anything else on the sheet gets. 1.4mm back puts a millimetre between them.
+ */
+export const SWITCH_NECK_MM = 1.4;
+
+export const SWITCH_GAP_MM = SWITCH_ROW_MM + SWITCH_NECK_MM;
 
 /**
  * Break the run each resistor sits on.
@@ -1121,23 +1135,33 @@ export function breakRuns(
  * Both stubs are a pad's width, not the tape's: at `.098in` centres, two full-width stubs would meet
  * between the terminals and short the part to itself.
  */
-function switchLand(span: PartSpan, pitch: number, padW: number, padL: number): Trace2D[] {
+function switchLand(
+  span: PartSpan,
+  pitch: number,
+  padW: number,
+  padL: number,
+  rowSep: number,
+): Trace2D[] {
   const { a, b } = span;
   const d = sub(b, a);
   const L = len(d);
   if (L < 1e-12) return [];
   const u = { x: d.x / L, y: d.y / L };
   const p = { x: -u.y, y: u.x };
-  // The common is at the near cut end, the two throws at the far one, a pitch either side of the rail. The
-  // outgoing tape runs down the middle, so it reaches neither throw on its own: one gets a land, and the
-  // other is left bare, which is what opens the circuit in that position.
+  // The common is at the near cut end. The throws are a row's separation along from it — not at the far cut
+  // end, which is pulled back a neck further so the idle throw sits in clear pattern. The outgoing tape
+  // reaches neither throw on its own: one gets a land, the other is left bare, which opens the circuit.
   const over = padL / 2;
-  const live = { x: b.x + p.x * (pitch + over), y: b.y + p.y * (pitch + over) };
+  const row = { x: a.x + u.x * rowSep, y: a.y + u.y * rowSep };
+  const live = { x: row.x + p.x * (pitch + over), y: row.y + p.y * (pitch + over) };
   // Each land runs half a pad past its terminal, so the whole pad has copper under it. Stopped dead on the
   // centre, half of it sat over bare pattern and the terminal made contact along one edge if at all.
+  // Centred on the terminal, not started at it: run from the cut end only forwards, the pad's centre sits on
+  // the land's own end cap and half the pad has nothing under it.
+  const commonStart = { x: a.x - u.x * over, y: a.y - u.y * over };
   const commonEnd = { x: a.x + u.x * over, y: a.y + u.y * over };
   return [
-    { net: span.net, pts: [a, commonEnd], width: padW },
+    { net: span.net, pts: [commonStart, commonEnd], width: padW },
     { net: span.net, pts: [b, live], width: padW },
   ];
 }
