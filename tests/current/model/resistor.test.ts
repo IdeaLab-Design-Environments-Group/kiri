@@ -149,7 +149,7 @@ describe("model/resistor", () => {
 
     const strips = buildCopperSvgExport(fold, r.traces, tapeW, "k", r.pads, undefined, undefined, r.resistors);
     expect(strips.svg).toContain('id="parts"');
-    expect(strips.svg).toContain("#8b93a1"); // the leads, onto the copper
+    expect(strips.svg).toContain("#c3cad6"); // the leads, onto the copper
     expect(strips.svg).toContain("#111111"); // the body, over the gap
 
     const carrier = buildCopperCarrierExport(
@@ -159,7 +159,7 @@ describe("model/resistor", () => {
     // top of it — so slicing to the end of the file would sweep the annotation in and prove nothing.
     const from = carrier.svg.indexOf('<g id="carrier"');
     const cut = carrier.svg.slice(from, carrier.svg.indexOf("</g>", from));
-    expect(cut).not.toContain("#8b93a1");
+    expect(cut).not.toContain("#c3cad6");
     expect(cut).not.toContain("#111111");
   });
 

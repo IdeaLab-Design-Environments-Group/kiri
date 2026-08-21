@@ -833,8 +833,10 @@ body {
   opacity: 0.55;
 }
 /* A resistor: black body, grey leads reaching onto the copper it bridges. */
-.el-res-lead { stroke: #8b93a1; fill: none; stroke-linecap: butt; }
+.el-res-lead { stroke: #c3cad6; fill: none; stroke-linecap: butt; }
 .el-res-body { fill: #111111; }
+/* Mounting holes: drawn on the part, never cut. */
+.el-res-hole { fill: none; stroke: #c3cad6; }
 .el-key-res { color: #4b5563; }
 .el-tape-pwr { fill: #ff0000; }
 .el-tape-gnd { fill: #222222; }

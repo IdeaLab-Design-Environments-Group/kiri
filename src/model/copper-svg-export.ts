@@ -101,7 +101,7 @@ const SWITCH = {
 
 /** A resistor: a black body, with grey leads reaching either way onto the copper it bridges. */
 const RES_BODY = "#111111";
-const RES_LEAD = "#8b93a1";
+const RES_LEAD = "#c3cad6";   // bright enough to read against the black housing it sits on
 
 export interface CopperSvgExport {
   filename: string;
@@ -818,7 +818,10 @@ export function switchShape(a: Vec2, b: Vec2, tape: number, cross = tape): Resis
   // The housing spans both rows, centred between them.
   const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
   const bodyL = 2 * SWITCH.pitch + p0.w;   // across the rail: both throws and their pads
-  const bodyW = L + p0.h;                  // along it: edge to edge, plus a pad
+  // Along the rail: exactly edge to edge between the two pad rows, so each terminal straddles the housing's
+  // outline and half of it stands proud, as the legs do on the part. A pad's length deeper and every
+  // terminal fell inside the outline, leaving the legs as slivers at the corners.
+  const bodyW = L;
   // A pad at its own size: `w` across the part's long axis, `h` along the rail.
   const pad = (c: Vec2): { a: Vec2; b: Vec2; width: number } => {
     const half = p0.h / 2;

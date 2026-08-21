@@ -716,15 +716,23 @@ export class ElectronicsModal {
     for (const w of this.routed.switches) {
       const sh = switchShape(this.tp(w.a), this.tp(w.b), this.tapeW() * this.scale(), this.partSize());
       if (!sh) continue;
+      // Housing first, then the legs and the mounting holes over it — the order the cut files use. A part's
+      // legs do run under its body, but every terminal of this one falls inside the housing's outline, so
+      // drawing the body last hid all three: the one thing you look at a footprint to see.
+      const bd = sh.body;
+      parts.push(
+        `<rect x="${fmt(bd.x)}" y="${fmt(bd.y)}" width="${fmt(bd.w)}" height="${fmt(bd.h)}" rx="${fmt(bd.h * 0.18)}" class="el-res-body" transform="rotate(${fmt(bd.angle)} ${fmt(bd.cx)} ${fmt(bd.cy)})" />`,
+      );
       for (const l of sh.leads) {
         parts.push(
           `<line x1="${fmt(l.a.x)}" y1="${fmt(l.a.y)}" x2="${fmt(l.b.x)}" y2="${fmt(l.b.y)}" class="el-res-lead" stroke-width="${fmt(l.width)}" />`,
         );
       }
-      const bd = sh.body;
-      parts.push(
-        `<rect x="${fmt(bd.x)}" y="${fmt(bd.y)}" width="${fmt(bd.w)}" height="${fmt(bd.h)}" rx="${fmt(bd.h * 0.18)}" class="el-res-body" transform="rotate(${fmt(bd.angle)} ${fmt(bd.cx)} ${fmt(bd.cy)})" />`,
-      );
+      for (const h of sh.holes ?? []) {
+        parts.push(
+          `<circle cx="${fmt(h.c.x)}" cy="${fmt(h.c.y)}" r="${fmt(h.r)}" class="el-res-hole" stroke-width="${fmt(h.r * 0.5)}" />`,
+        );
+      }
     }
     // Each LED is two distinct pads straddling its hinge — a PWR (+) pad toward face `a` and a GND (−)
     // pad toward face `b` — bridged by the LED chip. An LED whose gap no longer exists has nowhere to
