@@ -1023,14 +1023,13 @@ export const RESISTOR_MM =
 export const SWITCH_PITCH_MM = slide_switch.pads[1]!.cx - slide_switch.pads[0]!.cx;
 
 /**
- * The copper a switch takes out, in millimetres.
+ * The copper a switch takes out, in millimetres: the distance between the part's two rows of pads.
  *
- * The rail steps across the part, so the gap has to let the land reaching the live throw pass the
- * common's without touching it: a pad's width for each, plus a margin between them. Narrower and the two
- * lands meet beside the common, joining the incoming rail straight to the outgoing one and bypassing the
- * switch entirely.
+ * The common is on one edge and the two throws on the other, so the rail runs straight through the part —
+ * in at the common on one side, out at a throw on the other. The break is exactly the gap between those
+ * edges, which is what puts a terminal on the copper at each end of it.
  */
-export const SWITCH_GAP_MM = 2 * slide_switch.pads[0]!.h + 0.6;
+export const SWITCH_GAP_MM = slide_switch.pads[0]!.cy - slide_switch.pads[1]!.cy;
 
 /**
  * Break the run each resistor sits on.
@@ -1129,19 +1128,17 @@ function switchLand(span: PartSpan, pitch: number, padW: number, padL: number): 
   if (L < 1e-12) return [];
   const u = { x: d.x / L, y: d.y / L };
   const p = { x: -u.y, y: u.x };
-  const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; // the common, in the middle of the break
-  const live = { x: mid.x + p.x * pitch, y: mid.y + p.y * pitch };
-  // Each land runs half a pad past its terminal, so the whole pad has copper under it. Stopped dead on the
-  // centre, half of each pad sat over bare pattern and the terminal made contact along one edge if at all.
+  // The common is at the near cut end, the two throws at the far one, a pitch either side of the rail. The
+  // outgoing tape runs down the middle, so it reaches neither throw on its own: one gets a land, and the
+  // other is left bare, which is what opens the circuit in that position.
   const over = padL / 2;
-  const commonEnd = { x: mid.x + u.x * over, y: mid.y + u.y * over };
-  const liveEnd = { x: live.x + p.x * over, y: live.y + p.y * over };
-  // Out from the far cut end, across, then back: an L. Straight from `b` to the live throw the land would
-  // cut the corner and pass within a pad's width of the common's, joining the two rails around the part.
-  const corner = { x: b.x + p.x * pitch, y: b.y + p.y * pitch };
+  const live = { x: b.x + p.x * (pitch + over), y: b.y + p.y * (pitch + over) };
+  // Each land runs half a pad past its terminal, so the whole pad has copper under it. Stopped dead on the
+  // centre, half of it sat over bare pattern and the terminal made contact along one edge if at all.
+  const commonEnd = { x: a.x + u.x * over, y: a.y + u.y * over };
   return [
     { net: span.net, pts: [a, commonEnd], width: padW },
-    { net: span.net, pts: [b, corner, liveEnd], width: padW },
+    { net: span.net, pts: [b, live], width: padW },
   ];
 }
 

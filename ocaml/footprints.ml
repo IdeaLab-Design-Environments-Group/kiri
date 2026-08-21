@@ -57,14 +57,20 @@ let r_1206 =
 
 let slide_switch =
   (* class slide_switch: pads .039 x .047 at x = -.098, 0, .098 and y = .1;
-     holes .034 across at x = ±.118/2, y = 0 *)
+     holes .034 across at x = ±.118/2, y = 0.
+
+     One deliberate departure from pcb.py, from the part in hand: the COMMON is on the opposite edge.
+     pcb.py puts all three pads at y = .1, in a row. The switch being fitted has its two throws on one edge
+     and the common alone on the other, which is what lets a rail run straight through the part — in at the
+     common on one side, out at a throw on the other — instead of having to detour round it. Pad sizes,
+     pitch and mounting holes are the library's untouched. *)
   {
     name = "slide_switch";
-    source = "pcb.py class slide_switch - C&K AYZ0102AGRLC";
+    source = "pcb.py class slide_switch - C&K AYZ0102AGRLC (common moved to the far edge)";
     pads =
       [
         { cx = -0.098; cy = 0.1; w = 0.039; h = 0.047; label = "1" };
-        { cx = 0.0; cy = 0.1; w = 0.039; h = 0.047; label = "2" };
+        { cx = 0.0; cy = -0.1; w = 0.039; h = 0.047; label = "2 common" };
         { cx = 0.098; cy = 0.1; w = 0.039; h = 0.047; label = "3" };
       ];
     holes = [ { hx = -0.118 /. 2.0; hy = 0.0; hr = 0.034 /. 2.0 }; { hx = 0.118 /. 2.0; hy = 0.0; hr = 0.034 /. 2.0 } ];

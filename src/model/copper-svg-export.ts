@@ -808,25 +808,18 @@ export function switchShape(a: Vec2, b: Vec2, tape: number, cross = tape): Resis
   if (L < 1e-9) return null;
   const ux = dx / L, uy = dy / L;
   const px = -uy, py = ux;               // across the run, towards the body
-  // The part sits ACROSS the break, not along it. The rail arrives at the common, which is in the middle of
-  // the gap; the outgoing run leaves from a throw one pitch to the side, and the other throw is a pitch the
-  // other way, over bare pattern. That is what opens the circuit in that position — no window to cut, and
-  // no terminal sharing copper with the common, which is what made the switch switch nothing.
-  const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-  const across = (n: number): Vec2 => ({
-    x: mid.x + px * n * SWITCH.pitch,
-    y: mid.y + py * n * SWITCH.pitch,
-  });
-  const common = across(0);
-  const live = across(1);   // the throw the outgoing run reaches
-  const idle = across(-1);  // the throw over bare pattern
-  // The housing stands clear of the row, on the side the pads are offset from the part's origin.
-  const cx = common.x + ux * SWITCH.offset;
-  const cy = common.y + uy * SWITCH.offset;
+  // The rail runs straight through the part: the common is on the near edge of the break, the two throws on
+  // the far edge, a pitch either side of the centreline. The outgoing tape runs down the middle and reaches
+  // neither throw by itself — one gets a land, the other is left bare, and that is what opens the circuit.
   const p0 = SWITCH.fp.pads[0]!;
-  const bodyL = 2 * SWITCH.pitch + p0.w;
-  const bodyW = 2 * SWITCH.offset;
-  // A pad at its own size, drawn across the row (which runs perpendicular to the rail here).
+  const common = a;
+  const live = { x: b.x + px * SWITCH.pitch, y: b.y + py * SWITCH.pitch };
+  const idle = { x: b.x - px * SWITCH.pitch, y: b.y - py * SWITCH.pitch };
+  // The housing spans both rows, centred between them.
+  const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+  const bodyL = 2 * SWITCH.pitch + p0.w;   // across the rail: both throws and their pads
+  const bodyW = L + p0.h;                  // along it: edge to edge, plus a pad
+  // A pad at its own size: `w` across the part's long axis, `h` along the rail.
   const pad = (c: Vec2): { a: Vec2; b: Vec2; width: number } => {
     const half = p0.h / 2;
     return {

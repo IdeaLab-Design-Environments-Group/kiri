@@ -36,13 +36,13 @@ export const R_1206: Footprint = {
   ],
 };
 
-/** pcb.py class slide_switch - C&K AYZ0102AGRLC. Generated — see `ocaml/footprints.ml`. */
+/** pcb.py class slide_switch - C&K AYZ0102AGRLC (common moved to the far edge). Generated — see `ocaml/footprints.ml`. */
 export const slide_switch: Footprint = {
   name: "slide_switch",
-  source: "pcb.py class slide_switch - C&K AYZ0102AGRLC",
+  source: "pcb.py class slide_switch - C&K AYZ0102AGRLC (common moved to the far edge)",
   pads: [
     { cx: -2.4892, cy: 2.5400, w: 0.9906, h: 1.1938, label: "1" },
-    { cx: 0.0000, cy: 2.5400, w: 0.9906, h: 1.1938, label: "2" },
+    { cx: 0.0000, cy: -2.5400, w: 0.9906, h: 1.1938, label: "2 common" },
     { cx: 2.4892, cy: 2.5400, w: 0.9906, h: 1.1938, label: "3" },
   ],
   holes: [

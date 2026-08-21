@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { flatFaces, gapGraph, ledOf, type Circuit, type Vec2 } from "../../../src/model/electronics.js";
 import {
   RESISTOR_MM,
+  SWITCH_GAP_MM,
   SWITCH_PITCH_MM,
   breakRuns,
   planRoutes,
@@ -172,8 +173,10 @@ describe("model/resistor", () => {
 
 describe("model/switch", () => {
   /** house with one LED and a switch on the middle of a rail. */
-  function withSwitch(net: "pwr" | "gnd" = "pwr", at?: (pts: Vec2[]) => Vec2) {
-    const { fold, faces, gaps, base, plain, tapeW, k } = fixture();
+  function withSwitch(net: "pwr" | "gnd" = "pwr", at?: (pts: Vec2[]) => Vec2, leds = 3) {
+    // Three LEDs by default: the part is 5.08mm along the rail, and house's one-LED GND run is 5.7mm end to
+    // end — barely longer than the switch itself, with no rail left either side to seat it on.
+    const { fold, faces, gaps, base, plain, tapeW, k } = fixture(leds);
     const run = plain.traces.find((t) => t.net === net)!;
     const pick = at ?? ((p: Vec2[]) => ({
       x: (p[0]!.x + p[p.length - 1]!.x) / 2,
@@ -264,10 +267,16 @@ describe("model/switch", () => {
       expect(Math.hypot(l.b.x - l.a.x, l.b.y - l.a.y)).toBeCloseTo(slide_switch.pads[0]!.h, 4);
     }
 
-    // At the part's own pitch, and in a row.
+    // Two throws on one edge, a pitch either side of the rail, so twice the pitch apart. The common is
+    // alone on the other edge, square between them — which is what lets the rail run straight through.
     const c = sh.leads.map((l) => ({ x: (l.a.x + l.b.x) / 2, y: (l.a.y + l.b.y) / 2 }));
-    expect(Math.hypot(c[1]!.x - c[0]!.x, c[1]!.y - c[0]!.y)).toBeCloseTo(SWITCH_PITCH_MM, 6);
-    expect(Math.hypot(c[2]!.x - c[1]!.x, c[2]!.y - c[1]!.y)).toBeCloseTo(SWITCH_PITCH_MM, 6);
+    const [idle, common, live] = c as [Vec2, Vec2, Vec2];
+    expect(Math.hypot(live.x - idle.x, live.y - idle.y)).toBeCloseTo(2 * SWITCH_PITCH_MM, 6);
+    // The common is equidistant from the two throws, and a pad row's separation away from their edge.
+    const dIdle = Math.hypot(common.x - idle.x, common.y - idle.y);
+    const dLive = Math.hypot(common.x - live.x, common.y - live.y);
+    expect(dIdle).toBeCloseTo(dLive, 6);
+    expect(dIdle).toBeCloseTo(Math.hypot(SWITCH_PITCH_MM, SWITCH_GAP_MM), 6);
 
     expect(sh.holes).toHaveLength(2);
     for (const h of sh.holes!) expect(h.r).toBeCloseTo((0.034 * 25.4) / 2, 4);
