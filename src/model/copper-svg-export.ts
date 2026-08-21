@@ -39,6 +39,9 @@ const TAB_EVERY_MM = 60;
 /** However long a run is, this many grips at most: each is a place the copper stays joined to the waste. */
 const MAX_TABS_PER_RUN = 2;
 
+/** What a wall already carrying a tab adds to the cost of reaching it, in tape widths. */
+const CROWD_TOLL = 6;
+
 /** Width of the carrier frame's border, outside the pattern window. */
 const FRAME_BUFFER = 5;
 
@@ -1046,6 +1049,8 @@ export function buildCopperCarrierExport(
   let padTabs = 0;
   let componentTabs = 0;
   const tabPaths: Vec2[][] = [];
+  /** Every tab placed so far, so the next one can keep off them and off their walls. */
+  const chosen: { side: Side; path: Vec2[] }[] = [];
   const quads: Vec2[][] = [];
   /** Each tab as built, held back until every quad exists — whether a tab is redundant depends on the rest. */
   /** Held per RING, not per tab: a ring with two tabs is two arcs, and they are the ring's, not either
@@ -1075,7 +1080,7 @@ export function buildCopperCarrierExport(
     const picks: { index: number; side: Side; path: Vec2[] }[] = [];
     const taken = [...avoid];
     for (let t = 0; t < want; t++) {
-      const choice = pickTab(ring, others, win, tape, taken);
+      const choice = pickTab(ring, others, win, tape, taken, chosen);
       if (!choice) break;
       // The first grip is taken as it comes — a run has to be held even where the only spot is a poor one.
       // An extra is a convenience, so it is only worth having if it is clean: taking a compromised one would
@@ -1087,6 +1092,8 @@ export function buildCopperCarrierExport(
       tabPaths.push(choice.path);
       taken.push(ring[choice.index]!);
       picks.push({ index: choice.index, side: choice.side, path: choice.path });
+      // Every tab on the sheet so far, not just this run's: they all share the four walls.
+      chosen.push({ side: choice.side, path: choice.path });
     }
     if (!picks.length) return;
 
@@ -1281,6 +1288,15 @@ function pickTab(
   win: Win,
   tapeW: number,
   avoid: Vec2[],
+  /**
+   * Tabs already placed, so this one can go somewhere else.
+   *
+   * Sorted on distance alone, every tab dives for whichever wall happens to be nearest and they pile up:
+   * across the bundled circuits, 45 of 99 tabs ran within a tape width of another, and puffin sent all six
+   * to the top wall. A crowded wall is charged for, and a tab that would lie on one already placed is passed
+   * over while any clear spot remains.
+   */
+  placed: { side: Side; path: Vec2[] }[] = [],
 ): {
   index: number;
   side: Side;
@@ -1326,9 +1342,19 @@ function pickTab(
       }
     });
   }
-  candidates.sort((a, b) => a.reach - b.reach || a.index - b.index);
+  // A wall already carrying tabs costs more to reach, so later tabs spread onto the others rather than
+  // stacking. Priced in tape widths: dear enough to move a tab to another wall, not so dear that it drives
+  // one across the whole sheet.
+  const crowd = (side: Side): number => placed.filter((q) => q.side === side).length;
+  candidates.sort(
+    (a, b) =>
+      a.reach + crowd(a.side) * tapeW * CROWD_TOLL - (b.reach + crowd(b.side) * tapeW * CROWD_TOLL) ||
+      a.index - b.index,
+  );
 
   let fallback: { index: number; side: Side; path: Vec2[]; over?: boolean } | null = null;
+  /** Clear of the copper and the parts, but lying on a tab already placed. Better than going over a part. */
+  let crowded: { index: number; side: Side; path: Vec2[] } | null = null;
   for (const c of candidates) {
     const a = ring[c.index]!;
     const across = perpTo(c.side);
@@ -1360,11 +1386,31 @@ function pickTab(
       return false;
     });
     if (!blocked) {
+      // Not on top of a tab already placed: two tabs on one another are stuck down together and snipping
+      // one cuts the other.
+      const onAnother = placed.some((q) => {
+        for (let k = 1; k < path.length; k++) {
+          for (let j = 1; j < q.path.length; j++) {
+            if (segSegDist(path[k - 1]!, path[k]!, q.path[j - 1]!, q.path[j]!) < tapeW) return true;
+          }
+        }
+        return false;
+      });
+      if (onAnother) {
+        if (!crowded) crowded = { index: c.index, side: c.side, path };
+        continue;
+      }
       return {
         index: c.index, side: c.side, path,
         clear: true, onComponent: forcedOntoComponent, overComponent: false,
       };
     }
+  }
+  if (crowded) {
+    return {
+      index: crowded.index, side: crowded.side, path: crowded.path,
+      clear: true, onComponent: forcedOntoComponent, overComponent: false,
+    };
   }
   return fallback
     ? {

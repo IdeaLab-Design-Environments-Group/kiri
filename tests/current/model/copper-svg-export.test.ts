@@ -887,6 +887,54 @@ describe("model/copper-svg-export", () => {
     }
   }, { timeout: 30000 });
 
+  it("spreads its tabs over the walls instead of stacking them on one", () => {
+    // Sorted on distance alone every tab dives for whichever wall is nearest, and they pile up: 45 of 99
+    // tabs across the bundled circuits ran within a tape width of another, and puffin sent all six to the
+    // top. Two tabs on one another are stuck down together, and snipping one cuts the other.
+    const toSeg = (p: Vec2, a: Vec2, b: Vec2): number => {
+      const l2 = (b.x - a.x) ** 2 + (b.y - a.y) ** 2;
+      if (l2 < 1e-18) return Math.hypot(p.x - a.x, p.y - a.y);
+      const t = Math.max(0, Math.min(1, ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / l2));
+      return Math.hypot(p.x - (a.x + t * (b.x - a.x)), p.y - (a.y + t * (b.y - a.y)));
+    };
+
+    for (const name of ["akde-hex.fkld", "akde-square-pyramid.fkld"]) {
+      const { fold, traces, tapeW, keepOff, pads } = planned(name, 6);
+      const out = buildCopperCarrierExport(
+        fold, traces, tapeW, "k", keepOff, undefined, undefined, pads,
+      );
+      const { window: win, scale } = sheetFrame(fold);
+      const tape = tapeW * scale;
+      expect(out.tabPaths.length).toBeGreaterThan(4);
+
+      // No tab lies on another.
+      let touching = 0;
+      for (let i = 0; i < out.tabPaths.length; i++) {
+        for (let j = i + 1; j < out.tabPaths.length; j++) {
+          let nearest = Infinity;
+          for (const p of out.tabPaths[i]!) {
+            for (let q = 1; q < out.tabPaths[j]!.length; q++) {
+              nearest = Math.min(nearest, toSeg(p, out.tabPaths[j]![q - 1]!, out.tabPaths[j]![q]!));
+            }
+          }
+          if (nearest < tape) touching++;
+        }
+      }
+      expect(touching, `${name}: tabs lying on one another`).toBe(0);
+
+      // And they use more than one wall — on a circuit this size, at least three of the four.
+      const wall = (p: Vec2): string => {
+        const d: [string, number][] = [
+          ["L", Math.abs(p.x - win.x0)], ["R", Math.abs(p.x - win.x1)],
+          ["T", Math.abs(p.y - win.y0)], ["B", Math.abs(p.y - win.y1)],
+        ];
+        return d.sort((a, b) => a[1] - b[1])[0]![0];
+      };
+      const used = new Set(out.tabPaths.map((t) => wall(t[t.length - 1]!)));
+      expect(used.size, `${name}: walls used`).toBeGreaterThanOrEqual(3);
+    }
+  }, { timeout: 30000 });
+
   describe("openAround", () => {
     /** A 12x12 square ring, densified so its vertices are a unit apart — as the carrier's rings are. */
     const square = (): Vec2[] => {
