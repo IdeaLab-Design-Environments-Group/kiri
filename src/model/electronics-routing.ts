@@ -1044,12 +1044,55 @@ export function breakRuns(
         if (d < bestD) { bestD = d; bestRun = ti; bestSeg = i; bestT = u; }
       }
     });
-    if (bestRun < 0) continue; // no PWR copper to sit on — nothing to break
-    const split = splitRun(out, bestRun, bestSeg, bestT, body);
+    if (bestRun < 0) continue; // no copper to sit on — nothing to break
+    // Slide the part inboard if it was dropped near an end. A run has to keep a half-body either side or
+    // the break takes one of its ends off entirely, and the part was simply not placed -- a click that did
+    // nothing at all, with no way to tell why.
+    const moved = fitWithin(out[bestRun]!, bestSeg, bestT, body);
+    const split = moved
+      ? splitRun(out, bestRun, moved.seg, moved.t, body)
+      : { traces: out, span: null };
     out = split.traces;
     if (split.span) placed.push(split.span);
   }
   return { traces: out, placed };
+}
+
+/**
+ * Move a break inboard until a half-body fits either side of it, or report that the run is too short.
+ *
+ * Measured along the run, so it stays on the copper as the run bends.
+ */
+function fitWithin(
+  run: Trace2D,
+  seg: number,
+  t: number,
+  body: number,
+): { seg: number; t: number } | null {
+  const segs: number[] = [];
+  let total = 0;
+  for (let i = 1; i < run.pts.length; i++) {
+    const l = len(sub(run.pts[i]!, run.pts[i - 1]!));
+    segs.push(l);
+    total += l;
+  }
+  // Each half has to keep copper of its own after the break is trimmed out of it, so the run needs the
+  // body twice over: a half-body comes out either side, and a half-body is left either side to grip.
+  if (total <= 2 * body) return null;
+  let at = 0;
+  for (let i = 0; i < seg - 1; i++) at += segs[i]!;
+  at += (segs[seg - 1] ?? 0) * t;
+  const want = Math.min(Math.max(at, body), total - body);
+  // Back to a segment and a fraction along it.
+  let acc = 0;
+  for (let i = 0; i < segs.length; i++) {
+    if (want <= acc + segs[i]! || i === segs.length - 1) {
+      const f = segs[i]! > 0 ? Math.min(Math.max((want - acc) / segs[i]!, 0), 1) : 0;
+      return { seg: i + 1, t: f };
+    }
+    acc += segs[i]!;
+  }
+  return null;
 }
 
 /** Split run `ri` at a point, leaving `body` of bare pattern between the two halves. */

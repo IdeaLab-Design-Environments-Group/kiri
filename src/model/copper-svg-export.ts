@@ -800,7 +800,10 @@ export function switchShape(a: Vec2, b: Vec2, tape: number, cross = tape): Resis
   // Long enough to carry all three pads, deep enough to reach past its mounting holes.
   const p0 = SWITCH.fp.pads[0]!;
   const bodyL = 2 * SWITCH.pitch + p0.w;
-  const bodyW = SWITCH.offset;
+  // Deep enough to reach its own pads. At the pad row's offset it was centred over the mounting holes and
+  // stopped short of the legs, so the housing floated beside the copper with a gap between it and the
+  // terminals it belongs to. Twice the offset puts its near edge on the row and the holes in its middle.
+  const bodyW = 2 * SWITCH.offset;
   return {
     leads: [pad(a, -L, p0), pad(a, 0, p0), pad(b, 0, p0)],
     body: {
@@ -817,15 +820,17 @@ export function switchShape(a: Vec2, b: Vec2, tape: number, cross = tape): Resis
 
 function partMarks(sh: ResistorShape, bodyFill: string): string[] {
   const { leads, body } = sh;
+  // Housing first, pads over it. A part's legs run under its body, but a footprint drawing that hides them
+  // there answers none of the questions you look at it to answer: where the copper is and how big it is.
   return [
+    `<rect x="${fmt(body.x)}" y="${fmt(body.y)}" width="${fmt(body.w)}" ` +
+      `height="${fmt(body.h)}" rx="${fmt(body.h * 0.18)}" fill="${bodyFill}" ` +
+      `transform="rotate(${fmt(body.angle)} ${fmt(body.cx)} ${fmt(body.cy)})" />`,
     ...leads.map(
       (l) =>
         `<line x1="${fmt(l.a.x)}" y1="${fmt(l.a.y)}" x2="${fmt(l.b.x)}" y2="${fmt(l.b.y)}" ` +
         `stroke="${RES_LEAD}" stroke-width="${fmt(l.width)}" stroke-linecap="butt" />`,
     ),
-    `<rect x="${fmt(body.x)}" y="${fmt(body.y)}" width="${fmt(body.w)}" ` +
-      `height="${fmt(body.h)}" rx="${fmt(body.h * 0.18)}" fill="${bodyFill}" ` +
-      `transform="rotate(${fmt(body.angle)} ${fmt(body.cx)} ${fmt(body.cy)})" />`,
     ...(sh.holes ?? []).map(
       (h) =>
         `<circle cx="${fmt(h.c.x)}" cy="${fmt(h.c.y)}" r="${fmt(h.r)}" fill="none" ` +

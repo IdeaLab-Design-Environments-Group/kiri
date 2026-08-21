@@ -239,6 +239,23 @@ describe("model/switch", () => {
 
   });
 
+  it("places one dropped at the very end of a run", () => {
+    // A part needs a half-body of copper either side. Dropped near an end there was not room, and it was
+    // simply not placed: a click that did nothing, with nothing to say why. It slides inboard instead.
+    const { faces, gaps, base, plain, k } = fixture();
+    for (const net of ["pwr", "gnd"] as const) {
+      const run = plain.traces.find((t) => t.net === net)!;
+      for (const at of [run.pts[0]!, run.pts[run.pts.length - 1]!]) {
+        const r = planRoutes(faces, gaps, { ...base, switches: [at] });
+        expect(r.switches, `${net} at an end`).toHaveLength(1);
+        expect(r.traces.filter((t) => t.net === net)).toHaveLength(
+          plain.traces.filter((t) => t.net === net).length + 1,
+        );
+        expect((totalLength(plain.traces) - totalLength(r.traces)) * k).toBeCloseTo(SWITCH_PITCH_MM, 2);
+      }
+    }
+  });
+
   it("takes a switch and a resistor on the same circuit", () => {
     const { faces, gaps, base, plain, mid, k } = fixture(3);
     const pwr = plain.traces.filter((t) => t.net === "pwr");
