@@ -822,7 +822,10 @@ export function switchShape(a: Vec2, b: Vec2, tape: number, cross = tape): Resis
   const idle = { x: row.x - px * SWITCH.pitch, y: row.y - py * SWITCH.pitch };
   // The housing spans both rows, centred between them.
   const cx = (a.x + row.x) / 2, cy = (a.y + row.y) / 2;
-  const bodyL = 2 * SWITCH.pitch + p0.w;   // across the rail: both throws and their pads
+  // Across the rail: narrower than the terminals it carries, so a leg stands proud at each end as well as
+  // along the edges. Drawn out to the pads' far corners the housing swallowed them and read as a square
+  // block; the part is a slim thing with its legs sticking out.
+  const bodyL = 2 * SWITCH.pitch - p0.w;
   // Along the rail: exactly edge to edge between the two pad rows, so each terminal straddles the housing's
   // outline and half of it stands proud, as the legs do on the part. A pad's length deeper and every
   // terminal fell inside the outline, leaving the legs as slivers at the corners.
