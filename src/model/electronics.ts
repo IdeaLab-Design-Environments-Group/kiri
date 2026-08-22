@@ -52,8 +52,30 @@ export interface Vec2 {
   battery: Battery | null;
   /** Series resistors. Optional so circuits saved before they existed still load. */
   resistors?: Resistor[];
-  /** Switches — a 1x03 header, likewise in series on a rail. */
+  /** Switches — an SPDT slide switch, likewise in series on a rail. */
   switches?: Switch[];
+  /**
+   * Anything else from the component library, in series on a rail.
+   *
+   * `resistors` and `switches` are the two parts that predate the library and keep their own fields so
+   * circuits saved before it still load. Everything added since goes here, named by its library id, so a
+   * new part needs no new field, no new tool and no new branch in the router.
+   */
+  parts?: PlacedPart[];
+}
+
+/**
+ * A library part dropped on a rail.
+ *
+ * Stored as a point in the flat pattern, for the same reason a resistor is: the routes are re-planned
+ * whenever the circuit changes, so a run index would name a different piece of copper afterwards. The
+ * point is snapped to the nearest run of the right net each time the plan is built.
+ */
+export interface PlacedPart {
+  /** A `Component.id` from `footprints.generated.ts` — `"C_1206"`, `"SW_PUSH"`. */
+  component: string;
+  x: number;
+  y: number;
 }
 
 /**

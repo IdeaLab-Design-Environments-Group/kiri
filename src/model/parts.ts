@@ -19,7 +19,17 @@
  * are all still the part's own; only that one reflection is ours.
  */
 import { LED_1206, R_1206, SW_SPDT } from "./footprints.generated.js";
-import { padAt, padNamed, padSize, type Footprint, type Vec2 } from "./footprint.js";
+import {
+  holes,
+  padAt,
+  padNamed,
+  padSize,
+  terminals,
+  type Box,
+  type Footprint,
+  type Pad,
+  type Vec2,
+} from "./footprint.js";
 
 /** A two-terminal part in line with the rail: the tape runs in one pad and out the other. */
 export interface InlinePart {
@@ -68,3 +78,89 @@ export const SPDT = (() => {
     throwB: padAt(throwB),
   };
 })();
+
+/**
+ * How near two terminals must be across the part to count as sitting in the same row, in millimetres.
+ *
+ * Well under any real pad, so it separates rows rather than pads: the closest two rows in the library
+ * are the switch's 5.5mm apart, and the closest two pads within a row 1mm.
+ */
+const ROW_TOL_MM = 0.05;
+
+/** The part's terminals grouped into rows across it, near side first. */
+function terminalRows(fp: Footprint): { y: number; pads: Pad[] }[] {
+  const rows: { y: number; pads: Pad[] }[] = [];
+  for (const [, pad] of terminals(fp)) {
+    const y = padAt(pad).y;
+    const row = rows.find((r) => Math.abs(r.y - y) <= ROW_TOL_MM);
+    if (row) row.pads.push(pad);
+    else rows.push({ y, pads: [pad] });
+  }
+  return rows.sort((a, b) => a.y - b.y);
+}
+
+/** A part the rail steps ACROSS: in at one row, out at the other. The switch, generalised. */
+export interface AcrossPart {
+  /** Across the part, common row to throw row, in millimetres. */
+  rowSep: number;
+  /** Centre to centre along the throw row, the common's column to the throw the rail leaves by. */
+  pitch: number;
+  /** One terminal, as {@link padSize} gives it: `w` across the rail, `h` along it. */
+  pad: Box;
+}
+
+/**
+ * Whether a rail steps ACROSS this part, and if so with what geometry — read off the footprint alone.
+ *
+ * Two rows of terminals means the rail arrives at one and leaves at the other; that is the direct case.
+ * The other is the surface-mount one described at the top of this file: all the terminals on one edge,
+ * off the line the part's mounting pegs sit on, and the middle one reflected through that line to the
+ * far edge so the rail runs straight through instead of doubling back round the housing.
+ *
+ * Fewer than three terminals is a part in line with the rail, not one it steps across; and with no pegs
+ * there is no line to reflect through. Both stay one-row and are routed and drawn like a resistor.
+ *
+ * It lives here, alone, because it is one decision wearing two hats. The router breaks copper by it and
+ * the export draws by it, and when the two briefly had a rule each they agreed on every part in the
+ * library except the coin cell — three terminals but no pegs — which the router would have cut as an
+ * in-line part while the export drew a housing across the rail. A cut file that disagrees with its own
+ * drawing is the worst failure this code has, because it looks right until the copper is on the sheet.
+ */
+export function acrossPart(fp: Footprint): AcrossPart | null {
+  const rows = terminalRows(fp);
+  if (rows.length === 1) {
+    const row = rows[0]!;
+    if (row.pads.length < 3 || Math.abs(row.y) <= ROW_TOL_MM || holes(fp).length === 0) return null;
+    const byX = [...row.pads].sort((a, b) => padAt(a).x - padAt(b).x);
+    const common = byX[Math.floor(byX.length / 2)]!;
+    const live = byX[byX.length - 1]!;
+    return {
+      // The reflection, and nothing else: same column, opposite side.
+      rowSep: padAt(live).y - -padAt(common).y,
+      pitch: Math.abs(padAt(live).x - padAt(common).x),
+      pad: padSize(live),
+    };
+  }
+  if (rows.length < 2) return null;
+  // Genuinely two rows. The rail arrives at the sparser one — one common against several throws — and
+  // leaves at the throw furthest from the common's column, which is the one the neck has to clear.
+  const [near, far] = rows[0]!.pads.length <= rows[rows.length - 1]!.pads.length
+    ? [rows[0]!, rows[rows.length - 1]!]
+    : [rows[rows.length - 1]!, rows[0]!];
+  const common = [...near.pads].sort((a, b) => padAt(a).x - padAt(b).x)[Math.floor(near.pads.length / 2)]!;
+  const live = [...far.pads].sort(
+    (a, b) => Math.abs(padAt(a).x - padAt(common).x) - Math.abs(padAt(b).x - padAt(common).x),
+  )[far.pads.length - 1]!;
+  return {
+    rowSep: Math.abs(padAt(live).y - padAt(common).y),
+    pitch: Math.abs(padAt(live).x - padAt(common).x),
+    pad: padSize(live),
+  };
+}
+
+/** The terminals in line with the rail, outermost first — the one-row reading. */
+export function inlineTerminals(fp: Footprint): Pad[] {
+  return terminals(fp)
+    .map(([, p]) => p)
+    .sort((a, b) => padAt(a).x - padAt(b).x);
+}
