@@ -40,13 +40,16 @@ import {
   type Circuit,
   type FlatFace,
   type GapEdge,
+  type PlacedPart,
   type Vec2,
   dist2,
   gapForLed,
   pointInFace,
 } from "./electronics.js";
 import { DEFAULT_PRINT_SIZE } from "./stl-export.js";
-import { RESISTOR, SPDT } from "./parts.js";
+import { RESISTOR, SPDT, acrossPart, inlineTerminals } from "./parts.js";
+import { COMPONENTS } from "./footprints.generated.js";
+import { type Box, type Footprint, padAt, padSize } from "./footprint.js";
 
 /** One continuous strip of copper tape: a centreline polyline plus which net it carries. */
 export interface Trace2D {
@@ -78,6 +81,17 @@ export interface RoutedCircuit {
   resistors: PartSpan[];
   /** Likewise each switch: the break between its second pin and its third. */
   switches: PartSpan[];
+  /**
+   * Likewise every other library part, each carrying the id it was placed from so whatever draws it can
+   * look its footprint up. Always an array — `[]` when the circuit has none.
+   */
+  parts: PartPlacement[];
+}
+
+/** Where a placed library part ended up. */
+export interface PartPlacement extends PartSpan {
+  /** The `Component.id` it was placed from. */
+  component: string;
 }
 
 /** The gap a part bridges — `a` and `b` are the cut ends of the run, where its contacts land. */
@@ -97,7 +111,9 @@ export interface PartSpan {
 /** @deprecated the same thing; kept so existing callers read naturally. */
 export type ResistorSpan = PartSpan;
 
-export const EMPTY_ROUTE: RoutedCircuit = { traces: [], pads: [], unreachable: [], resistors: [], switches: [] };
+export const EMPTY_ROUTE: RoutedCircuit = {
+  traces: [], pads: [], unreachable: [], resistors: [], switches: [], parts: [],
+};
 
 /** How much dearer it is to travel through a hinge that has an LED on it than an empty one. Large enough to
  *  route around whenever there is any alternative, finite so that a dead-end tile stays reachable. */
@@ -411,7 +427,7 @@ export function planRoutes(
   const battery: Battery | null = circuit.battery;
   if (!battery || !faces[battery.face]) {
     circuit.leds.forEach((_, i) => unreachable.push(i));
-    return { traces: [], pads, unreachable, resistors: [], switches: [] };
+    return { traces: [], pads, unreachable, resistors: [], switches: [], parts: [] };
   }
 
   const diag = patternDiag(faces);
@@ -436,7 +452,7 @@ export function planRoutes(
       legFaces: [gap.faceA, gap.faceB],
     });
   });
-  if (!targets.length) return { traces: [], pads, unreachable, resistors: [], switches: [] };
+  if (!targets.length) return { traces: [], pads, unreachable, resistors: [], switches: [], parts: [] };
 
   // Drop LEDs the battery cannot reach across the material. Their tiles sit on a separate island of the
   // pattern, and the only way to "reach" them would be a straight line through empty space -- which is what
@@ -452,7 +468,7 @@ export function planRoutes(
     targets.splice(i, 1);
   }
   unreachable.sort((a, b) => a - b);
-  if (!targets.length) return { traces: [], pads, unreachable, resistors: [], switches: [] };
+  if (!targets.length) return { traces: [], pads, unreachable, resistors: [], switches: [], parts: [] };
 
   // The tour: the order the bus passes the LEDs. Nearest-neighbour from the battery, then 2-opt.
   // 2-opt is what earns the no-crossing guarantee: a self-crossing tour is always strictly longer than
@@ -1001,25 +1017,83 @@ export function planRoutes(
       toFlat(SWITCH_ROW_MM),
     );
   }
-  const swTraces = [
-    ...withSw.traces,
-    ...withSw.placed.flatMap((span) =>
-      switchLand(
-        span,
-        toFlat(SWITCH_PITCH_MM),
-        toFlat(swPad.h),
-        toFlat(swPad.w),
-        toFlat(SWITCH_ROW_MM),
-      ),
+  const swLands = withSw.placed.flatMap((span) =>
+    switchLand(
+      span,
+      toFlat(SWITCH_PITCH_MM),
+      toFlat(swPad.h),
+      toFlat(swPad.w),
+      toFlat(SWITCH_ROW_MM),
     ),
-  ];
+  );
+
+  // Everything else from the library, on the copper the two passes above have left. Grouped by component
+  // so a group is broken once with that part's own fit — the whole point being that a new part adds a
+  // group, not a branch. Groups run in the order their first part was dropped, so the plan stays
+  // deterministic, and each group sees the breaks the ones before it made.
+  const placedParts: PartPlacement[] = [];
+  const partLands: Trace2D[] = [];
+  let partTraces = withSw.traces;
+  for (const [id, drops] of byComponent(circuit.parts ?? [])) {
+    const fp = COMPONENTS.find((c) => c.id === id)?.footprint;
+    // A part the library no longer has is left unplaced rather than guessed at — same as one that
+    // does not fit, and the status line reports it the same way.
+    if (!fp) continue;
+    const fit = partFit(fp);
+    if (!(fit.gap > 0)) continue; // nothing to break a rail for
+    const broke = breakRuns(partTraces, drops, toFlat(fit.gap), {
+      before: toFlat(fit.before),
+      after: toFlat(fit.after),
+    });
+    partTraces = broke.traces;
+    const across = fit.rows === 2 ? acrossPart(fp) : null;
+    if (across) {
+      // Against the copper as it now stands, its own lands excluded for the reason the switch pass
+      // gives — but every other part's land included, since that is real copper an idle throw can touch.
+      const laid = [...partTraces, ...swLands, ...partLands];
+      for (const span of broke.placed) {
+        span.flip = idleSide(
+          span,
+          laid,
+          toFlat(across.pitch),
+          toFlat(across.pad.w) / 2,
+          toFlat(across.rowSep),
+        );
+      }
+      for (const span of broke.placed) {
+        partLands.push(
+          ...switchLand(
+            span,
+            toFlat(across.pitch),
+            toFlat(across.pad.h),
+            toFlat(across.pad.w),
+            toFlat(across.rowSep),
+          ),
+        );
+      }
+    }
+    for (const span of broke.placed) placedParts.push({ ...span, component: id });
+  }
+
   return {
-    traces: swTraces,
+    traces: [...partTraces, ...swLands, ...partLands],
     pads,
     unreachable,
     resistors: withRes.placed,
     switches: withSw.placed,
+    parts: placedParts,
   };
+}
+
+/** The placed parts by component id, each group in the order the parts were dropped. */
+function byComponent(parts: PlacedPart[]): [string, PlacedPart[]][] {
+  const by = new Map<string, PlacedPart[]>();
+  for (const p of parts) {
+    const group = by.get(p.component);
+    if (group) group.push(p);
+    else by.set(p.component, [p]);
+  }
+  return [...by];
 }
 
 /**
@@ -1067,18 +1141,62 @@ export const SWITCH_ROW_MM = SPDT.rowSep;
  */
 const SWITCH_KEEPOUT_MM = 1;
 
-/** How far past the tape's edge the idle pad's column sits — sideways clearance we get for free. */
-const SWITCH_LATERAL_MM = Math.max(0, SWITCH_PITCH_MM - TAPE_MM / 2);
-
-export const SWITCH_NECK_MM = (() => {
-  const reach = SPDT.pad.h / 2 + SWITCH_KEEPOUT_MM;
+/**
+ * The neck for any part the rail steps across, from its pitch and its pad — see {@link SWITCH_NECK_MM}.
+ *
+ * Written once and used for every part, so the switch's number and a new part's come out of the same
+ * arithmetic rather than one being the constant and the other a re-derivation that drifts from it.
+ */
+function neckFor(part: { pitch: number; pad: Box }): number {
+  const reach = part.pad.h / 2 + SWITCH_KEEPOUT_MM;
+  // How far past the tape's edge the idle pad's column sits — sideways clearance we get for free.
+  const lateral = Math.max(0, part.pitch - TAPE_MM / 2);
   // Sideways alone may already clear it, on a part whose pads are far enough out; then the neck is only
   // what keeps the tape from ending inside the housing.
-  const along = reach * reach - SWITCH_LATERAL_MM * SWITCH_LATERAL_MM;
-  return along > 0 ? Math.sqrt(along) : SPDT.pad.h / 2;
-})();
+  const along = reach * reach - lateral * lateral;
+  return along > 0 ? Math.sqrt(along) : part.pad.h / 2;
+}
+
+export const SWITCH_NECK_MM = neckFor({ pitch: SWITCH_PITCH_MM, pad: SPDT.pad });
 
 export const SWITCH_GAP_MM = SWITCH_ROW_MM + SWITCH_NECK_MM;
+
+/**
+ * How a part meets the rail, read off its own footprint — the generic form of `RESISTOR` and `SPDT`.
+ *
+ * One row of terminals and the rail runs ALONG them: the part replaces the bare span between the
+ * outermost two, straddles it evenly, and needs no more copper than that either side. Two rows and the
+ * rail steps ACROSS: the break is the row separation plus a neck, and the terminals run on past it, so
+ * the part wants a pad's width of rail beyond its own half-gap at each end.
+ *
+ * This is what makes a new part need no new branch: `partFit(R_1206).gap` is `RESISTOR.gap` and
+ * `partFit(SW_SPDT)` is the switch's two rows and {@link SWITCH_GAP_MM}, both out of the same reading.
+ */
+export interface PartFit {
+  rows: 1 | 2;
+  /** Copper it removes, in MILLIMETRES. */
+  gap: number;
+  /** Copper it needs either side of the break's centre to seat on, in MILLIMETRES. */
+  before: number;
+  after: number;
+}
+
+export function partFit(fp: Footprint): PartFit {
+  const across = acrossPart(fp);
+  if (!across) {
+    const row = inlineTerminals(fp);
+    // One terminal (or none) bridges nothing; it has no gap to break a rail for.
+    if (row.length < 2) return { rows: 1, gap: 0, before: 0, after: 0 };
+    const [first, last] = [row[0]!, row[row.length - 1]!];
+    // Centre to centre, less half of each outermost pad: the bare pattern the body covers.
+    const gap = Math.abs(padAt(last).x - padAt(first).x) - (padSize(first).w + padSize(last).w) / 2;
+    return { rows: 1, gap, before: gap, after: gap };
+  }
+  const gap = across.rowSep + neckFor(across);
+  // As the switch pass has always reserved it: the part's own half-gap plus a pad, either side.
+  const reach = gap / 2 + across.pad.w;
+  return { rows: 2, gap, before: reach, after: reach };
+}
 
 /**
  * Break the run each resistor sits on.
