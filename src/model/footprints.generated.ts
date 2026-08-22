@@ -50,3 +50,114 @@ export const slide_switch: Footprint = {
     { cx: 1.4986, cy: 0.0000, r: 0.4318 },
   ],
 };
+
+/**
+ * A component: named pads, each with an outline of its own.
+ *
+ * A pad is not a width and a height. It is a polygon, so any shape is expressible and a rectangle is
+ * just the common case; and it has a NAME, so a part's terminals can be addressed as `common` or `A`
+ * rather than by their position in a list.
+ *
+ * Millimetres throughout, which is what the sheet is cut in. `shape` and `outline` are the same
+ * polygon: a path for anything that wants to draw one directly, points for anything that has to
+ * measure it.
+ */
+export interface Pad {
+  name: string;
+  index: number;
+  layers: string[];
+  /** Where the pad sits on the part, about the part's origin. */
+  at: { x: number; y: number };
+  /** The pad's outline about its own origin, as an SVG path. */
+  shape: string;
+  /** The same outline, as points. */
+  outline: { x: number; y: number }[];
+}
+
+export interface Component {
+  name: string;
+  note: string;
+  pads: Pad[];
+  holes: { at: { x: number; y: number }; r: number }[];
+}
+
+/** A part's pad by name — the terminals are addressed by what they are, not where they sit. */
+export function padNamed(c: Component, name: string): Pad {
+  const p = c.pads.find((q) => q.name === name);
+  if (!p) throw new Error(`${c.name} has no pad ${name}`);
+  return p;
+}
+
+/** 1206 LED. Generated — see `ocaml/footprints.ml`. */
+export const LED_1206_part: Component = {
+  name: "LED_1206",
+  note: "1206 LED",
+  pads: [
+    {
+      name: "A", index: 1, layers: ["F.Cu", "F.Mask"],
+      at: { x: -1.3970, y: 0.0000 },
+      shape: "M -0.8128,0.8636 L 0.8128,0.8636 L 0.8128,-0.8636 L -0.8128,-0.8636 Z",
+      outline: [{ x: -0.8128, y: 0.8636 }, { x: 0.8128, y: 0.8636 }, { x: 0.8128, y: -0.8636 }, { x: -0.8128, y: -0.8636 }],
+    },
+    {
+      name: "C", index: 2, layers: ["F.Cu", "F.Mask"],
+      at: { x: 1.3970, y: 0.0000 },
+      shape: "M -0.8128,0.8636 L 0.8128,0.8636 L 0.8128,-0.8636 L -0.8128,-0.8636 Z",
+      outline: [{ x: -0.8128, y: 0.8636 }, { x: 0.8128, y: 0.8636 }, { x: 0.8128, y: -0.8636 }, { x: -0.8128, y: -0.8636 }],
+    },
+  ],
+  holes: [
+  ],
+};
+
+/** 1206 resistor. Generated — see `ocaml/footprints.ml`. */
+export const R_1206_part: Component = {
+  name: "R_1206",
+  note: "1206 resistor",
+  pads: [
+    {
+      name: "1", index: 1, layers: ["F.Cu", "F.Mask"],
+      at: { x: -1.5240, y: 0.0000 },
+      shape: "M -0.8128,0.8636 L 0.8128,0.8636 L 0.8128,-0.8636 L -0.8128,-0.8636 Z",
+      outline: [{ x: -0.8128, y: 0.8636 }, { x: 0.8128, y: 0.8636 }, { x: 0.8128, y: -0.8636 }, { x: -0.8128, y: -0.8636 }],
+    },
+    {
+      name: "2", index: 2, layers: ["F.Cu", "F.Mask"],
+      at: { x: 1.5240, y: 0.0000 },
+      shape: "M -0.8128,0.8636 L 0.8128,0.8636 L 0.8128,-0.8636 L -0.8128,-0.8636 Z",
+      outline: [{ x: -0.8128, y: 0.8636 }, { x: 0.8128, y: 0.8636 }, { x: 0.8128, y: -0.8636 }, { x: -0.8128, y: -0.8636 }],
+    },
+  ],
+  holes: [
+  ],
+};
+
+/** SPDT slide switch, common on the far edge. Generated — see `ocaml/footprints.ml`. */
+export const slide_switch_part: Component = {
+  name: "slide_switch",
+  note: "SPDT slide switch, common on the far edge",
+  pads: [
+    {
+      name: "throw_a", index: 1, layers: ["F.Cu", "F.Mask"],
+      at: { x: -2.4892, y: 2.5400 },
+      shape: "M -0.4953,0.5969 L 0.4953,0.5969 L 0.4953,-0.5969 L -0.4953,-0.5969 Z",
+      outline: [{ x: -0.4953, y: 0.5969 }, { x: 0.4953, y: 0.5969 }, { x: 0.4953, y: -0.5969 }, { x: -0.4953, y: -0.5969 }],
+    },
+    {
+      name: "common", index: 2, layers: ["F.Cu", "F.Mask"],
+      at: { x: 0.0000, y: -2.5400 },
+      shape: "M -0.4953,0.5969 L 0.4953,0.5969 L 0.4953,-0.5969 L -0.4953,-0.5969 Z",
+      outline: [{ x: -0.4953, y: 0.5969 }, { x: 0.4953, y: 0.5969 }, { x: 0.4953, y: -0.5969 }, { x: -0.4953, y: -0.5969 }],
+    },
+    {
+      name: "throw_b", index: 3, layers: ["F.Cu", "F.Mask"],
+      at: { x: 2.4892, y: 2.5400 },
+      shape: "M -0.4953,0.5969 L 0.4953,0.5969 L 0.4953,-0.5969 L -0.4953,-0.5969 Z",
+      outline: [{ x: -0.4953, y: 0.5969 }, { x: 0.4953, y: 0.5969 }, { x: 0.4953, y: -0.5969 }, { x: -0.4953, y: -0.5969 }],
+    },
+  ],
+  holes: [
+    { at: { x: -1.4986, y: 0.0000 }, r: 0.4318 },
+    { at: { x: 1.4986, y: 0.0000 }, r: 0.4318 },
+  ],
+};
