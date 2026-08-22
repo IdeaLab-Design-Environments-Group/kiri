@@ -18,7 +18,7 @@ import {
   switchShape,
 } from "../../../src/model/copper-svg-export.js";
 import { printScale } from "../../../src/model/print-scale.js";
-import { slide_switch } from "../../../src/model/footprints.generated.js";
+import { padNamed, padSpan, slide_switch_part } from "../../../src/model/footprints.generated.js";
 
 const EXAMPLES = new URL("../../../public/examples/", import.meta.url).pathname;
 
@@ -326,7 +326,7 @@ describe("model/switch", () => {
       }
     }
     // From the pad's own edge, not from its centre.
-    const gap = nearest - slide_switch.pads[0]!.h / 2;
+    const gap = nearest - padSpan(padNamed(slide_switch_part, "throw_a")).h / 2;
     expect(gap, "gap from the idle pad's edge to the nearest copper").toBeGreaterThan(0.8);
   });
 
@@ -374,21 +374,21 @@ describe("model/switch", () => {
     const lands = r.traces.filter((t) => t.width !== undefined);
     expect(lands).toHaveLength(2);
     for (const l of lands) {
-      expect(l.width! * k).toBeCloseTo(slide_switch.pads[0]!.h, 4);
+      expect(l.width! * k).toBeCloseTo(padSpan(padNamed(slide_switch_part, "throw_a")).h, 4);
       expect(l.width!).toBeLessThan(tapeW);
     }
   });
 
   it("is the size the datasheet says", () => {
-    // fab-modules pcb.py, class slide_switch (C&K AYZ0102AGRLC): pads .039 x .047in on .098in centres,
-    // plus two .034in mounting holes at ±.059in. Real millimetres from the library.
+    // Pads .039 x .047in on .098in centres, plus two .034in mounting holes at ±.059in — the part's own
+    // dimensions, read off the component rather than written out here a second time.
     const { r, tapeW, k } = withSwitch();
     const { sh } = seat(r, tapeW, k);
 
     expect(sh.leads).toHaveLength(3);
     for (const l of sh.leads) {
-      expect(l.width).toBeCloseTo(slide_switch.pads[0]!.w, 4);
-      expect(Math.hypot(l.b.x - l.a.x, l.b.y - l.a.y)).toBeCloseTo(slide_switch.pads[0]!.h, 4);
+      expect(l.width).toBeCloseTo(padSpan(padNamed(slide_switch_part, "throw_a")).w, 4);
+      expect(Math.hypot(l.b.x - l.a.x, l.b.y - l.a.y)).toBeCloseTo(padSpan(padNamed(slide_switch_part, "throw_a")).h, 4);
     }
 
     // Two throws on one edge, a pitch either side of the rail, so twice the pitch apart. The common is

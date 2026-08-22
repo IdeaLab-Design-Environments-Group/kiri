@@ -110,8 +110,7 @@ let path_of outline =
 let emit_pad p =
   Printf.printf "    {\n";
   Printf.printf "      name: %S, index: %d, layers: [%s],\n" p.pad_name p.index
-    (String.concat "; " (List.map (Printf.sprintf "%S") p.layers) |> String.split_on_char ';'
-     |> String.concat ",");
+    (String.concat ", " (List.map (Printf.sprintf "%S") p.layers));
   Printf.printf "      at: { x: %s, y: %s },\n" (mm p.at.px) (mm p.at.py);
   Printf.printf "      shape: %S,\n" (path_of p.outline);
   Printf.printf "      outline: [%s],\n"
@@ -126,7 +125,8 @@ let emit_component c =
   List.iter emit_pad c.cpads;
   Printf.printf "  ],\n  holes: [\n";
   List.iter
-    (fun h -> Printf.printf "    { at: { x: %s, y: %s }, r: %s },\n" (mm h.hat.px) (mm h.hat.py) (mm h.hr2))
+    (fun h ->
+      Printf.printf "    { at: { x: %s, y: %s }, r: %s },\n" (mm h.hat.px) (mm h.hat.py) (mm h.hr2))
     c.choles;
   Printf.printf "  ],\n};\n"
 
@@ -134,16 +134,16 @@ let emit_representation () =
   print_string
     "\n\
      /**\n\
-     \ * A component: named pads, each with an outline of its own.\n\
-     \ *\n\
-     \ * A pad is not a width and a height. It is a polygon, so any shape is expressible and a rectangle is\n\
-     \ * just the common case; and it has a NAME, so a part's terminals can be addressed as `common` or `A`\n\
-     \ * rather than by their position in a list.\n\
-     \ *\n\
-     \ * Millimetres throughout, which is what the sheet is cut in. `shape` and `outline` are the same\n\
-     \ * polygon: a path for anything that wants to draw one directly, points for anything that has to\n\
-     \ * measure it.\n\
-     \ */\n\
+    \ * A component: named pads, each with an outline of its own.\n\
+    \ *\n\
+    \ * A pad is not a width and a height. It is a polygon, so any shape is expressible and a rectangle is\n\
+    \ * just the common case; and it has a NAME, so a part's terminals can be addressed as `common` or `A`\n\
+    \ * rather than by their position in a list, which is what silently reads the wrong terminal when that\n\
+    \ * order changes.\n\
+    \ *\n\
+    \ * Millimetres throughout, which is what the sheet is cut in. `shape` and `outline` are the same\n\
+    \ * polygon: a path for anything that draws one, points for anything that measures it.\n\
+    \ */\n\
      export interface Pad {\n\
     \  name: string;\n\
     \  index: number;\n\
@@ -163,114 +163,30 @@ let emit_representation () =
     \  holes: { at: { x: number; y: number }; r: number }[];\n\
      }\n\
      \n\
-     /** A part's pad by name — the terminals are addressed by what they are, not where they sit. */\n\
+     /** A part's pad by name — a terminal is addressed by what it is, not by where it sits. */\n\
      export function padNamed(c: Component, name: string): Pad {\n\
     \  const p = c.pads.find((q) => q.name === name);\n\
     \  if (!p) throw new Error(`${c.name} has no pad ${name}`);\n\
     \  return p;\n\
+     }\n\
+     \n\
+     /** A pad's extent about its own origin: how far it reaches along each axis. */\n\
+     export function padSpan(p: Pad): { w: number; h: number } {\n\
+    \  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;\n\
+    \  for (const q of p.outline) {\n\
+    \    if (q.x < minX) minX = q.x;\n\
+    \    if (q.y < minY) minY = q.y;\n\
+    \    if (q.x > maxX) maxX = q.x;\n\
+    \    if (q.y > maxY) maxY = q.y;\n\
+    \  }\n\
+    \  return { w: maxX - minX, h: maxY - minY };\n\
      }\n";
   List.iter emit_component components
-
-type pad = {
-  cx : float;      (* centre, inches *)
-  cy : float;
-  w : float;       (* size, inches *)
-  h : float;
-  label : string;  (* 'A'/'C' on an LED, empty where the part does not mark its pads *)
-}
-
-type hole = { hx : float; hy : float; hr : float }
-
-type part = {
-  name : string;
-  source : string; (* the pcb.py class, and the manufacturer's part where it names one *)
-  pads : pad list;
-  holes : hole list;
-}
-
-(* [pad_1206 = cube(-.032,.032,-.034,.034,0,0)] *)
-let pad_1206 = (0.064, 0.068)
-
-let led_1206 =
-  (* class LED_1206: shape at ∓.06, pads at ∓.055, labelled A and C *)
-  let w, h = pad_1206 in
-  {
-    name = "LED_1206";
-    source = "pcb.py class LED_1206 - 1206 LED";
-    pads =
-      [
-        { cx = -0.055; cy = 0.0; w; h; label = "A" };
-        { cx = 0.055; cy = 0.0; w; h; label = "C" };
-      ];
-    holes = [];
-  }
-
-let r_1206 =
-  (* class R_1206: two pads at ±.06, unlabelled *)
-  let w, h = pad_1206 in
-  {
-    name = "R_1206";
-    source = "pcb.py class R_1206 - 1206 resistor";
-    pads =
-      [ { cx = -0.06; cy = 0.0; w; h; label = "" }; { cx = 0.06; cy = 0.0; w; h; label = "" } ];
-    holes = [];
-  }
-
-let slide_switch =
-  (* class slide_switch: pads .039 x .047 at x = -.098, 0, .098 and y = .1;
-     holes .034 across at x = ±.118/2, y = 0.
-
-     One deliberate departure from pcb.py, from the part in hand: the COMMON is on the opposite edge.
-     pcb.py puts all three pads at y = .1, in a row. The switch being fitted has its two throws on one edge
-     and the common alone on the other, which is what lets a rail run straight through the part — in at the
-     common on one side, out at a throw on the other — instead of having to detour round it. Pad sizes,
-     pitch and mounting holes are the library's untouched. *)
-  {
-    name = "slide_switch";
-    source = "pcb.py class slide_switch - C&K AYZ0102AGRLC (common moved to the far edge)";
-    pads =
-      [
-        { cx = -0.098; cy = 0.1; w = 0.039; h = 0.047; label = "1" };
-        { cx = 0.0; cy = -0.1; w = 0.039; h = 0.047; label = "2 common" };
-        { cx = 0.098; cy = 0.1; w = 0.039; h = 0.047; label = "3" };
-      ];
-    holes = [ { hx = -0.118 /. 2.0; hy = 0.0; hr = 0.034 /. 2.0 }; { hx = 0.118 /. 2.0; hy = 0.0; hr = 0.034 /. 2.0 } ];
-  }
-
-let parts = [ led_1206; r_1206; slide_switch ]
-
-let f v = Printf.sprintf "%.4f" (mm_of_inch v)
-
-let emit_pad p =
-  Printf.sprintf
-    "    { cx: %s, cy: %s, w: %s, h: %s, label: %S },"
-    (f p.cx) (f p.cy) (f p.w) (f p.h) p.label
-
-let emit_hole h = Printf.sprintf "    { cx: %s, cy: %s, r: %s }," (f h.hx) (f h.hy) (f h.hr)
-
-let emit p =
-  Printf.printf "\n/** %s. Generated — see `ocaml/footprints.ml`. */\n" p.source;
-  Printf.printf "export const %s: Footprint = {\n" p.name;
-  Printf.printf "  name: %S,\n  source: %S,\n" p.name p.source;
-  Printf.printf "  pads: [\n";
-  List.iter (fun pd -> print_endline (emit_pad pd)) p.pads;
-  Printf.printf "  ],\n  holes: [\n";
-  List.iter (fun h -> print_endline (emit_hole h)) p.holes;
-  Printf.printf "  ],\n};\n"
 
 let () =
   print_string
     "// GENERATED by `ocaml/footprints.ml` — do not edit by hand; run `npm run footprints`.\n\
      //\n\
-     // Footprints from fab-modules `pcb.py`, in millimetres. Every value is that library's own, converted\n\
-     // from the inches it is authored in: a named part is the size it is, and inventing a footprint shows\n\
-     // one that does not exist.\n\n\
-     /** A part's copper: pads, and any holes it is mounted through. Millimetres, origin at the part. */\n\
-     export interface Footprint {\n\
-    \  name: string;\n\
-    \  source: string;\n\
-    \  pads: { cx: number; cy: number; w: number; h: number; label: string }[];\n\
-    \  holes: { cx: number; cy: number; r: number }[];\n\
-     }\n";
-  List.iter emit parts;
+     // Component footprints, in millimetres, converted from the inches they are authored in. A named part\n\
+     // is the size it is: inventing a footprint shows one that does not exist.\n";
   emit_representation ()
