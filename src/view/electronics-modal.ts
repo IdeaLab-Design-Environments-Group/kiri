@@ -38,15 +38,15 @@ import {
   stripOutline,
   switchShape,
 } from "../model/copper-svg-export.js";
+import { PCB_COLOURS, designators, partSvg } from "../model/part-render.js";
 import { printScale } from "../model/print-scale.js";
 import { LED } from "../model/parts.js";
 import type { Footprint } from "../model/footprint.js";
-import { BAT_COIN_20, COMPONENTS } from "../model/footprints.generated.js";
+import { BAT_COIN_20, COMPONENTS, R_1206, SW_SPDT } from "../model/footprints.generated.js";
 import {
   type RoutedCircuit,
   type Terminals,
   EMPTY_ROUTE,
-  partFit,
   tapeWidthFor,
   batteryTerminals,
   planRoutes,
@@ -87,6 +87,31 @@ const PART_BY_ID = new Map(PART_COMPONENTS.map((c) => [c.id, c] as const));
  *  already positioned — align the frame, press them down, snip the tabs, lift the frame away. */
 type ViewMode = "strips" | "carrier";
 
+/**
+ * How much of the view a pad must be worth before its own name is written on it.
+ *
+ * Deliberately well above the point where the text is merely emittable. A pin name is written *inside* the
+ * pad it names, so a barely-legible one is worse than none: it covers the copper, which is the thing the
+ * drawing exists to show. The designator has no such problem — it sits beside the part in clear space — so
+ * the two appear at different zooms, and this is the later of them.
+ */
+const PAD_LABEL_VIEW_FRACTION = 0.035;
+
+/** The canvas width in pixels to assume when the element cannot say (a headless DOM, mostly). */
+const CANVAS_PX = 900;
+
+/**
+ * How many screen pixels one "rendered millimetre" is taken to be.
+ *
+ * {@link partSvg} suppresses text below a floor expressed in rendered millimetres — the size the label
+ * comes out at, not the size it is in the sheet — and `scale` is what tells it the two differ. On a screen
+ * the honest conversion is about four pixels to the millimetre, but four pixels of text is not a word.
+ * Eighteen is where, looking at the rendered canvas, a glyph stops being a smear and starts being a
+ * character — at Fit on a whole sheet nothing is written at all, which is right, because there is nothing
+ * there big enough to write on.
+ */
+const PX_PER_RENDERED_MM = 18;
+
 export class ElectronicsModal {
   private readonly overlay: HTMLElement;
   private readonly trigger: HTMLButtonElement;
@@ -123,6 +148,8 @@ export class ElectronicsModal {
   // Pan/zoom: `contentBox()` is the drawn pattern box in sheet mm; `view` is the visible window into it.
   private view = { x: 0, y: 0, w: 1, h: 1 };
   private pan: { x: number; y: number; moved: number } | null = null;
+  /** The zoom step the parts were last painted at — see {@link zoomStep}. */
+  private drawnZoomStep = NaN;
 
   private editHandler: (circuit: Circuit) => void = () => {};
 
@@ -185,8 +212,8 @@ export class ElectronicsModal {
               <span class="el-key el-key-pwr">▬ PWR</span>
               <span class="el-key el-key-gnd">▬ GND</span>
               <span class="el-key el-key-batt">▮ Battery</span>
-              <span class="el-key el-key-res">▬ Part, in line with the rail</span>
-              <span class="el-key el-key-res">▤ Part, across it</span>
+              <span class="el-key el-key-pad" style="color:${PCB_COLOURS.mask}">▮ Part pad, as it is cut</span>
+              <span class="el-key el-key-des" style="color:${PCB_COLOURS.componentLabel}">R1 Part label</span>
             </p>
             <span class="sim-status el-status"></span>
           </div>
@@ -676,6 +703,10 @@ export class ElectronicsModal {
     // Keep the `about` point fixed under the cursor.
     this.view = { x: c.x - (c.x - v.x) * scale, y: c.y - (c.y - v.y) * scale, w: nw, h: nh };
     this.applyViewBox();
+    // A part's text is sized against the view, so a big enough zoom change has to repaint it — that is how a
+    // pin name appears once its pad is large enough to hold one. Only when the step actually changes: a
+    // wheel gesture is dozens of events, and rebuilding the whole canvas on each of them is not free.
+    if (this.zoomStep() !== this.drawnZoomStep) this.draw();
   }
 
   private onWheel(e: WheelEvent): void {
@@ -722,6 +753,12 @@ export class ElectronicsModal {
 
   private render(): void {
     this.replan();
+    this.draw();
+  }
+
+  /** Repaint from the plan already in hand. A zoom changes what the canvas shows without changing the
+   *  circuit, and re-routing to answer one wheel tick would be work for nothing. */
+  private draw(): void {
     this.applyViewBox(); // keep the current pan/zoom window across re-renders
 
     const parts: string[] = [];
@@ -772,22 +809,23 @@ export class ElectronicsModal {
         `<path d="${[sub(outer), ...mine.map(sub)].join(" ")}" class="${cls}" fill-rule="evenodd" />`,
       );
     }
-    // The resistors, over the breaks they bridge: grey leads onto the copper either side, black body across
-    // the bare pattern between them, where there is deliberately no copper at all.
-    for (const r of this.routed.resistors) {
-      // The same shape the cut files draw, so the canvas cannot drift from them.
-      parts.push(...shapeMarkup(resistorShape(this.tp(r.a), this.tp(r.b)), false));
+    // Every part, drawn from its own footprint by the same `partSvg` the cut files use: each terminal as the
+    // pad that will actually be cut, in copper and mask, with the part's designator beside it. Drawn as the
+    // real thing rather than a cartoon body, so the canvas and the cut files cannot say different things.
+    const drawn = this.drawnParts();
+    if (drawn.length) {
+      const tags = designators(drawn);
+      // One group so the text can be given a halo in CSS without touching any of the palette's own colours.
+      parts.push(`<g class="el-part-marks">`);
+      drawn.forEach((d, i) => {
+        parts.push(...partSvg(d.footprint, d.shape, tags[i]!, {
+          labels: this.padLabelsFit(d.shape),
+          scale: this.renderScale(),
+        }));
+      });
+      parts.push(`</g>`);
     }
-    for (const w of this.routed.switches) {
-      parts.push(...shapeMarkup(switchShape(this.tp(w.a), this.tp(w.b), w.flip), true));
-    }
-    // And every other library part, drawn from its own footprint by the one generic shape — so a part the
-    // library gains appears here with nothing added to this file.
-    for (const p of this.routedParts()) {
-      const fp = PART_BY_ID.get(p.component)?.footprint;
-      if (!fp) continue;
-      parts.push(...shapeMarkup(this.partShapeOf(p), partFit(fp).rows === 2));
-    }
+    this.drawnZoomStep = this.zoomStep();
     // Each LED is two distinct pads straddling its hinge — a PWR (+) pad toward face `a` and a GND (−)
     // pad toward face `b` — bridged by the LED chip. An LED whose gap no longer exists has nowhere to
     // sit and is drawn as an orphan.
@@ -857,6 +895,68 @@ export class ElectronicsModal {
   private partShapeOf(p: { component: string; a: Vec2; b: Vec2; flip?: boolean }): ResistorShape | null {
     const fp = PART_BY_ID.get(p.component)?.footprint;
     return fp ? partShape(fp, this.tp(p.a), this.tp(p.b), p.flip) : null;
+  }
+
+  /**
+   * Every part on the canvas, in the order the cut files take them, each with the footprint it is drawn
+   * from. One list, because the designators have to be assigned across all of it at once: `R1` on the
+   * canvas and `R2` in the file for the same part would be worse than no label at all.
+   *
+   * `resistors` and `switches` predate the library and carry no component id of their own, so they name
+   * the part they have always been — the same two footprints the palette now places generically.
+   */
+  private drawnParts(): { component: string; footprint: Footprint; shape: ResistorShape }[] {
+    const out: { component: string; footprint: Footprint; shape: ResistorShape }[] = [];
+    const add = (component: string, footprint: Footprint, shape: ResistorShape | null): void => {
+      if (shape) out.push({ component, footprint, shape });
+    };
+    for (const r of this.routed.resistors) {
+      // The same shape the cut files draw, so the canvas cannot drift from them.
+      add("R_1206", R_1206, resistorShape(this.tp(r.a), this.tp(r.b)));
+    }
+    for (const w of this.routed.switches) {
+      add("SW_SPDT", SW_SPDT, switchShape(this.tp(w.a), this.tp(w.b), w.flip));
+    }
+    // And every other library part, drawn from its own footprint by the one generic shape — so a part the
+    // library gains appears here with nothing added to this file.
+    for (const p of this.routedParts()) {
+      const fp = PART_BY_ID.get(p.component)?.footprint;
+      if (fp) add(p.component, fp, this.partShapeOf(p));
+    }
+    return out;
+  }
+
+  /**
+   * Whether a part's pads are big enough on screen to carry their own pin names.
+   *
+   * The canvas fits itself to the whole sheet, and a 1206 pad on an AKDE pattern is well under a percent
+   * of it — a "1" written on that pad is a two-pixel smudge that hides the pad instead of naming it. So the
+   * names are a zoom-in: they appear once a pad is worth a few percent of the view, by which point the
+   * character inside it is comfortably a character. The designator comes back sooner, because it sits
+   * beside the part rather than on it and nothing is lost behind it.
+   */
+  private padLabelsFit(sh: ResistorShape): boolean {
+    return padMinOf(sh) >= this.view.w * PAD_LABEL_VIEW_FRACTION;
+  }
+
+  /**
+   * Rendered units per sheet millimetre: how big a millimetre of the sheet actually comes out on screen.
+   *
+   * {@link partSvg} sizes its text from the pads and drops it when the result would be too small to read,
+   * and this is what lets it know how small that is here. The canvas fits the whole sheet, so a millimetre
+   * of a 380mm pattern is a couple of pixels and a pin name on a 1206 pad is a two-pixel smudge — the same
+   * drawing that is perfectly legible in the cut file, which is printed at its real size. Zooming in raises
+   * it, which is exactly when the names become worth showing.
+   */
+  private renderScale(): number {
+    const px = (this.svg as { clientWidth?: number }).clientWidth || CANVAS_PX;
+    return px / Math.max(this.view.w, 1e-9) / PX_PER_RENDERED_MM;
+  }
+
+  /** The zoom, quantised into 1.25x steps — one press of the zoom buttons. Both label decisions above are
+   *  monotone in `view.w` alone, so this is exactly when the parts need repainting. */
+  private zoomStep(): number {
+    return Math.round(Math.log(Math.max(this.view.w, 1e-9)) / Math.log(1.25));
   }
 
   /** The carrier frame and its tabs, taken from the export itself.
@@ -1045,23 +1145,17 @@ function cloneCircuit(c: Circuit): Circuit {
 }
 
 /**
- * One drawn part: its contacts, its body and any mounting holes, as the cut files draw them.
+ * The smallest dimension of any of a part's pads, in the sheet millimetres the view is measured in.
  *
- * `bodyFirst` for a part whose terminals fall inside its housing — a two-row part like the SPDT slide
- * switch. Its legs do run under its body, but drawing the body last hid all three of them: the one thing
- * you look at a footprint to see. An in-line part is the other way round, its contacts on top of the tape.
+ * A lead is the pad's rectangle: a segment across the run, with a width along it. The smaller of those two
+ * is what has to hold a character, so it is what decides whether a name fits on the pad.
  */
-function shapeMarkup(sh: ResistorShape | null, bodyFirst: boolean): string[] {
-  if (!sh) return [];
-  const bd = sh.body;
-  const body = `<rect x="${fmt(bd.x)}" y="${fmt(bd.y)}" width="${fmt(bd.w)}" height="${fmt(bd.h)}" rx="${fmt(bd.h * 0.18)}" class="el-res-body" transform="rotate(${fmt(bd.angle)} ${fmt(bd.cx)} ${fmt(bd.cy)})" />`;
-  const leads = sh.leads.map(
-    (l) => `<line x1="${fmt(l.a.x)}" y1="${fmt(l.a.y)}" x2="${fmt(l.b.x)}" y2="${fmt(l.b.y)}" class="el-res-lead" stroke-width="${fmt(l.width)}" />`,
-  );
-  const holes = (sh.holes ?? []).map(
-    (h) => `<circle cx="${fmt(h.c.x)}" cy="${fmt(h.c.y)}" r="${fmt(h.r)}" class="el-res-hole" stroke-width="${fmt(h.r * 0.5)}" />`,
-  );
-  return bodyFirst ? [body, ...leads, ...holes] : [...leads, body, ...holes];
+function padMinOf(sh: ResistorShape): number {
+  let m = Infinity;
+  for (const l of sh.leads) {
+    m = Math.min(m, l.width, Math.hypot(l.b.x - l.a.x, l.b.y - l.a.y));
+  }
+  return Number.isFinite(m) ? m : 0;
 }
 
 const isZero = (p: Vec2): boolean => p.x === 0 && p.y === 0;

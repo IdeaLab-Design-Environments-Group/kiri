@@ -101,6 +101,8 @@ function terminalRows(fp: Footprint): { y: number; pads: Pad[] }[] {
 
 /** A part the rail steps ACROSS: in at one row, out at the other. The switch, generalised. */
 export interface AcrossPart {
+  /** The terminals this reading picked, by their own names in the footprint. */
+  names: { common: string; live: string; idle: string };
   /** Across the part, common row to throw row, in millimetres. */
   rowSep: number;
   /** Centre to centre along the throw row, the common's column to the throw the rail leaves by. */
@@ -134,7 +136,9 @@ export function acrossPart(fp: Footprint): AcrossPart | null {
     const byX = [...row.pads].sort((a, b) => padAt(a).x - padAt(b).x);
     const common = byX[Math.floor(byX.length / 2)]!;
     const live = byX[byX.length - 1]!;
+    const idle = byX[0]!;
     return {
+      names: nameOf(fp, common, live, idle),
       // The reflection, and nothing else: same column, opposite side.
       rowSep: padAt(live).y - -padAt(common).y,
       pitch: Math.abs(padAt(live).x - padAt(common).x),
@@ -148,19 +152,35 @@ export function acrossPart(fp: Footprint): AcrossPart | null {
     ? [rows[0]!, rows[rows.length - 1]!]
     : [rows[rows.length - 1]!, rows[0]!];
   const common = [...near.pads].sort((a, b) => padAt(a).x - padAt(b).x)[Math.floor(near.pads.length / 2)]!;
-  const live = [...far.pads].sort(
+  const byReach = [...far.pads].sort(
     (a, b) => Math.abs(padAt(a).x - padAt(common).x) - Math.abs(padAt(b).x - padAt(common).x),
-  )[far.pads.length - 1]!;
+  );
+  const live = byReach[byReach.length - 1]!;
+  // The idle throw is whatever else that row holds; with only one throw there is nothing to switch to and
+  // it stands in for itself, which keeps the naming total rather than optional.
+  const idle = byReach.length > 1 ? byReach[0]! : live;
   return {
+    names: nameOf(fp, common, live, idle),
     rowSep: Math.abs(padAt(live).y - padAt(common).y),
     pitch: Math.abs(padAt(live).x - padAt(common).x),
     pad: padSize(live),
   };
 }
 
+/** Look three chosen pads back up by the names the footprint gives them. */
+function nameOf(
+  fp: Footprint, common: Pad, live: Pad, idle: Pad,
+): { common: string; live: string; idle: string } {
+  const find = (target: Pad): string => terminals(fp).find(([, p]) => p === target)?.[0] ?? "";
+  return { common: find(common), live: find(live), idle: find(idle) };
+}
+
 /** The terminals in line with the rail, outermost first — the one-row reading. */
 export function inlineTerminals(fp: Footprint): Pad[] {
-  return terminals(fp)
-    .map(([, p]) => p)
-    .sort((a, b) => padAt(a).x - padAt(b).x);
+  return inlineNamedTerminals(fp).map(([, p]) => p);
+}
+
+/** The same, keeping each terminal's own name — what a drawing needs to label a pad. */
+export function inlineNamedTerminals(fp: Footprint): [string, Pad][] {
+  return terminals(fp).sort((a, b) => padAt(a[1]).x - padAt(b[1]).x);
 }

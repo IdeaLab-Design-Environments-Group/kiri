@@ -5,6 +5,8 @@ import { flatFaces } from "../../../src/model/electronics.js";
 import { batteryTerminals, patternDiag, tapeWidthFor } from "../../../src/model/electronics-routing.js";
 import { printScale } from "../../../src/model/print-scale.js";
 import { COMPONENTS } from "../../../src/model/footprints.generated.js";
+import { PCB_COLOURS } from "../../../src/model/part-render.js";
+import { terminals } from "../../../src/model/footprint.js";
 import { installDom } from "./mock-dom.js";
 
 /** A 2x2 grid of unit quads: four faces, hinges between neighbours. */
@@ -425,8 +427,8 @@ describe("view/electronics-modal", () => {
       expect(edits.length).toBeGreaterThan(base);
       expect(circuit.resistors).toHaveLength(1);
       // On screen, not merely in the circuit: nothing else re-renders the modal.
-      expect(modal.svg.innerHTML).toContain("el-res-body");
-      expect(modal.svg.innerHTML).toContain("el-res-lead");
+      expect(modal.svg.innerHTML).toContain("el-part-marks");
+      expect(modal.svg.innerHTML).toContain(PCB_COLOURS.copper);
     });
 
     it("is drawn the same size as an LED beside it", () => {
@@ -447,10 +449,13 @@ describe("view/electronics-modal", () => {
       expect(ledPad, "no LED pad drawn").toBeTruthy();
       const across = 2 * Number(ledPad![1]);
 
-      // The resistor's contacts are drawn across the run at exactly that span.
-      const lead = /<line x1="([\d.-]+)" y1="([\d.-]+)" x2="([\d.-]+)" y2="([\d.-]+)" class="el-res-lead"/.exec(html);
-      expect(lead, "no resistor contact drawn").toBeTruthy();
-      const span = Math.hypot(Number(lead![3]) - Number(lead![1]), Number(lead![4]) - Number(lead![2]));
+      // The resistor's contacts are drawn across the run at exactly that span. Read off the shape the
+      // canvas hands to the renderer, not off the markup: the pads are painted as their true outlines now,
+      // and it is the placement -- which this test is about -- that has to be unchanged.
+      const drawn = modal.drawnParts();
+      expect(drawn, "no resistor drawn").toHaveLength(1);
+      const lead = drawn[0].shape.leads[0];
+      const span = Math.hypot(lead.b.x - lead.a.x, lead.b.y - lead.a.y);
       expect(span).toBeCloseTo(across, 3);
     });
 
@@ -493,7 +498,7 @@ describe("view/electronics-modal", () => {
       expect(modal.circuit.resistors).toHaveLength(1);
       tapFlat(modal, modal.circuit.resistors[0]);
       expect(modal.circuit.resistors).toHaveLength(0);
-      expect(modal.svg.innerHTML).not.toContain("el-res-body");
+      expect(modal.svg.innerHTML).not.toContain("el-part-marks");
     });
   });
 
@@ -556,8 +561,8 @@ describe("view/electronics-modal", () => {
       expect(modal.circuit.parts[0].y).toBeCloseTo(snap.point.y, 9);
       expect(modal.circuit.parts[0].x, "stored the raw click, not the snap").not.toBeCloseTo(off.x, 9);
       // And it is on screen, not merely in the circuit: nothing else re-renders the modal.
-      expect(modal.svg.innerHTML).toContain("el-res-body");
-      expect(modal.svg.innerHTML).toContain("el-res-lead");
+      expect(modal.svg.innerHTML).toContain("el-part-marks");
+      expect(modal.svg.innerHTML).toContain(PCB_COLOURS.mask);
     });
 
     it("carries the placed parts through to the controller", () => {
@@ -582,7 +587,7 @@ describe("view/electronics-modal", () => {
 
       tapFlat(modal, modal.circuit.parts[0]);
       expect(modal.circuit.parts).toHaveLength(0);
-      expect(modal.svg.innerHTML).not.toContain("el-res-body");
+      expect(modal.svg.innerHTML).not.toContain("el-part-marks");
     });
 
     it("says so when a placed part did not fit", () => {
@@ -593,6 +598,110 @@ describe("view/electronics-modal", () => {
       modal.routed = { ...modal.routed, parts: [] };
       modal.renderStatus();
       expect(modal.statusEl.textContent).toContain("1 part did not fit");
+    });
+
+    it("keys the legend to the colours actually on the canvas", () => {
+      // The legend used to describe the cartoon -- "Part, in line with the rail" against a grey swatch --
+      // and a legend that names colours the canvas no longer paints is worse than none.
+      const { modal } = openOn(grid2x2());
+      const legend = modal.overlay.innerHTML as string;
+      expect(legend).toContain(PCB_COLOURS.mask);
+      expect(legend).toContain(PCB_COLOURS.componentLabel);
+      expect(legend, "the legend still keys the old grey contact").not.toContain("el-key-res");
+    });
+
+    it("draws each part as its real footprint pads, not an invented body", () => {
+      // The parts used to be a black rounded rect with two grey stubs -- a cartoon that answered none of the
+      // questions you look at a footprint to answer. Every terminal is now the pad that will actually be
+      // cut: its own outline, in copper with the mask opening over it.
+      const { modal, at } = withRails();
+      pick(modal, "C_1206");
+      tapFlat(modal, at);
+
+      const html = modal.svg.innerHTML as string;
+      const drawn = modal.drawnParts();
+      expect(drawn).toHaveLength(1);
+      const group = /<g class="el-part-marks">([\s\S]*?)<\/g>/.exec(html);
+      expect(group, "the parts are not drawn in their own group").toBeTruthy();
+      const marks = group![1]!;
+      // One copper path and one mask path for every terminal the footprint has -- counted from the library,
+      // not from the shape being drawn, or a drawing that lost a pad would agree with itself about it.
+      const pins = terminals(drawn[0].footprint).length;
+      expect(pins).toBe(2); // a 1206 capacitor
+      expect(drawn[0].shape.leads).toHaveLength(pins);
+      const copper = marks.match(new RegExp(`fill="${PCB_COLOURS.copper}"`, "g")) ?? [];
+      const mask = marks.match(new RegExp(`fill="${PCB_COLOURS.mask}"`, "g")) ?? [];
+      expect(copper).toHaveLength(pins);
+      expect(mask).toHaveLength(pins);
+      expect(marks, "the black cartoon body is still being drawn").not.toContain("#111111");
+      expect(marks, "the grey cartoon contacts are still being drawn").not.toContain("#c3cad6");
+      // And the origin dot that says where the part's own centre is.
+      expect(marks).toContain(PCB_COLOURS.origin);
+    });
+
+    it("numbers the designators per family across every part on the canvas at once", () => {
+      // The canvas draws three lists -- the two tools that predate the library, and the library itself --
+      // and they have to be designated as one set. A part called R1 here and R2 in the cut file would be
+      // worse than no label at all.
+      const { modal } = withRails();
+      const mid = (t: any): { x: number; y: number } => t.pts[Math.floor(t.pts.length / 2)];
+      // One of each kind, each on a run of its own -- two parts on one run and the second will not fit.
+      modal.selectTool("resistor");
+      tapFlat(modal, mid(modal.routed.traces.find((t: any) => t.net === "pwr")));
+      modal.selectTool("switch");
+      tapFlat(modal, mid(modal.routed.traces.find((t: any) => t.net === "gnd")));
+      pick(modal, "R_2010");
+      for (const t of modal.routed.traces.filter((x: any) => x.width === undefined)) {
+        tapFlat(modal, mid(t));
+        if (modal.routedParts().length) break;
+      }
+      expect(modal.drawnParts().map((d: any) => d.component)).toEqual(["R_1206", "SW_SPDT", "R_2010"]);
+
+      // Zoomed in far enough that the text is worth emitting at all.
+      modal.zoomBy(4);
+      const html = modal.svg.innerHTML as string;
+      const tags = [...html.matchAll(
+        new RegExp(`fill="${PCB_COLOURS.componentLabel}"[^>]*>([^<]+)<`, "g"),
+      )].map((m) => m[1]);
+      // The two resistors share a family and are numbered through it, whichever list each came from.
+      expect(tags).toEqual(["R1", "SW1", "R2"]);
+    });
+
+    it("holds the pin names back until a pad is big enough on screen to carry one", () => {
+      // The canvas fits itself to the whole sheet, so at Fit a 1206 pad is a few pixels across and its own
+      // name written on it is a smear that hides the pad instead of naming it. Zooming in is what makes the
+      // names worth having, and it must not move anything to show them.
+      const { modal, at } = withRails();
+      pick(modal, "C_1206");
+      tapFlat(modal, at);
+      modal.fitView();
+      modal.draw();
+
+      const placement = (): string[] =>
+        modal.drawnParts().map((d: any) => JSON.stringify(d.shape.leads));
+      const where = placement();
+      const html = (): string => modal.svg.innerHTML as string;
+
+      // At Fit the whole sheet is on screen and a 1206 is a few pixels: no writing on it at all.
+      const before = html();
+      expect(before, "a pin name at Fit, where it is a smear").not.toContain(PCB_COLOURS.padLabel);
+      expect(before, "a designator at Fit, where it is a smear").not.toContain(PCB_COLOURS.componentLabel);
+      expect(modal.drawnParts().every((d: any) => !modal.padLabelsFit(d.shape))).toBe(true);
+
+      // Zooming repaints the parts by itself -- nothing edits the circuit. The designator comes back first:
+      // it sits beside the part, so nothing is hidden behind it.
+      modal.zoomBy(2);
+      expect(html(), "zooming in never revealed the designator").toContain(PCB_COLOURS.componentLabel);
+      expect(html(), "a pin name while the pad is still too small to carry one")
+        .not.toContain(PCB_COLOURS.padLabel);
+      expect(modal.drawnParts().every((d: any) => !modal.padLabelsFit(d.shape))).toBe(true);
+
+      // And the pin names once the pad is big enough to hold one without covering itself.
+      modal.zoomBy(2);
+      expect(html(), "zooming in never revealed the pin names").toContain(PCB_COLOURS.padLabel);
+      expect(html()).not.toBe(before);
+      // ...and all of that was paint only: every pad is still exactly where it was.
+      expect(placement()).toEqual(where);
     });
 
     it("puts the placed parts in both cut files", () => {

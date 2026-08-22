@@ -19,6 +19,7 @@ import {
 } from "../../../src/model/footprints.generated.js";
 import { padNamed, padSize } from "../../../src/model/footprint.js";
 import { acrossPart } from "../../../src/model/parts.js";
+import type { ResistorShape } from "../../../src/model/copper-svg-export.js";
 
 /** Two breaks: one slanted, one straight up the page, so a rotation bug cannot hide in either. */
 const A: Vec2 = { x: 10, y: 20 };
@@ -102,16 +103,28 @@ function fixture() {
   return { fold, traces: r.traces, tapeW: tapeWidthFor(faces), mid };
 }
 
+/**
+ * The shape with its pad NAMES dropped, for comparison against the recorded geometry.
+ *
+ * The baseline below was taken before a lead carried the name of the terminal it belongs to. That name
+ * is a label, not a position, so it must not be allowed to make the geometry check pass or fail —
+ * stripping it keeps the recorded numbers doing the job they were recorded for.
+ */
+function geometry(sh: ResistorShape | null): unknown {
+  if (!sh) return null;
+  return { ...sh, leads: sh.leads.map(({ name: _name, ...rest }) => rest) };
+}
+
 describe("model/part-shape", () => {
   it("draws a 1206 resistor exactly as the hand-written resistorShape did", () => {
-    expect(partShape(R_1206, A, B)).toEqual(BEFORE.RES_AB);
-    expect(partShape(R_1206, C, D)).toEqual(BEFORE.RES_CD);
+    expect(geometry(partShape(R_1206, A, B))).toEqual(BEFORE.RES_AB);
+    expect(geometry(partShape(R_1206, C, D))).toEqual(BEFORE.RES_CD);
   });
 
   it("draws an SPDT exactly as the hand-written switchShape did, either way round", () => {
-    expect(partShape(SW_SPDT, A, B)).toEqual(BEFORE.SW_AB);
-    expect(partShape(SW_SPDT, A, B, true)).toEqual(BEFORE.SW_AB_FLIP);
-    expect(partShape(SW_SPDT, C, D, false)).toEqual(BEFORE.SW_CD);
+    expect(geometry(partShape(SW_SPDT, A, B))).toEqual(BEFORE.SW_AB);
+    expect(geometry(partShape(SW_SPDT, A, B, true))).toEqual(BEFORE.SW_AB_FLIP);
+    expect(geometry(partShape(SW_SPDT, C, D, false))).toEqual(BEFORE.SW_CD);
   });
 
   it("is the only implementation — resistorShape and switchShape now go through it", () => {

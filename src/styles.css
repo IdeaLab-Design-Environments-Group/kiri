@@ -852,12 +852,28 @@ body {
   fill-rule: nonzero;
   opacity: 0.55;
 }
-/* A resistor: black body, grey leads reaching onto the copper it bridges. */
-.el-res-lead { stroke: #c3cad6; fill: none; stroke-linecap: butt; }
-.el-res-body { fill: #111111; }
-/* Mounting holes: drawn on the part, never cut. */
-.el-res-hole { fill: none; stroke: #c3cad6; }
-.el-key-res { color: #4b5563; }
+/* Parts are drawn as their real footprints, straight from `part-render.ts`: every colour on them is the
+   PCB palette's and is carried inline on the elements, so there is deliberately no part colour here.
+   All this rule does is keep the palette's text readable — pale yellow pin names and cyan designators sit on
+   whatever the part happens to lie over, tape or cloth. `paint-order` draws the halo under the glyph, so the
+   fill stays exactly the colour the palette says it is; the stroke is non-scaling so it is a constant hairline
+   at any zoom rather than growing into a blot. */
+.el-part-marks text {
+  paint-order: stroke;
+  stroke: rgba(0, 0, 0, 0.65);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+/* The two part keys take their colour inline from `PCB_COLOURS`, so the legend cannot drift from the canvas.
+   Both are bright layer colours meant for a dark board, so they get the same dark halo the canvas text does —
+   without it the cyan is all but invisible on the modal's white footer. */
+.el-key-pad,
+.el-key-des {
+  font-weight: 600;
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.8);
+}
 .el-tape-pwr { fill: #ff0000; }
 .el-tape-gnd { fill: #222222; }
 /* Each LED = two distinct pads (PWR red +, GND dark −) bridged by an amber chip body. */

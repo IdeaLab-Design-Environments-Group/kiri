@@ -10,6 +10,7 @@ import {
   stripOutline,
 } from "../../../src/model/copper-svg-export.js";
 import { buildFkldSvgExport } from "../../../src/model/fkld-svg-export.js";
+import { PCB_COLOURS } from "../../../src/model/part-render.js";
 import { flatFaces, gapGraph, ledOf, type Circuit, type Led, type Vec2 } from "../../../src/model/electronics.js";
 import {
   batteryTerminals,
@@ -701,9 +702,10 @@ describe("model/copper-svg-export", () => {
       const ann = svg.slice(svg.indexOf('<g id="annotation"'));
       expect(ann).not.toContain("#ff0000");   // no PWR run redrawn
       expect(ann).not.toContain("#222222");   // nor GND
-      // What is left is the part: where it goes, and which way round.
-      expect(ann).toContain("#111111");       // its body
-      expect(ann).toContain("#c3cad6");       // its leads
+      // What is left is the part, drawn as its footprint: copper pads under their mask openings.
+      expect(ann).toContain(PCB_COLOURS.copper);
+      expect(ann).toContain(PCB_COLOURS.mask);
+      expect(ann).toContain(PCB_COLOURS.componentLabel);   // and which one it is
     });
 
     it("keeps the annotation out of the cut, so it can be switched off", () => {
@@ -711,15 +713,40 @@ describe("model/copper-svg-export", () => {
       // marks, so it lives in its own group and never in that one.
       const svg = built().svg;
       const cut = cutLayer(svg);
-      expect(cut).not.toContain("#111111");
-      expect(cut).not.toContain("#c3cad6");
+      expect(cut).not.toContain(PCB_COLOURS.copper);
+      expect(cut).not.toContain(PCB_COLOURS.mask);
+      expect(cut).not.toContain(PCB_COLOURS.padLabel);
+      expect(cut).not.toContain(PCB_COLOURS.componentLabel);
       expect(cut).not.toContain("<circle");
+      expect(cut).not.toContain("<text");
     });
 
     it("is left out entirely when there is nothing to annotate", () => {
       const { fold, tapeW } = planned("house.fkld");
       expect(buildCopperCarrierExport(fold, [], tapeW).svg).not.toContain('id="annotation"');
     });
+
+    /**
+     * Every x coordinate the annotation layer draws at, from whichever elements it uses.
+     *
+     * The parts are drawn by `part-render`, which is free to emit a pad as a polygon, a path or a rect —
+     * so this asks the markup for its geometry rather than for a particular tag. Text is included: a
+     * label that did not travel with the part it names would be marking the wrong component.
+     */
+    const annotationXs = (svg: string): number[] => {
+      const ann = svg.slice(svg.indexOf('<g id="annotation"'));
+      const xs: number[] = [];
+      for (const m of ann.matchAll(/\b(?:x|cx|x1|x2)="(-?[\d.]+)"/g)) xs.push(Number(m[1]));
+      for (const m of ann.matchAll(/\bpoints="([^"]+)"/g)) {
+        const n = m[1]!.trim().split(/[\s,]+/).map(Number);
+        for (let i = 0; i < n.length; i += 2) xs.push(n[i]!);
+      }
+      for (const m of ann.matchAll(/\bd="([^"]+)"/g)) {
+        const n = m[1]!.replace(/[A-Za-z]/g, " ").trim().split(/[\s,]+/).map(Number);
+        for (let i = 0; i < n.length; i += 2) xs.push(n[i]!);
+      }
+      return xs.filter(Number.isFinite);
+    };
 
     it("mirrors with the cut it annotates", () => {
       // It goes through the same transform, so a mirrored file cannot end up with its parts on the
@@ -733,17 +760,90 @@ describe("model/copper-svg-export", () => {
       const flipped = buildCopperCarrierExport(
         fold, traces, tapeW, "k", [], { x: true, y: false }, undefined, pads, res,
       );
-      // The first x in the annotation's first shape.
-      // A lead's MIDPOINT. Its two endpoints are no use on their own: mirroring flips the direction across
-      // the run, so the band's ends swap and `x1` of the mirrored one answers to `x2` of the other.
-      const cx = (svg: string): number => {
-        const m = svg
-          .slice(svg.indexOf('<g id="annotation"'))
-          .match(/<line[^>]*?x1="([\d.-]+)"[^>]*?x2="([\d.-]+)"/)!;
-        return (Number(m[1]) + Number(m[2])) / 2;
-      };
+      // The annotation's x extent, whatever elements it happens to be drawn from. A single coordinate is
+      // no use: mirroring reverses the order of a pad's own corners, so the mirrored file's first x
+      // answers to a different corner than the plain file's. The extent is order-free, and reflecting a
+      // shape swaps its two ends of it.
       const { w } = sheetFrame(fold);
-      expect(cx(flipped.svg)).toBeCloseTo(w - cx(plain.svg), 2);
+      const span = (svg: string): { lo: number; hi: number } => {
+        const xs = annotationXs(svg);
+        expect(xs.length).toBeGreaterThan(0);
+        return { lo: Math.min(...xs), hi: Math.max(...xs) };
+      };
+      const a = span(plain.svg), b = span(flipped.svg);
+      expect(b.lo).toBeCloseTo(w - a.hi, 2);
+      expect(b.hi).toBeCloseTo(w - a.lo, 2);
+    });
+
+    /** Every designator the file prints, in the order it prints them. */
+    const labels = (svg: string): string[] =>
+      [...svg.matchAll(/>([A-Z]+\d+)</g)].map((m) => m[1]!);
+
+    /** Each designator against the point it is printed at — which part it is actually naming. */
+    const labelled = (svg: string): Record<string, string> => {
+      const out: Record<string, string> = {};
+      for (const m of svg.matchAll(/<text x="(-?[\d.]+)" y="(-?[\d.]+)"[^>]*>([A-Z]+\d+)<\/text>/g)) {
+        out[m[3]!] = `${m[1]},${m[2]}`;
+      }
+      return out;
+    };
+
+    it("gives a part the same designator on the strips file and on the carrier", () => {
+      // The two files are laid one over the other: the strips are stuck down onto the carrier's window.
+      // A part called R1 on one and R2 on the other would be worse than printing no designator at all,
+      // because the reader would trust it.
+      const { fold, traces, tapeW, keepOff, pads } = planned("house.fkld", 3);
+      const pwr = traces.find((t) => t.net === "pwr")!;
+      const res = [
+        { a: pwr.pts[Math.floor(pwr.pts.length / 2)]!, b: pwr.pts[1]! },
+        { a: pwr.pts[0]!, b: pwr.pts[Math.min(2, pwr.pts.length - 1)]! },
+      ];
+      const sw = [{ a: pwr.pts[1]!, b: pwr.pts[Math.min(3, pwr.pts.length - 1)]! }];
+
+      const strips = buildCopperSvgExport(
+        fold, traces, tapeW, "k", pads, undefined, undefined, res, sw,
+      );
+      const carrier = buildCopperCarrierExport(
+        fold, traces, tapeW, "k", keepOff, undefined, undefined, pads, res, sw,
+      );
+      // Both files are framed by the same `sheetFrame`, so a designator naming the same part lands on the
+      // same point in both. Comparing the names alone would pass even if the two files had handed them
+      // out to different parts, which is exactly the failure worth guarding.
+      const onStrips = labelled(strips.svg);
+      expect(Object.keys(onStrips).length).toBeGreaterThan(1);
+      expect(labelled(carrier.svg)).toEqual(onStrips);
+    });
+
+    it("numbers each family from one, in the order the parts were placed", () => {
+      const { fold, traces, tapeW, pads } = planned("house.fkld", 3);
+      const pwr = traces.find((t) => t.net === "pwr")!;
+      const res = [
+        { a: pwr.pts[Math.floor(pwr.pts.length / 2)]!, b: pwr.pts[1]! },
+        { a: pwr.pts[0]!, b: pwr.pts[Math.min(2, pwr.pts.length - 1)]! },
+      ];
+      const sw = [{ a: pwr.pts[1]!, b: pwr.pts[Math.min(3, pwr.pts.length - 1)]! }];
+      const svg = buildCopperSvgExport(
+        fold, traces, tapeW, "k", pads, undefined, undefined, res, sw,
+      ).svg;
+      // Two resistors and a switch: the resistors count 1, 2 between themselves and the switch starts
+      // its own family at 1 rather than carrying on from theirs.
+      expect(new Set(labels(svg))).toEqual(new Set(["R1", "R2", "SW1"]));
+    });
+
+    it("drops a part it cannot draw without spending its number", () => {
+      // An unknown component is not in the library and is not drawn. If it still took a designator, the
+      // real parts after it would be numbered one too high and the file would disagree with itself.
+      const { fold, traces, tapeW, pads } = planned("house.fkld", 3);
+      const pwr = traces.find((t) => t.net === "pwr")!;
+      const at = pwr.pts[Math.floor(pwr.pts.length / 2)]!;
+      const parts = [
+        { component: "NOT_A_PART", a: at, b: pwr.pts[1]! },
+        { component: "R_2010", a: at, b: { x: at.x + 6, y: at.y } },
+      ];
+      const svg = buildCopperSvgExport(
+        fold, traces, tapeW, "k", pads, undefined, undefined, [], [], parts,
+      ).svg;
+      expect(labels(svg)).toEqual(["R1"]);
     });
   });
 

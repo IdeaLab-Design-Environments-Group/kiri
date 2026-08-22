@@ -17,8 +17,9 @@ import type { Vec2 } from "./electronics.js";
 import { type Trace2D, acrossRun, landingWidth } from "./electronics-routing.js";
 import { printScale } from "./print-scale.js";
 import { type Box, type Footprint, holes, MM_PER_INCH, padAt, padSize } from "./footprint.js";
-import { type AcrossPart, acrossPart, inlineTerminals } from "./parts.js";
+import { type AcrossPart, acrossPart, inlineNamedTerminals } from "./parts.js";
 import { COMPONENTS, R_1206, SW_SPDT } from "./footprints.generated.js";
+import { designators, partSvg } from "./part-render.js";
 
 const MARGIN = 8; // mm — must match the FKLD SVG export or the layers import misaligned
 
@@ -101,9 +102,6 @@ const GND_FILL = "#222222";
 /** The library, by component id — so a placed part can be drawn from the id the circuit stores. */
 const BY_ID = new Map(COMPONENTS.map((c) => [c.id, c.footprint]));
 
-/** A resistor: a black body, with grey leads reaching either way onto the copper it bridges. */
-const RES_BODY = "#111111";
-const RES_LEAD = "#c3cad6";   // bright enough to read against the black housing it sits on
 
 export interface CopperSvgExport {
   filename: string;
@@ -232,11 +230,9 @@ export function buildCopperSvgExport(
 
   const pwr = layer("pwr");
   const gnd = layer("gnd");
-  const marks = [
-    ...resistors.flatMap((r) => resistorMarks(r, T)),
-    ...switches.flatMap((r) => switchMarks(r, T)),
-    ...parts.flatMap((r) => partMarksOf(r, T)),
-  ];
+  // Named once, for this export: the carrier builds the same list from the same arguments, so a part is
+  // the same R1 on both files.
+  const marks = partsLayer(drawnParts(resistors, switches, parts), T);
   const body =
     `  <g id="pwr" fill="${PWR_FILL}" stroke="none" fill-rule="evenodd">\n    ${pwr.body}\n  </g>\n` +
     `  <g id="gnd" fill="${GND_FILL}" stroke="none" fill-rule="evenodd">\n    ${gnd.body}\n  </g>` +
@@ -709,9 +705,7 @@ function annotationLayer(
   // are left: where they go, and which way round.
   // The resistors, over the breaks they bridge. Drawn after the copper so a part reads as sitting on top of
   // the tape, which is how it goes down.
-  for (const r of resistors) marks.push(...resistorMarks(r, T));
-  for (const r of switches) marks.push(...switchMarks(r, T));
-  for (const r of parts) marks.push(...partMarksOf(r, T));
+  marks.push(...partsLayer(drawnParts(resistors, switches, parts), T));
 
   if (!marks.length) return "";
   return `  <g id="annotation" stroke-linejoin="round">\n    ${marks.join("\n    ")}\n  </g>\n`;
@@ -725,8 +719,13 @@ function annotationLayer(
  * where there is deliberately no copper at all.
  */
 export interface ResistorShape {
-  /** The two contacts, drawn across the tape at each cut end — one per lead. */
-  leads: { a: Vec2; b: Vec2; width: number }[];
+  /**
+   * The contacts, one per terminal: a segment across the run with a width, which is the pad's rectangle.
+   *
+   * `name` is the terminal's own name in the footprint — "1", "GND", "throw_a" — so a renderer can look
+   * the pad back up and draw its true outline and its label rather than a stand-in rectangle.
+   */
+  leads: { a: Vec2; b: Vec2; width: number; name?: string }[];
   /** The body, square across the run. */
   body: { x: number; y: number; w: number; h: number; angle: number; cx: number; cy: number };
   /** Mounting holes, where the part has them. Drawn, never cut: a hole through the pattern is the user's
@@ -753,7 +752,7 @@ export interface ResistorShape {
  * datasheet says it is; a wider tape does not make it bigger.
  */
 export function partShape(fp: Footprint, a: Vec2, b: Vec2, flip?: boolean): ResistorShape | null {
-  const ts = inlineTerminals(fp);
+  const ts = inlineNamedTerminals(fp);
   if (ts.length < 2) return null;
   const dx = b.x - a.x, dy = b.y - a.y;
   const L = Math.hypot(dx, dy);
@@ -762,7 +761,7 @@ export function partShape(fp: Footprint, a: Vec2, b: Vec2, flip?: boolean): Resi
   const across = acrossPart(fp);
   return across
     ? rowShape(fp, across, a, ux, uy, flip)
-    : inlineShape(padSize(ts[0]!), a, b, ux, uy, dx, dy);
+    : inlineShape(padSize(ts[0]![1]), [ts[0]![0], ts[ts.length - 1]![0]], a, b, ux, uy, dx, dy);
 }
 
 /**
@@ -773,7 +772,8 @@ export function partShape(fp: Footprint, a: Vec2, b: Vec2, flip?: boolean): Resi
  * gap they would show a part touching nothing.
  */
 function inlineShape(
-  pad: Box, a: Vec2, b: Vec2, ux: number, uy: number, dx: number, dy: number,
+  pad: Box, names: [string, string],
+  a: Vec2, b: Vec2, ux: number, uy: number, dx: number, dy: number,
 ): ResistorShape {
   const L = Math.hypot(dx, dy);
   const px = -uy, py = ux;               // across the run
@@ -795,7 +795,7 @@ function inlineShape(
     };
   };
   return {
-    leads: [contact(a, -1), contact(b, +1)],
+    leads: [{ ...contact(a, -1), name: names[0] }, { ...contact(b, +1), name: names[1] }],
     body: {
       x: mid.x - bodyL / 2, y: mid.y - bodyW / 2, w: bodyL, h: bodyW,
       angle: (Math.atan2(dy, dx) * 180) / Math.PI, cx: mid.x, cy: mid.y,
@@ -824,6 +824,7 @@ function rowShape(
   // The rail runs straight through the part: the common is on the near edge of the break, the two throws on
   // the far edge, a pitch either side of the centreline. The outgoing tape runs down the middle and reaches
   // neither throw by itself — one gets a land, the other is left bare, and that is what opens the circuit.
+  const names = g.names;
   const p0 = g.pad;
   const common = a;
   // The throws sit a row's separation along from the common — not at the far cut end, which is pulled back
@@ -860,7 +861,11 @@ function rowShape(
     };
   });
   return {
-    leads: [pad(idle), pad(common), pad(live)],
+    leads: [
+      { ...pad(idle), name: names.idle },
+      { ...pad(common), name: names.common },
+      { ...pad(live), name: names.live },
+    ],
     body: {
       x: cx - bodyL / 2, y: cy - bodyW / 2, w: bodyL, h: bodyW,
       angle: (Math.atan2(py, px) * 180) / Math.PI, cx, cy,
@@ -879,25 +884,16 @@ export function switchShape(a: Vec2, b: Vec2, flip?: boolean): ResistorShape | n
   return partShape(SW_SPDT, a, b, flip);
 }
 
-function partMarks(sh: ResistorShape, bodyFill: string): string[] {
-  const { leads, body } = sh;
-  // Housing first, pads over it. A part's legs run under its body, but a footprint drawing that hides them
-  // there answers none of the questions you look at it to answer: where the copper is and how big it is.
-  return [
-    `<rect x="${fmt(body.x)}" y="${fmt(body.y)}" width="${fmt(body.w)}" ` +
-      `height="${fmt(body.h)}" rx="${fmt(body.h * 0.18)}" fill="${bodyFill}" ` +
-      `transform="rotate(${fmt(body.angle)} ${fmt(body.cx)} ${fmt(body.cy)})" />`,
-    ...leads.map(
-      (l) =>
-        `<line x1="${fmt(l.a.x)}" y1="${fmt(l.a.y)}" x2="${fmt(l.b.x)}" y2="${fmt(l.b.y)}" ` +
-        `stroke="${RES_LEAD}" stroke-width="${fmt(l.width)}" stroke-linecap="butt" />`,
-    ),
-    ...(sh.holes ?? []).map(
-      (h) =>
-        `<circle cx="${fmt(h.c.x)}" cy="${fmt(h.c.y)}" r="${fmt(h.r)}" fill="none" ` +
-        `stroke="${RES_LEAD}" stroke-width="${fmt(h.r * 0.5)}" />`,
-    ),
-  ];
+/**
+ * One placed part, drawn the way a PCB layout tool draws it: its real pads in copper and mask, each
+ * carrying its own terminal name, with the designator beside it.
+ *
+ * The drawing is {@link partSvg}'s, and the palette lives with it in `part-render.ts` — there is no part
+ * colour in this file. What this file still owns is the *placement*, which {@link partShape} decided and
+ * which nothing here moves.
+ */
+function partMarks(fp: Footprint, sh: ResistorShape, designator: string): string[] {
+  return partSvg(fp, sh, designator);
 }
 
 /**
@@ -919,33 +915,52 @@ function partShapeOf(r: PlacedPartMark, T: (p: Vec2) => Vec2): ResistorShape | n
   return fp ? partShape(fp, T(r.a), T(r.b), r.flip) : null;
 }
 
-function partMarksOf(r: PlacedPartMark, T: (p: Vec2) => Vec2): string[] {
-  const sh = partShapeOf(r, T);
-  return sh ? partMarks(sh, RES_BODY) : [];
+/** A part about to be drawn: which footprint, which component it is, and the break it bridges. */
+interface DrawnPart {
+  component: string;
+  fp: Footprint;
+  a: Vec2;
+  b: Vec2;
+  flip?: boolean;
 }
 
-function switchMarks(r: { a: Vec2; b: Vec2; flip?: boolean }, T: (p: Vec2) => Vec2): string[] {
-  const sh = switchShape(T(r.a), T(r.b), r.flip);
-  return sh ? partMarks(sh, RES_BODY) : [];
-}
-
-function resistorMarks(r: { a: Vec2; b: Vec2; flip?: boolean }, T: (p: Vec2) => Vec2): string[] {
-  const sh = resistorShape(T(r.a), T(r.b));
-  if (!sh) return [];
-  const { leads, body } = sh;
-  const bodyL = body.w, bodyW = body.h, ang = body.angle;
-  const mid = { x: body.cx, y: body.cy };
+/**
+ * Every part a cut file draws, in one list and in one order.
+ *
+ * Both files build this list from the same three arguments, so both number the parts identically. A
+ * resistor called `R1` on the strips and `R2` on the carrier would be worse than no designator at all:
+ * the two files are meant to be laid one over the other, and the labels are how you tell which is which.
+ * A component that is not in the library is dropped here rather than later, so it consumes no designator.
+ */
+function drawnParts(
+  resistors: { a: Vec2; b: Vec2 }[],
+  switches: { a: Vec2; b: Vec2; flip?: boolean }[],
+  parts: PlacedPartMark[],
+): DrawnPart[] {
   return [
-    ...leads.map(
-      (l) =>
-        `<line x1="${fmt(l.a.x)}" y1="${fmt(l.a.y)}" x2="${fmt(l.b.x)}" y2="${fmt(l.b.y)}" ` +
-        `stroke="${RES_LEAD}" stroke-width="${fmt(l.width)}" stroke-linecap="butt" />`,
-    ),
-    // The body, square across the run.
-    `<rect x="${fmt(mid.x - bodyL / 2)}" y="${fmt(mid.y - bodyW / 2)}" width="${fmt(bodyL)}" ` +
-      `height="${fmt(bodyW)}" rx="${fmt(bodyW * 0.18)}" fill="${RES_BODY}" ` +
-      `transform="rotate(${fmt(ang)} ${fmt(mid.x)} ${fmt(mid.y)})" />`,
+    ...resistors.map((r) => ({ component: "R_1206", fp: R_1206, a: r.a, b: r.b })),
+    ...switches.map((s) => ({ component: "SW_SPDT", fp: SW_SPDT, a: s.a, b: s.b, flip: s.flip })),
+    ...parts.flatMap((p) => {
+      const fp = BY_ID.get(p.component);
+      return fp ? [{ component: p.component, fp, a: p.a, b: p.b, flip: p.flip }] : [];
+    }),
   ];
+}
+
+/**
+ * The parts layer: every part placed, named once, and drawn as its footprint.
+ *
+ * The designators are assigned over the parts that actually come out with a shape, so a degenerate
+ * placement cannot silently eat a number and shift every part after it.
+ */
+function partsLayer(drawn: DrawnPart[], T: (p: Vec2) => Vec2): string[] {
+  const placed: { d: DrawnPart; sh: ResistorShape }[] = [];
+  for (const d of drawn) {
+    const sh = partShape(d.fp, T(d.a), T(d.b), d.flip);
+    if (sh) placed.push({ d, sh });
+  }
+  const names = designators(placed.map((p) => p.d));
+  return placed.flatMap((p, i) => partMarks(p.d.fp, p.sh, names[i] ?? ""));
 }
 
 /** Names a mirrored file as mirrored, and by which axis.

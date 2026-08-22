@@ -48,6 +48,13 @@ function fixture(leds = 1) {
   return { fold, faces, gaps, base, plain, mid, tapeW: tapeWidthFor(faces), k: printScale(fold) };
 }
 
+/** Every fill and stroke colour used in a chunk of SVG, lowercased. */
+function paintIn(svg: string): Set<string> {
+  return new Set(
+    [...svg.matchAll(/(?:fill|stroke)="(#[0-9a-fA-F]{3,8})"/g)].map((m) => m[1]!.toLowerCase()),
+  );
+}
+
 describe("model/resistor", () => {
   it("breaks the copper it sits on, instead of narrowing it", () => {
     // Both a resistor's ends are on +. Tape running underneath therefore shorts it out and the LEDs see the
@@ -149,13 +156,20 @@ describe("model/resistor", () => {
 
   it("is drawn on both cut files, and cut on neither", () => {
     // The part is not copper. A cut along it would slice the tape it is bridging.
+    //
+    // Asserted against whatever the part is actually painted with rather than against pinned hexes. This
+    // test used to name the two colours the old drawing happened to use, which made it a mirror of the
+    // paint: it broke the moment parts were redrawn, for reasons that had nothing to do with the thing it
+    // exists to guard. What matters is that no colour the part is drawn in turns up in the copper the
+    // blade follows — and that holds however the part is painted.
     const { fold, faces, gaps, base, mid, tapeW } = fixture();
     const r = planRoutes(faces, gaps, { ...base, resistors: [mid] });
 
     const strips = buildCopperSvgExport(fold, r.traces, tapeW, "k", r.pads, undefined, undefined, r.resistors);
     expect(strips.svg).toContain('id="parts"');
-    expect(strips.svg).toContain("#c3cad6"); // the leads, onto the copper
-    expect(strips.svg).toContain("#111111"); // the body, over the gap
+    // The parts layer is emitted last, so it runs to the end of the file.
+    const partPaint = paintIn(strips.svg.slice(strips.svg.indexOf('<g id="parts"')));
+    expect(partPaint.size, "the part must actually be drawn").toBeGreaterThan(0);
 
     const carrier = buildCopperCarrierExport(
       fold, r.traces, tapeW, "k", [], undefined, undefined, r.pads, r.resistors,
@@ -164,8 +178,12 @@ describe("model/resistor", () => {
     // top of it — so slicing to the end of the file would sweep the annotation in and prove nothing.
     const from = carrier.svg.indexOf('<g id="carrier"');
     const cut = carrier.svg.slice(from, carrier.svg.indexOf("</g>", from));
-    expect(cut).not.toContain("#c3cad6");
-    expect(cut).not.toContain("#111111");
+    for (const colour of partPaint) {
+      expect(cut, `${colour} is a part colour and must not appear in the cut`).not.toContain(colour);
+    }
+    // And drawn on the carrier too, not merely absent from its cuts.
+    const drawnOnCarrier = paintIn(carrier.svg.slice(carrier.svg.indexOf("</g>", from)));
+    for (const colour of partPaint) expect(drawnOnCarrier.has(colour)).toBe(true);
   });
 
   it("leaves the circuit alone when there are none", () => {
