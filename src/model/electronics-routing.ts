@@ -46,7 +46,7 @@ import {
   pointInFace,
 } from "./electronics.js";
 import { DEFAULT_PRINT_SIZE } from "./stl-export.js";
-import { R_1206, slide_switch } from "./footprints.generated.js";
+import { R_1206_part, padNamed, padSpan, slide_switch_part } from "./footprints.generated.js";
 
 /** One continuous strip of copper tape: a centreline polyline plus which net it carries. */
 export interface Trace2D {
@@ -978,7 +978,8 @@ export function planRoutes(
   // Across the break the part needs only its own half-gap plus a pad either side: the terminals run square
   // to the rail now, not along it, so a much shorter run will take one.
   const toFlat = (mm: number): number => (mm * tapeW) / TAPE_MM;
-  const swReach = toFlat(SWITCH_GAP_MM / 2 + slide_switch.pads[0]!.w);
+  const swPad = padSpan(padNamed(slide_switch_part, "throw_a"));
+  const swReach = toFlat(SWITCH_GAP_MM / 2 + swPad.w);
   const withSw = breakRuns(withRes.traces, circuit.switches ?? [], toFlat(SWITCH_GAP_MM), {
     before: swReach,
     after: swReach,
@@ -989,8 +990,8 @@ export function planRoutes(
       switchLand(
         span,
         toFlat(SWITCH_PITCH_MM),
-        toFlat(slide_switch.pads[0]!.h),
-        toFlat(slide_switch.pads[0]!.w),
+        toFlat(swPad.h),
+        toFlat(swPad.w),
         toFlat(SWITCH_ROW_MM),
       ),
     ),
@@ -1011,8 +1012,10 @@ export function planRoutes(
  * centres, so 1.42mm of pattern between them. It was 6.5 before, a through-hole body I had picked myself;
  * the part in the library is a 1206, and its gap is a quarter of that.
  */
-export const RESISTOR_MM =
-  R_1206.pads[1]!.cx - R_1206.pads[0]!.cx - R_1206.pads[0]!.w;
+export const RESISTOR_MM = (() => {
+  const [one, two] = [padNamed(R_1206_part, "1"), padNamed(R_1206_part, "2")];
+  return two.at.x - one.at.x - padSpan(one).w;
+})();
 
 /**
  * The switch's pad pitch, in millimetres — from `pcb.py`'s `slide_switch` (C&K AYZ0102AGRLC) by way of
@@ -1021,7 +1024,8 @@ export const RESISTOR_MM =
  * The break is one pitch and falls between the second pad and the third, so two sit on one side of it and
  * one on the other.
  */
-export const SWITCH_PITCH_MM = slide_switch.pads[1]!.cx - slide_switch.pads[0]!.cx;
+export const SWITCH_PITCH_MM =
+  padNamed(slide_switch_part, "common").at.x - padNamed(slide_switch_part, "throw_a").at.x;
 
 /**
  * The copper a switch takes out, in millimetres.
@@ -1032,7 +1036,8 @@ export const SWITCH_PITCH_MM = slide_switch.pads[1]!.cx - slide_switch.pads[0]!.
  * ending it level with the pad row left only a quarter of a millimetre between the two. Pulled back by the
  * neck, that becomes a millimetre — the sort of gap an LED's pads get.
  */
-export const SWITCH_ROW_MM = slide_switch.pads[0]!.cy - slide_switch.pads[1]!.cy;
+export const SWITCH_ROW_MM =
+  padNamed(slide_switch_part, "throw_a").at.y - padNamed(slide_switch_part, "common").at.y;
 
 /**
  * How far the outgoing tape is pulled back beyond the pad row, in millimetres.

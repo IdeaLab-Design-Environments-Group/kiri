@@ -37,7 +37,7 @@ import {
   switchShape,
 } from "../model/copper-svg-export.js";
 import { printScale } from "../model/print-scale.js";
-import { LED_1206 } from "../model/footprints.generated.js";
+import { LED_1206_part, padNamed, padSpan } from "../model/footprints.generated.js";
 import {
   type RoutedCircuit,
   type Terminals,
@@ -918,7 +918,8 @@ export class ElectronicsModal {
    * which is the truth of it.
    */
   private ledPad(): number {
-    return Math.min(LED_1206.pads[0]!.w, LED_1206.pads[0]!.h) / 2;
+    const anode = padSpan(padNamed(LED_1206_part, "A"));
+    return Math.min(anode.w, anode.h) / 2;
   }
 
   /** Marker radius: the LED's pad, with the ring and chip drawn in proportion to it. */

@@ -161,3 +161,15 @@ export const slide_switch_part: Component = {
     { at: { x: 1.4986, y: 0.0000 }, r: 0.4318 },
   ],
 };
+
+/** A pad's extent about its own origin: how far it reaches along each axis. */
+export function padSpan(p: Pad): { w: number; h: number } {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const q of p.outline) {
+    if (q.x < minX) minX = q.x;
+    if (q.y < minY) minY = q.y;
+    if (q.x > maxX) maxX = q.x;
+    if (q.y > maxY) maxY = q.y;
+  }
+  return { w: maxX - minX, h: maxY - minY };
+}

@@ -16,7 +16,7 @@ import type { FoldFile } from "./fold-file.js";
 import type { Vec2 } from "./electronics.js";
 import { type Trace2D, landingWidth } from "./electronics-routing.js";
 import { printScale } from "./print-scale.js";
-import { R_1206, slide_switch } from "./footprints.generated.js";
+import { padNamed, padSpan, slide_switch_part } from "./footprints.generated.js";
 
 const MARGIN = 8; // mm — must match the FKLD SVG export or the layers import misaligned
 
@@ -95,13 +95,17 @@ const GND_FILL = "#222222";
  * guess at a footprint or a shape scaled to whatever the tape happens to be.
  */
 const SWITCH = {
-  fp: slide_switch,
+  fp: slide_switch_part,
+  /** The pads by what they are, not by where they sit in a list. */
+  throwA: padNamed(slide_switch_part, "throw_a"),
+  common: padNamed(slide_switch_part, "common"),
   /** Centre to centre between adjacent pads: the copper is broken by exactly this. */
-  pitch: slide_switch.pads[1]!.cx - slide_switch.pads[0]!.cx,
+  pitch: padNamed(slide_switch_part, "common").at.x - padNamed(slide_switch_part, "throw_a").at.x,
   /** How far the housing stands clear of the pad row — the pads' own offset from the part's origin. */
-  offset: slide_switch.pads[0]!.cy,
+  offset: padNamed(slide_switch_part, "throw_a").at.y,
   /** Between the two rows: the common's edge to the throws'. The break is this plus a neck. */
-  rowSep: slide_switch.pads[0]!.cy - slide_switch.pads[1]!.cy,
+  rowSep:
+    padNamed(slide_switch_part, "throw_a").at.y - padNamed(slide_switch_part, "common").at.y,
 };
 
 /** A resistor: a black body, with grey leads reaching either way onto the copper it bridges. */
@@ -810,7 +814,7 @@ export function switchShape(a: Vec2, b: Vec2, tape: number, cross = tape): Resis
   // The rail runs straight through the part: the common is on the near edge of the break, the two throws on
   // the far edge, a pitch either side of the centreline. The outgoing tape runs down the middle and reaches
   // neither throw by itself — one gets a land, the other is left bare, and that is what opens the circuit.
-  const p0 = SWITCH.fp.pads[0]!;
+  const p0 = padSpan(SWITCH.throwA);
   const common = a;
   // The throws sit a row's separation along from the common — not at the far cut end, which is pulled back
   // a neck further so the idle throw lands in clear pattern rather than beside the tape.
@@ -845,7 +849,7 @@ export function switchShape(a: Vec2, b: Vec2, tape: number, cross = tape): Resis
     },
     // The two mounting holes, on the body's own centre line.
     holes: SWITCH.fp.holes.map((h) => ({
-      c: { x: cx + ux * h.cx + px * h.cy, y: cy + uy * h.cx + py * h.cy },
+      c: { x: cx + ux * h.at.x + px * h.at.y, y: cy + uy * h.at.x + py * h.at.y },
       r: h.r,
     })),
   };
