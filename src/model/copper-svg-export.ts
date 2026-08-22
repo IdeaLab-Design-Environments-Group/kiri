@@ -16,8 +16,9 @@ import type { FoldFile } from "./fold-file.js";
 import type { Vec2 } from "./electronics.js";
 import { type Trace2D, acrossRun, landingWidth } from "./electronics-routing.js";
 import { printScale } from "./print-scale.js";
-import { holes, MM_PER_INCH, padAt } from "./footprint.js";
-import { RESISTOR, SPDT } from "./parts.js";
+import { type Box, type Footprint, holes, MM_PER_INCH, padAt, padSize } from "./footprint.js";
+import { type AcrossPart, acrossPart, inlineTerminals } from "./parts.js";
+import { COMPONENTS, R_1206, SW_SPDT } from "./footprints.generated.js";
 
 const MARGIN = 8; // mm — must match the FKLD SVG export or the layers import misaligned
 
@@ -97,7 +98,8 @@ const GND_FILL = "#222222";
  * the switch's common moved to the far edge, so a rail can run through the part rather than doubling back
  * around it — is derived and explained in `parts.ts`, not hidden in here.
  */
-const SWITCH = SPDT;
+/** The library, by component id — so a placed part can be drawn from the id the circuit stores. */
+const BY_ID = new Map(COMPONENTS.map((c) => [c.id, c.footprint]));
 
 /** A resistor: a black body, with grey leads reaching either way onto the copper it bridges. */
 const RES_BODY = "#111111";
@@ -200,6 +202,8 @@ export function buildCopperSvgExport(
   resistors: { a: Vec2; b: Vec2 }[] = [],
   /** Where each switch bridges a break — drawn, never cut. */
   switches: { a: Vec2; b: Vec2; flip?: boolean }[] = [],
+  /** Where each library part bridges a break, by component id — drawn, never cut. */
+  parts: PlacedPartMark[] = [],
 ): CopperSvgExport {
   const { w, h, T, scale } = sheetFrame(fold, mirror, sheetMm);
   // What will actually be cut, in millimetres. The outlines are built in flat units and mapped through T,
@@ -209,9 +213,10 @@ export function buildCopperSvgExport(
   // Windows to take out of the copper: an SPDT's idle throw needs bare pattern under it. Each is carried on
   // the same path as the strip it holes, since a separate one would just lie on top; `evenodd` then reads
   // the inner ring as a hole rather than as more copper.
-  const windows = switches
-    .map((w) => switchShape(T(w.a), T(w.b), w.flip)?.notch)
-    .filter((n): n is Vec2[] => !!n && n.length >= 3);
+  const windows = [
+    ...switches.map((w) => switchShape(T(w.a), T(w.b), w.flip)?.notch),
+    ...parts.map((w) => partShapeOf(w, T)?.notch),
+  ].filter((n): n is Vec2[] => !!n && n.length >= 3);
 
   const layer = (net: "pwr" | "gnd"): { body: string; count: number } => {
     const runs = traces.filter((t) => t.net === net && t.pts.length >= 2);
@@ -227,15 +232,16 @@ export function buildCopperSvgExport(
 
   const pwr = layer("pwr");
   const gnd = layer("gnd");
-  const parts = [
+  const marks = [
     ...resistors.flatMap((r) => resistorMarks(r, T)),
     ...switches.flatMap((r) => switchMarks(r, T)),
+    ...parts.flatMap((r) => partMarksOf(r, T)),
   ];
   const body =
     `  <g id="pwr" fill="${PWR_FILL}" stroke="none" fill-rule="evenodd">\n    ${pwr.body}\n  </g>\n` +
     `  <g id="gnd" fill="${GND_FILL}" stroke="none" fill-rule="evenodd">\n    ${gnd.body}\n  </g>` +
     // The parts sit on their own layer: they show where the resistor goes, and are not copper to cut.
-    (parts.length ? `\n  <g id="parts">\n    ${parts.join("\n    ")}\n  </g>` : "");
+    (marks.length ? `\n  <g id="parts">\n    ${marks.join("\n    ")}\n  </g>` : "");
 
   return {
     widthMm: tapeMm,
@@ -693,8 +699,9 @@ function annotationLayer(
   tapeW: number,
   scale: number,
   T: (p: Vec2) => Vec2,
+  parts: PlacedPartMark[] = [],
 ): string {
-  const parts: string[] = [];
+  const marks: string[] = [];
 
   // No copper here. The carrier IS the copper -- frame, tabs and traces are one piece, drawn as one filled
   // shape -- so redrawing each run on top of it in its net's colour said nothing the shape did not already
@@ -702,11 +709,12 @@ function annotationLayer(
   // are left: where they go, and which way round.
   // The resistors, over the breaks they bridge. Drawn after the copper so a part reads as sitting on top of
   // the tape, which is how it goes down.
-  for (const r of resistors) parts.push(...resistorMarks(r, T));
-  for (const r of switches) parts.push(...switchMarks(r, T));
+  for (const r of resistors) marks.push(...resistorMarks(r, T));
+  for (const r of switches) marks.push(...switchMarks(r, T));
+  for (const r of parts) marks.push(...partMarksOf(r, T));
 
-  if (!parts.length) return "";
-  return `  <g id="annotation" stroke-linejoin="round">\n    ${parts.join("\n    ")}\n  </g>\n`;
+  if (!marks.length) return "";
+  return `  <g id="annotation" stroke-linejoin="round">\n    ${marks.join("\n    ")}\n  </g>\n`;
 }
 
 /**
@@ -735,24 +743,43 @@ export interface ResistorShape {
 }
 
 /**
- * Where a resistor's leads and body go, given the break its leads bridge — both already in sheet coordinates.
+ * A library part drawn on the break it bridges — the generic form of {@link resistorShape} and
+ * {@link switchShape}, and the only implementation of either.
  *
- * One definition, used by the strips file, the carrier and the editor's canvas. The leads reach `LEAD_OVER`
- * past each cut end, because that is the part that matters: it lies on the copper, and it is what holds the
- * part down and carries the current. Drawn only to the edge of the gap they would show a part touching
- * nothing.
+ * `a` and `b` are the two cut ends of the copper, already in sheet coordinates. Which of the two forms
+ * a part takes is {@link acrossPart}'s decision and not this file's, because the router breaks copper by
+ * that same decision and a cut file that disagrees with its own drawing is worse than either being
+ * wrong. Every dimension then comes from the part's own pads and holes, so it is drawn at the size its
+ * datasheet says it is; a wider tape does not make it bigger.
  */
-export function resistorShape(a: Vec2, b: Vec2): ResistorShape | null {
+export function partShape(fp: Footprint, a: Vec2, b: Vec2, flip?: boolean): ResistorShape | null {
+  const ts = inlineTerminals(fp);
+  if (ts.length < 2) return null;
   const dx = b.x - a.x, dy = b.y - a.y;
   const L = Math.hypot(dx, dy);
   if (L < 1e-9) return null;
   const ux = dx / L, uy = dy / L;
+  const across = acrossPart(fp);
+  return across
+    ? rowShape(fp, across, a, ux, uy, flip)
+    : inlineShape(padSize(ts[0]!), a, b, ux, uy, dx, dy);
+}
+
+/**
+ * The in-line form: the rail runs along the terminals, and the part bridges the break between them.
+ *
+ * The leads reach a pad's length past each cut end, because that is the part that matters: it lies on
+ * the copper, and it is what holds the part down and carries the current. Drawn only to the edge of the
+ * gap they would show a part touching nothing.
+ */
+function inlineShape(
+  pad: Box, a: Vec2, b: Vec2, ux: number, uy: number, dx: number, dy: number,
+): ResistorShape {
+  const L = Math.hypot(dx, dy);
   const px = -uy, py = ux;               // across the run
-  // The part is drawn at its own size, like the switch beside it — the cut files and the canvas are both
-  // in sheet millimetres, which is what the footprint is in. A wider tape does not make the part bigger.
-  const over = RESISTOR.pad.w;           // a contact's length along the run — the pad's own
-  const half = RESISTOR.pad.h / 2;       // and how far across it
-  const bodyW = RESISTOR.pad.h * 0.85;   // the body, a little inside its contacts
+  const over = pad.w;                    // a contact's length along the run — the pad's own
+  const half = pad.h / 2;                // and how far across it
+  const bodyW = pad.h * 0.85;            // the body, a little inside its contacts
   // The body spans the whole break and laps a little onto each contact. At four fifths of the gap it fell
   // short of both, leaving the part drawn as three pieces with bare pattern showing between them.
   const bodyL = L + over * 0.5;
@@ -777,21 +804,19 @@ export function resistorShape(a: Vec2, b: Vec2): ResistorShape | null {
 }
 
 /**
- * Where the switch's pads, body and mounting holes go, given the break its middle pads bridge.
+ * The two-row form: the rail arrives at one row and leaves at the other.
  *
- * Three pads at the part's own pitch. The break is one pitch, so pad 2 sits on the copper at one end of it
- * and pad 3 on the copper at the other, with pad 1 a further pitch back beside pad 2 — two on one side, one
- * on the other.
+ * Three pads at the part's own pitch. The break is one row separation, so the common sits on the copper
+ * at the near end of it and the live throw on the copper at the far end, with the idle throw a pitch the
+ * other way — one on one side, two on the other.
  *
- * The body is offset the part's `.1in` clear of the pad row rather than drawn over it. That is where it
- * really sits: the legs reach out to the copper and the housing stands beside them. Drawn centred on the
- * rail it covered the very tape it is soldered to.
+ * The body is offset clear of the pad rows rather than drawn over them. That is where it really sits:
+ * the legs reach out to the copper and the housing stands beside them. Drawn centred on the rail it
+ * covered the very tape it is soldered to.
  */
-export function switchShape(a: Vec2, b: Vec2, flip?: boolean): ResistorShape | null {
-  const dx = b.x - a.x, dy = b.y - a.y;
-  const L = Math.hypot(dx, dy);
-  if (L < 1e-9) return null;
-  const ux = dx / L, uy = dy / L;
+function rowShape(
+  fp: Footprint, g: AcrossPart, a: Vec2, ux: number, uy: number, flip?: boolean,
+): ResistorShape {
   // Across the run, towards the live throw. The router chose the side when it placed the part; drawing
   // it the other way round would put the housing over the copper the idle throw is meant to avoid.
   const across = acrossRun({ x: ux, y: uy }, flip);
@@ -799,24 +824,24 @@ export function switchShape(a: Vec2, b: Vec2, flip?: boolean): ResistorShape | n
   // The rail runs straight through the part: the common is on the near edge of the break, the two throws on
   // the far edge, a pitch either side of the centreline. The outgoing tape runs down the middle and reaches
   // neither throw by itself — one gets a land, the other is left bare, and that is what opens the circuit.
-  const p0 = SWITCH.pad;
+  const p0 = g.pad;
   const common = a;
   // The throws sit a row's separation along from the common — not at the far cut end, which is pulled back
   // a neck further so the idle throw lands in clear pattern rather than beside the tape.
-  const row = { x: a.x + ux * SWITCH.rowSep, y: a.y + uy * SWITCH.rowSep };
-  const live = { x: row.x + px * SWITCH.pitch, y: row.y + py * SWITCH.pitch };
-  const idle = { x: row.x - px * SWITCH.pitch, y: row.y - py * SWITCH.pitch };
+  const row = { x: a.x + ux * g.rowSep, y: a.y + uy * g.rowSep };
+  const live = { x: row.x + px * g.pitch, y: row.y + py * g.pitch };
+  const idle = { x: row.x - px * g.pitch, y: row.y - py * g.pitch };
   // The housing spans both rows, centred between them.
   const cx = (a.x + row.x) / 2, cy = (a.y + row.y) / 2;
   // Across the rail: out to the throws' centres. Each terminal then straddles a corner of the housing --
   // half its width on, half off -- so it reads as attached while still standing proud. Drawn out to the
   // pads' far edges instead the housing swallowed them; drawn short of their centres they met it at a
   // single point and looked detached, which is what they were.
-  const bodyL = 2 * SWITCH.pitch;
+  const bodyL = 2 * g.pitch;
   // Along the rail: exactly edge to edge between the two pad rows, so each terminal straddles the housing's
   // outline and half of it stands proud, as the legs do on the part. A pad's length deeper and every
   // terminal fell inside the outline, leaving the legs as slivers at the corners.
-  const bodyW = SWITCH.rowSep;
+  const bodyW = g.rowSep;
   // A pad at its own size: `w` across the part's long axis, `h` along the rail.
   const pad = (c: Vec2): { a: Vec2; b: Vec2; width: number } => {
     const half = p0.h / 2;
@@ -826,21 +851,32 @@ export function switchShape(a: Vec2, b: Vec2, flip?: boolean): ResistorShape | n
       width: p0.w,
     };
   };
+  // The mounting holes, on the body's own centre line. Drawn, never cut.
+  const pegs = holes(fp).map((h) => {
+    const at = padAt(h);
+    return {
+      c: { x: cx + ux * at.x + px * at.y, y: cy + uy * at.x + py * at.y },
+      r: (h.drill!.diameter * MM_PER_INCH) / 2,
+    };
+  });
   return {
     leads: [pad(idle), pad(common), pad(live)],
     body: {
       x: cx - bodyL / 2, y: cy - bodyW / 2, w: bodyL, h: bodyW,
       angle: (Math.atan2(py, px) * 180) / Math.PI, cx, cy,
     },
-    // The two mounting holes, on the body's own centre line.
-    holes: holes(SWITCH.footprint).map((h) => {
-      const at = padAt(h);
-      return {
-        c: { x: cx + ux * at.x + px * at.y, y: cy + uy * at.x + py * at.y },
-        r: (h.drill!.diameter * MM_PER_INCH) / 2,
-      };
-    }),
+    ...(pegs.length ? { holes: pegs } : {}),
   };
+}
+
+/** The 1206 chip resistor, on the break its leads bridge. {@link partShape} with the part filled in. */
+export function resistorShape(a: Vec2, b: Vec2): ResistorShape | null {
+  return partShape(R_1206, a, b);
+}
+
+/** The SPDT slide switch, on the break its middle pads bridge. {@link partShape}, part filled in. */
+export function switchShape(a: Vec2, b: Vec2, flip?: boolean): ResistorShape | null {
+  return partShape(SW_SPDT, a, b, flip);
 }
 
 function partMarks(sh: ResistorShape, bodyFill: string): string[] {
@@ -862,6 +898,30 @@ function partMarks(sh: ResistorShape, bodyFill: string): string[] {
         `stroke="${RES_LEAD}" stroke-width="${fmt(h.r * 0.5)}" />`,
     ),
   ];
+}
+
+/**
+ * A library part placed on a break, as the cut files take it: which part, and the two cut ends.
+ *
+ * The component's *id*, not its footprint — the circuit stores an id, and a file that carried a
+ * footprint instead would go stale the moment the library was regenerated.
+ */
+export interface PlacedPartMark {
+  component: string;
+  a: Vec2;
+  b: Vec2;
+  flip?: boolean;
+}
+
+/** {@link partShape} for a placed part, or `null` if its component is not in the library. */
+function partShapeOf(r: PlacedPartMark, T: (p: Vec2) => Vec2): ResistorShape | null {
+  const fp = BY_ID.get(r.component);
+  return fp ? partShape(fp, T(r.a), T(r.b), r.flip) : null;
+}
+
+function partMarksOf(r: PlacedPartMark, T: (p: Vec2) => Vec2): string[] {
+  const sh = partShapeOf(r, T);
+  return sh ? partMarks(sh, RES_BODY) : [];
 }
 
 function switchMarks(r: { a: Vec2; b: Vec2; flip?: boolean }, T: (p: Vec2) => Vec2): string[] {
@@ -982,6 +1042,8 @@ export function buildCopperCarrierExport(
   resistors: { a: Vec2; b: Vec2 }[] = [],
   /** Where each switch bridges a break — drawn, never cut. */
   switches: { a: Vec2; b: Vec2; flip?: boolean }[] = [],
+  /** Where each library part bridges a break, by component id — drawn, never cut. */
+  parts: PlacedPartMark[] = [],
 ): CopperCarrierExport {
   const { w, h, window: win, T, scale } = sheetFrame(fold, mirror, sheetMm);
   // Everything below works in sheet millimetres, so the tape width has to be converted out of the pattern's
@@ -1192,9 +1254,10 @@ export function buildCopperCarrierExport(
   // The windows under an SPDT's idle throw. Added as loops rather than as cuts to be stitched: they are
   // already closed, they bound nothing else, and `evenodd` reads a ring inside the copper as a hole. Passing
   // them through the clip would only delete them, since they lie squarely inside a strip by design.
-  const windows = switches
-    .map((w) => switchShape(T(w.a), T(w.b), w.flip)?.notch)
-    .filter((n): n is Vec2[] => !!n && n.length >= 3);
+  const windows = [
+    ...switches.map((w) => switchShape(T(w.a), T(w.b), w.flip)?.notch),
+    ...parts.map((w) => partShapeOf(w, T)?.notch),
+  ].filter((n): n is Vec2[] => !!n && n.length >= 3);
   const loops = [...preClosed, ...stitched.loops, ...windows];
   const cutLayer =
     `  <g id="carrier" fill="${CARRIER_FILL}" stroke="none" fill-rule="evenodd">\n    ` +
@@ -1207,7 +1270,8 @@ export function buildCopperCarrierExport(
         `\n  </g>`
       : "");
   // On top of the carrier now that the carrier is filled: underneath it, the solid copper would bury it.
-  const body = cutLayer + "\n" + annotationLayer(traces, pads, resistors, switches, tapeW, scale, T);
+  const body =
+    cutLayer + "\n" + annotationLayer(traces, pads, resistors, switches, tapeW, scale, T, parts);
 
   return {
     filename: `${baseName}-copper-carrier${mirrorSuffix(mirror)}.svg`,
