@@ -909,9 +909,9 @@ export class ElectronicsModal {
   }
 
   /**
-   * An LED pad's radius, in sheet millimetres: the 1206 footprint's own pad, read from the part's KiCad file by way of
-   * `ocaml/footprints.ml` — `.064 x .068in`, so 1.63 by 1.73mm. Taken as a radius across the smaller of the
-   * two, since the pad is drawn round.
+   * An LED pad's radius, in sheet millimetres: the 1206 footprint's own pad, read from the part's KiCad
+   * file by `ocaml/kicad.ml`. Taken across the smaller of the pad's two dimensions, since the marker is
+   * drawn round. Derived rather than written down, so a change of part carries through.
    *
    * A real part at a real size, rather than a marker scaled to the pattern. It stays legible because the
    * canvas is in millimetres and fits itself to the sheet: on a big pattern the part is genuinely small,
