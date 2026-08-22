@@ -1,0 +1,178 @@
+(footprint "CP_Elec_10F_Tecate_TPLC-3R8"
+	(version 20240108)
+	(generator "pcbnew")
+	(generator_version "8.0")
+	(layer "F.Cu")
+	(descr "CAP LITH HYBRID 10F 3.8V T/H")
+	(tags "capacitor electrolytic supercapacitor TH")
+	(property "Reference" "REF**"
+		(at 0 -5.2 0)
+		(layer "F.SilkS")
+		(uuid "a2689e5c-8ccd-4e2c-8098-087f3c734022")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Value" "CP_Elec_10F_Tecate_TPLC-3R8"
+		(at 0 5.5 0)
+		(layer "F.Fab")
+		(uuid "aa9c9fa8-922d-4661-b6ba-f949438fcd13")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Footprint" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "998245a4-1d98-45b5-a2a3-37a7c9eadd9d")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "f015e7e8-653a-4371-8787-c6266ce34d21")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "4384d75e-507b-4e18-b951-c181bbe2ba61")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr through_hole)
+	(fp_line
+		(start -5.9 0)
+		(end -5.1 0)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "b69731dc-a74d-4be9-8b11-0a21dad4be18")
+	)
+	(fp_line
+		(start -5.5 -0.4)
+		(end -5.5 0.4)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "d42754be-232c-4f72-91c3-410cdb7a8c00")
+	)
+	(fp_circle
+		(center 0 0)
+		(end 4 0)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(fill none)
+		(layer "F.SilkS")
+		(uuid "57070b2e-b939-4ec9-ab2c-85cc49be4510")
+	)
+	(fp_circle
+		(center 0 0)
+		(end 4.5 0)
+		(stroke
+			(width 0.05)
+			(type default)
+		)
+		(fill none)
+		(layer "F.CrtYd")
+		(uuid "c9e35987-b4c8-4387-b9fc-c3f1607be799")
+	)
+	(fp_line
+		(start -2.2 -1.6)
+		(end -1.4 -1.6)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "53ded23b-dad2-4c6d-9d77-91fa13f8ed66")
+	)
+	(fp_line
+		(start -1.8 -2)
+		(end -1.8 -1.2)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "77da69f1-4a7e-4daf-b100-27fb75871e8c")
+	)
+	(fp_circle
+		(center 0 0)
+		(end 4 0)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(fill none)
+		(layer "F.Fab")
+		(uuid "e22687f9-c0b7-40e2-a8b7-8b4e6b6fe43a")
+	)
+	(fp_text user "${REFERENCE}"
+		(at 0 0 180)
+		(layer "F.Fab")
+		(uuid "0dda1646-a646-4a28-a8d2-393b8c94d637")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(pad "1" thru_hole circle
+		(at -1.75 0)
+		(size 1.2 1.2)
+		(drill 0.8)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(uuid "a4649f24-d20d-45cd-afcf-e14e3a6451b5")
+	)
+	(pad "2" thru_hole circle
+		(at 1.75 0)
+		(size 1.2 1.2)
+		(drill 0.8)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(uuid "b8e9f158-11ed-47d8-aeca-b823f9f18779")
+	)
+	(model "${KICAD9_3RD_PARTY}/3dmodels/org_fabcloud_gitlab_electronics_kicad/fab.3dshapes/Capacitor_Tecate-TPLC-3R8.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
+)

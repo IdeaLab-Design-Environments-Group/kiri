@@ -28,22 +28,48 @@ export interface Box {
   h: number;
 }
 
-/** A pad carries copper only if it is on a copper layer — which is what tells a terminal from a hole. */
-export function isTerminal(pad: Pad): boolean {
+/** Whether a pad is on a copper layer at all. Necessary for a terminal, and not sufficient — see below. */
+export function carriesCopper(pad: Pad): boolean {
   return pad.layers.some((l) => l === "F.Cu" || l === "B.Cu");
+}
+
+/**
+ * Whether a pad with this name is a terminal: copper the part is wired through, rather than metal it
+ * merely sits on.
+ *
+ * Copper alone does not settle it. A plated mounting hole is on `*.Cu` and is not a terminal, and the
+ * FabLib slide switch is exactly that case — its two locating pegs are declared `thru_hole` on `*.Cu`,
+ * not `np_thru_hole`, because they really are plated. Read by copper alone the switch has five
+ * terminals instead of three, which puts it past what a rail can pass through and drops it out of the
+ * palette entirely.
+ *
+ * What separates them is the name. KiCad gives a pad a number so a netlist can refer to it; a pad with
+ * no name cannot be assigned to a net, which is the format's own way of saying "not wired". Checked
+ * across all 159 FabLib footprints: 23 have unnamed pads and every one of them is mechanical — a
+ * mounting hole or a connector's shell tab — and of the 84 distinct pad names in the library, exactly
+ * one is empty and none begins with an underscore, which is the suffix the parser gives repeats of the
+ * same name. So the test is safe as well as principled.
+ */
+export function isTerminal(name: string, pad: Pad): boolean {
+  return carriesCopper(pad) && name !== "" && !/^_\d+$/.test(name);
 }
 
 /** The part's terminals, in pad-number order, as `[name, pad]`. */
 export function terminals(fp: Footprint): [string, Pad][] {
   return Object.entries(fp)
-    .filter(([, p]) => isTerminal(p))
+    .filter(([name, p]) => isTerminal(name, p))
     .sort((a, b) => a[1].index - b[1].index);
 }
 
-/** The part's mechanical holes — the pegs it seats on, which we cut but never wire. */
+/**
+ * The part's mechanical holes — the pegs it seats on, which we cut but never wire.
+ *
+ * Plated or not: what makes it a hole here is that nothing is wired to it.
+ */
 export function holes(fp: Footprint): Pad[] {
-  return Object.values(fp)
-    .filter((p) => !isTerminal(p) && p.drill !== undefined)
+  return Object.entries(fp)
+    .filter(([name, p]) => !isTerminal(name, p) && p.drill !== undefined)
+    .map(([, p]) => p)
     .sort((a, b) => a.index - b.index);
 }
 

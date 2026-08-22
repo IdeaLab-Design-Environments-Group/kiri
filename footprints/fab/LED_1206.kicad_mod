@@ -1,0 +1,243 @@
+(footprint "LED_1206"
+	(version 20240108)
+	(generator "pcbnew")
+	(generator_version "8.0")
+	(layer "F.Cu")
+	(descr "LED SMD 1206, hand soldering")
+	(tags "LED 1206")
+	(property "Reference" "REF**"
+		(at 0 -1.85 0)
+		(layer "F.SilkS")
+		(uuid "baa160c7-1644-4ec1-8f9c-fc324df7c8a2")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Value" "LED_1206"
+		(at 0 1.9 0)
+		(layer "F.Fab")
+		(uuid "c7223529-d879-4ff5-a73d-e5ae93fb890e")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Footprint" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "304bca58-ce29-4af6-939d-d035e4773a95")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "6ba67ef8-0fdd-4378-b769-46f413d7f75b")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "0bfdac1b-0d90-47d3-b5f9-e55d6560f652")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr smd)
+	(fp_line
+		(start -1.1 -0.95)
+		(end 1.1 -0.95)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "98cf0065-3faf-4806-9c04-e2cffef3c7f4")
+	)
+	(fp_line
+		(start -1.1 1)
+		(end 1.1 1)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "b24b8d7b-d4a5-4f9b-9bf0-a8f666c2d1b7")
+	)
+	(fp_rect
+		(start -2.6 -1.1)
+		(end 2.6 1.1)
+		(stroke
+			(width 0.05)
+			(type default)
+		)
+		(fill none)
+		(layer "F.CrtYd")
+		(uuid "0c398b90-4f9c-4ba3-858a-a8a6fe5731ad")
+	)
+	(fp_line
+		(start -2.8 -0.2)
+		(end -2.8 0.2)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "F.Fab")
+		(uuid "46285575-7065-4b58-a9b7-2acf6010d8d6")
+	)
+	(fp_line
+		(start -2.8 0.2)
+		(end -2.6 0)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "F.Fab")
+		(uuid "c343367c-2316-4215-b146-c4dc0d0340fa")
+	)
+	(fp_line
+		(start -2.6 0)
+		(end -2.8 -0.2)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "F.Fab")
+		(uuid "087cfee1-ae0a-40e6-98f5-325f5711bb12")
+	)
+	(fp_line
+		(start -1.6 -0.8)
+		(end 1.6 -0.8)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "2d2e6fb6-3b03-4d6e-a592-7dda29d8ac89")
+	)
+	(fp_line
+		(start -1.6 0.8)
+		(end -1.6 -0.8)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "525dfc25-d102-4b87-969a-6493aa4257f4")
+	)
+	(fp_line
+		(start -0.45 -0.4)
+		(end -0.45 0.4)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "b558c9b2-ecc6-43ba-920d-c0919d0373af")
+	)
+	(fp_line
+		(start -0.4 0)
+		(end 0.2 -0.4)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "7b958031-898f-4326-8c5a-6b6372fd69f1")
+	)
+	(fp_line
+		(start 0.2 -0.4)
+		(end 0.2 0.4)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "eabd7561-9d51-4914-afdf-ab2954e0beaf")
+	)
+	(fp_line
+		(start 0.2 0.4)
+		(end -0.4 0)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "a5764518-b931-4f98-843f-e28a75f3f952")
+	)
+	(fp_line
+		(start 1.6 -0.8)
+		(end 1.6 0.8)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "4412dffb-9ede-4a2a-9e92-cff89fb7e13e")
+	)
+	(fp_line
+		(start 1.6 0.8)
+		(end -1.6 0.8)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "c6eeaecf-1730-4214-9b0f-3f455116c770")
+	)
+	(fp_text user "${REFERENCE}"
+		(at 0 -1.8 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(uuid "927aa570-d4f8-4a5a-92f8-13a0d3cd5ded")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(pad "1" smd rect
+		(at -1.7 0)
+		(size 1.4 1.7)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(uuid "16095954-642c-4d65-a293-7da982498ff4")
+	)
+	(pad "2" smd rect
+		(at 1.7 0)
+		(size 1.4 1.7)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(uuid "39b37ae1-03a6-477c-85fb-227734f473d5")
+	)
+	(model "${KICAD9_3RD_PARTY}/3dmodels/org_fabcloud_gitlab_electronics_kicad/fab.3dshapes/LED-1206.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 90)
+		)
+	)
+)

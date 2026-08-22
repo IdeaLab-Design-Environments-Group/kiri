@@ -1,0 +1,244 @@
+(footprint "PinSocket_01x05_P2.54mm_Horizontal_SMD"
+	(version 20240108)
+	(generator "pcbnew")
+	(generator_version "8.0")
+	(layer "F.Cu")
+	(descr "Pin socket, 2.54mm pitch, horizontal, surface mount")
+	(tags "horizontal pin header SMD 2.54mm")
+	(property "Reference" "REF**"
+		(at -0.635 -2.54 180)
+		(layer "F.SilkS")
+		(uuid "b3f73d9c-7450-4dd9-8e5c-3e1e04208432")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+			(justify left)
+		)
+	)
+	(property "Value" "PinSocket_1x05"
+		(at 5.334 -4.064 0)
+		(layer "F.Fab")
+		(uuid "01e3b9d0-d4f8-466a-9579-fe215661ef43")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Footprint" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "257c4ba6-c64b-4af2-8888-daf45ede0347")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "a96ffea1-6901-4f0b-8a48-ab85a012e6be")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "9a97328d-8dbb-481b-8713-b982e2dd5fec")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr smd)
+	(fp_line
+		(start 2.413 -1.397)
+		(end 2.413 11.557)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "7ed00015-9fa5-47a1-bb64-c589ed95b595")
+	)
+	(fp_line
+		(start 2.413 11.557)
+		(end 10.668 11.557)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "2936dc31-c405-455e-b118-3e33e77435b8")
+	)
+	(fp_line
+		(start 10.668 -1.397)
+		(end 2.413 -1.397)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "97c15731-9f0f-439d-b5f8-9be44d366d94")
+	)
+	(fp_poly
+		(pts
+			(xy 0 -0.889) (xy -0.381 -1.397) (xy 0.381 -1.397)
+		)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(fill solid)
+		(layer "F.SilkS")
+		(uuid "ff949fe4-8d76-4a53-98cc-45272f87a9aa")
+	)
+	(fp_rect
+		(start -1.25 -1.75)
+		(end 11.25 11.75)
+		(stroke
+			(width 0.05)
+			(type default)
+		)
+		(fill none)
+		(layer "F.CrtYd")
+		(uuid "03c9affe-82db-4069-b91c-f6284d57f1f5")
+	)
+	(fp_rect
+		(start 2.54 -1.27)
+		(end 11.04 11.43)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(fill none)
+		(layer "F.Fab")
+		(uuid "d301d5c7-c4cb-412f-8390-8d41f79e4f67")
+	)
+	(fp_poly
+		(pts
+			(xy 2.5 -0.3) (xy -0.8 -0.3) (xy -0.8 0.3) (xy 2.5 0.3)
+		)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(fill none)
+		(layer "F.Fab")
+		(uuid "7677bcfa-1513-4a23-b2f9-d87d27895ff8")
+	)
+	(fp_poly
+		(pts
+			(xy 2.5 2.25) (xy -0.8 2.25) (xy -0.8 2.85) (xy 2.5 2.85)
+		)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(fill none)
+		(layer "F.Fab")
+		(uuid "15829582-00bc-4699-9e95-efecd49945c9")
+	)
+	(fp_poly
+		(pts
+			(xy 2.5 4.75) (xy -0.8 4.75) (xy -0.8 5.35) (xy 2.5 5.35)
+		)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(fill none)
+		(layer "F.Fab")
+		(uuid "2c28f318-36ea-4ed6-a610-9d76c9aee496")
+	)
+	(fp_poly
+		(pts
+			(xy 2.5 7.3) (xy -0.8 7.3) (xy -0.8 7.9) (xy 2.5 7.9)
+		)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(fill none)
+		(layer "F.Fab")
+		(uuid "bc513c7a-28c8-409f-ae25-26edc4a7f982")
+	)
+	(fp_poly
+		(pts
+			(xy 2.5 9.85) (xy -0.8 9.85) (xy -0.8 10.45) (xy 2.5 10.45)
+		)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(fill none)
+		(layer "F.Fab")
+		(uuid "e8d37b6f-e39f-4818-97bc-9aa9e0e1babf")
+	)
+	(fp_text user "${REFERENCE}"
+		(at 6.604 1.27 0)
+		(layer "F.Fab")
+		(uuid "d3f01c77-9813-48c2-ac2a-7b303c694cd3")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(pad "1" smd rect
+		(at 0 0)
+		(size 2 1)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(uuid "9769918a-eecd-4e32-ab68-fbdaf03fac19")
+	)
+	(pad "2" smd rect
+		(at 0 2.54)
+		(size 2 1)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(uuid "8fbca867-4a91-4355-8d9a-5ee77af3e433")
+	)
+	(pad "3" smd rect
+		(at 0 5.08)
+		(size 2 1)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(uuid "b7bcf4d0-e820-4406-83ec-e7e714085cfc")
+	)
+	(pad "4" smd rect
+		(at 0 7.62)
+		(size 2 1)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(uuid "c2893abf-0a35-4ba8-bf22-e53c30f2e807")
+	)
+	(pad "5" smd rect
+		(at 0 10.16)
+		(size 2 1)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(uuid "98f02a1e-dd7b-4c7b-940f-3c2f9e00d32a")
+	)
+	(model "${KICAD9_3RD_PARTY}/3dmodels/org_fabcloud_gitlab_electronics_kicad/fab.3dshapes/PinSocket-01x05_P2.54mm_Horizontal_SMD.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
+)

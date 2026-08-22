@@ -806,9 +806,35 @@ body {
   border-radius: 0.4rem;
   background: var(--surface, #fff);
   color: inherit;
-  max-width: 14rem;
+  max-width: 20rem;
 }
 .el-part:hover { background: var(--surface-soft, #f3f5f9); border-color: #cdd3df; }
+/* The library is 159 footprints and most of their names are datasheet part numbers, so the picker is a
+   search box and a grouped list rather than one long scroll. The count beside it is what keeps the list
+   honest: it says how much of the library is on offer and that the rest is a search away. */
+.el-part-search {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border, #d7dbe4);
+  border-radius: 0.4rem;
+  background: var(--surface, #fff);
+  color: inherit;
+  width: 9rem;
+}
+.el-part-search:focus {
+  outline: none;
+  border-color: var(--accent, #1f6feb);
+}
+.el-part optgroup { font-style: normal; font-weight: 600; color: var(--muted, #6b7280); }
+.el-part option { font-weight: 400; color: #344054; }
+.el-part option:disabled { color: var(--muted, #9aa1ad); font-style: italic; }
+.el-part-count {
+  font-size: 0.72rem;
+  color: var(--muted, #6b7280);
+  max-width: 15rem;
+  line-height: 1.2;
+}
 .el-view.is-active,
 .el-mirror.is-active,
 .el-part.is-active,
@@ -882,7 +908,9 @@ body {
 .el-led-gnd { fill: #2b2f36; stroke: #fff; stroke-width: 1; vector-effect: non-scaling-stroke; }
 .el-led-body.el-led-orphan { stroke: #e6a3a3; }
 /* The selected LED, which R turns round. */
-.el-led-selected {
+/* The selection ring — the same mark whether it is round an LED or round a part on a rail. */
+.el-led-selected,
+.el-part-selected {
   fill: none;
   stroke: #1f6feb;
   stroke-width: 2;

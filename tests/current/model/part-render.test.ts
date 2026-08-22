@@ -290,8 +290,10 @@ describe("partSvg on the library's real placements", () => {
         const size = padSize(padNamed(fp, l.name!));
         // The drawn pad is the footprint's own pad, to the millimetre.
         const dims = [span(d), span({ x: -d.y, y: d.x })].sort((p, q) => p - q);
-        expect(dims[0]).toBeCloseTo(Math.min(size.w, size.h), 6);
-        expect(dims[1]).toBeCloseTo(Math.max(size.w, size.h), 6);
+        // Four places, not six: the library stores coordinates on a 1e-6 inch grid, so a dimension is
+        // good to 2.54e-5mm and asserting past that tests the grid rather than the drawing.
+        expect(dims[0]).toBeCloseTo(Math.min(size.w, size.h), 4);
+        expect(dims[1]).toBeCloseTo(Math.max(size.w, size.h), 4);
       }
     }
   });

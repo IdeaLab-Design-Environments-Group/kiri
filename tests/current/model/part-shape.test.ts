@@ -28,64 +28,27 @@ const C: Vec2 = { x: 5, y: -3 };
 const D: Vec2 = { x: 5, y: 9 };
 
 /**
- * What `resistorShape` and `switchShape` returned BEFORE `partShape` existed, recorded by running them.
+ * The geometry `partShape` produces for a 1206 resistor and an SPDT, frozen as literals.
  *
- * These are the whole point of the refactor: the generic path has to reproduce the two hand-written
- * special cases exactly, not approximately. Written out as literals rather than compared against the old
- * functions because the old functions are gone — they are thin calls to `partShape` now, so comparing
- * them to it would compare it to itself and pass whatever it did.
+ * Originally these were what the hand-written `resistorShape` and `switchShape` returned before
+ * `partShape` replaced them, and matching them byte for byte is what proved that refactor inert. That
+ * proof has been served and now lives in the history: these numbers were RE-RECORDED when the component
+ * library moved wholesale to the KiCad FabLib, because FabLib's 1206 parts are the reflow variants and
+ * the hand-solder ones we had vendored were a different part — 3mm centres against 4mm, so the body
+ * spans 25.6mm where it used to span 26. The values changed because the part did, not because the code
+ * drifted; every other test was green across that change.
+ *
+ * They are still worth freezing. As a lock they catch any future change to placement, which is the one
+ * thing every rewrite of this drawing code has had to leave alone. Written as literals rather than
+ * compared against the old functions because the old functions are gone — they are thin calls to
+ * `partShape` now, so comparing them to it would compare it to itself and pass whatever it did.
  */
 const BEFORE = {
-  RES_AB: {
-    leads: [
-      { a: { x: 9.278, y: 18.904 }, b: { x: 8.802000000000001, y: 20.535999999999998 }, width: 1.9999999999999998 },
-      { a: { x: 35.198, y: 26.464000000000002 }, b: { x: 34.722, y: 28.096 }, width: 1.9999999999999998 },
-    ],
-    body: { x: 9, y: 22.7775, w: 26, h: 1.4449999999999998, angle: 16.26020470831196, cx: 22, cy: 23.5 },
-  },
-  RES_CD: {
-    leads: [
-      { a: { x: 5.85, y: -4 }, b: { x: 4.15, y: -4 }, width: 1.9999999999999998 },
-      { a: { x: 5.85, y: 10 }, b: { x: 4.15, y: 10 }, width: 1.9999999999999998 },
-    ],
-    body: { x: -1.5, y: 2.2775, w: 13, h: 1.4449999999999998, angle: 90, cx: 5, cy: 3 },
-  },
-  SW_AB: {
-    leads: [
-      { a: { x: 14.78, y: 18.79 }, b: { x: 17.18, y: 19.490000000000002 }, width: 1.5 },
-      { a: { x: 8.8, y: 19.65 }, b: { x: 11.2, y: 20.35 }, width: 1.5 },
-      { a: { x: 13.38, y: 23.589999999999996 }, b: { x: 15.78, y: 24.29 }, width: 1.5 },
-    ],
-    body: { x: 10.14, y: 18.02, w: 4.999999999999999, h: 5.5, angle: 106.26020470831196, cx: 12.64, cy: 20.77 },
-    holes: [
-      { c: { x: 14.08, y: 21.19 }, r: 0.42499999999999993 },
-      { c: { x: 11.200000000000001, y: 20.349999999999998 }, r: 0.42499999999999993 },
-    ],
-  },
-  SW_AB_FLIP: {
-    leads: [
-      { a: { x: 13.38, y: 23.589999999999996 }, b: { x: 15.78, y: 24.29 }, width: 1.5 },
-      { a: { x: 8.8, y: 19.65 }, b: { x: 11.2, y: 20.35 }, width: 1.5 },
-      { a: { x: 14.78, y: 18.79 }, b: { x: 17.18, y: 19.490000000000002 }, width: 1.5 },
-    ],
-    body: { x: 10.14, y: 18.02, w: 4.999999999999999, h: 5.5, angle: -73.73979529168804, cx: 12.64, cy: 20.77 },
-    holes: [
-      { c: { x: 14.08, y: 21.19 }, r: 0.42499999999999993 },
-      { c: { x: 11.200000000000001, y: 20.349999999999998 }, r: 0.42499999999999993 },
-    ],
-  },
-  SW_CD: {
-    leads: [
-      { a: { x: 7.5, y: 1.2500000000000002 }, b: { x: 7.5, y: 3.75 }, width: 1.5 },
-      { a: { x: 5, y: -4.25 }, b: { x: 5, y: -1.7500000000000002 }, width: 1.5 },
-      { a: { x: 2.5000000000000004, y: 1.2500000000000002 }, b: { x: 2.5000000000000004, y: 3.75 }, width: 1.5 },
-    ],
-    body: { x: 2.5000000000000004, y: -3, w: 4.999999999999999, h: 5.5, angle: 180, cx: 5, cy: -0.25 },
-    holes: [
-      { c: { x: 5, y: 1.25 }, r: 0.42499999999999993 },
-      { c: { x: 5, y: -1.75 }, r: 0.42499999999999993 },
-    ],
-  },
+  RES_AB: {"leads":[{"a":{"x":9.648000704000001,"y":19.064001872},"b":{"x":9.2000016,"y":20.5999988},"width":1.1999975999999999},{"a":{"x":34.7999984,"y":26.4000012},"b":{"x":34.351999295999995,"y":27.935998128},"width":1.1999975999999999}],"body":{"x":9.2000006,"y":22.82000136,"w":25.5999988,"h":1.35999728,"angle":16.26020470831196,"cx":22,"cy":23.5}},
+  RES_CD: {"leads":[{"a":{"x":5.7999984,"y":-3.5999988},"b":{"x":4.2000016,"y":-3.5999988},"width":1.1999975999999999},{"a":{"x":5.7999984,"y":9.5999988},"b":{"x":4.2000016,"y":9.5999988},"width":1.1999975999999999}],"body":{"x":-1.2999994,"y":2.32000136,"w":12.5999988,"h":1.35999728,"angle":90,"cx":5,"cy":3}},
+  SW_AB: {"leads":[{"a":{"x":15.115989768,"y":18.888002224},"b":{"x":16.267987464,"y":19.224001552},"width":0.999998},{"a":{"x":9.424001152,"y":19.832000336},"b":{"x":10.575998848,"y":20.167999664},"width":0.999998},{"a":{"x":13.715992567999999,"y":23.687992624},"b":{"x":14.867990263999998,"y":24.023991952},"width":0.999998}],"body":{"x":9.996000008,"y":18.128003744,"w":4.9999899999999995,"h":5.199989599999999,"angle":106.26020470831196,"cx":12.495995008,"cy":20.727998544000002},"holes":[{"c":{"x":11.055997888,"y":20.307999384000002},"r":0.4250055},{"c":{"x":13.935992127999999,"y":21.147997704},"r":0.4250055}]},
+  SW_AB_FLIP: {"leads":[{"a":{"x":13.715992567999999,"y":23.687992624},"b":{"x":14.867990263999998,"y":24.023991952},"width":0.999998},{"a":{"x":9.424001152,"y":19.832000336},"b":{"x":10.575998848,"y":20.167999664},"width":0.999998},{"a":{"x":15.115989768,"y":18.888002224},"b":{"x":16.267987464,"y":19.224001552},"width":0.999998}],"body":{"x":9.996000008,"y":18.128003744,"w":4.9999899999999995,"h":5.199989599999999,"angle":-73.73979529168804,"cx":12.495995008,"cy":20.727998544000002},"holes":[{"c":{"x":11.055997888,"y":20.307999384000002},"r":0.4250055},{"c":{"x":13.935992127999999,"y":21.147997704},"r":0.4250055}]},
+  SW_CD: {"leads":[{"a":{"x":7.499995,"y":1.5999907999999996},"b":{"x":7.499995,"y":2.7999883999999993},"width":0.999998},{"a":{"x":5,"y":-3.5999988},"b":{"x":5,"y":-2.4000012},"width":0.999998},{"a":{"x":2.5000050000000003,"y":1.5999907999999996},"b":{"x":2.5000050000000003,"y":2.7999883999999993},"width":0.999998}],"body":{"x":2.5000050000000003,"y":-3,"w":4.9999899999999995,"h":5.199989599999999,"angle":180,"cx":5,"cy":-0.4000052000000003},"holes":[{"c":{"x":5,"y":-1.9000022000000003},"r":0.4250055},{"c":{"x":5,"y":1.0999917999999997},"r":0.4250055}]},
 };
 
 const EXAMPLES = new URL("../../../public/examples/", import.meta.url).pathname;

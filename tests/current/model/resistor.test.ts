@@ -444,13 +444,19 @@ describe("model/switch", () => {
     expect(sh.notch).toBeUndefined();
   });
 
-  it("places one dropped at the very end of a run, on either rail", () => {
+  it("slides one dropped at the very end of a run inboard, or refuses it outright", () => {
     // A part needs copper either side of its break to seat on. Dropped near an end there was not room, and
     // it was simply not placed: a click that did nothing, with nothing to say why. It slides inboard now.
+    //
+    // Except at the end of the GND run, where sliding inboard is not enough. That end is at the battery,
+    // where the two rails run alongside each other, and a switch reaches a pitch plus half a pad off its
+    // own centreline — far enough that a throw comes down 0.5mm inside the PWR copper. That is a short
+    // through the part, so the seat is refused. Both outcomes are correct and the test allows either; what
+    // it does not allow is a part placed with a terminal on the other net, which is what used to happen.
     for (const net of ["pwr", "gnd"] as const) {
       for (const which of [0, -1]) {
         const { r, tapeW, k } = withSwitch(net, (p) => (which === 0 ? p[0]! : p[p.length - 1]!));
-        expect(r.switches, `${net} at an end`).toHaveLength(1);
+        if (r.switches.length === 0) continue;      // refused rather than shorted
         const { idle, common, live } = seat(r, tapeW, k);
         expect(idle).toEqual([]);
         // The common's land overlaps the rail it continues, so it may read as more than one run — what
@@ -459,6 +465,12 @@ describe("model/switch", () => {
         expect(live.length).toBeGreaterThan(0);
         expect(common.some((i) => live.includes(i))).toBe(false);
       }
+    }
+    // And it is not a blanket refusal: the PWR ends still seat, so the veto has not simply banned the part
+    // from run ends altogether.
+    for (const which of [0, -1]) {
+      const { r } = withSwitch("pwr", (p) => (which === 0 ? p[0]! : p[p.length - 1]!));
+      expect(r.switches, `pwr at end ${which}`).toHaveLength(1);
     }
   });
 

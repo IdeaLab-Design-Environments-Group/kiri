@@ -76,7 +76,21 @@ export interface PlacedPart {
   component: string;
   x: number;
   y: number;
+  /** Which way round the author wants it — see {@link PartFlip}. */
+  flip?: boolean;
 }
+
+/**
+ * Which way round a placed part sits, when the author has said.
+ *
+ * Left unset the router decides, exactly as it does for an LED: for a part the rail steps ACROSS it picks
+ * the side the idle terminal is stranded on, and for one in line with the rail it takes the ends as the
+ * break gave them. Once set it is respected, so turning a part round is a decision and not a suggestion.
+ *
+ * On a part in line with the rail this swaps which terminal lands on which cut end — which is what a
+ * polarised part (an electrolytic, a diode) needs and what an ordinary resistor is indifferent to.
+ */
+export type PartFlip = boolean;
 
 /**
  * A resistor, in series on the PWR net.
@@ -92,6 +106,8 @@ export interface PlacedPart {
 export interface Resistor {
   x: number;
   y: number;
+  /** Which way round the author wants it — see {@link PartFlip}. */
+  flip?: boolean;
 }
 
 /**
@@ -107,6 +123,8 @@ export interface Resistor {
 export interface Switch {
   x: number;
   y: number;
+  /** Which way round the author wants it — see {@link PartFlip}. */
+  flip?: boolean;
 }
 
 export const EMPTY_CIRCUIT: Circuit = { leds: [], battery: null, resistors: [], switches: [] };

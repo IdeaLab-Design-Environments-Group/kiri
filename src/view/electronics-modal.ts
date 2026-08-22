@@ -40,15 +40,17 @@ import {
 } from "../model/copper-svg-export.js";
 import { PCB_COLOURS, designators, partSvg } from "../model/part-render.js";
 import { printScale } from "../model/print-scale.js";
-import { LED } from "../model/parts.js";
+import { LED, placement } from "../model/parts.js";
 import type { Footprint } from "../model/footprint.js";
-import { BAT_COIN_20, COMPONENTS, R_1206, SW_SPDT } from "../model/footprints.generated.js";
+import { type Component, BAT_COIN_20, COMPONENTS, R_1206, SW_SPDT } from "../model/footprints.generated.js";
 import {
   type RoutedCircuit,
   type Terminals,
   EMPTY_ROUTE,
+  TAPE_MM,
   tapeWidthFor,
   batteryTerminals,
+  partFit,
   planRoutes,
 } from "../model/electronics-routing.js";
 import { TILE_INSET_FRAC } from "../model/tile-subdiv.js";
@@ -68,17 +70,163 @@ const MARGIN = 8; // mm — must match the SVG export so preview ↔ export regi
  */
 type Tool = "led" | "battery" | "resistor" | "switch" | (string & {});
 
+/**
+ * What the last tap picked up.
+ *
+ * `kind` names the list on the {@link Circuit} that `index` is into: an LED, a library part, or one of the
+ * two legacy lists. Every one of them selects, turns round and deletes by the same three gestures — a
+ * capacitor is no less a component than an LED, and having only LEDs answer to them was the odd part.
+ */
+type Selection = { kind: "led" | PartKind; index: number };
+
+/** The three kinds that sit in series on a rail — everything but the LED, which straddles a hinge. */
+type PartKind = "part" | "resistor" | "switch";
+
+/** A selection known to be one of those. */
+type PartSelection = { kind: PartKind; index: number };
+
+/** The `Circuit` field each selectable-part kind lives in. LEDs are not here: they are placed on a hinge
+ *  rather than on a rail, and are handled on their own throughout. */
+const PART_FIELD = { part: "parts", resistor: "resistors", switch: "switches" } as const;
+
+/** A part in series on a rail, whichever of the three lists it came from. */
+type PlacedOnRail = { x: number; y: number; flip?: boolean };
+
+/**
+ * The smallest a placed part's pick-up target may be, in millimetres of the sheet.
+ *
+ * A tap picks a part up when it lands within the part's own extent along the rail, so that two parts a few
+ * millimetres apart are two targets and not one. That leaves a 1206 chip a 3mm target, which is small but
+ * honest; this floor keeps anything smaller from becoming unpickable.
+ */
+const PART_PICK_FLOOR_MM = 2;
+
 /** The parts the two fixed tools already place, so the palette does not offer them a second time. */
 const FIXED_PLACEMENT = new Set<Footprint>([LED.footprint, BAT_COIN_20]);
 
 /**
- * The palette's contents: every library part that goes in series on a rail.
+ * How the palette shelves the parts it offers, first match winning.
  *
- * Derived from `COMPONENTS`, never listed here — a part added to the library appears in the palette
- * without a line of code in this file, which is the whole point of the generic path.
+ * Presentation only, and name-based because the FabLib's filenames are the only thing there is to
+ * shelve by — a footprint carries its geometry, not its aisle. Forty entries in one scroll is a wall;
+ * forty in nine shelves of five is a menu. Anything the table does not recognise lands under "Other"
+ * rather than vanishing, so a part added to the library is always somewhere.
  */
-const PART_COMPONENTS = COMPONENTS.filter((c) => !FIXED_PLACEMENT.has(c.footprint));
-const PART_BY_ID = new Map(PART_COMPONENTS.map((c) => [c.id, c] as const));
+const PART_GROUPS: { label: string; match: RegExp }[] = [
+  { label: "LEDs", match: /^LED/ },
+  { label: "Resistors", match: /^R_/ },
+  { label: "Capacitors", match: /^CP?_/ },
+  { label: "Diodes & transistors", match: /^(Diode|SOD|SOT|TO[-_]|Q_|Bridge)/ },
+  { label: "Switches & buttons", match: /^(Switch|SW_|Button|Jumper|Potentiometer)/ },
+  { label: "Headers & sockets", match: /^(PinHeader|PinSocket|Header)/ },
+  { label: "Connectors & terminals", match: /^(Conn|TerminalBlock)/ },
+  { label: "Power", match: /^(Battery|BAT_)/ },
+  { label: "Other", match: /^/ },
+];
+
+/**
+ * The palette's contents: the library parts that go in series on a rail, and the ones that do not with
+ * the reason ready to read out.
+ *
+ * The rule is {@link placement}'s, not this file's. It is the same reading of a footprint that
+ * `partFit` and `acrossPart` route and draw by, so the palette cannot offer a part the router would
+ * then refuse — which is the whole reason it does not live here.
+ *
+ * These grow: the library arrives in two halves, and {@link admit} is asked the same question about
+ * both. Which half a part came from decides only when it loads, never whether it can be placed.
+ */
+const OFFERED: Component[] = [];
+const BLOCKED: { component: Component; why: string }[] = [];
+const PART_BY_ID = new Map<string, Component>();
+/** Which shelf each offered part sits on, worked out once as it is admitted. */
+const GROUP_OF = new Map<string, string>();
+
+/**
+ * Sort a batch of library parts onto the shelves, or onto the list of what cannot be placed.
+ *
+ * Idempotent by id, so loading the second half twice cannot double the list, and sorted afterwards so
+ * the picker reads the same however the halves arrived.
+ */
+function admit(parts: readonly Component[]): void {
+  const known = new Set([...PART_BY_ID.keys(), ...BLOCKED.map((b) => b.component.id)]);
+  for (const c of parts) {
+    if (FIXED_PLACEMENT.has(c.footprint) || known.has(c.id)) continue;
+    known.add(c.id);
+    const p = placement(c.footprint);
+    if (!p.placeable) {
+      BLOCKED.push({ component: c, why: p.why });
+      continue;
+    }
+    OFFERED.push(c);
+    PART_BY_ID.set(c.id, c);
+    GROUP_OF.set(c.id, PART_GROUPS.find((g) => g.match.test(c.id))!.label);
+  }
+  OFFERED.sort((a, b) => a.id.localeCompare(b.id));
+  BLOCKED.sort((a, b) => a.component.id.localeCompare(b.component.id));
+}
+
+admit(COMPONENTS);
+
+/**
+ * Fetch the half of the library that is not in the main bundle.
+ *
+ * A megabyte of pad outlines for parts that cannot be placed has no business in the initial download,
+ * so the generator emits them separately — but they still have to be *findable*, or a user hunting for
+ * a USB socket concludes the app is broken rather than that the part cannot be wired this way. So the
+ * modal pulls them in the first time it opens, and the picker grows when they land.
+ *
+ * Fetched once, and a failure is not fatal: the palette carries on offering what it already has.
+ */
+let restRequest: Promise<void> | null = null;
+function loadRestOfLibrary(): Promise<void> {
+  restRequest ??= import("../model/footprints.rest.generated.js")
+    .then((m) => admit(m.REST_COMPONENTS))
+    .catch(() => {});
+  return restRequest;
+}
+
+/**
+ * How many parts the palette will spell out when a search turns up ones it cannot place.
+ *
+ * Enough to see that the thing you searched for is in the library, short enough that the answer stays a
+ * glance. The tail is counted rather than listed.
+ */
+const BLOCKED_SHOWN = 12;
+
+/**
+ * What a part is called in the picker: its library id, then the human note.
+ *
+ * The id leads because it is the half that is unique. The FabLib's notes come from the footprints' own
+ * `descr`, and four different pin headers all describe themselves as "Through hole straight pin
+ * header" — put that first and a shelf reads as the same row four times over, with the part number cut
+ * off the end. The id sorts sensibly within a shelf too. The note follows it, and both are searched.
+ */
+function partLabel(c: Component): string {
+  return c.note ? `${c.id} · ${c.note}` : c.id;
+}
+
+/**
+ * The line beside the picker: how much of the library is on offer, and how much of it never can be.
+ *
+ * It is there so the picker is never read as the whole library. Most of the FabLib cannot go in series
+ * on a rail, and a list that simply omitted those would have a user conclude the parts are missing
+ * rather than unusable — so the count says out loud that there are more, and that searching finds them.
+ */
+function paletteCount(searching: boolean, shown: number, blocked: number): string {
+  if (!searching) {
+    const rest = BLOCKED.length;
+    const all = `${OFFERED.length} of ${OFFERED.length + rest} parts go in series on a rail`;
+    return rest === 0 ? all : `${all} — search to see the other ${rest}`;
+  }
+  const found = `${shown} match`;
+  return blocked === 0 ? found : `${found} · ${blocked} in the library but not placeable`;
+}
+
+/** Whether every whitespace-separated term of `query` appears in the part's note or id. */
+function matches(c: Component, terms: string[]): boolean {
+  const hay = `${c.id} ${c.note}`.toLowerCase();
+  return terms.every((t) => hay.includes(t));
+}
 
 /** How the copper is shown, matching the two ways it can be cut.
  *
@@ -122,6 +270,13 @@ export class ElectronicsModal {
   private readonly mirrorButtons = new Map<keyof Mirror, HTMLButtonElement>();
   /** The library picker — one control for the whole library, so a part added to it costs no toolbar room. */
   private readonly partSelect: HTMLSelectElement;
+  /** Narrows the picker. At 159 footprints the list is longer than the screen and the names are things
+   *  like `Switch_Slide_RightAngle_CnK_AYZ0102AGRLC_7.2x3mm`; typing is the only way in. */
+  private readonly partSearch: HTMLInputElement;
+  /** Says how much of the library the picker is showing, and how much of it can never be shown. */
+  private readonly partCount: HTMLElement;
+  /** Settles once the lazily-loaded half of the library has reached the picker. */
+  private libraryReady: Promise<void> = Promise.resolve();
 
   private tool: Tool = "led";
   private viewMode: ViewMode = "strips";
@@ -134,8 +289,8 @@ export class ElectronicsModal {
    *  here and the gaps an LED bridges are the same geometry the printed build is cut at, so this has to
    *  track that slider or the placement surface disagrees with what gets printed. */
   private tileGap = TILE_INSET_FRAC;
-  /** Index into `circuit.leds` of the LED under the cursor's last tap, or -1. */
-  private selected = -1;
+  /** What the cursor's last tap picked up — an LED or a part on a rail — or null. */
+  private selected: Selection | null = null;
   private fold: FoldFile | null = null;
   private faces: FlatFace[] = [];
   private tiles: TilePoly[] = [];
@@ -178,9 +333,9 @@ export class ElectronicsModal {
             </span>
             <span class="el-group el-parts">
               <label class="el-part-label" for="el-part">Part</label>
-              <select id="el-part" class="el-part" title="Pick a library part, then click either rail to place it. The copper is broken there, so the tape does not short the part out">${
-                PART_COMPONENTS.map((c) => `<option value="${c.id}">${c.note}</option>`).join("")
-              }</select>
+              <input type="search" id="el-part-search" class="el-part-search" placeholder="Search the library" aria-label="Search the component library" autocomplete="off">
+              <select id="el-part" class="el-part" title="Pick a library part, then click either rail to place it. The copper is broken there, so the tape does not short the part out"></select>
+              <span class="el-part-count" aria-live="polite"></span>
             </span>
             <span class="el-group">
               <button type="button" class="el-clear" title="Remove all LEDs, the battery and routes">Clear</button>
@@ -225,13 +380,19 @@ export class ElectronicsModal {
     this.svg = this.overlay.querySelector(".el-svg")!;
     this.statusEl = this.overlay.querySelector(".el-status")!;
     this.partSelect = this.overlay.querySelector(".el-part")!;
+    this.partSearch = this.overlay.querySelector(".el-part-search")!;
+    this.partCount = this.overlay.querySelector(".el-part-count")!;
+    this.fillPalette();
     // The browser would default a select to its first option; say so explicitly, so `value` names a real
     // part before anyone has touched it and the two agree from the start.
-    this.partSelect.value = PART_COMPONENTS[0]?.id ?? "";
+    this.partSelect.value = OFFERED[0]?.id ?? "";
     // Picking a part IS choosing the tool — there is no separate "place a part" button to arm first. A
     // plain click re-arms it too, so coming back from the LED tool is one gesture rather than two.
-    this.partSelect.addEventListener("change", () => this.selectTool(this.partSelect.value));
-    this.partSelect.addEventListener("click", () => this.selectTool(this.partSelect.value));
+    this.partSelect.addEventListener("change", () => this.armPicked());
+    this.partSelect.addEventListener("click", () => this.armPicked());
+    // Typing narrows the list; it never arms anything. Re-arming on every keystroke would change what the
+    // next click on the canvas places while the user is still reading the names.
+    for (const ev of ["input", "search"]) this.partSearch.addEventListener(ev, () => this.fillPalette());
 
     for (const btn of this.overlay.querySelectorAll<HTMLButtonElement>(".el-tool")) {
       const tool = btn.dataset.tool as Tool;
@@ -299,6 +460,7 @@ export class ElectronicsModal {
     this.fold = fold;
     this.rebuildGeometry();
     this.circuit = { leds: [], battery: null };
+    this.selected = null;
     this.computeBounds();
     this.fitView();
     this.syncButtons();
@@ -351,6 +513,10 @@ export class ElectronicsModal {
     this.syncButtons();
     this.render();
     this.overlay.hidden = false;
+    // The rest of the library is not in the main bundle. Ask for it now rather than at start-up, and
+    // redraw the picker when it lands, so a search can turn up the parts that cannot be placed and say
+    // why. Held so a caller — a test, mostly — can wait for the library to be whole.
+    this.libraryReady = loadRestOfLibrary().then(() => this.fillPalette());
     this.emit(); // ask the controller for a fresh plan now that we're visible
   }
 
@@ -379,6 +545,79 @@ export class ElectronicsModal {
     this.syncButtons();
   }
 
+  /**
+   * Arm whatever the picker is showing — but only if it is a part that can actually be placed.
+   *
+   * The picker also carries rows for parts the rail cannot pass through, so that searching for a USB
+   * socket finds it and says why it is not on offer. Those rows are disabled and carry no value, and a
+   * browser that lets one through anyway must not leave the canvas armed with a tool that places
+   * nothing.
+   */
+  private armPicked(): void {
+    const id = this.partSelect.value;
+    if (PART_BY_ID.has(id)) this.selectTool(id);
+  }
+
+  /**
+   * Rebuild the picker from the search box.
+   *
+   * Two things have to be true at once. The list has to be short enough to read — hence the search, and
+   * hence the shelves, which turn forty-odd names into eight groups of five. And a part the rail cannot
+   * pass through has to be *findable*, not absent: hunting for a connector and getting an empty list
+   * reads as a broken app, so a search that turns one up lists it, greyed out, under the reason. They
+   * are only listed while searching; all 117 of them at once would put the wall straight back.
+   *
+   * The armed part is always in the list even when the search excludes it, so narrowing the view never
+   * silently disagrees with what the next click will place.
+   */
+  private fillPalette(): void {
+    const terms = this.partSearch.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const armed = PART_BY_ID.get(this.tool);
+    const shown = OFFERED.filter((c) => c === armed || matches(c, terms));
+    const blocked = terms.length ? BLOCKED.filter((b) => matches(b.component, terms)) : [];
+
+    this.partSelect.innerHTML = "";
+    for (const { label } of PART_GROUPS) {
+      const on = shown.filter((c) => GROUP_OF.get(c.id) === label);
+      if (on.length === 0) continue;
+      const group = this.addGroup(label);
+      for (const c of on) {
+        const opt = document.createElement("option");
+        opt.value = c.id;
+        opt.textContent = partLabel(c);
+        group.appendChild(opt);
+      }
+    }
+    if (shown.length === 0) this.addGroup("No part matches").disabled = true;
+    if (blocked.length > 0) {
+      const group = this.addGroup("In the library, but not in series on a rail");
+      group.disabled = true;
+      for (const b of blocked.slice(0, BLOCKED_SHOWN)) {
+        const opt = document.createElement("option");
+        opt.disabled = true;
+        opt.textContent = `${b.component.id} — ${b.why}`;
+        group.appendChild(opt);
+      }
+      if (blocked.length > BLOCKED_SHOWN) {
+        const more = document.createElement("option");
+        more.disabled = true;
+        more.textContent = `…and ${blocked.length - BLOCKED_SHOWN} more`;
+        group.appendChild(more);
+      }
+    }
+    // A rebuilt select forgets its selection, and the armed part is always present, so say it again.
+    if (armed) this.partSelect.value = armed.id;
+    this.partCount.textContent = paletteCount(terms.length > 0, shown.length, blocked.length);
+  }
+
+  /** One shelf in the picker, appended and returned so its parts can be hung on it. */
+  private addGroup(label: string): HTMLOptGroupElement {
+    const group = document.createElement("optgroup");
+    group.setAttribute("label", label);
+    this.partSelect.appendChild(group);
+    return group;
+  }
+
   /** The library part the current tool places, or null when the tool is not a part tool. */
   private activePart(): { id: string; footprint: Footprint } | null {
     return PART_BY_ID.get(this.tool) ?? null;
@@ -386,6 +625,7 @@ export class ElectronicsModal {
 
   private clear(): void {
     this.circuit = { leds: [], battery: null };
+    this.selected = null;
     this.syncButtons();
     this.emit();
   }
@@ -407,6 +647,16 @@ export class ElectronicsModal {
   private onCanvasClick(e: MouseEvent): void {
     const flat = this.clientToFlat(e);
     if (!flat) return;
+    // A tap on a part already placed picks that part up, whatever tool is armed — the same gesture as
+    // tapping an LED, and for the same reason: deleting on the gesture that selects leaves no way to pick
+    // one up in order to turn it round. Delete takes it off. It comes before placing, so the target a part
+    // occupies is its own; the rest of the rail is still free to drop another one on.
+    const onPart = this.partAt(flat);
+    if (onPart) {
+      this.selected = onPart;
+      this.render();
+      return;
+    }
     const part = this.activePart();
     if (part) {
       // Stored as a point and snapped to the nearest run when the plan is built, exactly as a resistor is:
@@ -414,15 +664,11 @@ export class ElectronicsModal {
       const near = this.nearestOnRail(flat);
       if (!near || near.dist > this.pickRadius()) return;
       const placed = this.circuit.parts ?? [];
-      // Clicking a placed part takes it off again — whichever part it is. Requiring the matching tool
-      // before you could remove something would make the palette a mode you get stuck in.
-      const hit = placed.findIndex((p) => Math.hypot(p.x - flat.x, p.y - flat.y) <= this.pickRadius() / 2);
       this.circuit = {
         ...this.circuit,
-        parts: hit >= 0
-          ? placed.filter((_, i) => i !== hit)
-          : [...placed, { component: part.id, x: near.point.x, y: near.point.y }],
+        parts: [...placed, { component: part.id, x: near.point.x, y: near.point.y }],
       };
+      this.selected = { kind: "part", index: placed.length };
       this.emit();
       return;
     }
@@ -433,14 +679,8 @@ export class ElectronicsModal {
       if (!near || near.dist > this.pickRadius()) return;
       const key = this.tool === "switch" ? "switches" : "resistors";
       const existing = (this.tool === "switch" ? this.circuit.switches : this.circuit.resistors) ?? [];
-      // Clicking an existing one takes it off again, as clicking the battery's own tile does.
-      const hit = existing.findIndex((r) => Math.hypot(r.x - flat.x, r.y - flat.y) <= this.pickRadius() / 2);
-      this.circuit = {
-        ...this.circuit,
-        [key]: hit >= 0
-          ? existing.filter((_, i) => i !== hit)
-          : [...existing, { x: near.point.x, y: near.point.y }],
-      };
+      this.circuit = { ...this.circuit, [key]: [...existing, { x: near.point.x, y: near.point.y }] };
+      this.selected = { kind: this.tool === "switch" ? "switch" : "resistor", index: existing.length };
       this.emit();
       return;
     }
@@ -456,7 +696,7 @@ export class ElectronicsModal {
       // LEDs straddle a gap: snap the click to the nearest hinge between two tiles.
       const hit = nearestGap(this.gaps, flat);
       if (!hit || hit.dist > this.pickRadius()) {
-        this.selected = -1; // a tap on bare cloth clears the selection
+        this.selected = null; // a tap on bare cloth clears the selection
         this.render();
         return;
       }
@@ -465,12 +705,12 @@ export class ElectronicsModal {
       if (at >= 0) {
         // An LED already here: select it, so it can be rotated or removed. Tapping it no longer deletes it —
         // deleting on the same gesture that selects would make rotating one impossible.
-        this.selected = at;
+        this.selected = { kind: "led", index: at };
         this.render();
         return;
       }
       this.circuit = { ...this.circuit, leds: [...this.circuit.leds, led] };
-      this.selected = this.circuit.leds.length - 1;
+      this.selected = { kind: "led", index: this.circuit.leds.length - 1 };
     }
     this.emit();
   }
@@ -479,6 +719,13 @@ export class ElectronicsModal {
    *  the field, so a stale route cannot crash the canvas. */
   private routedParts(): { component: string; a: Vec2; b: Vec2; flip?: boolean }[] {
     return this.routed.parts ?? [];
+  }
+
+  /** How many parts are on rails, over all three lists — what makes the hint worth showing. */
+  private placedCount(): number {
+    return (this.circuit.parts ?? []).length
+      + (this.circuit.resistors ?? []).length
+      + (this.circuit.switches ?? []).length;
   }
 
   /** The nearest point on any run to `p` — where a resistor would break the copper. Either rail: a
@@ -497,6 +744,62 @@ export class ElectronicsModal {
       }
     }
     return best;
+  }
+
+  /**
+   * The part a tap at `p` lands on, or null — searched over every list, nearest first.
+   *
+   * Each part's target is its own size on the sheet, not a fraction of the pattern. It was the latter, and
+   * that is what made a second part impossible to place: on any pattern the target was several times the
+   * part, so the tap meant to drop a second capacitor beside the first landed on the first and took it off
+   * again. Every attempt at two of anything left one.
+   */
+  private partAt(p: Vec2): Selection | null {
+    let best: Selection | null = null;
+    let bestD = Infinity;
+    const consider = (kind: Selection["kind"], i: number, at: PlacedOnRail, fp: Footprint | null): void => {
+      const d = Math.hypot(at.x - p.x, at.y - p.y);
+      if (d > this.partPickRadius(fp) || d >= bestD) return;
+      bestD = d;
+      best = { kind, index: i };
+    };
+    (this.circuit.parts ?? []).forEach((q, i) =>
+      consider("part", i, q, PART_BY_ID.get(q.component)?.footprint ?? null));
+    (this.circuit.resistors ?? []).forEach((q, i) => consider("resistor", i, q, R_1206));
+    (this.circuit.switches ?? []).forEach((q, i) => consider("switch", i, q, SW_SPDT));
+    return best;
+  }
+
+  /** How near a tap must land to a part's own point to pick it up: half the part's extent along the rail,
+   *  in the flat pattern's units, and never below {@link PART_PICK_FLOOR_MM}. */
+  private partPickRadius(fp: Footprint | null): number {
+    const toFlat = (mm: number): number => (mm * this.tapeW()) / TAPE_MM;
+    const fit = fp ? partFit(fp) : null;
+    const along = fit ? Math.max(fit.gap, fit.before + fit.after) : 0;
+    return Math.max(toFlat(PART_PICK_FLOOR_MM), toFlat(along) / 2);
+  }
+
+  /** The selection where it is a part on a rail, or null when it is an LED or nothing. */
+  private partSelection(): PartSelection | null {
+    const sel = this.selected;
+    return sel && sel.kind !== "led" ? { kind: sel.kind, index: sel.index } : null;
+  }
+
+  /** The circuit list a selection indexes into, with the field it is stored under. */
+  private listFor(kind: PartKind): {
+    field: (typeof PART_FIELD)[keyof typeof PART_FIELD];
+    items: PlacedOnRail[];
+  } {
+    const field = PART_FIELD[kind];
+    return { field, items: (this.circuit[field] ?? []) as PlacedOnRail[] };
+  }
+
+  /** Where the router put the selected part, so the canvas can ring the copper it actually broke. */
+  private routedSpanFor(sel: PartSelection): { a: Vec2; b: Vec2 } | null {
+    const from = sel.kind === "part"
+      ? this.routedParts()
+      : sel.kind === "resistor" ? this.routed.resistors : this.routed.switches;
+    return (from as { a: Vec2; b: Vec2; source?: number }[]).find((s) => s.source === sel.index) ?? null;
   }
 
   /** How close (flat mm) a click must land to a hinge to drop an LED there. */
@@ -530,9 +833,15 @@ export class ElectronicsModal {
    *  This also fixes the orientation. Polarity is otherwise the router's to choose — it flips LEDs to clear
    *  crossings — so without pinning it the router would be free to turn the LED straight back. */
   private rotateSelected(): void {
-    const led = this.circuit.leds[this.selected];
-    if (!led) {
-      this.statusEl.textContent = "Select an LED first, then press R to turn it round";
+    const sel = this.selected;
+    const part = this.partSelection();
+    if (part) {
+      this.turnPartRound(part);
+      return;
+    }
+    const led = sel ? this.circuit.leds[sel.index] : undefined;
+    if (!led || !sel) {
+      this.statusEl.textContent = "Select a component first, then press R to turn it round";
       return;
     }
     // R cycles: the router's choice -> turned round -> back to the router's choice.
@@ -541,16 +850,54 @@ export class ElectronicsModal {
     // the wrong way can force a PWR/GND crossing that it would otherwise have avoided -- so there has to be a
     // way to hand the decision back. Without it the first press was permanent.
     const next: boolean | undefined =
-      led.flip === undefined ? !this.plannedFlip(this.selected) : undefined;
+      led.flip === undefined ? !this.plannedFlip(sel.index) : undefined;
     this.circuit = {
       ...this.circuit,
       leds: this.circuit.leds.map((l, i) => {
-        if (i !== this.selected) return l;
+        if (i !== sel.index) return l;
         const { flip: _drop, ...rest } = l;
         return next === undefined ? rest : { ...rest, flip: next };
       }),
     };
     this.emit();
+  }
+
+  /**
+   * Turn the selected part round.
+   *
+   * On a part the rail steps across — a switch — that is which side of the rail its idle terminal is
+   * stranded on. On one in line with the rail it is which of its terminals lands on which cut end, which
+   * matters to anything polarised and to nothing else.
+   *
+   * It cycles exactly as an LED does: the router's choice, then turned from it, then back to the router's
+   * choice. Fixing an orientation forbids the router from picking a better one, so there has to be a way
+   * to hand the decision back.
+   */
+  private turnPartRound(sel: PartSelection): void {
+    const { field, items } = this.listFor(sel.kind);
+    const item = items[sel.index];
+    if (!item) {
+      this.statusEl.textContent = "Select a component first, then press R to turn it round";
+      return;
+    }
+    const next: boolean | undefined = item.flip === undefined ? !this.plannedPartFlip(sel) : undefined;
+    this.circuit = {
+      ...this.circuit,
+      [field]: items.map((q, i) => {
+        if (i !== sel.index) return q;
+        const { flip: _drop, ...rest } = q;
+        return next === undefined ? rest : { ...rest, flip: next };
+      }),
+    };
+    this.emit();
+  }
+
+  /** Which way the router currently has this part, so the first turn turns it from what is on screen. */
+  private plannedPartFlip(sel: PartSelection): boolean {
+    const from = sel.kind === "part"
+      ? this.routedParts()
+      : sel.kind === "resistor" ? this.routed.resistors : this.routed.switches;
+    return (from as { flip?: boolean; source?: number }[]).find((s) => s.source === sel.index)?.flip ?? false;
   }
 
   /** Which way the router currently has this LED, so the first rotate turns it from what is on screen. */
@@ -563,12 +910,18 @@ export class ElectronicsModal {
   }
 
   private removeSelected(): void {
-    if (!this.circuit.leds[this.selected]) return;
-    this.circuit = {
-      ...this.circuit,
-      leds: this.circuit.leds.filter((_, i) => i !== this.selected),
-    };
-    this.selected = -1;
+    const sel = this.selected;
+    if (!sel) return;
+    const part = this.partSelection();
+    if (!part) {
+      if (!this.circuit.leds[sel.index]) return;
+      this.circuit = { ...this.circuit, leds: this.circuit.leds.filter((_, i) => i !== sel.index) };
+    } else {
+      const { field, items } = this.listFor(part.kind);
+      if (!items[sel.index]) return;
+      this.circuit = { ...this.circuit, [field]: items.filter((_, i) => i !== sel.index) };
+    }
+    this.selected = null;
     this.emit();
   }
 
@@ -825,6 +1178,16 @@ export class ElectronicsModal {
       });
       parts.push(`</g>`);
     }
+    // The selected part, ringed on the copper the router actually broke for it — the same mark an LED gets.
+    const selPart = this.partSelection();
+    const selSpan = selPart ? this.routedSpanFor(selPart) : null;
+    if (selSpan) {
+      const a = this.tp(selSpan.a), b = this.tp(selSpan.b);
+      const c = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      // Big enough to sit outside the part it rings: its own span, or an LED's marker where that is bigger.
+      const r = Math.max(Math.hypot(b.x - a.x, b.y - a.y) * 0.75, this.markerR() * 1.5);
+      parts.push(`<circle cx="${fmt(c.x)}" cy="${fmt(c.y)}" r="${fmt(r)}" class="el-part-selected" />`);
+    }
     this.drawnZoomStep = this.zoomStep();
     // Each LED is two distinct pads straddling its hinge — a PWR (+) pad toward face `a` and a GND (−)
     // pad toward face `b` — bridged by the LED chip. An LED whose gap no longer exists has nowhere to
@@ -855,7 +1218,7 @@ export class ElectronicsModal {
       const pwr = this.tp(pwrPt);
       const gnd = this.tp(gndPt);
       const o = orphan ? " el-led-orphan" : "";
-      if (i === this.selected) {
+      if (this.selected?.kind === "led" && this.selected.index === i) {
         const mid2 = { x: (pwr.x + gnd.x) / 2, y: (pwr.y + gnd.y) / 2 };
         parts.push(
           `<circle cx="${fmt(mid2.x)}" cy="${fmt(mid2.y)}" r="${fmt(r * 1.5)}" class="el-led-selected" />`,
@@ -1117,12 +1480,25 @@ export class ElectronicsModal {
         msg += ` · ${missing} ${what}${missing === 1 ? "" : "s"} did not fit — that run is too short for the part`;
       }
     }
-    if (this.circuit.leds[this.selected]) {
-      const fixed = this.circuit.leds[this.selected]!.flip !== undefined;
-      msg += ` · LED ${this.selected + 1} selected — R to turn it round, Delete to remove`;
-      msg += fixed ? " (orientation fixed — R again to let the router choose)" : " (router chooses)";
-    } else if (n > 0) {
-      msg += " · click an LED to select it";
+    const sel = this.selected;
+    const selPart = this.partSelection();
+    const picked = sel
+      ? selPart
+        ? this.listFor(selPart.kind).items[selPart.index]
+        : this.circuit.leds[sel.index]
+      : undefined;
+    if (sel && picked) {
+      const what = sel.kind === "led"
+        ? "LED"
+        : sel.kind === "part"
+          ? PART_BY_ID.get((this.circuit.parts ?? [])[sel.index]!.component)?.note ?? "Part"
+          : sel.kind === "resistor" ? "Resistor" : "Switch";
+      msg += ` · ${what} ${sel.index + 1} selected — R to turn it round, Delete to remove`;
+      msg += picked.flip !== undefined
+        ? " (orientation fixed — R again to let the router choose)"
+        : " (router chooses)";
+    } else if (n > 0 || this.placedCount() > 0) {
+      msg += " · click a component to select it";
     }
     this.statusEl.textContent = msg;
   }
@@ -1136,12 +1512,21 @@ function cloneCircuit(c: Circuit): Circuit {
     battery: c.battery ? { face: c.battery.face } : null,
     // Likewise the resistors: a clone that dropped them would draw one on the canvas and lose it the moment
     // the circuit reached the store — gone from the folded model, and from the next render back.
-    resistors: (c.resistors ?? []).map((r) => ({ x: r.x, y: r.y })),
-    switches: (c.switches ?? []).map((r) => ({ x: r.x, y: r.y })),
+    // `flip` travels with each of them for the same reason it travels with an LED: it is the author's
+    // decision about which way round the part goes, and a clone that dropped it would lose the turn the
+    // moment the circuit reached the store.
+    resistors: (c.resistors ?? []).map(withFlip),
+    switches: (c.switches ?? []).map(withFlip),
     // And every library part, which is the same trap once more: a clone that dropped `parts` would draw
     // one on the canvas and lose it the moment the circuit reached the store.
-    parts: (c.parts ?? []).map((p) => ({ component: p.component, x: p.x, y: p.y })),
+    parts: (c.parts ?? []).map((p) => ({ component: p.component, ...withFlip(p) })),
   };
+}
+
+/** A placed part's point, keeping the authored turn only where there is one — an absent `flip` means the
+ *  router chooses, and writing `undefined` in would be a different thing from leaving it out. */
+function withFlip<T extends PlacedOnRail>(p: T): PlacedOnRail {
+  return p.flip === undefined ? { x: p.x, y: p.y } : { x: p.x, y: p.y, flip: p.flip };
 }
 
 /**

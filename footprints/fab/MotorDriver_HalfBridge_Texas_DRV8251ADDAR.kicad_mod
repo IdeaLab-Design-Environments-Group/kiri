@@ -1,0 +1,255 @@
+(footprint "MotorDriver_HalfBridge_Texas_DRV8251ADDAR"
+	(version 20240108)
+	(generator "pcbnew")
+	(generator_version "8.0")
+	(layer "F.Cu")
+	(tags "SOIC 1.27")
+	(property "Reference" "REF**"
+		(at 0 -3.4 0)
+		(layer "F.SilkS")
+		(uuid "519f6e60-eb9c-479d-80df-fda781585c2a")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Value" "MotorDriver_HalfBridge_Texas_DRV8251ADDAR"
+		(at 0 3.6 0)
+		(layer "F.Fab")
+		(uuid "e843c0d8-b84e-4163-9e56-4cc72182e39a")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Footprint" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "44528835-7dbf-40a3-bcdb-0d25bf31081a")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "650476cd-a28c-476f-993d-4fa8926f106f")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "c880724a-f515-4f65-bed2-cc7b7845e286")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr smd)
+	(fp_line
+		(start -3.69 -2.575)
+		(end 2.075 -2.575)
+		(stroke
+			(width 0.15)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "135a6c8a-2949-492b-8b0c-e79a8b7843c6")
+	)
+	(fp_line
+		(start -2.075 2.575)
+		(end 2.075 2.575)
+		(stroke
+			(width 0.15)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "d259dbc6-3050-4542-a7e4-56a9729b1f40")
+	)
+	(fp_poly
+		(pts
+			(xy -3.1 -3) (xy -3.5 -3.4) (xy -2.7 -3.4)
+		)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(fill solid)
+		(layer "F.SilkS")
+		(uuid "4e4e262a-fee9-4961-bbed-3fff50e6d649")
+	)
+	(fp_line
+		(start -3.9 -2.7)
+		(end 3.9 -2.7)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "5faf5d32-c69b-4ea5-8598-1d698eb87d58")
+	)
+	(fp_line
+		(start -3.9 2.7)
+		(end -3.9 -2.7)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "14803a49-4d31-4b8d-9c88-f299f9c6d9f4")
+	)
+	(fp_line
+		(start 3.9 -2.7)
+		(end 3.9 2.7)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "be0f6ff5-89d1-4987-92dc-0284b6ca8ea9")
+	)
+	(fp_line
+		(start 3.9 2.7)
+		(end -3.9 2.7)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "93a8c13a-56cf-4c81-ba35-f91f1e512315")
+	)
+	(fp_line
+		(start -1.95 -2.45)
+		(end -1.95 2.45)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "ffd6dca7-1ac1-40e3-9503-ec932cd66e73")
+	)
+	(fp_line
+		(start -1.95 -2.45)
+		(end 1.95 -2.45)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "d70c9649-607c-492f-b96e-fec63efe12b2")
+	)
+	(fp_line
+		(start -1.95 2.45)
+		(end 1.95 2.45)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "1a788a85-8753-4a48-9586-79783ab77965")
+	)
+	(fp_line
+		(start 1.95 -2.45)
+		(end 1.95 2.45)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "966da41f-7bd6-4c80-bba8-83d73a7d684a")
+	)
+	(fp_text user "${REFERENCE}"
+		(at 0 0 0)
+		(layer "F.Fab")
+		(uuid "fe1fc527-60b6-4641-947d-42c4e081bc8b")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(pad "1" smd rect
+		(at -2.7 -1.905)
+		(size 1.55 0.6)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(uuid "00cf998a-a93b-44fd-a69a-31879d451d5c")
+	)
+	(pad "2" smd rect
+		(at -2.7 -0.635)
+		(size 1.55 0.6)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(uuid "a0b33f7a-cea1-4063-8d59-0eedf64e4a7b")
+	)
+	(pad "3" smd rect
+		(at -2.7 0.635)
+		(size 1.55 0.6)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(uuid "42064b24-64df-472e-a97a-e7d93fcefcf6")
+	)
+	(pad "4" smd rect
+		(at -2.7 1.905)
+		(size 1.55 0.6)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(uuid "d0e7d358-e644-427e-81d4-cce48150d609")
+	)
+	(pad "5" smd rect
+		(at 2.7 1.905)
+		(size 1.55 0.6)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(uuid "a4bfadc0-1422-4b67-9ab2-2c25f55a46eb")
+	)
+	(pad "6" smd rect
+		(at 2.7 0.635)
+		(size 1.55 0.6)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(uuid "4205cfbe-85cf-40b7-8336-10edf324d3ef")
+	)
+	(pad "7" smd rect
+		(at 2.7 -0.635)
+		(size 1.55 0.6)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(uuid "c7d36c0c-447d-4f81-acf5-154b24f35764")
+	)
+	(pad "8" smd rect
+		(at 2.7 -1.905)
+		(size 1.55 0.6)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(uuid "04e7ba59-3bd7-4a62-a1c4-ba759fe84e42")
+	)
+	(pad "9" smd rect
+		(at 0 0)
+		(size 2.71 3.4)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(solder_paste_margin_ratio -0.2)
+		(uuid "e3e04a0c-a620-4d6e-aba5-7ac3eec49805")
+	)
+	(model "${KICAD9_3RD_PARTY}/3dmodels/org_fabcloud_gitlab_electronics_kicad/fab.3dshapes/MotorDriver_HalfBridge_Texas-DRV8251ADDAR.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
+)

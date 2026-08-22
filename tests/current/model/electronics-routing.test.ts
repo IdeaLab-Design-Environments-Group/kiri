@@ -53,7 +53,12 @@ function ledsOn(gaps: ReturnType<typeof load>["gaps"], max: number): Led[] {
 }
 
 describe("model/electronics-routing", () => {
-  it("never runs copper over an LED chip, on any bundled pattern", () => {
+  // Routes every bundled pattern, which is ~4.5s of genuine work on this machine and has sat at 90% of
+  // vitest's 5s default for a long time — so it tipped over whenever the machine was busy, and read as
+  // flakiness rather than as a budget nobody had ever chosen. 20s is picked to be loose enough that load
+  // cannot trip it and tight enough that a real slowdown still can: the routing would have to get four
+  // times slower to fail here, which is far past any change that should pass review unnoticed.
+  it("never runs copper over an LED chip, on any bundled pattern", { timeout: 20_000 }, () => {
     // The one destructive constraint: tape over the chip shorts the part. Checked on the real patterns,
     // not a toy grid, because a toy grid satisfies it by construction.
     for (const name of ["house.fkld", "church.fkld", "puffin.fkld", "akde-hex.fkld"]) {

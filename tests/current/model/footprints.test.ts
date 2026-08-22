@@ -1,3 +1,4 @@
+import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   COMPONENTS,
@@ -5,7 +6,9 @@ import {
   R_1206,
   SW_SPDT,
 } from "../../../src/model/footprints.generated.js";
+import { REST_COMPONENTS } from "../../../src/model/footprints.rest.generated.js";
 import {
+  carriesCopper,
   holes,
   isTerminal,
   MM_PER_INCH,
@@ -15,7 +18,10 @@ import {
   padSize,
   terminals,
 } from "../../../src/model/footprint.js";
-import { LED, RESISTOR, SPDT } from "../../../src/model/parts.js";
+import { LED, placement, RESISTOR, SPDT } from "../../../src/model/parts.js";
+
+/** The whole FabLib, both halves of the split. Tests bundle nothing, so both can be imported. */
+const ALL = [...COMPONENTS, ...REST_COMPONENTS];
 
 /**
  * The component library.
@@ -26,15 +32,17 @@ import { LED, RESISTOR, SPDT } from "../../../src/model/parts.js";
  * its meaning: units, axis, which pads are terminals, and the one place we knowingly depart from the part.
  */
 describe("model/footprints", () => {
-  it("gives every part terminals, numbered from one", () => {
-    expect(COMPONENTS.length).toBeGreaterThan(0);
-    for (const c of COMPONENTS) {
+  it("gives every part pads with an outline, numbered from one", () => {
+    expect(ALL.length).toBe(159);
+    for (const c of ALL) {
+      // A part need not have terminals — `MountingHole_M3` is a hole and nothing else — but it must
+      // have pads, because a footprint with none is a file the scan failed to read.
+      expect(Object.keys(c.footprint).length, `${c.id} has no pads`).toBeGreaterThan(0);
       const t = terminals(c.footprint);
-      expect(t.length, `${c.id} has no terminals`).toBeGreaterThan(0);
       // Pad numbers are the part's own, so they start at 1 and do not repeat.
       const indices = t.map(([, p]) => p.index);
       expect(new Set(indices).size).toBe(indices.length);
-      expect(Math.min(...indices)).toBe(1);
+      if (t.length > 0) expect(Math.min(...indices)).toBe(1);
       for (const [name, pad] of t) {
         expect(padPoints(pad).length, `${c.id}.${name} has no outline`).toBeGreaterThan(2);
         const { w, h } = padSize(pad);
@@ -59,7 +67,11 @@ describe("model/footprints", () => {
     const pegs = holes(SW_SPDT);
     expect(pegs.length).toBe(2);
     for (const peg of pegs) {
-      expect(isTerminal(peg)).toBe(false);
+      // The FabLib declares these `thru_hole` on `*.Cu`, so they really are plated and copper alone
+      // does not tell them from a terminal. What does is that the file gives them no name.
+      expect(carriesCopper(peg)).toBe(true);
+      const name = Object.entries(SW_SPDT).find(([, p]) => p === peg)![0];
+      expect(isTerminal(name, peg)).toBe(false);
       expect(peg.drill!.diameter).toBeGreaterThan(0);
     }
     expect(terminals(SW_SPDT).map(([n]) => n)).toEqual(["1", "2", "3"]);
@@ -72,8 +84,16 @@ describe("model/footprints", () => {
       expect(part.gap).toBeCloseTo(part.pitch - part.pad.w, 12);
       expect(part.gap).toBeGreaterThan(0);
     }
-    // Both are 1206 packages, so they agree — which is also a check that the two came through the same way.
-    expect(LED.pitch).toBeCloseTo(RESISTOR.pitch, 12);
+    // They used to be asserted equal — both are 1206 packages, so both were 4mm pitch on 2mm pads.
+    // The FabLib does not agree with itself about that: its `LED_1206` is the wide hand-solder land
+    // (3.4mm centres, 1.4mm pads) and its `R_1206` the tighter one (3.0mm on 1.2mm). That is the
+    // vendor's reading of the same package and we take it, so what is checked now is that both are
+    // still 1206-sized rather than that they match — an inch slipped in anywhere would be 25x out.
+    for (const part of [LED, RESISTOR]) {
+      expect(part.pitch).toBeGreaterThan(2.5);
+      expect(part.pitch).toBeLessThan(4.5);
+    }
+    expect(LED.pitch).not.toBeCloseTo(RESISTOR.pitch, 1);
   });
 
   it("moves only the switch's common, and moves it across", () => {
@@ -95,7 +115,18 @@ describe("model/footprints", () => {
   it("takes the switch pitch from the file rather than from the package name", () => {
     // Twice this was wrong: 2.54mm assumed from "1x03", then 2.5mm read off a datasheet page. The
     // footprint says 2.5mm exactly, and now so do we.
-    expect(SPDT.pitch).toBeCloseTo(2.5, 9);
+    // To four places, not nine: coordinates are stored quantised to a millionth of an inch, so 2.5mm
+    // comes back 5 nanometres short. The number this test exists to reject is 2.54, which is 0.04 away.
+    expect(SPDT.pitch).toBeCloseTo(2.5, 4);
+  });
+
+  it("draws a rect pad as its four corners and no more", () => {
+    // The cheapest possible check that a pad's outline is the pad and not a stand-in: a `rect` is a
+    // closed quadrilateral, five points. Anything else means the shape branch changed under us. What a
+    // *curved* pad's outline has to be is `kicad-parser.test.ts`'s question — it holds the chord budget
+    // and the FabLib's one roundrect part — and is not restated here.
+    expect(padPoints(padNamed(LED_1206, "1")).length).toBe(5);
+    expect(padPoints(padNamed(R_1206, "2")).length).toBe(5);
   });
 
   it("keeps the LED's pads a pad-width apart, so a break leaves copper under both", () => {
@@ -103,5 +134,211 @@ describe("model/footprints", () => {
     expect(padAt(a).y).toBeCloseTo(padAt(c).y, 12);
     expect(Math.abs(padAt(c).x - padAt(a).x)).toBeCloseTo(LED.pitch, 12);
     expect(padSize(a)).toEqual(padSize(c));
+  });
+});
+
+
+/**
+ * The scan.
+ *
+ * `ocaml/footprints.ml` no longer holds a list of parts. It reads `footprints/fab/`, so the library is
+ * whatever is on disk and adding a part is dropping a file in a directory. That moves where the risk
+ * lives: nothing can be *wrong* in a list any more, but a file can be silently missed, two files can
+ * collide onto one name, and the name or the blurb can drift from what the file actually says. None of
+ * those is visible by reading the generated output — there are 159 parts in it — so all four are
+ * checked here against the directory itself rather than against a copy of the answer.
+ *
+ * `kicad-parser.test.ts` checks the other direction: every generated part back against its own source
+ * file's pad count and pad sizes. Between the two, all 159 footprints are accounted for both ways —
+ * nothing on disk is missing from the library, and nothing in the library was invented.
+ */
+describe("model/footprints — the scan", () => {
+  const FAB = new URL("../../../footprints/fab/", import.meta.url);
+  const GENERATED = [
+    new URL("../../../src/model/footprints.generated.ts", import.meta.url),
+    new URL("../../../src/model/footprints.rest.generated.ts", import.meta.url),
+  ];
+
+  /** The three parts whose names predate the FabLib, and which no rule over a filename can produce. */
+  const ALIASES: Record<string, string> = {
+    "Switch_Slide_RightAngle_CnK_AYZ0102AGRLC_7.2x3mm.kicad_mod": "SW_SPDT",
+    "Button_CnK_PTS636.0_6x3.5mm.kicad_mod": "SW_PUSH",
+    "Battery-Holder_Coin-Cell_CR2032_Linx_BAT-HLD-001.kicad_mod": "BAT_COIN_20",
+  };
+
+  const files = readdirSync(FAB).filter((f) => f.endsWith(".kicad_mod")).sort();
+  const source = (file: string) => readFileSync(new URL(file, FAB), "utf8");
+
+  /**
+   * Which file each part came from, out of the doc comment the generator writes above it. Read from
+   * the text rather than from the data because the data does not carry it — and the whole question
+   * here is whether the file on disk and the const in the library are the same part.
+   */
+  const provenance = (() => {
+    const map = new Map<string, string>();
+    for (const url of GENERATED) {
+      const text = readFileSync(url, "utf8");
+      const re = /from `([^`]+\.kicad_mod)`\.\s*\*\/\s*export const (\w+): Footprint/g;
+      for (let m = re.exec(text); m; m = re.exec(text)) map.set(m[2]!, m[1]!);
+    }
+    return map;
+  })();
+
+  /**
+   * The id rule, restated: everything that cannot appear in a TypeScript identifier becomes `_`, runs
+   * of those collapse, the ends are trimmed, and a leading digit gets a `_` in front of it. Written
+   * out again here rather than shared with the generator, which is in OCaml and cannot be imported —
+   * so this is a second reading of the rule, which is the only kind worth testing against.
+   */
+  function derivedId(stem: string): string {
+    const s = stem.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+/, "").replace(/_+$/, "");
+    if (s === "") return "part";
+    return /^[0-9]/.test(s) ? `_${s}` : s;
+  }
+
+  /** A KiCad string literal's escapes, undone — `descr` fields carry `\"` around inch measurements. */
+  const unescape = (s: string) =>
+    s.replace(/\\(.)/g, (_, c: string) =>
+      c === "n" ? "\n" : c === "r" ? "\r" : c === "t" ? "\t" : c);
+
+  /** A `(descr ...)` value, which is usually a quoted string but is a bare atom in a few files. */
+  const field = (text: string, name: string) => {
+    const m = new RegExp(`\\(${name}\\s+(?:"((?:[^"\\\\]|\\\\.)*)"|([^\\s()]+))`).exec(text);
+    if (!m) return "";
+    return unescape(m[1] ?? m[2]!).replace(/\s+/g, " ").trim();
+  };
+
+  /** The note rule, restated: the file's own `descr` with any bare URL taken out of it, else its
+      `tags`, else the filename as words. */
+  function derivedNote(file: string, text: string): string {
+    const tidy = (s: string) => s.replace(/\s+/g, " ").trim().replace(/[\s,;:\-(]+$/, "");
+    const descr = tidy(
+      field(text, "descr")
+        .split(" ")
+        // A leading bracket or quote does not stop a word being a link: one `descr` reads
+        // "TQFP, 144 Pin (http://…), generated with …".
+        .filter((w) => !/^[([<"']*https?:\/\//.test(w))
+        .join(" "),
+    );
+    if (descr !== "") return descr;
+    const tags = tidy(field(text, "tags"));
+    if (tags !== "") return tags;
+    return file.replace(/\.kicad_mod$/, "").replace(/_/g, " ");
+  }
+
+  it("emits exactly one part per footprint file, and nothing for what is not a footprint", () => {
+    // The directory is vendored wholesale, so it holds the FabLib's licence too. A scan that took
+    // every file would either crash on it or, worse, emit an empty part named LICENSE.
+    expect(readdirSync(FAB)).toContain("LICENSE");
+    expect(files.length).toBe(159);
+
+    // Every file is in the library exactly once, and every part in the library is one of those files.
+    // Checked as a bijection rather than as a count: 159 parts from 158 files plus one duplicate
+    // counts the same as 159 from 159, and is a part silently missing.
+    const byFile = new Map<string, string[]>();
+    for (const c of ALL) {
+      const file = provenance.get(c.id);
+      expect(file, `${c.id} records no source file`).toBeDefined();
+      byFile.set(file!, [...(byFile.get(file!) ?? []), c.id]);
+    }
+    expect([...byFile.keys()].sort()).toEqual(files);
+    for (const [file, ids] of byFile) expect(ids, `${file} emitted more than once`).toHaveLength(1);
+  });
+
+  it("names a part by a rule over its filename, aliasing only where the rule cannot reach", () => {
+    const aliased: string[] = [];
+    for (const c of ALL) {
+      const file = provenance.get(c.id)!;
+      const stem = file.replace(/\.kicad_mod$/, "");
+      if (ALIASES[file] !== undefined) {
+        expect(c.id, `${file} should be aliased`).toBe(ALIASES[file]);
+        // An alias is only justified where the rule genuinely cannot produce the wanted name.
+        expect(derivedId(stem), `${file} needs no alias`).not.toBe(ALIASES[file]);
+        aliased.push(file);
+        continue;
+      }
+      expect(c.id, `${file} was not named by the rule`).toBe(derivedId(stem));
+    }
+    expect(aliased.sort(), "aliases beyond the three declared ones").toEqual(Object.keys(ALIASES).sort());
+
+    // And every name is usable: a legal identifier, and its own.
+    for (const c of ALL) expect(c.id).toMatch(/^[A-Za-z_][A-Za-z0-9_]*$/);
+    expect(new Set(ALL.map((c) => c.id)).size).toBe(ALL.length);
+  });
+
+  it("keeps the seven names the app and its tests already reach for", () => {
+    // These are imported by `parts.ts`, by the export, and by four test files. A rename here is not a
+    // rename, it is a part that has vanished.
+    const want: Record<string, string> = {
+      LED_1206: "LED_1206.kicad_mod",
+      R_1206: "R_1206.kicad_mod",
+      C_1206: "C_1206.kicad_mod",
+      R_2010: "R_2010.kicad_mod",
+      SW_SPDT: "Switch_Slide_RightAngle_CnK_AYZ0102AGRLC_7.2x3mm.kicad_mod",
+      SW_PUSH: "Button_CnK_PTS636.0_6x3.5mm.kicad_mod",
+      BAT_COIN_20: "Battery-Holder_Coin-Cell_CR2032_Linx_BAT-HLD-001.kicad_mod",
+    };
+    for (const [id, file] of Object.entries(want)) {
+      const c = ALL.find((x) => x.id === id);
+      expect(c, `${id} is gone from the library`).toBeDefined();
+      expect(provenance.get(id), `${id} now comes from a different part`).toBe(file);
+      expect(Object.keys(c!.footprint).length).toBeGreaterThan(0);
+    }
+  });
+
+  it("says what a part is in the words of its own file, not in its filename", () => {
+    for (const c of ALL) {
+      const file = provenance.get(c.id)!;
+      expect(c.note, `${c.id} has no note`).not.toBe("");
+      expect(c.note, `${c.id}'s note is not its file's`).toBe(derivedNote(file, source(file)));
+    }
+
+    // The three cases the rule exists for, spelled out. A `descr` is used as it stands; a `descr` that
+    // is nothing but a datasheet URL is no description of a part, so the tags carry it; and with
+    // neither field there is only the filename, which at least becomes words.
+    const noteOf = (id: string) => ALL.find((c) => c.id === id)!.note;
+    expect(noteOf("R_1206")).toBe("Resistor SMD 1206, hand soldering");
+    expect(field(source("Switch_Slide_RightAngle_CnK_AYZ0102AGRLC_7.2x3mm.kicad_mod"), "descr")).toMatch(/^https?:\/\//);
+    expect(noteOf("SW_SPDT")).toBe("switch spdt right angle slide");
+    expect(field(source("Battery-Holder_Coin-Cell_CR2032_Linx_BAT-HLD-001.kicad_mod"), "descr")).toBe("");
+    expect(noteOf("BAT_COIN_20")).toBe("Battery-Holder Coin-Cell CR2032 Linx BAT-HLD-001");
+
+    // No note may carry a URL: the palette shows this string, and a link it cannot follow is noise
+    // sitting where the part's name should be.
+    for (const c of ALL) expect(c.note, `${c.id}`).not.toMatch(/https?:\/\//);
+  });
+
+  it("catalogues the very footprints it exported, not copies of them", () => {
+    // `COMPONENTS` and the named consts are two ways to reach one library. If the catalogue held
+    // clones, a part could be placed through the palette and drawn through the export and the two
+    // would be different objects with the same numbers — until one of them changed.
+    expect(COMPONENTS.find((c) => c.id === "R_1206")!.footprint).toBe(R_1206);
+    expect(COMPONENTS.find((c) => c.id === "SW_SPDT")!.footprint).toBe(SW_SPDT);
+    expect(COMPONENTS.find((c) => c.id === "LED_1206")!.footprint).toBe(LED_1206);
+    // In id order, so the palette has something stable to lay out and a diff of the file is readable.
+    for (const list of [COMPONENTS, REST_COMPONENTS]) {
+      expect(list.map((c) => c.id)).toEqual([...list.map((c) => c.id)].sort());
+    }
+  });
+
+  it("puts a part in the eagerly-loaded half exactly when a rail can take it", () => {
+    // The split exists to keep the main bundle small: 159 parts is a megabyte of pad outlines and most
+    // of them cannot go on a rail. But it duplicates a decision `placement()` already owns, and this
+    // codebase has been bitten once by two readings of a footprint disagreeing. So the two are checked
+    // against each other over the whole library, every time.
+    //
+    // Drift here costs bytes, not correctness — the palette asks `placement()` about parts from both
+    // halves and never reads the split — which is exactly why it would otherwise go unnoticed.
+    for (const c of ALL) {
+      const eager = COMPONENTS.some((x) => x.id === c.id);
+      expect(eager, `${c.id}: ${JSON.stringify(placement(c.footprint))}`).toBe(
+        placement(c.footprint).placeable,
+      );
+    }
+    // The two halves are one library between them: disjoint, and everything is in one of them.
+    expect(COMPONENTS.length + REST_COMPONENTS.length).toBe(159);
+    expect(new Set(ALL.map((c) => c.id)).size).toBe(159);
+    // And the split is worth having: most of the library is in the half that is not loaded up front.
+    expect(REST_COMPONENTS.length).toBeGreaterThan(COMPONENTS.length);
   });
 });

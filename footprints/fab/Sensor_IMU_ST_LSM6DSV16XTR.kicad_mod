@@ -1,0 +1,260 @@
+(footprint "Sensor_IMU_ST_LSM6DSV16XTR"
+	(version 20241229)
+	(generator "pcbnew")
+	(generator_version "9.0")
+	(layer "F.Cu")
+	(descr "Manufaturer opinionated LGA-14L 2.5 x 3.0 x 0.86 mm package")
+	(tags "LGA-14L SMD")
+	(property "Reference" "REF**"
+		(at 0 2.2 0)
+		(unlocked yes)
+		(layer "F.SilkS")
+		(uuid "9d9c2a83-7e01-4fa1-98ab-e643c3ad78e7")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.1)
+			)
+		)
+	)
+	(property "Value" "Sensor_IMU_ST_LSM6DSV16XTR"
+		(at 0 3.6 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(uuid "90309fbd-70df-48af-af88-7163ab9b66ab")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "5006729a-1120-4c8f-bbfd-9f79ef7c965e")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "a852120b-e703-4e5e-9cb5-3fdbaec1832d")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr smd)
+	(fp_line
+		(start -1.6 1)
+		(end -1.6 1.4)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "a799d64f-dfad-4482-870b-7ad1c4a02918")
+	)
+	(fp_line
+		(start -1.6 1.4)
+		(end -1 1.4)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "a8bf0bd4-0d31-4cdd-8aeb-31c026d56876")
+	)
+	(fp_line
+		(start -1 1.4)
+		(end 1.6 1.4)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "3733490d-1b33-4ef3-9866-c2519274f7dc")
+	)
+	(fp_line
+		(start 1.6 -1.4)
+		(end 1 -1.4)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "a3b89aee-f701-43a6-a074-17c48239617f")
+	)
+	(fp_line
+		(start 1.6 -1.4)
+		(end 1.6 -1)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "5709a4a0-e2b4-4f40-918a-ac6cb4a60eda")
+	)
+	(fp_line
+		(start 1.6 1)
+		(end 1.6 0.8)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "993bccbf-f1b7-4fa1-ac3b-7dd79e507cc5")
+	)
+	(fp_line
+		(start 1.6 1.4)
+		(end 1.6 1)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "d589a792-d8dc-42e3-8f8b-2139bf5c7ef8")
+	)
+	(fp_poly
+		(pts
+			(xy -1.2 -1.4) (xy -1.6 -1.8) (xy -0.8 -1.8)
+		)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(fill yes)
+		(layer "F.SilkS")
+		(uuid "2a94d1b7-e682-4503-a0ae-5181afceb285")
+	)
+	(fp_rect
+		(start -1.5 -1.25)
+		(end 1.5 1.25)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(fill no)
+		(layer "F.Fab")
+		(uuid "b92a3bfa-d758-4c6a-9c6c-879ecb5ba712")
+	)
+	(fp_text user "${REFERENCE}"
+		(at 0 5.1 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(uuid "01d9539f-f693-44ed-9369-7865f25a13be")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(pad "1" smd rect
+		(at -1.1625 -0.75 270)
+		(size 0.25 0.475)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "4852a38d-329b-497d-8797-4cd5b90cea21")
+	)
+	(pad "2" smd rect
+		(at -1.1625 -0.25 270)
+		(size 0.25 0.475)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "69203d59-ef1e-4038-893a-422a421e6384")
+	)
+	(pad "3" smd rect
+		(at -1.1625 0.25 270)
+		(size 0.25 0.475)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "7fdf2f57-0e18-4653-a65b-11466d630f31")
+	)
+	(pad "4" smd rect
+		(at -1.1625 0.75 270)
+		(size 0.25 0.475)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "8a4b3a8a-e6eb-4f12-a0cb-eacec0d08ec9")
+	)
+	(pad "5" smd rect
+		(at -0.5 0.9125 180)
+		(size 0.25 0.475)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "324f1ef8-ec17-4ddc-b857-ac6e53b78127")
+	)
+	(pad "6" smd rect
+		(at 0 0.9125 180)
+		(size 0.25 0.475)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "9d367a26-f82d-4891-b9b8-d7c83a8ef789")
+	)
+	(pad "7" smd rect
+		(at 0.5 0.9125 180)
+		(size 0.25 0.475)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "257cb56f-05e1-4f85-a742-d36d60e5322c")
+	)
+	(pad "8" smd rect
+		(at 1.1625 0.75 270)
+		(size 0.25 0.475)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "cabc9125-7869-459a-aeaf-b3a3d61f5ecb")
+	)
+	(pad "9" smd rect
+		(at 1.1625 0.25 270)
+		(size 0.25 0.475)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "290a7066-534a-4146-a401-e13da3129d83")
+	)
+	(pad "10" smd rect
+		(at 1.1625 -0.25 270)
+		(size 0.25 0.475)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "5ebf189a-acc3-4dd3-858e-14b0234ada44")
+	)
+	(pad "11" smd rect
+		(at 1.1625 -0.75 270)
+		(size 0.25 0.475)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "3da311b9-a0d9-4310-b96a-253168b3f0ec")
+	)
+	(pad "12" smd rect
+		(at 0.5 -0.9125 180)
+		(size 0.25 0.475)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "e6869634-3634-4afe-881e-f37d7f51674e")
+	)
+	(pad "13" smd rect
+		(at 0 -0.9125 180)
+		(size 0.25 0.475)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "4380c494-5d73-4bee-9ea7-3e4a812a6d2e")
+	)
+	(pad "14" smd rect
+		(at -0.5 -0.9125 180)
+		(size 0.25 0.475)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "6f12b5bd-c9c9-4350-a922-1328caf79062")
+	)
+	(embedded_fonts no)
+	(model "${KICAD9_3RD_PARTY}/3dmodels/org_fabcloud_gitlab_electronics_kicad/fab.3dshapes/Sensor_IMU_ST_LSM6DSV16XTR.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
+)

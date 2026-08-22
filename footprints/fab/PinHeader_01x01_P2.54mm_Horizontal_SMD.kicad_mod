@@ -1,0 +1,266 @@
+(footprint "PinHeader_01x01_P2.54mm_Horizontal_SMD"
+	(version 20240108)
+	(generator "pcbnew")
+	(generator_version "8.0")
+	(layer "F.Cu")
+	(descr "https://s3.amazonaws.com/catalogspreads-pdf/PAGE112-113%20.100%20MALE%20HDR.pdf")
+	(tags "horizontal pin header SMD 2.54mm")
+	(property "Reference" "REF**"
+		(at -1.524 -2.54 180)
+		(layer "F.SilkS")
+		(uuid "ebc60704-1d49-4c8f-a774-bfb2b07e4207")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+			(justify left)
+		)
+	)
+	(property "Value" "PinHeader_1x01"
+		(at 2.6 3.2 0)
+		(layer "F.Fab")
+		(uuid "428184e1-5b79-474e-a80b-0c85d28418ae")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Footprint" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "cb6cc63f-9676-4921-b64d-a90527e8ae43")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "786e2fb2-c0a8-4c84-97d7-12d7824c41c4")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "57340023-b671-481f-8ab1-f2ecacbd4c01")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr smd)
+	(fp_line
+		(start -1.27 -1.27)
+		(end 0 -1.27)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "666c41f3-ef14-4949-a6a8-e7c55c1427b1")
+	)
+	(fp_line
+		(start 3.81 -1.27)
+		(end 6.35 -1.27)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "6d71519e-f6e0-4b4f-a568-20aee9987740")
+	)
+	(fp_line
+		(start 3.81 -0.254)
+		(end 1.5 -0.254)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "81020a40-82b8-4a3b-9866-f41f2e9cd2e3")
+	)
+	(fp_line
+		(start 3.81 0.254)
+		(end 1.5 0.254)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "b0461ab6-35c0-48c9-9f31-619231e08c68")
+	)
+	(fp_line
+		(start 3.81 1.397)
+		(end 3.81 -1.27)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "08f05afd-f628-4bc9-a605-a19940e7092e")
+	)
+	(fp_line
+		(start 6.35 -1.27)
+		(end 6.35 1.397)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "6c93bae6-b0c9-4772-b548-841abf603227")
+	)
+	(fp_line
+		(start 6.35 1.397)
+		(end 3.81 1.397)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "af51fae5-6557-4e50-a25e-cf8edcf5e79f")
+	)
+	(fp_line
+		(start -1.8 -1.8)
+		(end -1.8 1.9)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "67c1e2c2-f1a7-4088-9259-15a071f4f6fd")
+	)
+	(fp_line
+		(start -1.8 1.9)
+		(end 6.4 1.9)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "9176fdb0-8695-414a-bb30-ad0de5f06f04")
+	)
+	(fp_line
+		(start 6.4 -1.8)
+		(end -1.8 -1.8)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "0fff18b6-fff5-4836-8de5-7a53fcdf320c")
+	)
+	(fp_line
+		(start 6.4 1.9)
+		(end 6.4 -1.8)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "97f327aa-b983-4131-80c8-9bb5ae83ecfd")
+	)
+	(fp_line
+		(start -0.635 -0.254)
+		(end -0.635 0.254)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "a877dfb2-59de-4237-9595-4b39ef33d810")
+	)
+	(fp_line
+		(start 3.8 -1.27)
+		(end 6.34 -1.27)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "5b371f2b-20f3-4320-87be-4c2cc4f2406d")
+	)
+	(fp_line
+		(start 3.81 0)
+		(end -0.635 0)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "9af97de3-0c4a-44ba-a423-ff3e69468927")
+	)
+	(fp_line
+		(start 3.81 1.4)
+		(end 3.8 -1.27)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "6bfa8348-0450-466f-bf1e-f58a31ab23f5")
+	)
+	(fp_line
+		(start 3.81 1.4)
+		(end 6.36 1.4)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "86daa21a-4c12-425b-9947-302b24415a27")
+	)
+	(fp_line
+		(start 6.34 -1.27)
+		(end 6.36 1.4)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "4f9b7e61-d64a-4e82-af76-5373a4198515")
+	)
+	(fp_text user "${REFERENCE}"
+		(at 2.5 0 90)
+		(layer "F.Fab")
+		(uuid "c0393dbd-6234-4ab9-a596-d32882aa3d3e")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(pad "1" smd rect
+		(at 0 0)
+		(size 2.5 1.7)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(uuid "ef356dc6-ad64-4576-9e36-3c6b9cfa39bd")
+	)
+	(model "${KICAD9_3RD_PARTY}/3dmodels/org_fabcloud_gitlab_electronics_kicad/fab.3dshapes/Header_SMD_01x01_P2.54mm_Horizontal_Male.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
+)

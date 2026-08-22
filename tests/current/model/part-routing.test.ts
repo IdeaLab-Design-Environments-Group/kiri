@@ -14,7 +14,9 @@ import {
   RESISTOR_MM,
   SWITCH_GAP_MM,
   SWITCH_NECK_MM,
+  SWITCH_PITCH_MM,
   SWITCH_ROW_MM,
+  TAPE_MM,
   breakRuns,
   partFit,
   planRoutes,
@@ -82,6 +84,16 @@ function rect(w: number, h: number, x: number, y: number, index: number, hole = 
   };
 }
 
+/**
+ * How many decimal places of a millimetre a dimension read from the library is good to.
+ *
+ * Coordinates are stored on a 1e-6 inch grid, so one is off by at most 12.7nm and a dimension — the
+ * difference of two of them — by at most 2.54e-5mm. Asserting to more places than that tests the grid,
+ * not the geometry. Four is two orders inside the bound and still 2000x finer than the cutter places a
+ * cut, so a real error has nowhere to hide.
+ */
+const GRID_DP = 4;
+
 describe("model/part-routing", () => {
   it("reads the 1206 resistor's own fit off its footprint — the same numbers `RESISTOR` has", () => {
     // The proof that the generic path has not merely approximated the special case it replaces: not
@@ -112,15 +124,18 @@ describe("model/part-routing", () => {
   it("reads every other library part without being told anything about it", () => {
     // A 2010 resistor is wider than a 1206 and a push button wider still; each fit is that part's own
     // pads, so a new part in the library needs no new number here.
+    // FabLib's own numbers. These moved when the library became the single source: its 1206 parts are
+    // the reflow variants, not the hand-solder ones we had vendored, so a chip capacitor sits on 3mm
+    // centres rather than 4mm. Nothing was recalibrated to make a test pass — the part changed.
     for (const [fp, gap] of [
-      [LED_1206, 2], // 1206 pads: 4mm centres, 2mm wide
-      [C_1206, 2],
-      [R_2010, 3.4], // 2010: 5mm centres, 1.6mm pads
-      [SW_PUSH, 5.5], // PTS636: 8mm centres, 2.5mm wide
+      [LED_1206, 2], //   3.4mm centres, 1.4mm pads
+      [C_1206, 1.8], //   3.0mm centres, 1.2mm pads
+      [R_2010, 3.4], //   5.0mm centres, 1.6mm pads
+      [SW_PUSH, 5.5], //  8.0mm centres, 2.5mm pads
     ] as [Footprint, number][]) {
       const fit = partFit(fp);
       expect(fit.rows).toBe(1);
-      expect(fit.gap).toBeCloseTo(gap, 6);
+      expect(fit.gap).toBeCloseTo(gap, GRID_DP);
     }
     // Distinct parts get distinct fits — a reading, not one number reused.
     expect(partFit(R_2010).gap).toBeGreaterThan(partFit(R_1206).gap);
@@ -292,4 +307,67 @@ describe("model/part-routing", () => {
     // No battery: nothing is routed at all, and the field still comes back.
     expect(planRoutes(faces, gaps, { leds: [], battery: null }).parts).toEqual([]);
   });
+  it("refuses a seat that would short the two nets through the part", { timeout: 20_000 }, () => {
+    // A switch reaches a pitch plus half a pad off the centreline — 3.25mm on the SPDT, wider than the
+    // tape it sits on — so on a crowded pattern a throw can land on the OTHER net's rail. That bridges
+    // power to ground through the part, and it is invisible on screen because the terminal is drawn over
+    // the copper it is shorting to. Measured before the veto existed: 9 of 44 placements did it.
+    //
+    // Choosing the better side cannot fix it, because when both sides are bad the better one still
+    // shorts. So the part is refused instead, and reported as not fitting.
+    const fold = JSON.parse(readFileSync(`${EXAMPLES}church.fkld`, "utf8"));
+    const faces = flatFaces(fold);
+    const gaps = gapGraph(fold, faces).gaps;
+    const seen = new Set<string>();
+    const leds = [];
+    for (const g of gaps) {
+      const l = ledOf(g.faceA, g.faceB);
+      const key = `${l.a}_${l.b}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      leds.push(l);
+      if (leds.length >= 3) break;
+    }
+    const base: Circuit = { leds, battery: { face: 0 } };
+    const tapeW = tapeWidthFor(faces);
+    const pwr = planRoutes(faces, gaps, base).traces
+      .filter((t) => t.net === "pwr")
+      .sort((a, b) => b.pts.length - a.pts.length)[0]!;
+
+    let placed = 0;
+    for (let i = 0; i <= 8; i++) {
+      const at = pwr.pts[Math.round((i / 8) * (pwr.pts.length - 1))]!;
+      const r = planRoutes(faces, gaps, { ...base, parts: [{ component: "SW_SPDT", x: at.x, y: at.y }] });
+      if (r.parts.length === 0) continue;      // refused, which is the allowed outcome
+      placed++;
+      const span = r.parts[0]!;
+      const d = { x: span.b.x - span.a.x, y: span.b.y - span.a.y };
+      const L = Math.hypot(d.x, d.y);
+      const u = { x: d.x / L, y: d.y / L };
+      const p = span.flip ? { x: u.y, y: -u.x } : { x: -u.y, y: u.x };
+      const pitch = (SWITCH_PITCH_MM * tapeW) / TAPE_MM;
+      const rowSep = (SWITCH_ROW_MM * tapeW) / TAPE_MM;
+      const row = { x: span.a.x + u.x * rowSep, y: span.a.y + u.y * rowSep };
+      const terminalsAt = [
+        span.a,
+        { x: row.x + p.x * pitch, y: row.y + p.y * pitch },
+        { x: row.x - p.x * pitch, y: row.y - p.y * pitch },
+      ];
+      for (const c of terminalsAt) {
+        for (const t of r.traces.filter((x) => x.net !== span.net)) {
+          for (let k = 1; k < t.pts.length; k++) {
+            const a = t.pts[k - 1]!, b = t.pts[k]!;
+            const l2 = (b.x - a.x) ** 2 + (b.y - a.y) ** 2;
+            const s = l2 < 1e-18 ? 0
+              : Math.max(0, Math.min(1, ((c.x - a.x) * (b.x - a.x) + (c.y - a.y) * (b.y - a.y)) / l2));
+            const dist = Math.hypot(c.x - (a.x + s * (b.x - a.x)), c.y - (a.y + s * (b.y - a.y)));
+            expect(dist, `a terminal sits on the ${t.net} rail`).toBeGreaterThanOrEqual((t.width ?? tapeW) / 2);
+          }
+        }
+      }
+    }
+    // The veto must not be a blanket refusal — most seats along a rail are still fine.
+    expect(placed, "the veto refused every placement").toBeGreaterThan(3);
+  });
+
 });

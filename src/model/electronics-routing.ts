@@ -92,6 +92,12 @@ export interface RoutedCircuit {
 export interface PartPlacement extends PartSpan {
   /** The `Component.id` it was placed from. */
   component: string;
+  /**
+   * Index into `circuit.parts` — the part the author placed, not its position within its component group.
+   * The groups are broken one at a time, so the index a span comes back with is the group's; it is
+   * translated here, because outside this file the only list anyone has is `circuit.parts`.
+   */
+  source: number;
 }
 
 /** The gap a part bridges — `a` and `b` are the cut ends of the run, where its contacts land. */
@@ -106,6 +112,14 @@ export interface PartSpan {
    * and honoured by everything that draws or wires the part, so the two cannot disagree.
    */
   flip?: boolean;
+  /**
+   * Which drop this span came from: the index of the placed part in the list handed to {@link breakRuns}.
+   *
+   * The spans are NOT index-aligned with that list — a part whose run is too short to break is dropped —
+   * so this is the only way back from a routed span to the component the author placed. The canvas needs
+   * it to draw the selection round the right part, and the router itself to read that part's own `flip`.
+   */
+  source: number;
 }
 
 /** @deprecated the same thing; kept so existing callers read naturally. */
@@ -997,6 +1011,10 @@ export function planRoutes(
   }
 
   const withRes = breakForResistors(best, circuit.resistors ?? [], tapeW);
+  // A resistor is in line with the rail, so turning one round swaps which of its terminals lands on which
+  // cut end. Indifferent on a resistor itself, and the whole point on anything polarised.
+  const resistorFlips = circuit.resistors ?? [];
+  withRes.placed = withRes.placed.map((s) => (resistorFlips[s.source]?.flip ? turnRound(s) : s));
   // Across the break the part needs only its own half-gap plus a pad either side: the terminals run square
   // to the rail now, not along it, so a much shorter run will take one.
   const toFlat = (mm: number): number => (mm * tapeW) / TAPE_MM;
@@ -1008,8 +1026,10 @@ export function planRoutes(
   });
   // Which way each switch faces is decided against the copper as it now stands, before any land is laid:
   // the lands themselves belong to the part and would otherwise vote for its own orientation.
+  const switchFlips = circuit.switches ?? [];
   for (const span of withSw.placed) {
-    span.flip = idleSide(
+    // The author's choice where there is one; otherwise the side the copper leaves free.
+    span.flip = switchFlips[span.source]?.flip ?? idleSide(
       span,
       withSw.traces,
       toFlat(SWITCH_PITCH_MM),
@@ -1017,6 +1037,11 @@ export function planRoutes(
       toFlat(SWITCH_ROW_MM),
     );
   }
+  // A seat that shorts the two nets through the part is no seat at all — drop it and let it be reported.
+  withSw.placed = withSw.placed.filter((span) =>
+    clearOfOtherNet(span, withSw.traces, tapeW, toFlat(SWITCH_PITCH_MM),
+      { w: toFlat(swPad.w), h: toFlat(swPad.h) }, toFlat(SWITCH_ROW_MM)),
+  );
   const swLands = withSw.placed.flatMap((span) =>
     switchLand(
       span,
@@ -1034,13 +1059,14 @@ export function planRoutes(
   const placedParts: PartPlacement[] = [];
   const partLands: Trace2D[] = [];
   let partTraces = withSw.traces;
-  for (const [id, drops] of byComponent(circuit.parts ?? [])) {
+  for (const [id, group] of byComponent(circuit.parts ?? [])) {
     const fp = COMPONENTS.find((c) => c.id === id)?.footprint;
     // A part the library no longer has is left unplaced rather than guessed at — same as one that
     // does not fit, and the status line reports it the same way.
     if (!fp) continue;
     const fit = partFit(fp);
     if (!(fit.gap > 0)) continue; // nothing to break a rail for
+    const drops = group.map((g) => g.part);
     const broke = breakRuns(partTraces, drops, toFlat(fit.gap), {
       before: toFlat(fit.before),
       after: toFlat(fit.after),
@@ -1052,7 +1078,8 @@ export function planRoutes(
       // gives — but every other part's land included, since that is real copper an idle throw can touch.
       const laid = [...partTraces, ...swLands, ...partLands];
       for (const span of broke.placed) {
-        span.flip = idleSide(
+        // The author's choice where there is one, as with the switch above.
+        span.flip = drops[span.source]?.flip ?? idleSide(
           span,
           laid,
           toFlat(across.pitch),
@@ -1060,6 +1087,10 @@ export function planRoutes(
           toFlat(across.rowSep),
         );
       }
+      broke.placed = broke.placed.filter((span) =>
+        clearOfOtherNet(span, laid, tapeW, toFlat(across.pitch),
+          { w: toFlat(across.pad.w), h: toFlat(across.pad.h) }, toFlat(across.rowSep)),
+      );
       for (const span of broke.placed) {
         partLands.push(
           ...switchLand(
@@ -1072,7 +1103,12 @@ export function planRoutes(
         );
       }
     }
-    for (const span of broke.placed) placedParts.push({ ...span, component: id });
+    for (const span of broke.placed) {
+      // In line with the rail there is no idle terminal to strand, so turning the part round is the swap
+      // of its two ends — the same thing a resistor's authored turn does above.
+      const turned = !across && drops[span.source]?.flip ? turnRound(span) : span;
+      placedParts.push({ ...turned, component: id, source: group[span.source]!.at });
+    }
   }
 
   return {
@@ -1085,15 +1121,26 @@ export function planRoutes(
   };
 }
 
-/** The placed parts by component id, each group in the order the parts were dropped. */
-function byComponent(parts: PlacedPart[]): [string, PlacedPart[]][] {
-  const by = new Map<string, PlacedPart[]>();
-  for (const p of parts) {
-    const group = by.get(p.component);
-    if (group) group.push(p);
-    else by.set(p.component, [p]);
-  }
+/**
+ * The placed parts by component id, each group in the order the parts were dropped.
+ *
+ * Each entry keeps `at`, its index in `circuit.parts`, because a group is broken on its own and the spans
+ * come back numbered within the group — and every caller outside the router counts parts in the one list
+ * the author placed them in.
+ */
+function byComponent(parts: PlacedPart[]): [string, { part: PlacedPart; at: number }[]][] {
+  const by = new Map<string, { part: PlacedPart; at: number }[]>();
+  parts.forEach((part, at) => {
+    const group = by.get(part.component);
+    if (group) group.push({ part, at });
+    else by.set(part.component, [{ part, at }]);
+  });
   return [...by];
+}
+
+/** The same part, end for end: its two terminals swap which cut end of the break they land on. */
+function turnRound<T extends PartSpan>(span: T): T {
+  return { ...span, a: span.b, b: span.a };
 }
 
 /**
@@ -1244,7 +1291,7 @@ export function breakRuns(
   if (!parts.length) return { traces, placed };
   const body = gap;
   let out = traces;
-  for (const r of parts) {
+  for (const [at, r] of parts.entries()) {
     let bestRun = -1, bestSeg = -1, bestT = 0, bestD = Infinity;
     out.forEach((t, ti) => {
       for (let i = 1; i < t.pts.length; i++) {
@@ -1276,7 +1323,8 @@ export function breakRuns(
     out = split.traces;
     // Turned round, the span is reported end-for-end, which is how the part knows which way it faces.
     if (split.span) {
-      placed.push(forward ? split.span : { a: split.span.b, b: split.span.a, net: split.span.net });
+      const span = split.span;
+      placed.push(forward ? { ...span, source: at } : { a: span.b, b: span.a, net: span.net, source: at });
     }
   }
   return { traces: out, placed };
@@ -1337,6 +1385,56 @@ function idleSide(span: PartSpan, traces: Trace2D[], pitch: number, over: number
     return nearest;
   };
   return clearance(true) > clearance(false) + 1e-9;
+}
+
+/**
+ * Whether a three-terminal part seated here keeps every terminal off the OTHER net's copper.
+ *
+ * A switch reaches a pitch plus half a pad off the centreline — 3.25mm on the SPDT, wider than the tape
+ * it sits on — so on a crowded pattern a throw can come down on the rail of the opposite net. That is
+ * not a cosmetic overlap: it bridges power to ground through the part, and it is invisible on screen
+ * because the terminal is drawn over the copper it is shorting to. Measured before this check existed,
+ * 9 of 44 switch placements across the bundled patterns did exactly that.
+ *
+ * {@link idleSide} cannot prevent it. It picks the better of two sides, and when both sides are bad the
+ * better one is still a short. So this is a veto rather than a preference: a part that cannot be seated
+ * without touching the other net is not placed at all, and the caller reports it as not fitting — the
+ * same answer a run too short to hold it gets, and an honest one.
+ */
+function clearOfOtherNet(
+  span: PartSpan, traces: Trace2D[], tapeW: number,
+  pitch: number, pad: { w: number; h: number }, rowSep: number,
+): boolean {
+  const d = sub(span.b, span.a);
+  const L = len(d);
+  if (L < 1e-12) return false;
+  const u = { x: d.x / L, y: d.y / L };
+  const p = acrossRun(u, span.flip);
+  const row = { x: span.a.x + u.x * rowSep, y: span.a.y + u.y * rowSep };
+  const centres = [
+    span.a,                                                                        // common
+    { x: row.x + p.x * pitch, y: row.y + p.y * pitch },                            // live throw
+    { x: row.x - p.x * pitch, y: row.y - p.y * pitch },                            // idle throw
+  ];
+  const other = traces.filter((t) => t.net !== span.net);
+  for (const c of centres) {
+    // The pad's four corners, so a terminal that clips a rail with one corner is caught too.
+    for (const sx of [-1, 1]) {
+      for (const sy of [-1, 1]) {
+        const q = {
+          x: c.x + (p.x * sx * pad.w + u.x * sy * pad.h) / 2,
+          y: c.y + (p.y * sx * pad.w + u.y * sy * pad.h) / 2,
+        };
+        for (const t of other) {
+          const half = (t.width ?? tapeW) / 2;
+          for (let i = 1; i < t.pts.length; i++) {
+            if (distToSeg(q, t.pts[i - 1]!, t.pts[i]!) < half) return false;
+          }
+        }
+      }
+    }
+  }
+  return true;
 }
 
 /** Distance from a point to a segment — the projection clamped to the segment's own ends. */
@@ -1423,7 +1521,7 @@ function splitRun(
   seg: number,
   t: number,
   body: number,
-): { traces: Trace2D[]; span: ResistorSpan | null } {
+): { traces: Trace2D[]; span: Omit<ResistorSpan, "source"> | null } {
   const run = traces[ri]!;
   const a = run.pts[seg - 1]!, b = run.pts[seg]!;
   const at = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };

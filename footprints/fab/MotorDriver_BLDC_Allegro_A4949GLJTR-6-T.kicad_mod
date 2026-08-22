@@ -1,0 +1,239 @@
+(footprint "MotorDriver_BLDC_Allegro_A4949GLJTR-6-T"
+	(version 20240108)
+	(generator "pcbnew")
+	(generator_version "8.0")
+	(layer "F.Cu")
+	(property "Reference" "REF**"
+		(at -3.6 0 90)
+		(unlocked yes)
+		(layer "F.SilkS")
+		(uuid "5e54c59f-19ce-4047-87df-9ed2925f601a")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.1)
+			)
+		)
+	)
+	(property "Value" "MotorDriver_BLDC_Allegro_A4949GLJTR-6-T"
+		(at 0 1 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(uuid "0327eb3f-4092-4e93-bee7-a69fb8d6e574")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Footprint" ""
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "fcfb29cf-1860-404c-b9ba-8089392b1d6b")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "83de5c49-ef2e-4548-9f0e-1bcc94e2c97e")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "bc73e042-6a29-4a56-bd1a-31712a1b15f5")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr smd)
+	(fp_line
+		(start -2.73 -1.425)
+		(end 2.73 -1.425)
+		(stroke
+			(width 0.12)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "cefa2366-7a65-40bb-93b0-25ed3e8f7fba")
+	)
+	(fp_line
+		(start -2.73 0.625)
+		(end -2.73 -1.425)
+		(stroke
+			(width 0.12)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "40b49d20-3166-4e6b-abf3-2feb9fef49f8")
+	)
+	(fp_line
+		(start -1.93 1.425)
+		(end -2.73 0.625)
+		(stroke
+			(width 0.12)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "b6624ee4-5cac-4bd6-ab6e-df23e970c658")
+	)
+	(fp_line
+		(start 2.73 -1.425)
+		(end 2.73 1.425)
+		(stroke
+			(width 0.12)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "edc516ed-1a31-42ca-97e5-6fb143acecc9")
+	)
+	(fp_line
+		(start 2.73 1.425)
+		(end -1.93 1.425)
+		(stroke
+			(width 0.12)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "5c92f7a6-c71b-40bf-88b3-76dc5c34eedb")
+	)
+	(fp_line
+		(start -2.48 -3.92)
+		(end 2.48 -3.92)
+		(stroke
+			(width 0.05)
+			(type default)
+		)
+		(layer "F.CrtYd")
+		(uuid "5ebde4e1-57fe-4353-8d5f-ba7bac4f96a5")
+	)
+	(fp_line
+		(start -2.48 3.92)
+		(end -2.48 -3.92)
+		(stroke
+			(width 0.05)
+			(type default)
+		)
+		(layer "F.CrtYd")
+		(uuid "36c0113d-a2a0-4842-aaf4-879a339de9f3")
+	)
+	(fp_line
+		(start 2.48 -3.92)
+		(end 2.48 3.92)
+		(stroke
+			(width 0.05)
+			(type default)
+		)
+		(layer "F.CrtYd")
+		(uuid "cc964966-1d30-497c-8d67-988f1dd930a8")
+	)
+	(fp_line
+		(start 2.48 3.92)
+		(end -2.48 3.92)
+		(stroke
+			(width 0.05)
+			(type default)
+		)
+		(layer "F.CrtYd")
+		(uuid "c2012a0c-9192-4227-b016-3daa9c3924c5")
+	)
+	(fp_text user "${REFERENCE}"
+		(at 0 2.5 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(uuid "d348be36-f9ce-4b9e-854f-9013444648b1")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(pad "1" smd rect
+		(at -1.905 2.8)
+		(size 0.65 1.75)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(thermal_bridge_angle 45)
+		(uuid "0bb093a6-7270-4ab6-a92e-8682f9d2ea5c")
+	)
+	(pad "2" smd rect
+		(at -0.635 2.8)
+		(size 0.65 1.75)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(thermal_bridge_angle 45)
+		(uuid "4b7027e6-76f6-41a6-9c3a-214900f6b934")
+	)
+	(pad "3" smd rect
+		(at 0.635 2.8)
+		(size 0.65 1.75)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(thermal_bridge_angle 45)
+		(uuid "eef8f2da-2b29-4b9f-91c3-6c28009864dc")
+	)
+	(pad "4" smd rect
+		(at 1.905 2.8)
+		(size 0.65 1.75)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(thermal_bridge_angle 45)
+		(uuid "9a429e56-3900-4e5b-8842-6e6af36fbac4")
+	)
+	(pad "5" smd rect
+		(at 1.905 -2.8)
+		(size 0.65 1.75)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(thermal_bridge_angle 45)
+		(uuid "4fa647fa-5950-40a8-a87f-8a80cb220d4f")
+	)
+	(pad "6" smd rect
+		(at 0.635 -2.8)
+		(size 0.65 1.75)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(thermal_bridge_angle 45)
+		(uuid "90b0ced3-f683-4f2c-9775-721a6aad5a4a")
+	)
+	(pad "7" smd rect
+		(at -0.635 -2.8)
+		(size 0.65 1.75)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(thermal_bridge_angle 45)
+		(uuid "b343eec2-af31-449f-8825-d82854e0cd29")
+	)
+	(pad "8" smd rect
+		(at -1.905 -2.8)
+		(size 0.65 1.75)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(thermal_bridge_angle 45)
+		(uuid "737477cd-46dd-49d1-aa49-c4c27f3c2a4d")
+	)
+	(model "${KICAD9_3RD_PARTY}/3dmodels/org_fabcloud_gitlab_electronics_kicad/fab.3dshapes/MotorDriver_BLDC_Allegro-A4949GLJTR-6-T.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
+)

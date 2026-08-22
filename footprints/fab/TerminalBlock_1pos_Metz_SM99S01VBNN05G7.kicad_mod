@@ -1,0 +1,279 @@
+(footprint "TerminalBlock_1pos_Metz_SM99S01VBNN05G7"
+	(version 20240108)
+	(generator "pcbnew")
+	(generator_version "8.0")
+	(layer "F.Cu")
+	(descr "TERM BLOCK 1POS SIDE ENTRY SMD")
+	(tags "terminal block 1pos side entry horizontal surface mount smd")
+	(property "Reference" "REF**"
+		(at 0 -3.6 0)
+		(unlocked yes)
+		(layer "F.SilkS")
+		(uuid "52042cd8-5e3a-487d-8d98-c842e4342852")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.1)
+			)
+		)
+	)
+	(property "Value" "TerminalBlock_1pos_Metz_SM99S01VBNN05G7"
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(uuid "de76b365-6695-40bb-a6ac-895b3c534690")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Footprint" ""
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "4606a8f5-ae25-4b9e-af9b-afdeffd86b73")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "52f24a7e-3c39-4989-938c-d5ad64145d73")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "10407806-f473-4a4e-86fa-0305585b4d65")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr smd)
+	(fp_line
+		(start -7.4 -3.1)
+		(end -7.4 -1.9)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "8d0b88c1-887d-4001-bd0e-4b3365dc7a4d")
+	)
+	(fp_line
+		(start -7.4 1.9)
+		(end -7.4 3.1)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "dbc74184-f53f-4efd-8fe4-0a5dc66146a4")
+	)
+	(fp_line
+		(start -7.4 3.1)
+		(end -6.2 3.1)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "cd86490e-285f-4c3b-b65e-267cdfad9fc3")
+	)
+	(fp_line
+		(start -6.2 -3.1)
+		(end -7.4 -3.1)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "c895039b-c92e-46e0-9c3f-0dcbeecf7e1b")
+	)
+	(fp_line
+		(start 8.2 -1.6)
+		(end 8.2 1.6)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "9b40b0ee-8ef1-4e7e-bcea-ee9c3c6cb19c")
+	)
+	(fp_line
+		(start -7.3 -3)
+		(end 6 -3)
+		(stroke
+			(width 0.05)
+			(type default)
+		)
+		(layer "F.CrtYd")
+		(uuid "2aff40e0-34a3-4073-961c-839a8dcce190")
+	)
+	(fp_line
+		(start -7.3 3)
+		(end -7.3 -3)
+		(stroke
+			(width 0.05)
+			(type default)
+		)
+		(layer "F.CrtYd")
+		(uuid "778fcd03-222a-4288-9c37-c6dfd0a44ac3")
+	)
+	(fp_line
+		(start 6 -3)
+		(end 8.1 -1.8)
+		(stroke
+			(width 0.05)
+			(type default)
+		)
+		(layer "F.CrtYd")
+		(uuid "f2721a1b-8cf3-4ac2-be60-0e33546df3a6")
+	)
+	(fp_line
+		(start 6 3)
+		(end -7.3 3)
+		(stroke
+			(width 0.05)
+			(type default)
+		)
+		(layer "F.CrtYd")
+		(uuid "d2154d8e-12a2-488d-93e1-86a83a315b49")
+	)
+	(fp_line
+		(start 8.1 -1.8)
+		(end 8.1 1.8)
+		(stroke
+			(width 0.05)
+			(type default)
+		)
+		(layer "F.CrtYd")
+		(uuid "f861ff14-57da-4f3c-9650-cca07c6788d6")
+	)
+	(fp_line
+		(start 8.1 1.8)
+		(end 6 3)
+		(stroke
+			(width 0.05)
+			(type default)
+		)
+		(layer "F.CrtYd")
+		(uuid "398b5cd2-e17a-45a9-a6b7-0b61d53e714e")
+	)
+	(fp_line
+		(start -6.8 -2.75)
+		(end -6.8 2.75)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "F.Fab")
+		(uuid "7b172e42-e187-48ff-ac65-ffa5e61a44e0")
+	)
+	(fp_line
+		(start -6.8 -2.75)
+		(end 5.85 -2.75)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "F.Fab")
+		(uuid "88fed97f-ac91-4be8-a734-45b8405ace88")
+	)
+	(fp_line
+		(start -6.8 2.75)
+		(end 5.85 2.75)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "F.Fab")
+		(uuid "661f089a-7dc1-4cae-8395-c0e1c268415a")
+	)
+	(fp_line
+		(start 5.85 -2.75)
+		(end 7.8 -1.65)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "F.Fab")
+		(uuid "594344a7-e556-482e-a2fa-6c0c388c73fe")
+	)
+	(fp_line
+		(start 5.85 2.75)
+		(end 7.8 1.65)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "F.Fab")
+		(uuid "62d6df91-757b-447e-9700-9744a41a47b8")
+	)
+	(fp_line
+		(start 7.8 -1.65)
+		(end 7.8 1.65)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "F.Fab")
+		(uuid "7c96bb5b-5e82-45bb-ae48-49ba75241a4e")
+	)
+	(fp_text user "${REFERENCE}"
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(uuid "2bb830ea-9537-4c7c-8c0d-53c700636c88")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(pad "1" smd rect
+		(at -4.25 0)
+		(size 5.8 2)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(thermal_bridge_angle 45)
+		(uuid "eaffde35-0dfc-4b71-b811-d8050156a481")
+	)
+	(pad "1" smd rect
+		(at 3.5 0)
+		(size 4.3 2)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(thermal_bridge_angle 45)
+		(uuid "b5635817-e734-4789-a8fb-27bbe6588238")
+	)
+	(model "${KICAD9_3RD_PARTY}/3dmodels/org_fabcloud_gitlab_electronics_kicad/fab.3dshapes/TerminalBlock_Metz-SM99S01VBNN05G7.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 90)
+		)
+	)
+)

@@ -184,3 +184,34 @@ export function inlineTerminals(fp: Footprint): Pad[] {
 export function inlineNamedTerminals(fp: Footprint): [string, Pad][] {
   return terminals(fp).sort((a, b) => padAt(a[1]).x - padAt(b[1]).x);
 }
+
+/**
+ * Whether a part can go in series on a rail at all, and if not, why not.
+ *
+ * The FabLib holds 159 footprints and most of them are not series parts: a forty-pin connector has no
+ * meaning spliced into a run of copper tape, and a single-terminal pad has nothing to bridge. The
+ * palette needs to know which are which — and, when it refuses one, to say something truer than
+ * nothing, because a user hunting for a USB socket and finding an empty list concludes the app is
+ * broken rather than that the part cannot be wired this way.
+ *
+ * It lives here rather than in the generated data because it is the same decision {@link acrossPart}
+ * and `partFit` already make, and a second copy of it in the generator would be a second rule to drift
+ * from this one. That has happened once in this codebase already: the router and the export each grew
+ * their own reading of a footprint's rows, agreed on every part but the coin cell, and would have cut
+ * it as one shape while drawing another. One rule, one place.
+ */
+export type Placement = { placeable: true } | { placeable: false; why: string };
+
+/** How many terminals a rail could reach: two in line, or three where it steps across. */
+const MAX_IN_SERIES = 3;
+
+export function placement(fp: Footprint): Placement {
+  const n = terminals(fp).length;
+  if (n < 2) {
+    return { placeable: false, why: n === 1 ? "one terminal — nothing to bridge" : "no terminals" };
+  }
+  if (n > MAX_IN_SERIES) {
+    return { placeable: false, why: `${n} terminals — a rail passes through at most ${MAX_IN_SERIES}` };
+  }
+  return { placeable: true };
+}

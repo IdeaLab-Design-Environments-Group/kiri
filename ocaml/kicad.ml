@@ -130,8 +130,53 @@ let rectangle w h : poly list =
   [ [ (-.w /. 2., h /. 2.); (w /. 2., h /. 2.); (w /. 2., -.h /. 2.);
       (-.w /. 2., -.h /. 2.); (-.w /. 2., h /. 2.) ] ]
 
+(** {2 How finely a curve is tessellated}
+
+    Every arc leaves here as straight chords, so the only question is how far a chord may fall inside
+    the true curve. The answer is a length, not a point count: the pads here run from a 1.2mm drill to
+    a 17.8mm coin-cell ring, so a count that suits one is either coarse or ruinous on the other.
+
+    [chord_tolerance] is that length — the sagitta, the deepest gap between a chord and the arc it
+    replaces. 5µm is chosen against what the geometry is for. A pad is cut out of copper tape on a
+    craft cutter: blade kerf is around 0.2mm and repeat positioning around 0.1mm, so the machine
+    cannot express 5µm and neither can the tape, which tears at that scale. On screen, a 20mm part
+    filling an 800-pixel view puts a pixel at 25µm, so the error is a fifth of one. The tolerance
+    therefore sits an order of magnitude below the finest thing either the cutter or the display
+    resolves, and two orders below the 0.1mm at which a pad's placement starts to matter.
+
+    For a chord subtending [theta] on a circle of radius [r] the sagitta is exactly r(1 - cos(θ/2)),
+    so the widest admissible step is θ_max = 2·acos(1 - tol/r) and an arc of [sweep] radians needs
+    ⌈sweep/θ_max⌉ of them. Every pad in the library then costs what its own size asks for: the 1.6mm
+    drill pad that dominates the count comes out at 32 chords where 180 used to sit, the smallest circle
+    here (1.2mm) at 28, and the 17.8mm coin-cell ring — by far the largest — at 96.
+
+    One floor on top of the arithmetic: never fewer than 16 chords to a full revolution, i.e. 4 to a
+    quarter. Below that the chord error stops being what you notice — a corner made of two segments
+    reads as a chamfer at any zoom, however small its sagitta — and the small roundrect corners here
+    (0.0375mm on the tightest pad, which the sagitta alone would give two segments) do exactly that. *)
+
+let chord_tolerance = 0.005 /. 25.4
+
+(** Chords needed to sweep [sweep] radians on a circle of radius [r] within {!chord_tolerance},
+    never fewer than [floor]. *)
+let arc_steps ~floor:min_steps r sweep =
+  if r <= 0. then min_steps
+  else
+    let ratio = chord_tolerance /. r in
+    if ratio >= 2. then min_steps (* tolerance swallows the whole circle *)
+    else
+      let theta_max = 2. *. acos (1. -. ratio) in
+      Stdlib.max min_steps (int_of_float (Float.ceil (sweep /. theta_max)))
+
+(** A circle, tessellated a quarter at a time so the count is always a multiple of four.
+
+    That is not tidiness. A vertex on each axis is what makes the polygon's bounding box exactly the
+    pad's own size, and the bounding box is what everything downstream reads a pad's dimensions from —
+    the router's pitch, the pad the copper is scaled onto. Left to the raw count, a 17.8mm ring came
+    out at 94 chords with no vertex at the top, so its box was 5µm short in y and 0 in x, and drawing
+    it into a square turned that into a visible ellipse. Four extra chords buy an exact box. *)
 let circle r : poly list =
-  let n = 180 in
+  let n = 4 * arc_steps ~floor:4 r (Float.pi /. 2.) in
   let pts =
     List.init n (fun i ->
         let theta = Float.pi *. 2. /. float_of_int n *. float_of_int i in
@@ -139,10 +184,28 @@ let circle r : poly list =
   in
   [ pts @ [ List.hd pts ] ]
 
+(** KiCad's trapezoid: a rectangle whose two opposite sides are shortened by [(rect_delta dx dy)],
+    which is how a pad is drawn to fan out towards a package's corner. Following KiCad's own
+    [TransformTrapezoidToPolygon], with half-sizes [hw]/[hh] and half-deltas [ddx]/[ddy] the corners
+    are (-hw ± ddy, ±hh ± ddx) — [dx] tilts the left and right edges, leaving the pad taller at -x
+    and shorter at +x, and [dy] tilts the top and bottom the same way. Zero deltas reduce to exactly
+    {!rectangle}, corner for corner, which is the only case the vendored library actually contains:
+    its two trapezoid pads (in [Sensor_Optical_ST_VL53L5CXV0GC]) carry no [rect_delta] at all, so the
+    sign convention above is taken from KiCad's source rather than confirmed against a file here. *)
+let trapezoid w h dx dy : poly list =
+  let hw = w /. 2. and hh = h /. 2. and ddx = dx /. 2. and ddy = dy /. 2. in
+  (* Listed from the top-left corner and negated into the y-up frame, so the winding and the starting
+     corner match {!rectangle}. *)
+  let pts =
+    [ (-.hw +. ddy, hh +. ddx); (hw -. ddy, hh -. ddx);
+      (hw +. ddy, -.hh +. ddx); (-.hw -. ddy, -.hh -. ddx) ]
+  in
+  [ pts @ [ List.hd pts ] ]
+
 (** A rounded rectangle, cornered by [rratio] of its shorter side — [1.] rounds it into an oval. *)
 let round_rect w h rratio : poly list =
-  let per_corner = 10 in
   let radius = Float.min w h *. rratio /. 2. in
+  let per_corner = arc_steps ~floor:4 radius (Float.pi /. 2.) + 1 in
   let corner (cx, cy) f =
     List.init per_corner (fun i ->
         let angle = Float.pi /. 2. *. float_of_int i /. float_of_int (per_corner - 1) in
@@ -170,9 +233,32 @@ let rotate_shape (shape : poly list) (deg : float) : poly list =
 
 (** {1 Emission} *)
 
-(** Shortest text that reads back as the same double, so the generated file stays diff-stable and
-    does not carry seventeen digits of noise on a number that is exactly 0.03. *)
+(** The grid every emitted length is snapped to, in inches.
+
+    Shortest-round-trip alone is not enough. A coordinate that came out of a cosine is irrational, so
+    the shortest text that reads back as the same double is all seventeen digits of it —
+    [-0.02755905511811024] to say "0.7mm". Across the library that is most of the generated file, and
+    the file is parsed on every page load.
+
+    So the number is snapped first, and the grid follows the same argument as {!chord_tolerance}: an
+    outline already carries up to 5µm of tessellation error, and the grid must be negligible against
+    that rather than merely small. At one percent of the budget the snapping may move a point by at
+    most 50nm, so the step is at most 100nm — 3.9e-6 inch, rounded down to a decimal 1e-6. That is a
+    12.7nm half-step: a quarter of one percent of the chord budget, four thousand times finer than a
+    craft cutter can position, and about a tenth the wavelength of visible light. Nothing downstream
+    can tell the difference, and the coordinate above becomes [-0.027559].
+
+    The grid is written as a divisor rather than a step, because a rounded value has to be reached by
+    {i dividing} by the power of ten: division is correctly rounded, so [39370. /. 1e6] is the same
+    double the decimal literal [0.03937] parses to, and the shortest-round-trip search below then
+    finds those five digits. Multiplying by [1e-6] lands an ulp away and the search prints all
+    seventeen digits again. *)
+let coordinate_grid = 1e6
+
+(** Shortest text that reads back as the same point on {!coordinate_grid}, so the generated file stays
+    diff-stable and does not carry seventeen digits of noise on a number that is exactly 0.03. *)
 let fmt (v : float) : string =
+  let v = Float.round (v *. coordinate_grid) /. coordinate_grid in
   let v = if v = 0. then 0. else v in
   let rec try_prec p =
     if p > 17 then Printf.sprintf "%.17g" v
@@ -260,6 +346,13 @@ let of_string (src : string) : footprint =
               | "roundrect" ->
                   let ratio = match named items "roundrect_rratio" with r :: _ -> num r | [] -> 0. in
                   round_rect w h ratio
+              | "trapezoid" ->
+                  let dx, dy =
+                    match named items "rect_delta" with
+                    | x :: y :: _ -> (num x *. scale, num y *. scale)
+                    | _ -> (0., 0.)
+                  in
+                  trapezoid w h dx dy
               | "circle" -> circle (w /. 2.)
               | "oval" -> round_rect w h 1.
               | "custom" -> (
