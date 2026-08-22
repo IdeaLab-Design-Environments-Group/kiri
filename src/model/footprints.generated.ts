@@ -52,6 +52,28 @@ export function padSpan(p: Pad): { w: number; h: number } {
   return { w: maxX - minX, h: maxY - minY };
 }
 
+/** 0603 LED. Generated — see `ocaml/footprints.ml`. */
+export const LED_0603_part: Component = {
+  name: "LED_0603",
+  note: "0603 LED",
+  pads: [
+    {
+      name: "A", index: 1, layers: ["F.Cu", "F.Mask"],
+      at: { x: -0.8500, y: 0.0000 },
+      shape: "M -0.5000,0.5000 L 0.5000,0.5000 L 0.5000,-0.5000 L -0.5000,-0.5000 Z",
+      outline: [{ x: -0.5000, y: 0.5000 }, { x: 0.5000, y: 0.5000 }, { x: 0.5000, y: -0.5000 }, { x: -0.5000, y: -0.5000 }],
+    },
+    {
+      name: "C", index: 2, layers: ["F.Cu", "F.Mask"],
+      at: { x: 0.8500, y: 0.0000 },
+      shape: "M -0.5000,0.5000 L 0.5000,0.5000 L 0.5000,-0.5000 L -0.5000,-0.5000 Z",
+      outline: [{ x: -0.5000, y: 0.5000 }, { x: 0.5000, y: 0.5000 }, { x: 0.5000, y: -0.5000 }, { x: -0.5000, y: -0.5000 }],
+    },
+  ],
+  holes: [
+  ],
+};
+
 /** 1206 LED. Generated — see `ocaml/footprints.ml`. */
 export const LED_1206_part: Component = {
   name: "LED_1206",
@@ -74,10 +96,98 @@ export const LED_1206_part: Component = {
   ],
 };
 
+/** 0402 resistor. Generated — see `ocaml/footprints.ml`. */
+export const R_0402_part: Component = {
+  name: "R_0402",
+  note: "0402 resistor",
+  pads: [
+    {
+      name: "1", index: 1, layers: ["F.Cu", "F.Mask"],
+      at: { x: -0.6500, y: 0.0000 },
+      shape: "M -0.4000,0.3000 L 0.4000,0.3000 L 0.4000,-0.3000 L -0.4000,-0.3000 Z",
+      outline: [{ x: -0.4000, y: 0.3000 }, { x: 0.4000, y: 0.3000 }, { x: 0.4000, y: -0.3000 }, { x: -0.4000, y: -0.3000 }],
+    },
+    {
+      name: "2", index: 2, layers: ["F.Cu", "F.Mask"],
+      at: { x: 0.6500, y: 0.0000 },
+      shape: "M -0.4000,0.3000 L 0.4000,0.3000 L 0.4000,-0.3000 L -0.4000,-0.3000 Z",
+      outline: [{ x: -0.4000, y: 0.3000 }, { x: 0.4000, y: 0.3000 }, { x: 0.4000, y: -0.3000 }, { x: -0.4000, y: -0.3000 }],
+    },
+  ],
+  holes: [
+  ],
+};
+
+/** 0603 resistor. Generated — see `ocaml/footprints.ml`. */
+export const R_0603_part: Component = {
+  name: "R_0603",
+  note: "0603 resistor",
+  pads: [
+    {
+      name: "1", index: 1, layers: ["F.Cu", "F.Mask"],
+      at: { x: -0.8500, y: 0.0000 },
+      shape: "M -0.5000,0.5000 L 0.5000,0.5000 L 0.5000,-0.5000 L -0.5000,-0.5000 Z",
+      outline: [{ x: -0.5000, y: 0.5000 }, { x: 0.5000, y: 0.5000 }, { x: 0.5000, y: -0.5000 }, { x: -0.5000, y: -0.5000 }],
+    },
+    {
+      name: "2", index: 2, layers: ["F.Cu", "F.Mask"],
+      at: { x: 0.8500, y: 0.0000 },
+      shape: "M -0.5000,0.5000 L 0.5000,0.5000 L 0.5000,-0.5000 L -0.5000,-0.5000 Z",
+      outline: [{ x: -0.5000, y: 0.5000 }, { x: 0.5000, y: 0.5000 }, { x: 0.5000, y: -0.5000 }, { x: -0.5000, y: -0.5000 }],
+    },
+  ],
+  holes: [
+  ],
+};
+
 /** 1206 resistor. Generated — see `ocaml/footprints.ml`. */
 export const R_1206_part: Component = {
   name: "R_1206",
   note: "1206 resistor",
+  pads: [
+    {
+      name: "1", index: 1, layers: ["F.Cu", "F.Mask"],
+      at: { x: -1.5240, y: 0.0000 },
+      shape: "M -0.8128,0.8636 L 0.8128,0.8636 L 0.8128,-0.8636 L -0.8128,-0.8636 Z",
+      outline: [{ x: -0.8128, y: 0.8636 }, { x: 0.8128, y: 0.8636 }, { x: 0.8128, y: -0.8636 }, { x: -0.8128, y: -0.8636 }],
+    },
+    {
+      name: "2", index: 2, layers: ["F.Cu", "F.Mask"],
+      at: { x: 1.5240, y: 0.0000 },
+      shape: "M -0.8128,0.8636 L 0.8128,0.8636 L 0.8128,-0.8636 L -0.8128,-0.8636 Z",
+      outline: [{ x: -0.8128, y: 0.8636 }, { x: 0.8128, y: 0.8636 }, { x: 0.8128, y: -0.8636 }, { x: -0.8128, y: -0.8636 }],
+    },
+  ],
+  holes: [
+  ],
+};
+
+/** 0603 capacitor. Generated — see `ocaml/footprints.ml`. */
+export const C_0603_part: Component = {
+  name: "C_0603",
+  note: "0603 capacitor",
+  pads: [
+    {
+      name: "1", index: 1, layers: ["F.Cu", "F.Mask"],
+      at: { x: -0.8500, y: 0.0000 },
+      shape: "M -0.5000,0.5000 L 0.5000,0.5000 L 0.5000,-0.5000 L -0.5000,-0.5000 Z",
+      outline: [{ x: -0.5000, y: 0.5000 }, { x: 0.5000, y: 0.5000 }, { x: 0.5000, y: -0.5000 }, { x: -0.5000, y: -0.5000 }],
+    },
+    {
+      name: "2", index: 2, layers: ["F.Cu", "F.Mask"],
+      at: { x: 0.8500, y: 0.0000 },
+      shape: "M -0.5000,0.5000 L 0.5000,0.5000 L 0.5000,-0.5000 L -0.5000,-0.5000 Z",
+      outline: [{ x: -0.5000, y: 0.5000 }, { x: 0.5000, y: 0.5000 }, { x: 0.5000, y: -0.5000 }, { x: -0.5000, y: -0.5000 }],
+    },
+  ],
+  holes: [
+  ],
+};
+
+/** 1206 capacitor. Generated — see `ocaml/footprints.ml`. */
+export const C_1206_part: Component = {
+  name: "C_1206",
+  note: "1206 capacitor",
   pads: [
     {
       name: "1", index: 1, layers: ["F.Cu", "F.Mask"],
@@ -125,3 +235,16 @@ export const slide_switch_part: Component = {
     { at: { x: 1.4986, y: 0.0000 }, r: 0.4318 },
   ],
 };
+
+/** Every component in the library. The editor's palette is built from this, so a part added here
+ *  appears there without a second list to keep in step. */
+export const COMPONENTS: Component[] = [
+  LED_0603_part,
+  LED_1206_part,
+  R_0402_part,
+  R_0603_part,
+  R_1206_part,
+  C_0603_part,
+  C_1206_part,
+  slide_switch_part,
+];

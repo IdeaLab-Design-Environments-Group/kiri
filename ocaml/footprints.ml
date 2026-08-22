@@ -98,7 +98,40 @@ let slide_switch_c =
         { hat = { px = 0.059; py = 0.0 }; hr2 = 0.034 /. 2.0 } ];
   }
 
-let components = [ led_1206_c; r_1206_c; slide_switch_c ]
+(** A two-terminal chip part: pads [pw] by [ph] on centres [dx] either side, all in inches. *)
+let chip name note pw ph dx a b =
+  let o = rect_pad pw ph in
+  {
+    cname = name;
+    note;
+    cpads =
+      [ { pad_name = a; outline = o; at = { px = -.dx; py = 0.0 }; layers = [ "F.Cu"; "F.Mask" ]; index = 1 };
+        { pad_name = b; outline = o; at = { px = dx; py = 0.0 }; layers = [ "F.Cu"; "F.Mask" ]; index = 2 } ];
+    choles = [];
+  }
+
+let mm_ v = v /. 25.4
+
+(* The chip sizes, on their standard land patterns. 0402 and 0603 are dimensioned in millimetres and
+   converted; 1206 is authored in inches, as it is drawn. *)
+let r_0402_c = chip "R_0402" "0402 resistor" (mm_ 0.8) (mm_ 0.6) (mm_ 0.65) "1" "2"
+let r_0603_c = chip "R_0603" "0603 resistor" (mm_ 1.0) (mm_ 1.0) (mm_ 0.85) "1" "2"
+let c_0603_c = chip "C_0603" "0603 capacitor" (mm_ 1.0) (mm_ 1.0) (mm_ 0.85) "1" "2"
+let c_1206_c = chip "C_1206" "1206 capacitor" 0.064 0.068 0.06 "1" "2"
+let led_0603_c = chip "LED_0603" "0603 LED" (mm_ 1.0) (mm_ 1.0) (mm_ 0.85) "A" "C"
+
+let components =
+  [ led_0603_c; led_1206_c; r_0402_c; r_0603_c; r_1206_c; c_0603_c; c_1206_c; slide_switch_c ]
+
+(** Every component, so the app can offer them without a second list to keep in step. *)
+let emit_catalogue () =
+  Printf.printf
+    "\n/** Every component in the library. The editor's palette is built from this, so a part added here\n\
+    \ *  appears there without a second list to keep in step. */\nexport const COMPONENTS: Component[] = [\n";
+  List.iter (fun c -> Printf.printf "  %s_part,\n" c.cname) components;
+  Printf.printf "];\n"
+
+
 
 let mm v = Printf.sprintf "%.4f" (mm_of_inch v)
 
@@ -181,7 +214,8 @@ let emit_representation () =
     \  }\n\
     \  return { w: maxX - minX, h: maxY - minY };\n\
      }\n";
-  List.iter emit_component components
+  List.iter emit_component components;
+  emit_catalogue ()
 
 let () =
   print_string
