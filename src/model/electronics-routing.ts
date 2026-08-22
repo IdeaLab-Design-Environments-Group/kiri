@@ -1189,6 +1189,15 @@ export function acrossRun(u: Vec2, flip?: boolean): Vec2 {
  * touched. The part is symmetric, so the fix is free: put the live throw on whichever side leaves the
  * idle one further from every other piece of copper.
  *
+ * Measured over 84 placements spread along the longest rail of house, church, puffin and akde-hex,
+ * sampling the idle pad on a 7x7 grid: 1120 of 4116 samples landed on copper with no choice made, and
+ * 27 with. Puffin and akde-hex go to nil. Measuring from the pad's corners to the tape's edge rather
+ * than centre to centreline was tried and picked the same side in all 84, so this stays the simpler one.
+ *
+ * What it cannot do is rescue a spot where both sides are bad — church still has one placement whose
+ * idle throw clips a rail whichever way the part faces. Sliding the part along the run would, and does
+ * not exist yet.
+ *
  * Ties keep the unflipped orientation, so a part with room on both sides sits as it always did.
  */
 function idleSide(span: PartSpan, traces: Trace2D[], pitch: number, over: number, rowSep: number): boolean {

@@ -19,7 +19,7 @@ import {
 } from "../../../src/model/copper-svg-export.js";
 import { printScale } from "../../../src/model/print-scale.js";
 import { holes, padAt } from "../../../src/model/footprint.js";
-import { SPDT } from "../../../src/model/parts.js";
+import { RESISTOR, SPDT } from "../../../src/model/parts.js";
 
 const EXAMPLES = new URL("../../../public/examples/", import.meta.url).pathname;
 
@@ -120,12 +120,15 @@ describe("model/resistor", () => {
   });
 
   it("lays its contacts across the tape, not along it", () => {
-    // The join is a band of lead pressed over the full width of the copper. Drawn along the run it read as
-    // a line down the middle of the tape, which is not where a lead touches.
-    const { faces, gaps, base, mid, tapeW, k } = fixture();
+    // The join is a band of lead pressed over the copper. Drawn along the run it read as a line down the
+    // middle of the tape, which is not where a lead touches.
+    const { faces, gaps, base, mid, k } = fixture();
     const r = planRoutes(faces, gaps, { ...base, resistors: [mid] });
-    const { a, b } = r.resistors[0]!;
-    const sh = resistorShape(a, b, tapeW)!;
+    // Into sheet millimetres, which is what both the canvas and the cut files draw in — and what the
+    // footprint is in, now that the part is drawn at its own size rather than the tape's.
+    const { a: fa, b: fb } = r.resistors[0]!;
+    const a = { x: fa.x * k, y: fa.y * k }, b = { x: fb.x * k, y: fb.y * k };
+    const sh = resistorShape(a, b)!;
     expect(sh.leads).toHaveLength(2);
     // And the body reaches both of them: drawn shorter than the break, the part came out as three
     // disconnected pieces with bare pattern showing between the black and each grey contact.
@@ -138,8 +141,9 @@ describe("model/resistor", () => {
       // Square to the run: the dot product of the two directions is nil.
       const dot = (across.x * run.x + across.y * run.y) / (Math.hypot(across.x, across.y) * runLen);
       expect(Math.abs(dot)).toBeLessThan(1e-9);
-      // And a tape's width across, so it covers the copper it sits on.
-      expect(Math.hypot(across.x, across.y) * k).toBeCloseTo(tapeW * k, 6);
+      // The contact is the part's own pad, not a band the width of whatever tape it happens to sit on.
+      expect(Math.hypot(across.x, across.y)).toBeCloseTo(RESISTOR.pad.h, 9);
+      expect(l.width).toBeCloseTo(RESISTOR.pad.w, 9);
     }
   });
 
@@ -259,8 +263,6 @@ describe("model/switch", () => {
     const sh = switchShape(
       { x: w0.a.x * k, y: w0.a.y * k },
       { x: w0.b.x * k, y: w0.b.y * k },
-      tapeW * k,
-      undefined,
       w0.flip,
     )!;
     const rings = r.traces.map((t, i) => ({

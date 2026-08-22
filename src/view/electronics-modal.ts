@@ -411,7 +411,7 @@ export class ElectronicsModal {
       return;
     }
     const out = buildCopperSvgExport(
-      this.fold, this.routed.traces, this.tapeW(), "kiri", this.routed.pads, this.mirror, this.sheetMm, this.routed.resistors, this.partSize(), this.routed.switches,
+      this.fold, this.routed.traces, this.tapeW(), "kiri", this.routed.pads, this.mirror, this.sheetMm, this.routed.resistors, this.routed.switches,
     );
     this.download(out.filename, out.svg);
     const { pwr, gnd } = out.counts;
@@ -672,7 +672,7 @@ export class ElectronicsModal {
     // wired to the rail in both positions and switches nothing. The canvas has to cut them too — showing
     // unbroken tape there is showing a circuit that does not exist.
     const windows = this.routed.switches
-      .map((w) => switchShape(this.tp(w.a), this.tp(w.b), this.tapeW() * this.scale(), this.partSize(), w.flip)?.notch)
+      .map((w) => switchShape(this.tp(w.a), this.tp(w.b), w.flip)?.notch)
       .filter((n): n is Vec2[] => !!n && n.length >= 3);
 
     // Copper tape, under the components so the pads and terminals stay readable on top of it.
@@ -701,7 +701,7 @@ export class ElectronicsModal {
     // the bare pattern between them, where there is deliberately no copper at all.
     for (const r of this.routed.resistors) {
       // The same shape the cut files draw, so the canvas cannot drift from them.
-      const sh = resistorShape(this.tp(r.a), this.tp(r.b), this.tapeW() * this.scale(), this.partSize());
+      const sh = resistorShape(this.tp(r.a), this.tp(r.b));
       if (!sh) continue;
       const { leads, body } = sh;
       for (const l of leads) {
@@ -714,7 +714,7 @@ export class ElectronicsModal {
       );
     }
     for (const w of this.routed.switches) {
-      const sh = switchShape(this.tp(w.a), this.tp(w.b), this.tapeW() * this.scale(), this.partSize(), w.flip);
+      const sh = switchShape(this.tp(w.a), this.tp(w.b), w.flip);
       if (!sh) continue;
       // Housing first, then the legs and the mounting holes over it — the order the cut files use. A part's
       // legs do run under its body, but every terminal of this one falls inside the housing's outline, so
@@ -809,7 +809,7 @@ export class ElectronicsModal {
     if (!this.fold) return [];
     const out = buildCopperCarrierExport(
       this.fold, this.routed.traces, this.tapeW(), "kiri", this.keepOff(), this.mirror, this.sheetMm,
-      this.routed.pads, this.routed.resistors, this.partSize(), this.routed.switches,
+      this.routed.pads, this.routed.resistors, this.routed.switches,
     );
     const ring = (r: { x0: number; y0: number; x1: number; y1: number }): string => {
       const c = [
@@ -854,7 +854,7 @@ export class ElectronicsModal {
     }
     const out = buildCopperCarrierExport(
       this.fold, this.routed.traces, this.tapeW(), "kiri", this.keepOff(), this.mirror, this.sheetMm,
-      this.routed.pads, this.routed.resistors, this.partSize(), this.routed.switches,
+      this.routed.pads, this.routed.resistors, this.routed.switches,
     );
     this.download(out.filename, out.svg);
     const w = Math.round(out.widthMm * 100) / 100;
@@ -902,11 +902,6 @@ export class ElectronicsModal {
     URL.revokeObjectURL(url);
   }
 
-  /** How wide a part is drawn across its run: an LED's two pads span this, so a resistor beside one comes
-   *  out the same size rather than to its own scale. */
-  private partSize(): number {
-    return this.ledPad() * 2;
-  }
 
   /**
    * An LED pad's radius, in sheet millimetres: the 1206 footprint's own pad, read from the part's KiCad
