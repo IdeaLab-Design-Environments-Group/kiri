@@ -46,7 +46,7 @@ import {
   pointInFace,
 } from "./electronics.js";
 import { DEFAULT_PRINT_SIZE } from "./stl-export.js";
-import { R_1206_part, padNamed, padSpan, slide_switch_part } from "./footprints.generated.js";
+import { RESISTOR, SPDT } from "./parts.js";
 
 /** One continuous strip of copper tape: a centreline polyline plus which net it carries. */
 export interface Trace2D {
@@ -86,6 +86,12 @@ export interface PartSpan {
   b: Vec2;
   /** Which rail it was placed on, so land copper joins the right net. */
   net: "pwr" | "gnd";
+  /**
+   * Which way round a three-terminal part sits: which side of the rail the live throw takes, and so
+   * which side the idle one is stranded on. Chosen when the part is placed — see {@link idleSide} —
+   * and honoured by everything that draws or wires the part, so the two cannot disagree.
+   */
+  flip?: boolean;
 }
 
 /** @deprecated the same thing; kept so existing callers read naturally. */
@@ -978,12 +984,23 @@ export function planRoutes(
   // Across the break the part needs only its own half-gap plus a pad either side: the terminals run square
   // to the rail now, not along it, so a much shorter run will take one.
   const toFlat = (mm: number): number => (mm * tapeW) / TAPE_MM;
-  const swPad = padSpan(padNamed(slide_switch_part, "throw_a"));
+  const swPad = SPDT.pad;
   const swReach = toFlat(SWITCH_GAP_MM / 2 + swPad.w);
   const withSw = breakRuns(withRes.traces, circuit.switches ?? [], toFlat(SWITCH_GAP_MM), {
     before: swReach,
     after: swReach,
   });
+  // Which way each switch faces is decided against the copper as it now stands, before any land is laid:
+  // the lands themselves belong to the part and would otherwise vote for its own orientation.
+  for (const span of withSw.placed) {
+    span.flip = idleSide(
+      span,
+      withSw.traces,
+      toFlat(SWITCH_PITCH_MM),
+      toFlat(swPad.w) / 2,
+      toFlat(SWITCH_ROW_MM),
+    );
+  }
   const swTraces = [
     ...withSw.traces,
     ...withSw.placed.flatMap((span) =>
@@ -1008,24 +1025,19 @@ export function planRoutes(
 /**
  * The copper a 1206 resistor replaces, in millimetres: the bare span between its two pads.
  *
- * From fab-modules `pcb.py` (`class R_1206`) by way of `ocaml/footprints.ml` — pads .064 wide on .12
- * centres, so 1.42mm of pattern between them. It was 6.5 before, a through-hole body I had picked myself;
- * the part in the library is a 1206, and its gap is a quarter of that.
+ * Read off the part's own KiCad footprint — see `parts.ts`. It was 6.5 once, a through-hole body I had
+ * picked myself, which is exactly the sort of number this pipeline exists to stop us inventing.
  */
-export const RESISTOR_MM = (() => {
-  const [one, two] = [padNamed(R_1206_part, "1"), padNamed(R_1206_part, "2")];
-  return two.at.x - one.at.x - padSpan(one).w;
-})();
+export const RESISTOR_MM = RESISTOR.gap;
 
 /**
- * The switch's pad pitch, in millimetres — from `pcb.py`'s `slide_switch` (C&K AYZ0102AGRLC) by way of
- * `ocaml/footprints.ml`. Three pads, so twice this across the lot.
+ * The switch's pad pitch, in millimetres — from the C&K AYZ0102AGRLC footprint, which says 2.5mm exactly.
+ * Three pads, so twice this across the lot.
  *
  * The break is one pitch and falls between the second pad and the third, so two sit on one side of it and
  * one on the other.
  */
-export const SWITCH_PITCH_MM =
-  padNamed(slide_switch_part, "common").at.x - padNamed(slide_switch_part, "throw_a").at.x;
+export const SWITCH_PITCH_MM = SPDT.pitch;
 
 /**
  * The copper a switch takes out, in millimetres.
@@ -1036,17 +1048,35 @@ export const SWITCH_PITCH_MM =
  * ending it level with the pad row left only a quarter of a millimetre between the two. Pulled back by the
  * neck, that becomes a millimetre — the sort of gap an LED's pads get.
  */
-export const SWITCH_ROW_MM =
-  padNamed(slide_switch_part, "throw_a").at.y - padNamed(slide_switch_part, "common").at.y;
+export const SWITCH_ROW_MM = SPDT.rowSep;
 
 /**
  * How far the outgoing tape is pulled back beyond the pad row, in millimetres.
  *
- * The idle throw sits a pitch off the rail's centreline. At 2.489mm out against a 3.25mm tape, its pad edge
- * cleared the copper by 0.27mm with the tape ending level with it — close enough for solder to bridge, and
- * far tighter than anything else on the sheet gets. 1.4mm back puts a millimetre between them.
+ * The idle throw has to sit in clear pattern — that void is what opens the circuit — and "clear" has to
+ * mean a keep-out, not merely "no copper exactly under the centre". With the tape ending level with the
+ * pad row the two were 0.27mm apart, close enough for solder to bridge.
+ *
+ * So the pull-back is solved for rather than picked. The idle pad sits a pitch off the centreline, which
+ * puts it {@link SWITCH_LATERAL_MM} clear of the tape's edge sideways; pulling the tape back by the neck
+ * adds that much along the rail. The nearest copper is the tape's corner, so the two combine as the legs
+ * of a right angle, and the neck is whatever makes the hypotenuse reach past the pad by the keep-out.
+ *
+ * It is derived because the pad is: this switch's terminals are 1.5mm wide against the 0.43mm ones the
+ * part was first drawn with, and a hard-coded 1.4mm neck that used to leave a millimetre left 0.40mm.
  */
-export const SWITCH_NECK_MM = 1.4;
+const SWITCH_KEEPOUT_MM = 1;
+
+/** How far past the tape's edge the idle pad's column sits — sideways clearance we get for free. */
+const SWITCH_LATERAL_MM = Math.max(0, SWITCH_PITCH_MM - TAPE_MM / 2);
+
+export const SWITCH_NECK_MM = (() => {
+  const reach = SPDT.pad.h / 2 + SWITCH_KEEPOUT_MM;
+  // Sideways alone may already clear it, on a part whose pads are far enough out; then the neck is only
+  // what keeps the tape from ending inside the housing.
+  const along = reach * reach - SWITCH_LATERAL_MM * SWITCH_LATERAL_MM;
+  return along > 0 ? Math.sqrt(along) : SPDT.pad.h / 2;
+})();
 
 export const SWITCH_GAP_MM = SWITCH_ROW_MM + SWITCH_NECK_MM;
 
@@ -1145,6 +1175,52 @@ export function breakRuns(
  * Both stubs are a pad's width, not the tape's: at `.098in` centres, two full-width stubs would meet
  * between the terminals and short the part to itself.
  */
+/** Across the run, towards the side the live throw takes. {@link PartSpan.flip} swaps it. */
+export function acrossRun(u: Vec2, flip?: boolean): Vec2 {
+  return flip ? { x: u.y, y: -u.x } : { x: -u.y, y: u.x };
+}
+
+/**
+ * Which way round to seat a three-terminal part, so its idle throw lands on bare pattern.
+ *
+ * The idle throw is only insulated by where it sits. That is fine in the middle of a long run and not
+ * fine near anything else: the terminal reaches a pitch plus half a pad off the centreline, which on
+ * this switch is 3.25mm — as far again as the tape is wide — and a neighbouring rail that close is
+ * touched. The part is symmetric, so the fix is free: put the live throw on whichever side leaves the
+ * idle one further from every other piece of copper.
+ *
+ * Ties keep the unflipped orientation, so a part with room on both sides sits as it always did.
+ */
+function idleSide(span: PartSpan, traces: Trace2D[], pitch: number, over: number, rowSep: number): boolean {
+  const d = sub(span.b, span.a);
+  const L = len(d);
+  if (L < 1e-12) return false;
+  const u = { x: d.x / L, y: d.y / L };
+  const row = { x: span.a.x + u.x * rowSep, y: span.a.y + u.y * rowSep };
+  const clearance = (flip: boolean): number => {
+    // The idle throw is opposite the live one.
+    const p = acrossRun(u, !flip);
+    const c = { x: row.x + p.x * (pitch + over), y: row.y + p.y * (pitch + over) };
+    let nearest = Infinity;
+    for (const t of traces) {
+      for (let i = 1; i < t.pts.length; i++) {
+        nearest = Math.min(nearest, distToSeg(c, t.pts[i - 1]!, t.pts[i]!));
+      }
+    }
+    return nearest;
+  };
+  return clearance(true) > clearance(false) + 1e-9;
+}
+
+/** Distance from a point to a segment — the projection clamped to the segment's own ends. */
+function distToSeg(r: Vec2, a: Vec2, b: Vec2): number {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const l2 = dx * dx + dy * dy;
+  if (l2 < 1e-18) return len(sub(r, a));
+  const t = Math.max(0, Math.min(1, ((r.x - a.x) * dx + (r.y - a.y) * dy) / l2));
+  return Math.hypot(r.x - (a.x + t * dx), r.y - (a.y + t * dy));
+}
+
 function switchLand(
   span: PartSpan,
   pitch: number,
@@ -1157,7 +1233,7 @@ function switchLand(
   const L = len(d);
   if (L < 1e-12) return [];
   const u = { x: d.x / L, y: d.y / L };
-  const p = { x: -u.y, y: u.x };
+  const p = acrossRun(u, span.flip);
   // The common is at the near cut end. The throws are a row's separation along from it — not at the far cut
   // end, which is pulled back a neck further so the idle throw sits in clear pattern. The outgoing tape
   // reaches neither throw on its own: one gets a land, the other is left bare, which opens the circuit.

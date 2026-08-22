@@ -1,81 +1,107 @@
 import { describe, expect, it } from "vitest";
 import {
-  LED_1206_part,
-  R_1206_part,
-  padNamed,
-  padSpan,
-  slide_switch_part,
-  type Component,
+  COMPONENTS,
+  LED_1206,
+  R_1206,
+  SW_SPDT,
 } from "../../../src/model/footprints.generated.js";
+import {
+  holes,
+  isTerminal,
+  MM_PER_INCH,
+  padAt,
+  padNamed,
+  padPoints,
+  padSize,
+  terminals,
+} from "../../../src/model/footprint.js";
+import { LED, RESISTOR, SPDT } from "../../../src/model/parts.js";
 
-const ALL: Component[] = [LED_1206_part, R_1206_part, slide_switch_part];
-
+/**
+ * The component library.
+ *
+ * These parts are not authored here — they are read out of the manufacturers' own KiCad footprints by
+ * `ocaml/kicad.ml`, and the generated file is committed. So what is worth asserting is not "the resistor
+ * is 4mm long" (that is the file's business) but that the pipeline between the file and the router keeps
+ * its meaning: units, axis, which pads are terminals, and the one place we knowingly depart from the part.
+ */
 describe("model/footprints", () => {
-  it("addresses a terminal by name, and says so when there is none", () => {
-    // The point of naming them. Reading `pads[1]` quietly returns whatever is second, and the order has
-    // already changed once — when the switch's common moved to the far edge.
-    expect(padNamed(slide_switch_part, "common").index).toBe(2);
-    expect(padNamed(LED_1206_part, "A").at.x).toBeLessThan(0);
-    expect(padNamed(LED_1206_part, "C").at.x).toBeGreaterThan(0);
-    expect(() => padNamed(LED_1206_part, "nope")).toThrow(/no pad nope/);
-  });
-
-  it("gives every pad an outline, a place, a layer and a number", () => {
-    for (const c of ALL) {
-      expect(c.pads.length, c.name).toBeGreaterThan(0);
-      const names = new Set<string>();
-      const indices = new Set<number>();
-      for (const p of c.pads) {
-        expect(p.name, `${c.name} pad name`).not.toBe("");
-        expect(names.has(p.name), `${c.name} repeats the pad name ${p.name}`).toBe(false);
-        names.add(p.name);
-        expect(indices.has(p.index), `${c.name} repeats the index ${p.index}`).toBe(false);
-        indices.add(p.index);
-        expect(p.layers.length, `${c.name}.${p.name} layers`).toBeGreaterThan(0);
-        // A polygon, not a pair of numbers: at least a triangle, and closed by convention rather than by
-        // repeating the first point.
-        expect(p.outline.length, `${c.name}.${p.name} outline`).toBeGreaterThanOrEqual(3);
-        expect(p.outline[0]).not.toEqual(p.outline[p.outline.length - 1]);
+  it("gives every part terminals, numbered from one", () => {
+    expect(COMPONENTS.length).toBeGreaterThan(0);
+    for (const c of COMPONENTS) {
+      const t = terminals(c.footprint);
+      expect(t.length, `${c.id} has no terminals`).toBeGreaterThan(0);
+      // Pad numbers are the part's own, so they start at 1 and do not repeat.
+      const indices = t.map(([, p]) => p.index);
+      expect(new Set(indices).size).toBe(indices.length);
+      expect(Math.min(...indices)).toBe(1);
+      for (const [name, pad] of t) {
+        expect(padPoints(pad).length, `${c.id}.${name} has no outline`).toBeGreaterThan(2);
+        const { w, h } = padSize(pad);
+        expect(w, `${c.id}.${name} is flat`).toBeGreaterThan(0);
+        expect(h).toBeGreaterThan(0);
       }
     }
   });
 
-  it("keeps the path and the points saying the same thing", () => {
-    // Both are emitted so neither side has to parse the other; they must not drift apart.
-    for (const c of ALL) {
-      for (const p of c.pads) {
-        const nums = (p.shape.match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number);
-        expect(nums.length, `${c.name}.${p.name}`).toBe(p.outline.length * 2);
-        p.outline.forEach((q, i) => {
-          expect(nums[2 * i]).toBeCloseTo(q.x, 4);
-          expect(nums[2 * i + 1]).toBeCloseTo(q.y, 4);
-        });
-        expect(p.shape.trimEnd().endsWith("Z"), `${c.name}.${p.name} closes`).toBe(true);
-      }
+  it("keeps millimetres out of the stored representation and inches out of the model", () => {
+    // A 1206 pad is a couple of millimetres, which is a couple of hundredths of an inch. If the scale
+    // were dropped the two would differ by 25x, and a pad would be the size of a fingernail.
+    const pad = padNamed(R_1206, "1");
+    expect(Math.abs(pad.pos[0])).toBeLessThan(0.5);        // inches, as stored
+    expect(Math.abs(padAt(pad).x)).toBeGreaterThan(1);     // millimetres, as read
+    expect(padAt(pad).x * (1 / MM_PER_INCH)).toBeCloseTo(pad.pos[0], 12);
+  });
+
+  it("tells a terminal from a mounting hole", () => {
+    // The switch seats on two pegs. They are in the footprint because we cut them, but a rail must never
+    // try to reach one — being off every copper layer is what says so.
+    const pegs = holes(SW_SPDT);
+    expect(pegs.length).toBe(2);
+    for (const peg of pegs) {
+      expect(isTerminal(peg)).toBe(false);
+      expect(peg.drill!.diameter).toBeGreaterThan(0);
     }
+    expect(terminals(SW_SPDT).map(([n]) => n)).toEqual(["1", "2", "3"]);
   });
 
-  it("measures a pad from its outline, whatever shape it is", () => {
-    // `padSpan` reads the polygon, so it is right for a pad that is not a rectangle — which the old width
-    // and height could not even express.
-    const a = padNamed(LED_1206_part, "A");
-    expect(padSpan(a).w).toBeCloseTo(0.064 * 25.4, 4);
-    expect(padSpan(a).h).toBeCloseTo(0.068 * 25.4, 4);
-
-    const skew = { ...a, outline: [{ x: 0, y: 0 }, { x: 3, y: 1 }, { x: 2, y: 4 }] };
-    expect(padSpan(skew).w).toBeCloseTo(3, 9);
-    expect(padSpan(skew).h).toBeCloseTo(4, 9);
+  it("reads a two-terminal part as a gap the rail can be broken by", () => {
+    for (const part of [LED, RESISTOR]) {
+      expect(part.pitch).toBeGreaterThan(part.pad.w);
+      // The gap is bare pattern between the pads — pitch less one pad, so each pad still lands on copper.
+      expect(part.gap).toBeCloseTo(part.pitch - part.pad.w, 12);
+      expect(part.gap).toBeGreaterThan(0);
+    }
+    // Both are 1206 packages, so they agree — which is also a check that the two came through the same way.
+    expect(LED.pitch).toBeCloseTo(RESISTOR.pitch, 12);
   });
 
-  it("holds the switch's own arrangement: two throws one side, the common the other", () => {
-    const t1 = padNamed(slide_switch_part, "throw_a");
-    const t2 = padNamed(slide_switch_part, "throw_b");
-    const common = padNamed(slide_switch_part, "common");
-    expect(t1.at.y).toBeCloseTo(t2.at.y, 9);              // the throws share an edge
-    expect(Math.sign(common.at.y)).toBe(-Math.sign(t1.at.y)); // the common is on the other
-    expect(common.at.x).toBeCloseTo((t1.at.x + t2.at.x) / 2, 9); // square between them
-    // And its two mounting holes, on the centre line between the rows.
-    expect(slide_switch_part.holes).toHaveLength(2);
-    for (const h of slide_switch_part.holes) expect(h.at.y).toBeCloseTo(0, 9);
+  it("moves only the switch's common, and moves it across", () => {
+    // The part itself is single-row surface mount: all three terminals share an edge.
+    const rows = new Set(terminals(SW_SPDT).map(([, p]) => p.pos[1]));
+    expect(rows.size, "the stored footprint should be the manufacturer's, unmodified").toBe(1);
+
+    // The model puts the common on the far side so a rail runs through rather than doubling back.
+    expect(Math.sign(SPDT.common.y)).toBe(-Math.sign(SPDT.throwA.y));
+    expect(SPDT.rowSep).toBeCloseTo(SPDT.throwA.y - SPDT.common.y, 12);
+    expect(SPDT.rowSep).toBeGreaterThan(0);
+
+    // The throws stay where the part put them: same row, a pitch either side of the common's column.
+    expect(SPDT.throwA.y).toBeCloseTo(SPDT.throwB.y, 12);
+    expect(SPDT.throwB.x - SPDT.common.x).toBeCloseTo(SPDT.pitch, 12);
+    expect(SPDT.common.x - SPDT.throwA.x).toBeCloseTo(SPDT.pitch, 12);
+  });
+
+  it("takes the switch pitch from the file rather than from the package name", () => {
+    // Twice this was wrong: 2.54mm assumed from "1x03", then 2.5mm read off a datasheet page. The
+    // footprint says 2.5mm exactly, and now so do we.
+    expect(SPDT.pitch).toBeCloseTo(2.5, 9);
+  });
+
+  it("keeps the LED's pads a pad-width apart, so a break leaves copper under both", () => {
+    const [a, c] = [padNamed(LED_1206, "1"), padNamed(LED_1206, "2")];
+    expect(padAt(a).y).toBeCloseTo(padAt(c).y, 12);
+    expect(Math.abs(padAt(c).x - padAt(a).x)).toBeCloseTo(LED.pitch, 12);
+    expect(padSize(a)).toEqual(padSize(c));
   });
 });

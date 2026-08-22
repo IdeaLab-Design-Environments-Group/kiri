@@ -37,7 +37,7 @@ import {
   switchShape,
 } from "../model/copper-svg-export.js";
 import { printScale } from "../model/print-scale.js";
-import { LED_1206_part, padNamed, padSpan } from "../model/footprints.generated.js";
+import { LED } from "../model/parts.js";
 import {
   type RoutedCircuit,
   type Terminals,
@@ -672,7 +672,7 @@ export class ElectronicsModal {
     // wired to the rail in both positions and switches nothing. The canvas has to cut them too — showing
     // unbroken tape there is showing a circuit that does not exist.
     const windows = this.routed.switches
-      .map((w) => switchShape(this.tp(w.a), this.tp(w.b), this.tapeW() * this.scale(), this.partSize())?.notch)
+      .map((w) => switchShape(this.tp(w.a), this.tp(w.b), this.tapeW() * this.scale(), this.partSize(), w.flip)?.notch)
       .filter((n): n is Vec2[] => !!n && n.length >= 3);
 
     // Copper tape, under the components so the pads and terminals stay readable on top of it.
@@ -714,7 +714,7 @@ export class ElectronicsModal {
       );
     }
     for (const w of this.routed.switches) {
-      const sh = switchShape(this.tp(w.a), this.tp(w.b), this.tapeW() * this.scale(), this.partSize());
+      const sh = switchShape(this.tp(w.a), this.tp(w.b), this.tapeW() * this.scale(), this.partSize(), w.flip);
       if (!sh) continue;
       // Housing first, then the legs and the mounting holes over it — the order the cut files use. A part's
       // legs do run under its body, but every terminal of this one falls inside the housing's outline, so
@@ -909,7 +909,7 @@ export class ElectronicsModal {
   }
 
   /**
-   * An LED pad's radius, in sheet millimetres: the 1206 footprint's own pad, from `pcb.py` by way of
+   * An LED pad's radius, in sheet millimetres: the 1206 footprint's own pad, read from the part's KiCad file by way of
    * `ocaml/footprints.ml` — `.064 x .068in`, so 1.63 by 1.73mm. Taken as a radius across the smaller of the
    * two, since the pad is drawn round.
    *
@@ -918,8 +918,7 @@ export class ElectronicsModal {
    * which is the truth of it.
    */
   private ledPad(): number {
-    const anode = padSpan(padNamed(LED_1206_part, "A"));
-    return Math.min(anode.w, anode.h) / 2;
+    return Math.min(LED.pad.w, LED.pad.h) / 2;
   }
 
   /** Marker radius: the LED's pad, with the ring and chip drawn in proportion to it. */

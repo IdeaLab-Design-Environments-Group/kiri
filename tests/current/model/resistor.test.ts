@@ -18,7 +18,8 @@ import {
   switchShape,
 } from "../../../src/model/copper-svg-export.js";
 import { printScale } from "../../../src/model/print-scale.js";
-import { padNamed, padSpan, slide_switch_part } from "../../../src/model/footprints.generated.js";
+import { holes, padAt } from "../../../src/model/footprint.js";
+import { SPDT } from "../../../src/model/parts.js";
 
 const EXAMPLES = new URL("../../../public/examples/", import.meta.url).pathname;
 
@@ -255,7 +256,13 @@ describe("model/switch", () => {
   /** Which copper, if any, each terminal sits on — and whether the two lands touch each other. */
   function seat(r: ReturnType<typeof withSwitch>["r"], tapeW: number, k: number) {
     const w0 = r.switches[0]!;
-    const sh = switchShape({ x: w0.a.x * k, y: w0.a.y * k }, { x: w0.b.x * k, y: w0.b.y * k }, tapeW * k)!;
+    const sh = switchShape(
+      { x: w0.a.x * k, y: w0.a.y * k },
+      { x: w0.b.x * k, y: w0.b.y * k },
+      tapeW * k,
+      undefined,
+      w0.flip,
+    )!;
     const rings = r.traces.map((t, i) => ({
       i,
       land: t.width !== undefined,
@@ -326,7 +333,7 @@ describe("model/switch", () => {
       }
     }
     // From the pad's own edge, not from its centre.
-    const gap = nearest - padSpan(padNamed(slide_switch_part, "throw_a")).h / 2;
+    const gap = nearest - SPDT.pad.h / 2;
     expect(gap, "gap from the idle pad's edge to the nearest copper").toBeGreaterThan(0.8);
   });
 
@@ -374,21 +381,21 @@ describe("model/switch", () => {
     const lands = r.traces.filter((t) => t.width !== undefined);
     expect(lands).toHaveLength(2);
     for (const l of lands) {
-      expect(l.width! * k).toBeCloseTo(padSpan(padNamed(slide_switch_part, "throw_a")).h, 4);
+      expect(l.width! * k).toBeCloseTo(SPDT.pad.h, 4);
       expect(l.width!).toBeLessThan(tapeW);
     }
   });
 
   it("is the size the datasheet says", () => {
-    // Pads .039 x .047in on .098in centres, plus two .034in mounting holes at ±.059in — the part's own
-    // dimensions, read off the component rather than written out here a second time.
+    // Every dimension here is read off the footprint rather than written out a second time: pinning the
+    // numbers is what let a hand-picked 0.4318mm pad survive a change of part.
     const { r, tapeW, k } = withSwitch();
     const { sh } = seat(r, tapeW, k);
 
     expect(sh.leads).toHaveLength(3);
     for (const l of sh.leads) {
-      expect(l.width).toBeCloseTo(padSpan(padNamed(slide_switch_part, "throw_a")).w, 4);
-      expect(Math.hypot(l.b.x - l.a.x, l.b.y - l.a.y)).toBeCloseTo(padSpan(padNamed(slide_switch_part, "throw_a")).h, 4);
+      expect(l.width).toBeCloseTo(SPDT.pad.w, 4);
+      expect(Math.hypot(l.b.x - l.a.x, l.b.y - l.a.y)).toBeCloseTo(SPDT.pad.h, 4);
     }
 
     // Two throws on one edge, a pitch either side of the rail, so twice the pitch apart. The common is
@@ -405,9 +412,13 @@ describe("model/switch", () => {
     expect(dIdle).toBeCloseTo(Math.hypot(SWITCH_PITCH_MM, SWITCH_ROW_MM), 6);
 
     expect(sh.holes).toHaveLength(2);
-    for (const h of sh.holes!) expect(h.r).toBeCloseTo((0.034 * 25.4) / 2, 4);
+    const pegs = holes(SPDT.footprint);
+    expect(pegs).toHaveLength(2);
+    for (let i = 0; i < 2; i++) {
+      expect(sh.holes![i]!.r).toBeCloseTo((pegs[i]!.drill!.diameter * 25.4) / 2, 9);
+    }
     expect(Math.hypot(sh.holes![1]!.c.x - sh.holes![0]!.c.x, sh.holes![1]!.c.y - sh.holes![0]!.c.y))
-      .toBeCloseTo(0.118 * 25.4, 4);
+      .toBeCloseTo(Math.abs(padAt(pegs[1]!).x - padAt(pegs[0]!).x), 9);
 
     // No window to cut: the idle throw is off the copper by where it sits, not by a hole in the strip.
     expect(sh.notch).toBeUndefined();
