@@ -31,17 +31,22 @@ import {
   type Mirror,
   buildCopperCarrierExport,
   buildCopperSvgExport,
+  type ResistorShape,
   mirrorPoint,
+  partShape,
   resistorShape,
   stripOutline,
   switchShape,
 } from "../model/copper-svg-export.js";
 import { printScale } from "../model/print-scale.js";
 import { LED } from "../model/parts.js";
+import type { Footprint } from "../model/footprint.js";
+import { BAT_COIN_20, COMPONENTS } from "../model/footprints.generated.js";
 import {
   type RoutedCircuit,
   type Terminals,
   EMPTY_ROUTE,
+  partFit,
   tapeWidthFor,
   batteryTerminals,
   planRoutes,
@@ -52,7 +57,28 @@ import type { FoldFile } from "../model/fold-file.js";
 const SVG_NS = "http://www.w3.org/2000/svg";
 const MARGIN = 8; // mm — must match the SVG export so preview ↔ export register
 
-type Tool = "led" | "battery" | "resistor" | "switch";
+/**
+ * What the next click on the canvas does.
+ *
+ * `led` and `battery` are placements of their own — an LED straddles a hinge and the battery pins to a
+ * face, so neither is a part in series on a rail. `resistor` and `switch` are the two parts that predate
+ * the library and keep their own fields on the {@link Circuit}; they are no longer offered in the palette
+ * (the library's own `R_1206` and `SW_SPDT` place the same parts through the generic path) but the tools
+ * stay so a circuit authored before the library still edits. Every other value is a `Component.id`.
+ */
+type Tool = "led" | "battery" | "resistor" | "switch" | (string & {});
+
+/** The parts the two fixed tools already place, so the palette does not offer them a second time. */
+const FIXED_PLACEMENT = new Set<Footprint>([LED.footprint, BAT_COIN_20]);
+
+/**
+ * The palette's contents: every library part that goes in series on a rail.
+ *
+ * Derived from `COMPONENTS`, never listed here — a part added to the library appears in the palette
+ * without a line of code in this file, which is the whole point of the generic path.
+ */
+const PART_COMPONENTS = COMPONENTS.filter((c) => !FIXED_PLACEMENT.has(c.footprint));
+const PART_BY_ID = new Map(PART_COMPONENTS.map((c) => [c.id, c] as const));
 
 /** How the copper is shown, matching the two ways it can be cut.
  *
@@ -69,6 +95,8 @@ export class ElectronicsModal {
   private readonly toolButtons = new Map<Tool, HTMLButtonElement>();
   private readonly viewButtons = new Map<ViewMode, HTMLButtonElement>();
   private readonly mirrorButtons = new Map<keyof Mirror, HTMLButtonElement>();
+  /** The library picker — one control for the whole library, so a part added to it costs no toolbar room. */
+  private readonly partSelect: HTMLSelectElement;
 
   private tool: Tool = "led";
   private viewMode: ViewMode = "strips";
@@ -120,8 +148,12 @@ export class ElectronicsModal {
             <span class="el-group">
               <button type="button" class="el-tool" data-tool="led" title="Add an LED — click a gap between two tiles">LED</button>
               <button type="button" class="el-tool" data-tool="battery" title="Place the battery — click a tile">Battery</button>
-              <button type="button" class="el-tool" data-tool="resistor" title="Add a series resistor — click on either rail. The copper is broken there, so the tape does not short the resistor out">Resistor</button>
-              <button type="button" class="el-tool" data-tool="switch" title="Add a 1x03 switch — click either rail. The copper is broken by one pin pitch: two pins land one side of it, one the other">Switch</button>
+            </span>
+            <span class="el-group el-parts">
+              <label class="el-part-label" for="el-part">Part</label>
+              <select id="el-part" class="el-part" title="Pick a library part, then click either rail to place it. The copper is broken there, so the tape does not short the part out">${
+                PART_COMPONENTS.map((c) => `<option value="${c.id}">${c.note}</option>`).join("")
+              }</select>
             </span>
             <span class="el-group">
               <button type="button" class="el-clear" title="Remove all LEDs, the battery and routes">Clear</button>
@@ -153,8 +185,8 @@ export class ElectronicsModal {
               <span class="el-key el-key-pwr">▬ PWR</span>
               <span class="el-key el-key-gnd">▬ GND</span>
               <span class="el-key el-key-batt">▮ Battery</span>
-              <span class="el-key el-key-res">▬ Resistor</span>
-              <span class="el-key el-key-res">▤ Switch</span>
+              <span class="el-key el-key-res">▬ Part, in line with the rail</span>
+              <span class="el-key el-key-res">▤ Part, across it</span>
             </p>
             <span class="sim-status el-status"></span>
           </div>
@@ -165,6 +197,14 @@ export class ElectronicsModal {
 
     this.svg = this.overlay.querySelector(".el-svg")!;
     this.statusEl = this.overlay.querySelector(".el-status")!;
+    this.partSelect = this.overlay.querySelector(".el-part")!;
+    // The browser would default a select to its first option; say so explicitly, so `value` names a real
+    // part before anyone has touched it and the two agree from the start.
+    this.partSelect.value = PART_COMPONENTS[0]?.id ?? "";
+    // Picking a part IS choosing the tool — there is no separate "place a part" button to arm first. A
+    // plain click re-arms it too, so coming back from the LED tool is one gesture rather than two.
+    this.partSelect.addEventListener("change", () => this.selectTool(this.partSelect.value));
+    this.partSelect.addEventListener("click", () => this.selectTool(this.partSelect.value));
 
     for (const btn of this.overlay.querySelectorAll<HTMLButtonElement>(".el-tool")) {
       const tool = btn.dataset.tool as Tool;
@@ -309,7 +349,12 @@ export class ElectronicsModal {
 
   private selectTool(tool: Tool): void {
     this.tool = tool;
-    for (const [t, btn] of this.toolButtons) btn.classList.toggle("is-active", t === tool);
+    this.syncButtons();
+  }
+
+  /** The library part the current tool places, or null when the tool is not a part tool. */
+  private activePart(): { id: string; footprint: Footprint } | null {
+    return PART_BY_ID.get(this.tool) ?? null;
   }
 
   private clear(): void {
@@ -321,6 +366,10 @@ export class ElectronicsModal {
   /** Reflect active state on the toggle-ish toolbar buttons. */
   private syncButtons(): void {
     for (const [t, btn] of this.toolButtons) btn.classList.toggle("is-active", t === this.tool);
+    // The picker is the palette's active control whenever a part tool is armed, and it shows which part.
+    const part = this.activePart();
+    this.partSelect.classList.toggle("is-active", part !== null);
+    if (part) this.partSelect.value = part.id;
     for (const [m, btn] of this.viewButtons) btn.classList.toggle("is-active", m === this.viewMode);
     for (const [axis, btn] of this.mirrorButtons) {
       btn.classList.toggle("is-active", this.mirror[axis]);
@@ -331,6 +380,25 @@ export class ElectronicsModal {
   private onCanvasClick(e: MouseEvent): void {
     const flat = this.clientToFlat(e);
     if (!flat) return;
+    const part = this.activePart();
+    if (part) {
+      // Stored as a point and snapped to the nearest run when the plan is built, exactly as a resistor is:
+      // the routes move whenever the circuit does, so an index along one would name different copper after.
+      const near = this.nearestOnRail(flat);
+      if (!near || near.dist > this.pickRadius()) return;
+      const placed = this.circuit.parts ?? [];
+      // Clicking a placed part takes it off again — whichever part it is. Requiring the matching tool
+      // before you could remove something would make the palette a mode you get stuck in.
+      const hit = placed.findIndex((p) => Math.hypot(p.x - flat.x, p.y - flat.y) <= this.pickRadius() / 2);
+      this.circuit = {
+        ...this.circuit,
+        parts: hit >= 0
+          ? placed.filter((_, i) => i !== hit)
+          : [...placed, { component: part.id, x: near.point.x, y: near.point.y }],
+      };
+      this.emit();
+      return;
+    }
     if (this.tool === "resistor" || this.tool === "switch") {
       // The click is stored as a point and snapped to the nearest run when the plan is built — the routes
       // move whenever the circuit does, so an index along one would name different copper afterwards.
@@ -380,6 +448,12 @@ export class ElectronicsModal {
     this.emit();
   }
 
+  /** Where the router put each placed library part. Defensive against an older plan object that predates
+   *  the field, so a stale route cannot crash the canvas. */
+  private routedParts(): { component: string; a: Vec2; b: Vec2; flip?: boolean }[] {
+    return this.routed.parts ?? [];
+  }
+
   /** The nearest point on any run to `p` — where a resistor would break the copper. Either rail: a
    *  resistor in series limits the current the same on the way out as on the way back. */
   private nearestOnRail(p: Vec2): { point: Vec2; dist: number } | null {
@@ -411,7 +485,7 @@ export class ElectronicsModal {
       return;
     }
     const out = buildCopperSvgExport(
-      this.fold, this.routed.traces, this.tapeW(), "kiri", this.routed.pads, this.mirror, this.sheetMm, this.routed.resistors, this.routed.switches,
+      this.fold, this.routed.traces, this.tapeW(), "kiri", this.routed.pads, this.mirror, this.sheetMm, this.routed.resistors, this.routed.switches, this.routedParts(),
     );
     this.download(out.filename, out.svg);
     const { pwr, gnd } = out.counts;
@@ -671,9 +745,10 @@ export class ElectronicsModal {
     // Windows to take out of the copper: an SPDT's idle throw needs bare pattern under it, or the part is
     // wired to the rail in both positions and switches nothing. The canvas has to cut them too — showing
     // unbroken tape there is showing a circuit that does not exist.
-    const windows = this.routed.switches
-      .map((w) => switchShape(this.tp(w.a), this.tp(w.b), w.flip)?.notch)
-      .filter((n): n is Vec2[] => !!n && n.length >= 3);
+    const windows = [
+      ...this.routed.switches.map((w) => switchShape(this.tp(w.a), this.tp(w.b), w.flip)?.notch),
+      ...this.routedParts().map((p) => this.partShapeOf(p)?.notch),
+    ].filter((n): n is Vec2[] => !!n && n.length >= 3);
 
     // Copper tape, under the components so the pads and terminals stay readable on top of it.
     for (const t of this.routed.traces) {
@@ -701,38 +776,17 @@ export class ElectronicsModal {
     // the bare pattern between them, where there is deliberately no copper at all.
     for (const r of this.routed.resistors) {
       // The same shape the cut files draw, so the canvas cannot drift from them.
-      const sh = resistorShape(this.tp(r.a), this.tp(r.b));
-      if (!sh) continue;
-      const { leads, body } = sh;
-      for (const l of leads) {
-        parts.push(
-          `<line x1="${fmt(l.a.x)}" y1="${fmt(l.a.y)}" x2="${fmt(l.b.x)}" y2="${fmt(l.b.y)}" class="el-res-lead" stroke-width="${fmt(l.width)}" />`,
-        );
-      }
-      parts.push(
-        `<rect x="${fmt(body.x)}" y="${fmt(body.y)}" width="${fmt(body.w)}" height="${fmt(body.h)}" rx="${fmt(body.h * 0.18)}" class="el-res-body" transform="rotate(${fmt(body.angle)} ${fmt(body.cx)} ${fmt(body.cy)})" />`,
-      );
+      parts.push(...shapeMarkup(resistorShape(this.tp(r.a), this.tp(r.b)), false));
     }
     for (const w of this.routed.switches) {
-      const sh = switchShape(this.tp(w.a), this.tp(w.b), w.flip);
-      if (!sh) continue;
-      // Housing first, then the legs and the mounting holes over it — the order the cut files use. A part's
-      // legs do run under its body, but every terminal of this one falls inside the housing's outline, so
-      // drawing the body last hid all three: the one thing you look at a footprint to see.
-      const bd = sh.body;
-      parts.push(
-        `<rect x="${fmt(bd.x)}" y="${fmt(bd.y)}" width="${fmt(bd.w)}" height="${fmt(bd.h)}" rx="${fmt(bd.h * 0.18)}" class="el-res-body" transform="rotate(${fmt(bd.angle)} ${fmt(bd.cx)} ${fmt(bd.cy)})" />`,
-      );
-      for (const l of sh.leads) {
-        parts.push(
-          `<line x1="${fmt(l.a.x)}" y1="${fmt(l.a.y)}" x2="${fmt(l.b.x)}" y2="${fmt(l.b.y)}" class="el-res-lead" stroke-width="${fmt(l.width)}" />`,
-        );
-      }
-      for (const h of sh.holes ?? []) {
-        parts.push(
-          `<circle cx="${fmt(h.c.x)}" cy="${fmt(h.c.y)}" r="${fmt(h.r)}" class="el-res-hole" stroke-width="${fmt(h.r * 0.5)}" />`,
-        );
-      }
+      parts.push(...shapeMarkup(switchShape(this.tp(w.a), this.tp(w.b), w.flip), true));
+    }
+    // And every other library part, drawn from its own footprint by the one generic shape — so a part the
+    // library gains appears here with nothing added to this file.
+    for (const p of this.routedParts()) {
+      const fp = PART_BY_ID.get(p.component)?.footprint;
+      if (!fp) continue;
+      parts.push(...shapeMarkup(this.partShapeOf(p), partFit(fp).rows === 2));
     }
     // Each LED is two distinct pads straddling its hinge — a PWR (+) pad toward face `a` and a GND (−)
     // pad toward face `b` — bridged by the LED chip. An LED whose gap no longer exists has nowhere to
@@ -799,6 +853,12 @@ export class ElectronicsModal {
     this.renderStatus();
   }
 
+  /** A placed library part's drawn shape, in the sheet millimetres the canvas works in. */
+  private partShapeOf(p: { component: string; a: Vec2; b: Vec2; flip?: boolean }): ResistorShape | null {
+    const fp = PART_BY_ID.get(p.component)?.footprint;
+    return fp ? partShape(fp, this.tp(p.a), this.tp(p.b), p.flip) : null;
+  }
+
   /** The carrier frame and its tabs, taken from the export itself.
    *
    *  Deriving them again here would let the preview drift from the file — and it did: the export learned to bend
@@ -809,7 +869,7 @@ export class ElectronicsModal {
     if (!this.fold) return [];
     const out = buildCopperCarrierExport(
       this.fold, this.routed.traces, this.tapeW(), "kiri", this.keepOff(), this.mirror, this.sheetMm,
-      this.routed.pads, this.routed.resistors, this.routed.switches,
+      this.routed.pads, this.routed.resistors, this.routed.switches, this.routedParts(),
     );
     const ring = (r: { x0: number; y0: number; x1: number; y1: number }): string => {
       const c = [
@@ -854,7 +914,7 @@ export class ElectronicsModal {
     }
     const out = buildCopperCarrierExport(
       this.fold, this.routed.traces, this.tapeW(), "kiri", this.keepOff(), this.mirror, this.sheetMm,
-      this.routed.pads, this.routed.resistors, this.routed.switches,
+      this.routed.pads, this.routed.resistors, this.routed.switches, this.routedParts(),
     );
     this.download(out.filename, out.svg);
     const w = Math.round(out.widthMm * 100) / 100;
@@ -950,6 +1010,7 @@ export class ElectronicsModal {
     const short = [
       ["switch", (this.circuit.switches ?? []).length - this.routed.switches.length],
       ["resistor", (this.circuit.resistors ?? []).length - this.routed.resistors.length],
+      ["part", (this.circuit.parts ?? []).length - this.routedParts().length],
     ] as const;
     for (const [what, missing] of short) {
       if (missing > 0) {
@@ -977,7 +1038,30 @@ function cloneCircuit(c: Circuit): Circuit {
     // the circuit reached the store — gone from the folded model, and from the next render back.
     resistors: (c.resistors ?? []).map((r) => ({ x: r.x, y: r.y })),
     switches: (c.switches ?? []).map((r) => ({ x: r.x, y: r.y })),
+    // And every library part, which is the same trap once more: a clone that dropped `parts` would draw
+    // one on the canvas and lose it the moment the circuit reached the store.
+    parts: (c.parts ?? []).map((p) => ({ component: p.component, x: p.x, y: p.y })),
   };
+}
+
+/**
+ * One drawn part: its contacts, its body and any mounting holes, as the cut files draw them.
+ *
+ * `bodyFirst` for a part whose terminals fall inside its housing — a two-row part like the SPDT slide
+ * switch. Its legs do run under its body, but drawing the body last hid all three of them: the one thing
+ * you look at a footprint to see. An in-line part is the other way round, its contacts on top of the tape.
+ */
+function shapeMarkup(sh: ResistorShape | null, bodyFirst: boolean): string[] {
+  if (!sh) return [];
+  const bd = sh.body;
+  const body = `<rect x="${fmt(bd.x)}" y="${fmt(bd.y)}" width="${fmt(bd.w)}" height="${fmt(bd.h)}" rx="${fmt(bd.h * 0.18)}" class="el-res-body" transform="rotate(${fmt(bd.angle)} ${fmt(bd.cx)} ${fmt(bd.cy)})" />`;
+  const leads = sh.leads.map(
+    (l) => `<line x1="${fmt(l.a.x)}" y1="${fmt(l.a.y)}" x2="${fmt(l.b.x)}" y2="${fmt(l.b.y)}" class="el-res-lead" stroke-width="${fmt(l.width)}" />`,
+  );
+  const holes = (sh.holes ?? []).map(
+    (h) => `<circle cx="${fmt(h.c.x)}" cy="${fmt(h.c.y)}" r="${fmt(h.r)}" class="el-res-hole" stroke-width="${fmt(h.r * 0.5)}" />`,
+  );
+  return bodyFirst ? [body, ...leads, ...holes] : [...leads, body, ...holes];
 }
 
 const isZero = (p: Vec2): boolean => p.x === 0 && p.y === 0;

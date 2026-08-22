@@ -4,6 +4,7 @@ import type { FoldFile } from "../../../src/model/fold-file.js";
 import { flatFaces } from "../../../src/model/electronics.js";
 import { batteryTerminals, patternDiag, tapeWidthFor } from "../../../src/model/electronics-routing.js";
 import { printScale } from "../../../src/model/print-scale.js";
+import { COMPONENTS } from "../../../src/model/footprints.generated.js";
 import { installDom } from "./mock-dom.js";
 
 /** A 2x2 grid of unit quads: four faces, hinges between neighbours. */
@@ -495,4 +496,138 @@ describe("view/electronics-modal", () => {
       expect(modal.svg.innerHTML).not.toContain("el-res-body");
     });
   });
+
+  describe("library parts", () => {
+    /** A circuit with copper on it, and a point in the middle of a run to place parts on. */
+    function withRails(): { modal: any; edits: unknown[]; at: { x: number; y: number } } {
+      const { modal, edits } = openOn(grid2x2());
+      modal.selectTool("battery");
+      tapFlat(modal, { x: 0.5, y: 0.5 });
+      modal.selectTool("led");
+      tapFlat(modal, modal.gaps[0].point);
+      expect(modal.routed.traces.length).toBeGreaterThan(0);
+      const run = modal.routed.traces[0];
+      return { modal, edits, at: run.pts[Math.floor(run.pts.length / 2)] };
+    }
+
+    /** Arm the palette on a library part, the way clicking the picker does. */
+    function pick(modal: any, id: string): void {
+      const select = modal.overlay.querySelector(".el-part");
+      select.value = id;
+      select.dispatch("change", {});
+      expect(modal.tool).toBe(id);
+    }
+
+    it("offers every series part in the library, and grows without a button each", () => {
+      // The palette is built from COMPONENTS, so a part added to the library has to appear here with no
+      // change to the view. A button per part was the thing to avoid: seven fits on the toolbar, twenty
+      // does not.
+      const { modal } = openOn(grid2x2());
+      const offered = modal.overlay.querySelectorAll("option").map((o: any) => o.value);
+      const ids = COMPONENTS.map((c) => c.id);
+      for (const id of offered) expect(ids, `${id} is not a library part`).toContain(id);
+      // Everything in series on a rail is offered...
+      for (const id of ["R_1206", "R_2010", "C_1206", "SW_SPDT", "SW_PUSH"]) {
+        expect(offered, `${id} missing from the palette`).toContain(id);
+      }
+      // ...and the two the fixed tools place are not, since neither goes in series: an LED straddles a
+      // hinge and the battery pins to a face.
+      expect(offered).not.toContain("LED_1206");
+      expect(offered).not.toContain("BAT_COIN_20");
+      expect(offered).toHaveLength(COMPONENTS.length - 2);
+      // One control for the library, not one button per part.
+      expect(modal.overlay.querySelectorAll(".el-tool")).toHaveLength(2);
+    });
+
+    it("places the picked part on the nearest rail, snapped to the copper, and draws it", () => {
+      const { modal, edits, at } = withRails();
+      pick(modal, "C_1206");
+
+      // Click just off the copper: what gets stored is the point on the run, not where the cursor was.
+      const off = { x: at.x + 0.02, y: at.y + 0.02 };
+      const snap = modal.nearestOnRail(off);
+      const base = edits.length;
+      tapFlat(modal, off);
+
+      expect(edits.length).toBeGreaterThan(base);
+      expect(modal.circuit.parts).toHaveLength(1);
+      expect(modal.circuit.parts[0].component).toBe("C_1206");
+      expect(modal.circuit.parts[0].x).toBeCloseTo(snap.point.x, 9);
+      expect(modal.circuit.parts[0].y).toBeCloseTo(snap.point.y, 9);
+      expect(modal.circuit.parts[0].x, "stored the raw click, not the snap").not.toBeCloseTo(off.x, 9);
+      // And it is on screen, not merely in the circuit: nothing else re-renders the modal.
+      expect(modal.svg.innerHTML).toContain("el-res-body");
+      expect(modal.svg.innerHTML).toContain("el-res-lead");
+    });
+
+    it("carries the placed parts through to the controller", () => {
+      // `cloneCircuit` has silently dropped a newly added field before, and the symptom is nasty: the part
+      // draws on the canvas and vanishes the moment the circuit reaches the store.
+      const { modal, edits, at } = withRails();
+      pick(modal, "R_2010");
+      tapFlat(modal, at);
+
+      const sent = edits[edits.length - 1] as any;
+      expect(sent.parts).toEqual(modal.circuit.parts);
+      expect(sent.parts, "the clone shares the array with the modal's own circuit").not.toBe(modal.circuit.parts);
+      expect(sent.parts[0], "the clone shares a part object").not.toBe(modal.circuit.parts[0]);
+      expect(sent.parts[0]).toEqual({ component: "R_2010", x: expect.any(Number), y: expect.any(Number) });
+    });
+
+    it("takes a placed part off when it is tapped again", () => {
+      const { modal, at } = withRails();
+      pick(modal, "C_1206");
+      tapFlat(modal, at);
+      expect(modal.circuit.parts).toHaveLength(1);
+
+      tapFlat(modal, modal.circuit.parts[0]);
+      expect(modal.circuit.parts).toHaveLength(0);
+      expect(modal.svg.innerHTML).not.toContain("el-res-body");
+    });
+
+    it("says so when a placed part did not fit", () => {
+      // The router drops a part whose run is too short, and without this the click registered, the circuit
+      // kept the part, and nothing at all appeared on the canvas.
+      const { modal } = withRails();
+      modal.circuit = { ...modal.circuit, parts: [{ component: "C_1206", x: 0, y: 0 }] };
+      modal.routed = { ...modal.routed, parts: [] };
+      modal.renderStatus();
+      expect(modal.statusEl.textContent).toContain("1 part did not fit");
+    });
+
+    it("puts the placed parts in both cut files", () => {
+      // Drawn on the copper files (never cut) — a part missing from them is a part nobody building this
+      // knows to fit.
+      const svgs: string[] = [];
+      const { modal, at } = withRails();
+      (globalThis as any).URL = { createObjectURL: () => "blob:mock", revokeObjectURL: () => {} };
+      (globalThis as any).Blob = class {
+        constructor(parts: any[]) {
+          svgs.push(String(parts[0]));
+        }
+      };
+
+      // Nothing placed yet, so neither file has a parts layer at all.
+      modal.overlay.querySelector(".el-export").dispatch("click", {});
+      modal.overlay.querySelector(".el-export-carrier").dispatch("click", {});
+      const [stripsBefore, carrierBefore] = svgs.splice(0, 2);
+      expect(stripsBefore).not.toContain('<g id="parts">');
+      expect(carrierBefore).not.toContain('<g id="annotation"');
+
+      pick(modal, "C_1206");
+      tapFlat(modal, at);
+      expect(modal.routed.parts, "the router placed nothing to export").toHaveLength(1);
+
+      modal.overlay.querySelector(".el-export").dispatch("click", {});
+      modal.overlay.querySelector(".el-export-carrier").dispatch("click", {});
+      const [stripsAfter, carrierAfter] = svgs.splice(0, 2);
+      // The part is drawn on its own layer in each file — it is annotation, never copper to cut.
+      expect(stripsAfter, "the part never reached the strips file").toContain('<g id="parts">');
+      expect(carrierAfter, "the part never reached the carrier file").toContain('<g id="annotation"');
+
+      delete (globalThis as any).URL;
+      delete (globalThis as any).Blob;
+    });
+  });
+
 });

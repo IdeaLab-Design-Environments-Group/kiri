@@ -790,8 +790,28 @@ body {
 .el-zoom-in:hover,
 .el-zoom-out:hover,
 .el-fit:hover { background: var(--surface-soft, #f3f5f9); border-color: #cdd3df; }
+/* The library picker. One control for the whole library: parts are added to `footprints.generated.ts`
+   all the time, and a button each would push the rest of the toolbar off the row by the tenth one. */
+.el-part-label {
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted, #6b7280);
+}
+.el-part {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border, #d7dbe4);
+  border-radius: 0.4rem;
+  background: var(--surface, #fff);
+  color: inherit;
+  max-width: 14rem;
+}
+.el-part:hover { background: var(--surface-soft, #f3f5f9); border-color: #cdd3df; }
 .el-view.is-active,
 .el-mirror.is-active,
+.el-part.is-active,
 .el-tool.is-active {
   background: var(--accent-soft, #eef3ff);
   color: var(--accent-strong, #1741c4);
