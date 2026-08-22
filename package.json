@@ -8,7 +8,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "footprints": "cd ocaml && ocamlfind ocamlopt footprints.ml -o footprints && ./footprints > ../src/model/footprints.generated.ts"
+    "footprints": "cd ocaml && ocamlfind ocamlopt kicad.ml footprints.ml -o footprints && ./footprints > footprints.tmp.ts && mv footprints.tmp.ts ../src/model/footprints.generated.ts"
   },
   "devDependencies": {
     "@types/node": "^22.19.20",

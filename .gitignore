@@ -6,3 +6,4 @@
 ocaml/*.cm*
 ocaml/*.o
 ocaml/footprints
+ocaml/*.tmp.ts
