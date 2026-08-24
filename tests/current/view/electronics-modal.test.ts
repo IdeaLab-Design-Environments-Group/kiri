@@ -1,14 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ElectronicsModal } from "../../../src/view/electronics-modal.js";
+import { ElectronicsModal, UNSHELVED, shelfFor } from "../../../src/view/electronics-modal.js";
 import type { FoldFile } from "../../../src/model/fold-file.js";
-import { flatFaces } from "../../../src/model/electronics.js";
+import { flatFaces, pointInFace } from "../../../src/model/electronics.js";
 import { batteryTerminals, patternDiag, tapeWidthFor } from "../../../src/model/electronics-routing.js";
 import { printScale } from "../../../src/model/print-scale.js";
-import { COMPONENTS, R_1206 } from "../../../src/model/footprints.generated.js";
-import { REST_COMPONENTS } from "../../../src/model/footprints.rest.generated.js";
+import { COMPONENTS, R_1206, SW_SPDT } from "../../../src/model/footprints.generated.js";
 import { PCB_COLOURS } from "../../../src/model/part-render.js";
 import { padNamed, padSize, terminals } from "../../../src/model/footprint.js";
-import { placement } from "../../../src/model/parts.js";
+import { netPlacement } from "../../../src/model/parts.js";
+import { LIBRARY, componentById } from "../../../src/model/library.js";
+import { sheetFrame } from "../../../src/model/copper-svg-export.js";
+import { ERRORS } from "../../../src/model/wire-rules.js";
 import { installDom } from "./mock-dom.js";
 
 /** A 2x2 grid of unit quads: four faces, hinges between neighbours. */
@@ -74,6 +76,9 @@ describe("view/electronics-modal", () => {
   afterEach(() => {
     delete (globalThis as any).document;
     delete (globalThis as any).window;
+    // The address bar too: a leaked `#/electronics` would put the next modal on the editor page before
+    // its test asked for it, which is a confusing way for an unrelated test to fail.
+    delete (globalThis as any).location;
   });
 
   it("redraws the tiles and the leg pads when the sim's Gap slider moves", () => {
@@ -162,7 +167,188 @@ describe("view/electronics-modal", () => {
     }
   });
 
-  it("draws a placed LED's two pads immediately", () => {
+  describe("the round trip to the store", () => {
+    /**
+     * A circuit with every optional field populated.
+     *
+     * This fixture is the guard. `cloneCircuit` has silently eaten six fields over this project's life —
+     * `flip`, `component`, `nets`/`terminals`, `wires`, `free`, `color` — and every one drew on the canvas
+     * and was gone one hop later, with nothing thrown and nothing logged. A test cannot know about a field
+     * added tomorrow, but the moment someone adds one to `Circuit` and populates it HERE, the assertions
+     * below fail until the clone carries it.
+     *
+     * So: **adding a field to `Circuit` means adding it to this fixture.**
+     */
+    function fullCircuit(): any {
+      return {
+        leds: [{ a: 0, b: 1, flip: true, component: "LED_0603" }],
+        battery: { face: 2 },
+        resistors: [{ x: 1, y: 2, flip: true }],
+        switches: [{ x: 3, y: 4, flip: false }],
+        parts: [{ component: "C_1206", x: 5, y: 6, flip: true, free: true, rot: 90 }],
+        nets: [{ id: "n1", name: "SDA", color: "#ff8800" }],
+        terminals: [{ part: 0, pad: "1", net: "n1" }],
+        wires: [{
+          id: "w1",
+          // Every vertex kind, so a clone that flattens one to a bare point is caught here.
+          pts: [
+            { kind: "free", x: 0, y: 0 },
+            { kind: "pad", part: 0, pad: "1" },
+            { kind: "led", led: 0, leg: 1 },
+            { kind: "battery", side: "pwr" },
+          ],
+          net: "n1",
+          width: 2,
+        }],
+      };
+    }
+
+    it("hands the store every field it was given, and shares none of them", () => {
+      const { modal, edits } = openOn(grid2x2());
+      const full = fullCircuit();
+      modal.circuit = full;
+      modal.emit();
+
+      const sent = edits[edits.length - 1] as any;
+      // Every field arrives...
+      expect(Object.keys(sent).sort(), "the clone dropped or invented a field").toEqual(
+        Object.keys(full).sort(),
+      );
+      // ...with its value intact...
+      expect(sent).toEqual(full);
+      // ...and nothing is shared with the modal's own circuit, or an edit here would reach into what the
+      // controller already holds.
+      for (const key of Object.keys(full)) {
+        if (Array.isArray(full[key]) && full[key].length > 0) {
+          expect(sent[key], `${key} is the same array`).not.toBe(full[key]);
+          expect(sent[key][0], `${key}[0] is the same object`).not.toBe(full[key][0]);
+        }
+      }
+      expect(sent.battery, "battery is the same object").not.toBe(full.battery);
+    });
+
+    it("carries a field the clone has never heard of, rather than dropping it", () => {
+      // The inversion that makes the trap survivable: `cloneCircuit` deep-copies what it knows by name and
+      // spreads the rest, so a field added to the model outlives the trip even before anyone teaches this
+      // function about it. It arrives by reference — good enough for a value, and the test above is what
+      // says a nested one wants a real copy.
+      const { modal, edits } = openOn(grid2x2());
+      modal.circuit = { ...fullCircuit(), somethingNobodyHasWrittenYet: 42 };
+      modal.emit();
+
+      const sent = edits[edits.length - 1] as any;
+      expect(sent.somethingNobodyHasWrittenYet, "an unknown field was silently dropped").toBe(42);
+    });
+  });
+
+  describe("the toolbar", () => {
+    it("draws every set of mutually exclusive choices as one segmented control", () => {
+      // A wall of identically-styled buttons said nothing about which were modes, which were actions, and
+      // which belonged together. Each set of choices is now one control with dividers -- and this is the
+      // guard, because the cheap way to add a tool is to drop another loose button beside the others.
+      // Read off the markup rather than the parsed tree: the mock DOM flattens `innerHTML`, so nesting
+      // only exists in the string. The segments are not themselves nested, so "inside a segment" is
+      // "the nearest tag before me that opens or closes one, opens one".
+      const { modal } = openOn(grid2x2());
+      const html = modal.overlay.innerHTML as string;
+      const inSegment = (at: number): boolean => {
+        const opened = html.lastIndexOf('<span class="el-seg">', at);
+        const closed = html.lastIndexOf("</span>", at);
+        return opened !== -1 && opened > closed;
+      };
+      for (const cls of ["el-tool", "el-place", "el-view", "el-mirror"]) {
+        const found = [...html.matchAll(new RegExp(`class="${cls}"`, "g"))];
+        expect(found.length, `no .${cls} buttons at all`).toBeGreaterThan(0);
+        for (const m of found) {
+          expect(
+            inSegment(m.index!),
+            `a .${cls} mode button sits loose outside a segmented control`,
+          ).toBe(true);
+        }
+      }
+    });
+
+    it("does not label two different groups with the same word", () => {
+      // There were briefly two groups both captioned "Place": one for what to place, one for how it sits.
+      // A toolbar that says the same word twice about different things is worse than an unlabelled one.
+      const { modal } = openOn(grid2x2());
+      const labels = modal.overlay.querySelectorAll(".el-group-label")
+        .map((l: any) => String(l.textContent).trim())
+        .filter((t: string) => t.length > 0);
+      expect(new Set(labels).size, `duplicate group captions: ${labels.join(", ")}`).toBe(labels.length);
+    });
+  });
+
+  describe("as a page rather than a dialog", () => {
+    it("is a region on the page, and claims nothing about the rest of it", () => {
+      // `role="dialog" aria-modal="true"` told a screen reader the header and the model behind it did not
+      // exist. That was true of a modal and is a lie about a page, which is the whole point of the change.
+      const { modal } = openOn(grid2x2());
+      const shell = modal.overlay.innerHTML as string;
+      expect(modal.overlay.className).toContain("el-page");
+      expect(modal.overlay.className, "still an overlay over the app").not.toContain("sim-overlay");
+      expect(shell).not.toContain("aria-modal");
+      expect(shell).not.toContain('role="dialog"');
+      // And there is no dismiss control, because a page is left rather than closed.
+      expect(shell).toContain("el-back");
+      expect(shell).not.toContain('aria-label="Close"');
+    });
+
+    it("takes the model page down while it is up, and gives it back on the way out", () => {
+      // Hidden by a class on <body>, never emptied or moved: `installResizableLayout` is bound to #app,
+      // and the viewer's iframe reloads to a blank preview the moment it is re-parented.
+      const { modal } = openOn(grid2x2());
+      const body = (globalThis as any).document.body;
+      expect(body.classList.contains("is-electronics")).toBe(true);
+      expect(modal.trigger.classList.contains("is-active"), "the nav link does not say where you are").toBe(true);
+
+      modal.close();
+      expect(body.classList.contains("is-electronics")).toBe(false);
+      expect(modal.trigger.classList.contains("is-active")).toBe(false);
+    });
+
+    it("opens at its own URL, and the browser's Back leaves it", () => {
+      const loc = { hash: "#/" };
+      (globalThis as any).location = loc;
+      const { document } = installDom();
+      const listeners: (() => void)[] = [];
+      (globalThis as any).window = { addEventListener: (_t: string, fn: () => void) => listeners.push(fn) };
+      const modal = new ElectronicsModal() as any;
+      modal.mountTrigger(document.createElement("div") as unknown as HTMLElement);
+      modal.setPattern(grid2x2());
+
+      modal.open();
+      expect(loc.hash, "the editor did not put itself in the address bar").toBe("#/electronics");
+      expect(modal.overlay.hidden).toBe(false);
+
+      // The browser going back: the hash returns to the model page and `hashchange` fires.
+      loc.hash = "#/";
+      for (const fn of listeners) fn();
+      expect(modal.overlay.hidden, "Back left the editor showing").toBe(true);
+      expect((globalThis as any).document.body.classList.contains("is-electronics")).toBe(false);
+
+      // ...and Forward brings it back, without the trigger being clicked again.
+      loc.hash = "#/electronics";
+      for (const fn of listeners) fn();
+      expect(modal.overlay.hidden).toBe(false);
+
+      delete (globalThis as any).location;
+    });
+
+    it("starts on the editor when the page is loaded straight at its URL", () => {
+      // A pasted or bookmarked #/electronics has to arrive on the editor, not on the model page with the
+      // address bar claiming otherwise.
+      (globalThis as any).location = { hash: "#/electronics" };
+      installDom();
+      const modal = new ElectronicsModal() as any;
+      expect(modal.overlay.hidden).toBe(false);
+      delete (globalThis as any).location;
+    });
+  });
+
+  it("draws a placed LED immediately, as the footprint that will be cut", () => {
+    // It used to be two coloured circles invented here. It is now the library part, drawn through the same
+    // `partSvg` every other part goes through, so what is on the canvas is what comes out of the cutter.
     const { modal, edits } = openOn(grid2x2());
 
     modal.selectTool("led");
@@ -172,8 +358,15 @@ describe("view/electronics-modal", () => {
 
     expect(edits).toHaveLength(base + 1);
     expect((edits[base] as any).leds).toHaveLength(1);
-    expect(modal.svg.innerHTML).toContain("el-led-pwr");
-    expect(modal.svg.innerHTML).toContain("el-led-gnd");
+    // Two real pads, in the PCB palette's copper and mask, inside the parts group.
+    expect(modal.svg.innerHTML).toContain("el-part-marks");
+    expect(modal.svg.innerHTML).toContain(PCB_COLOURS.mask);
+    expect(modal.drawnParts().map((d: any) => d.component)).toEqual(["LED_1206"]);
+    expect(modal.drawnParts()[0].shape.leads).toHaveLength(2);
+    // And nothing is left of the bespoke marker it used to be drawn as.
+    expect(modal.svg.innerHTML).not.toContain("el-led-pwr");
+    expect(modal.svg.innerHTML).not.toContain("el-led-gnd");
+    expect(modal.svg.innerHTML).not.toContain("el-led-body");
   });
 
   it("selects an LED when it is tapped, and removes it on Delete", () => {
@@ -468,7 +661,9 @@ describe("view/electronics-modal", () => {
         const run = modal.routed.traces[0];
         modal.selectTool("resistor");
         tapFlat(modal, run.pts[Math.floor(run.pts.length / 2)]);
-        const drawn = modal.drawnParts();
+        // The LED is drawn through the same list now, so pick the resistor out of it rather than
+        // assuming it is alone.
+        const drawn = modal.drawnParts().filter((d: any) => d.component === "R_1206");
         expect(drawn, "no resistor drawn").toHaveLength(1);
         // Read off the shape the canvas hands the renderer, not the markup: pads are painted as their
         // true outlines now, and it is the placement this test is about.
@@ -530,7 +725,9 @@ describe("view/electronics-modal", () => {
       (globalThis as any).document.dispatch("keydown", { key: "Delete" });
       expect(modal.circuit.resistors).toHaveLength(0);
       expect(modal.selected).toBeNull();
-      expect(modal.svg.innerHTML).not.toContain("el-part-marks");
+      // The parts group is still there — it holds the LED, which is drawn through it too — but the
+      // resistor is not in it any more.
+      expect(modal.drawnParts().map((d: any) => d.component)).toEqual(["LED_1206"]);
     });
   });
 
@@ -555,41 +752,245 @@ describe("view/electronics-modal", () => {
       expect(modal.tool).toBe(id);
     }
 
-    /** Every part in the library, both halves of the generated file — the palette must weigh them the
-     *  same. Which half a part is emitted into is a bundling decision, not a fact about the part. */
-    const WHOLE_LIBRARY = [...COMPONENTS, ...REST_COMPONENTS];
 
-    it("offers every series part in the library, and grows without a button each", async () => {
-      // The palette is built from COMPONENTS, so a part added to the library has to appear here with no
-      // change to the view. A button per part was the thing to avoid: seven fits on the toolbar, twenty
-      // does not.
-      const { modal } = openOn(grid2x2());
-      await modal.libraryReady;
-      const offered = modal.overlay.querySelectorAll("option").map((o: any) => o.value);
-      const ids = WHOLE_LIBRARY.map((c) => c.id);
-      for (const id of offered) expect(ids, `${id} is not a library part`).toContain(id);
-      // Everything in series on a rail is offered...
-      for (const id of ["R_1206", "R_2010", "C_1206", "SW_SPDT", "SW_PUSH"]) {
-        expect(offered, `${id} missing from the palette`).toContain(id);
-      }
-      // ...and the two the fixed tools place are not, since neither goes in series: an LED straddles a
-      // hinge and the battery pins to a face.
-      expect(offered).not.toContain("LED_1206");
-      expect(offered).not.toContain("BAT_COIN_20");
-      // Exactly the library parts a rail can pass through, less those two. Stated as the rule rather
-      // than as a number: the library went from 8 footprints to 159 and a count would have been a lie
-      // by the next commit.
-      const series = WHOLE_LIBRARY.filter(
-        (c) => placement(c.footprint).placeable && c.id !== "LED_1206" && c.id !== "BAT_COIN_20",
-      );
-      expect(offered.sort()).toEqual(series.map((c) => c.id).sort());
-      // One control for the library, not one button per part.
-      expect(modal.overlay.querySelectorAll(".el-tool")).toHaveLength(2);
+    it("stands a part on the sheet where there is no rail, instead of swallowing the click", () => {
+      // A rail passes through at most three terminals, so for most of the library the only way to place a
+      // part at all is to stand it on the sheet and wire its pads. That click used to do NOTHING -- no part,
+      // no message -- which reads as a broken palette rather than as a rule.
+      const { modal, edits } = openOn(grid2x2());
+      modal.selectTool("battery");
+      tapFlat(modal, { x: 0.5, y: 0.5 });
+      modal.selectTool("led");
+      tapFlat(modal, modal.gaps[0].point);
+      const before = modal.routed.traces;
+      expect(before.length).toBeGreaterThan(0);
+
+      // Right on top of a rail, deliberately. A twenty-six-way socket has no seat to land in whatever it is
+      // near: `placement` refuses anything past three terminals, because a rail passes THROUGH a part and
+      // there is no meaning to splicing a USB socket into a run of tape. So proximity must not get a vote,
+      // and this asserts that by choosing the least favourable point for it.
+      const spot = before[0].pts[Math.floor(before[0].pts.length / 2)];
+      expect(pointInFace(modal.faces, spot)).toBeGreaterThanOrEqual(0);
+      expect(modal.nearestOnRail(spot).dist).toBeLessThan(modal.pickRadius());
+
+      modal.selectPlaceMode("free");
+      pick(modal, "Conn_USB_C_Socket_Molex_2171790001");
+      tapFlat(modal, spot!);
+
+      const circuit = edits[edits.length - 1] as any;
+      expect(circuit.parts).toHaveLength(1);
+      expect(circuit.parts[0].free).toBe(true);
+      expect(circuit.parts[0].x).toBeCloseTo(spot!.x, 9);
+      expect(circuit.parts[0].y).toBeCloseTo(spot!.y, 9);
+      // And no copper was cut for it: a free part is not in series with anything.
+      expect(modal.routed.traces).toEqual(before);
     });
 
-    /** The picker's rows, as a browser would read them: what each offers, whether it is selectable. */
+    it("draws a free part on the canvas, at the size the rail would have given it", () => {
+      // The router is not asked about free parts -- it skips them when it cuts rails -- so nothing puts one
+      // in `routed.parts`. Placed, stored, exported in the netlist and INVISIBLE is the worst of the
+      // available failures: the author drops a socket, sees nothing, and drops another.
+      const { modal } = openOn(grid2x2());
+      modal.selectTool("battery");
+      tapFlat(modal, { x: 0.5, y: 0.5 });
+      const before = modal.svg.innerHTML as string;
+
+      modal.selectPlaceMode("free");
+      pick(modal, "Conn_USB_C_Socket_Molex_2171790001");
+      tapFlat(modal, { x: 1.2, y: 1.2 });
+      expect(modal.circuit.parts[0].free).toBe(true);
+
+      // On the canvas, not merely in the circuit.
+      expect(modal.svg.innerHTML).not.toBe(before);
+      expect(modal.svg.innerHTML).toContain("el-part-marks");
+      // And drawn from its own footprint: 26 terminals means 26 contacts, the count `rowShape` used to
+      // flatten to three. This is the two fixes meeting -- free placement is what finally puts a
+      // twenty-six-way part on the sheet at all.
+      const drawn = modal.routedParts().find((p: any) => p.source === 0);
+      expect(drawn).toBeDefined();
+      expect(modal.partShapeOf(drawn).leads).toHaveLength(26);
+    });
+
+    it("drags a free part to a new place, committing once on release", () => {
+      const { modal, edits } = openOn(grid2x2());
+      modal.selectPlaceMode("free");
+      pick(modal, "Conn_USB_C_Socket_Molex_2171790001");
+      tapFlat(modal, { x: 1.2, y: 1.2 });
+      const from = { ...modal.circuit.parts[0] };
+      const base = edits.length;
+
+      const grab = modal.tp({ x: from.x, y: from.y });
+      const drop = modal.tp({ x: from.x + 0.6, y: from.y + 0.4 });
+      modal.svg.dispatch("pointerdown", { clientX: grab.x, clientY: grab.y, pointerId: 1, button: 0 });
+      modal.svg.dispatch("pointermove", { clientX: drop.x, clientY: drop.y, pointerId: 1 });
+      // Mid-drag the part has NOT moved and nothing has been re-planned: a full plan is most of a second,
+      // and paying it per pointer-move is the stutter the live layer exists to avoid.
+      expect(modal.circuit.parts[0].x).toBeCloseTo(from.x, 9);
+      expect(edits.length).toBe(base);
+      expect(modal.liveLayer().innerHTML).toContain("el-part-ghost");
+
+      modal.svg.dispatch("pointerup", { clientX: drop.x, clientY: drop.y, pointerId: 1 });
+      expect(modal.circuit.parts[0].x).toBeCloseTo(from.x + 0.6, 6);
+      expect(modal.circuit.parts[0].y).toBeCloseTo(from.y + 0.4, 6);
+      expect(edits.length).toBe(base + 1); // once, on release
+      expect(modal.circuit.parts[0].free).toBe(true);
+    });
+
+    it("does not drag a SEATED part, whose place belongs to the run it breaks", () => {
+      // A seated part is held by the copper: the router cut a gap for it at a point on a rail, and moving
+      // the drawing without re-cutting would show it somewhere the break is not. Dropping it again is how
+      // you move one, because that re-plans the break too. Only free parts -- which no copper is cut for --
+      // move under the cursor.
+      const { modal } = openOn(grid2x2());
+      modal.selectTool("battery");
+      tapFlat(modal, { x: 0.5, y: 0.5 });
+      modal.selectTool("led");
+      tapFlat(modal, modal.gaps[0].point);
+      const run = modal.routed.traces[0];
+      const on = run.pts[Math.floor(run.pts.length / 2)];
+      modal.selectPlaceMode("free");
+      pick(modal, "R_1206");
+      tapFlat(modal, on);
+      expect(modal.circuit.parts[0].free).toBeUndefined(); // seated, not free
+      const was = { ...modal.circuit.parts[0] };
+
+      const grab = modal.tp({ x: was.x, y: was.y });
+      modal.svg.dispatch("pointerdown", { clientX: grab.x, clientY: grab.y, pointerId: 1, button: 0 });
+      modal.svg.dispatch("pointermove", { clientX: grab.x + 40, clientY: grab.y + 30, pointerId: 1 });
+      modal.svg.dispatch("pointerup", { clientX: grab.x + 40, clientY: grab.y + 30, pointerId: 1 });
+
+      expect(modal.circuit.parts[0].x).toBeCloseTo(was.x, 9);
+      expect(modal.circuit.parts[0].y).toBeCloseTo(was.y, 9);
+    });
+
+    it("still pans when the drag started away from any part", () => {
+      // The part grab is tested BEFORE `this.pan` is armed, so it is placed where it could swallow a pan.
+      const { modal } = openOn(grid2x2());
+      modal.selectPlaceMode("free");
+      pick(modal, "Conn_USB_C_Socket_Molex_2171790001");
+      tapFlat(modal, { x: 1.2, y: 1.2 });
+      const before = { ...modal.view };
+
+      const away = modal.tp({ x: 40, y: 40 });
+      modal.svg.dispatch("pointerdown", { clientX: away.x, clientY: away.y, pointerId: 1, button: 0 });
+      modal.svg.dispatch("pointermove", { clientX: away.x + 60, clientY: away.y + 40, pointerId: 1 });
+      modal.svg.dispatch("pointerup", { clientX: away.x + 60, clientY: away.y + 40, pointerId: 1 });
+      expect(modal.view).not.toEqual(before);
+      expect(modal.circuit.parts[0].x).toBeCloseTo(1.2, 9); // and moved nothing
+    });
+
+    it("turns a free part a quarter at a time, and all the way back round", () => {
+      // A seated part FLIPS -- its angle belongs to the run it breaks. A free part has no run, so R turns it.
+      const { modal } = openOn(grid2x2());
+      modal.selectPlaceMode("free");
+      pick(modal, "Conn_USB_C_Socket_Molex_2171790001");
+      tapFlat(modal, { x: 1.2, y: 1.2 });
+      expect(modal.circuit.parts[0].rot).toBeUndefined();
+
+      const press = () => (globalThis as any).document.dispatch("keydown", { key: "r" });
+      press();
+      expect(modal.circuit.parts[0].rot).toBe(90);
+      press(); press();
+      expect(modal.circuit.parts[0].rot).toBe(270);
+      press();
+      expect(modal.circuit.parts[0].rot).toBe(0); // round, not 360
+      // And the turn reaches the drawing, not just the circuit.
+      modal.circuit = { ...modal.circuit, parts: [{ ...modal.circuit.parts[0], rot: 90 }] };
+      const turned = modal.routedParts().find((p: any) => p.source === 0);
+      expect(Math.abs(turned.b.x - turned.a.x)).toBeLessThan(Math.abs(turned.b.y - turned.a.y));
+    });
+
+    it("puts an LED on a tile when asked to, instead of always bridging a fold", () => {
+      // An LED bridging a hinge was a rule about the PART. It is now a rule about the MODE, and the same
+      // choice is offered for every component. On a tile the LED gets no `Led` entry at all, so the router
+      // never bridges it and never decides which leg is positive -- the author wires both pads.
+      const { modal } = openOn(grid2x2());
+      modal.selectTool("led");
+      modal.selectPlaceMode("free");
+      tapFlat(modal, { x: 1.2, y: 1.2 });
+
+      expect(modal.circuit.leds).toHaveLength(0);
+      expect(modal.circuit.parts).toHaveLength(1);
+      expect(modal.circuit.parts[0].free).toBe(true);
+      expect(modal.circuit.parts[0].component).toMatch(/^LED_/);
+      expect(modal.circuit.parts[0].x).toBeCloseTo(1.2, 9);
+    });
+
+    it("still bridges a fold with an LED in gap mode, exactly as it always did", () => {
+      // The default is unchanged, and this is the assertion that says so: adding the choice must not have
+      // quietly moved where an LED goes when nobody asks for anything different.
+      const { modal } = openOn(grid2x2());
+      modal.selectTool("led");
+      tapFlat(modal, modal.gaps[0].point);
+      expect(modal.circuit.leds).toHaveLength(1);
+      expect(modal.circuit.parts ?? []).toHaveLength(0);
+    });
+
+    it("stands a part across a fold in gap mode, turned to cross the hinge", () => {
+      // The other direction, and the one that had no way of being asked for at all: a two-pad chip has as
+      // much reason to bridge a fold as an LED does.
+      const { modal } = openOn(grid2x2());
+      const g = modal.gaps[0];
+      pick(modal, "C_1206");
+      tapFlat(modal, g.point);
+
+      const part = modal.circuit.parts[0];
+      expect(part.free).toBe(true);          // no rail is cut for it
+      expect(part.rot).toBeDefined();
+      // On the hinge, and ACROSS it: the part's own axis is perpendicular to the fold, or both pads would
+      // land on the same tile and it would bridge nothing.
+      const [p, q] = g.ends;
+      expect(part.x).toBeCloseTo((p.x + q.x) / 2, 9);
+      expect(part.y).toBeCloseTo((p.y + q.y) / 2, 9);
+      const drawn = modal.routedParts().find((r: any) => r.source === 0);
+      const along = { x: drawn.b.x - drawn.a.x, y: drawn.b.y - drawn.a.y };
+      const hinge = { x: q.x - p.x, y: q.y - p.y };
+      const dot = (along.x * hinge.x + along.y * hinge.y)
+        / (Math.hypot(along.x, along.y) * Math.hypot(hinge.x, hinge.y));
+      expect(Math.abs(dot)).toBeLessThan(1e-6); // perpendicular
+    });
+
+    it("drops nothing in the margin, where there is no sheet to stick a part to", () => {
+      const { modal, edits } = openOn(grid2x2());
+      const outside = { x: 40, y: 40 };
+      expect(pointInFace(modal.faces, outside)).toBe(-1);
+      const base = edits.length;
+      modal.selectPlaceMode("free");
+      pick(modal, "Conn_USB_C_Socket_Molex_2171790001");
+      tapFlat(modal, outside);
+      expect(edits.length).toBe(base);
+    });
+
+    it("offers every part in the library it can wire, and grows without a button each", () => {
+      // The rule changed under this test and the test is the record of it. A rail can only pass THROUGH a
+      // part with two or three terminals, so the palette used to offer 37 of 129 and file the rest under
+      // "not in series on a rail". With nets a part is a set of pads to wire, not something a rail passes
+      // through, so a USB socket is as placeable as a resistor and the only requirement left is a
+      // terminal to wire. Stated as the rule, never as a count -- the count has already rotted once.
+      const { modal } = openOn(grid2x2());
+      const offered = modal.overlay.querySelector(".el-part")
+        .querySelectorAll("option").map((o: any) => o.value);
+      const wirable = LIBRARY.filter((c) => netPlacement(c.footprint).placeable && !FIXED.has(c.id));
+      expect(offered.sort()).toEqual(wirable.map((c) => c.id).sort());
+      // Including the parts that were refused before...
+      for (const id of ["R_1206", "C_1206", "SW_SPDT"]) expect(offered).toContain(id);
+      expect(offered.some((id: string) => /USB_C/.test(id)), "no USB socket on offer").toBe(true);
+      // ...and still excluding the three the fixed tools place, which do not go on a rail at all: both
+      // LED packages straddle a hinge, and the battery pins to a face.
+      for (const id of ["LED_1206", "LED_0603", "BAT_COIN_20"]) expect(offered).not.toContain(id);
+      // One control for the library, not one button per part. Stated as the rule and not as a count of
+      // the toolbar, for the reason given above: the count has rotted twice now, most recently when the
+      // wire tool arrived — a button that places no part at all, and so no evidence either way.
+      const tools = modal.overlay.querySelectorAll(".el-tool").map((b: any) => b.dataset.tool);
+      expect(tools.filter((t: string) => offered.includes(t))).toEqual([]);
+    });
+
+    /** The parts the two fixed tools place, which the library picker therefore never offers. */
+    const FIXED = new Set(["LED_1206", "LED_0603", "BAT_COIN_20"]);
+
+    /** The LIBRARY picker's rows, as a browser would read them: what each offers, whether selectable. */
     function rows(modal: any): { value: string; text: string; disabled: boolean }[] {
-      return modal.overlay.querySelectorAll("option").map((o: any) => ({
+      return modal.overlay.querySelector(".el-part").querySelectorAll("option").map((o: any) => ({
         value: o.value,
         text: o.textContent,
         disabled: o.disabled === true,
@@ -607,7 +1008,7 @@ describe("view/electronics-modal", () => {
       // Forty-odd rows in one scroll is a wall. The shelves are what make it a menu -- and every offered
       // part has to be on one, or the grouping has quietly lost a part instead of filing it.
       const { modal } = openOn(grid2x2());
-      const groups = modal.overlay.querySelectorAll("optgroup");
+      const groups = modal.overlay.querySelector(".el-part").querySelectorAll("optgroup");
       expect(groups.length).toBeGreaterThan(1);
       for (const g of groups) expect(g.getAttribute("label")).toBeTruthy();
       const shelved = groups.flatMap((g: any) => g.children.map((o: any) => o.value));
@@ -645,6 +1046,7 @@ describe("view/electronics-modal", () => {
       // Typing narrows the view; it must not change what the next click on the canvas places. If the
       // armed part dropped out of the list the picker would be showing one part and placing another.
       const { modal } = openOn(grid2x2());
+      modal.selectPlaceMode("free");
       pick(modal, "C_1206");
       search(modal, "resistor");
       expect(modal.tool, "typing re-armed the tool").toBe("C_1206");
@@ -652,31 +1054,33 @@ describe("view/electronics-modal", () => {
       expect(modal.overlay.querySelector(".el-part").value).toBe("C_1206");
     });
 
-    it("reaches the half of the library that is not in the main bundle", async () => {
-      // The 117 parts a rail cannot pass through are a megabyte of pad outlines and are emitted into a
-      // second file, fetched only when the modal opens. They are emitted at all so the palette can name
-      // them -- so the picker has to actually know about them, and know them by the same rule as the
-      // rest: which file a part was emitted into is a bundling decision, not a fact about the part.
+    it("has the whole library the moment it opens, without fetching a second half", async () => {
+      // The library used to arrive in two halves, the second fetched on first open, and the picker merged
+      // it in when it landed. The split is gone -- `library.ts` joins them statically -- because only the
+      // palette ever merged the halves: the router, the cut files and the netlist all resolved against the
+      // eager half alone, so a part from the other one could be placed and then fail to resolve everywhere
+      // that mattered. What is left to test is that nothing has to be waited for.
       const { modal } = openOn(grid2x2());
-      await modal.libraryReady;
-      const lazy = REST_COMPONENTS.find((c) => /USB_C/.test(c.id))!;
-      expect(lazy, "the lazy half has no USB-C part to look for").toBeTruthy();
+      const before = rows(modal).length;
+      const usb = LIBRARY.find((c) => /USB_C/.test(c.id))!;
+      expect(usb, "the library has no USB-C part to look for").toBeTruthy();
 
-      search(modal, lazy.id.toLowerCase());
-      const row = rows(modal).find((r) => r.text.includes(lazy.id));
-      expect(row, `${lazy.id} is in the library but the picker never heard of it`).toBeTruthy();
-      // Judged by placement(), not by which file it came out of.
-      const verdict = placement(lazy.footprint);
-      expect(verdict.placeable).toBe(false);
-      expect(row!.disabled).toBe(true);
-      expect(row!.text).toContain(verdict.placeable ? "" : verdict.why);
+      search(modal, usb.id.toLowerCase());
+      const row = rows(modal).find((r) => r.text.includes(usb.id));
+      expect(row, `${usb.id} is in the library but the picker never heard of it`).toBeTruthy();
+      expect(row!.disabled, "a wirable part was offered greyed out").toBe(false);
+
+      // ...and awaiting the old fetch changes nothing, because there is nothing to fetch.
+      search(modal, "");
+      await modal.libraryReady;
+      expect(rows(modal)).toHaveLength(before);
     });
 
-    it("redraws the picker when the lazily-loaded half of the library arrives", async () => {
-      // The library is fetched once per page, so by the second test in this file it is already there.
-      // This one asks for a fresh module registry, so the modal is genuinely opened against a picker
-      // that does not yet know the other 114 parts -- and has to be redrawn when they land, or the
-      // count line goes on claiming the eager half is the whole library.
+    it("needs no redraw for a library half, because there is no second half", async () => {
+      // This used to assert the picker was rebuilt when the fetched half landed -- it knew the eager half
+      // first, and the count line went on claiming that half was the whole library until the redraw. With
+      // `library.ts` there is one library from the first paint, so what is left to guard is that the count
+      // is honest immediately rather than after an await.
       vi.resetModules();
       const { ElectronicsModal: Fresh } = await import("../../../src/view/electronics-modal.js");
       const { document } = installDom();
@@ -689,66 +1093,157 @@ describe("view/electronics-modal", () => {
       const count = modal.overlay.querySelector(".el-part-count");
       const before = count.textContent;
       await modal.libraryReady;
-
-      expect(before, "the picker knew the lazy half before it was fetched").not.toContain("search to see");
-      expect(count.textContent, "the picker was never redrawn when the library landed").toContain(
-        `search to see the other ${REST_COMPONENTS.length}`,
-      );
+      expect(before, "the count changed once the old fetch settled").toBe(count.textContent);
+      expect(before).not.toContain("search to see");
     });
 
-    it("finds a part it cannot place and says why, instead of showing nothing", async () => {
-      // The library holds 159 footprints and most cannot go in series on a rail. Hunting for a USB socket
-      // and getting an empty list reads as a broken app -- so the search turns it up, greyed out, under
-      // the reason it is not on offer.
-      const { modal } = openOn(grid2x2());
-      await modal.libraryReady;
-      search(modal, "usb");
-      const blocked = rows(modal).filter((r) => r.disabled);
-      expect(blocked.length, "no USB part was surfaced at all").toBeGreaterThan(0);
-      for (const r of blocked) {
-        expect(r.text.toLowerCase()).toContain("usb");
-        expect(r.text, `${r.text} does not say why it cannot be placed`).toMatch(/terminal/);
-        expect(r.value, "an unplaceable row could be picked").toBeFalsy();
-      }
-      // It is named, not merely counted: the id is there to recognise.
-      expect(blocked.map((r) => r.text).join(" ")).toContain("Conn_USB");
-      // And it is under a shelf that says what the greyed-out rows are.
-      const labels = modal.overlay.querySelectorAll("optgroup").map((g: any) => g.getAttribute("label"));
-      expect(labels).toContain("In the library, but not in series on a rail");
+    it("arms a part that used to be refused, and places it", () => {
+      // The USB socket was the standing example of a part in the library and not on offer: four pads, and
+      // a rail cannot pass through it. With nets it is four pads to wire, so it is offered like anything
+      // else -- and the test that used to assert it was greyed out now asserts it works.
+      const { modal, at } = withRails();
+      const usb = LIBRARY.find((c) => /USB_C/.test(c.id))!;
+      pick(modal, usb.id);
+      expect(modal.tool).toBe(usb.id);
+
+      tapFlat(modal, at);
+      expect(modal.circuit.parts.map((p: any) => p.component)).toEqual([usb.id]);
     });
 
-    it("will not arm a tool on a part it cannot place", () => {
-      // Belt and braces on the greyed-out rows: even if a browser let one through, the canvas must not be
-      // left armed with a tool that places nothing.
+    it("will not arm a tool on a part the palette does not offer", () => {
+      // Nothing in the library is refused any more -- every one of the 129 has a terminal to wire -- but
+      // the guard still has work to do: the fixed tools' own parts are not on the palette, and the canvas
+      // must never be left armed with a tool that places nothing.
       const { modal } = openOn(grid2x2());
+      modal.selectPlaceMode("free");
       pick(modal, "C_1206");
       const select = modal.overlay.querySelector(".el-part");
-      select.value = "Conn_USB_C_Socket_Molex_2171790001";
+      select.value = "LED_1206"; // placed by the LED tool, never by the library picker
       select.dispatch("change", {});
       expect(modal.tool).toBe("C_1206");
     });
 
-    it("says how much of the library is on offer, so the picker is not read as all of it", async () => {
+    it("says how many parts are on offer, and counts the hits while searching", () => {
+      // The line existed to say that most of the library was NOT on offer. Now everything with a terminal
+      // is, so it has only the good news left: how many there are, and that typing finds them.
+      const { modal } = openOn(grid2x2());
+      const count = modal.overlay.querySelector(".el-part-count");
+      expect(count.textContent).toBe(`${rows(modal).length} parts — search by name or package`);
+
+      search(modal, "resistor");
+      expect(count.textContent).toContain(`${rows(modal).length} match`);
+    });
+
+    /** The library menu's shelves, as a reader sees them: heading, tally, and whether it is open. */
+    function shelves(modal: any): { label: string; open: boolean; rows: string[] }[] {
+      return modal.overlay.querySelectorAll(".el-part-shelf").map((sh: any) => {
+        const head = sh.children.find((c: any) => c.className.includes("el-part-shelf-head"));
+        const body = sh.children.find((c: any) => c.className.includes("el-part-shelf-body"));
+        return {
+          label: head.textContent,
+          open: head.getAttribute("aria-expanded") === "true",
+          rows: body.children.map((r: any) => r.dataset.id ?? r.textContent),
+        };
+      });
+    }
+
+    /** Click a shelf heading by its label, the way a reader opens one. */
+    function openShelf(modal: any, label: string): void {
+      const head = modal.overlay.querySelectorAll(".el-part-shelf-head")
+        .find((h: any) => h.textContent === label);
+      expect(head, `no shelf called ${label}`).toBeTruthy();
+      head.dispatch("click", {});
+    }
+
+    it("shows the library as shelves that are shut until they are asked for", async () => {
+      // The native select opened as one flat scroll of every offered part, with the group names as
+      // dividers you cannot click -- so finding a capacitor meant reading the whole library. The menu is
+      // built in JS for exactly this: a shut shelf is one line and a count.
       const { modal } = openOn(grid2x2());
       await modal.libraryReady;
-      const count = modal.overlay.querySelector(".el-part-count");
-      const offered = rows(modal).length;
-      const notFixed = WHOLE_LIBRARY.filter((c) => c.id !== "LED_1206" && c.id !== "BAT_COIN_20");
-      const library = notFixed.length;
-      const unplaceable = notFixed.filter((c) => !placement(c.footprint).placeable).length;
-      expect(count.textContent).toBe(
-        `${offered} of ${library} parts go in series on a rail — search to see the other ${unplaceable}`,
-      );
-      // While searching it counts the hits, and says how many more the library has that it cannot place.
-      search(modal, "usb");
-      const hits = rows(modal).filter((r) => !r.disabled).length;
-      const missed = rows(modal).filter((r) => r.disabled).length;
-      expect(count.textContent).toContain(`${hits} match`);
-      expect(count.textContent).toContain(`${missed} in the library but not placeable`);
+      const shut = shelves(modal);
+      expect(shut.length, "no shelves at all").toBeGreaterThan(1);
+      // Every shelf carries its own tally, so its one line says how much is behind it.
+      for (const sh of shut) expect(sh.rows.length).toBeGreaterThan(0);
+      // ...and all of them are shut, bar the one holding whatever is armed.
+      const armed = modal.tool;
+      const openOnes = shut.filter((sh) => sh.open);
+      expect(openOnes.length, "more than the armed part's shelf was open").toBeLessThanOrEqual(1);
+      if (openOnes.length === 1) expect(openOnes[0]!.rows).toContain(armed);
+    });
+
+    it("opens a shelf on a click and shuts it on the next one", async () => {
+      const { modal } = openOn(grid2x2());
+      await modal.libraryReady;
+      const before = shelves(modal).find((sh) => sh.label.startsWith("Capacitors"))!;
+      expect(before.open, "Capacitors was already open").toBe(false);
+
+      openShelf(modal, before.label);
+      const opened = shelves(modal).find((sh) => sh.label.startsWith("Capacitors"))!;
+      expect(opened.open).toBe(true);
+      expect(opened.rows).toContain("C_1206");
+
+      openShelf(modal, before.label);
+      expect(shelves(modal).find((sh) => sh.label.startsWith("Capacitors"))!.open).toBe(false);
+    });
+
+    it("arms the part on the row that was clicked, and puts the menu away", async () => {
+      const { modal } = openOn(grid2x2());
+      await modal.libraryReady;
+      modal.overlay.querySelector(".el-part-trigger").dispatch("click", {});
+      expect(modal.menuOpen).toBe(true);
+
+      const capacitors = shelves(modal).find((sh) => sh.label.startsWith("Capacitors"))!;
+      openShelf(modal, capacitors.label);
+      const row = modal.overlay.querySelectorAll(".el-part-row")
+        .find((r: any) => r.dataset.id === "C_1206");
+      row.dispatch("click", {});
+
+      expect(modal.tool, "the clicked row did not arm its part").toBe("C_1206");
+      expect(modal.menuOpen, "choosing a part left the menu up").toBe(false);
+      // The trigger says what is armed, so the shut menu still answers "which part am I placing?".
+      expect(modal.overlay.querySelector(".el-part-trigger").textContent).toContain("C_1206");
+    });
+
+    it("opens the shelves a search matches, rather than making them be hunted for", async () => {
+      const { modal } = openOn(grid2x2());
+      await modal.libraryReady;
+      search(modal, "capacitor");
+
+      expect(modal.menuOpen, "typing did not bring the list out").toBe(true);
+      const found = shelves(modal);
+      expect(found.length).toBeGreaterThan(0);
+      for (const sh of found) expect(sh.open, `${sh.label} stayed shut while searching`).toBe(true);
+      // And clearing the box shuts them again, bar the armed part's own.
+      search(modal, "");
+      expect(shelves(modal).filter((sh) => sh.open).length).toBeLessThanOrEqual(1);
+    });
+
+    it("closes the menu on Escape, and leaves the page where it is", async () => {
+      // Escape used to close the editor once the menu was away, which was right for a dialog and is wrong
+      // for a page: a page is not dismissible, and a stray Escape wiping out the view you navigated to is
+      // how work gets lost. Back is the way out now.
+      const { modal } = openOn(grid2x2());
+      await modal.libraryReady;
+      modal.overlay.querySelector(".el-part-trigger").dispatch("click", {});
+      expect(modal.menuOpen).toBe(true);
+
+      (globalThis as any).document.dispatch("keydown", { key: "Escape" });
+      expect(modal.menuOpen, "Escape left the menu up").toBe(false);
+      expect(modal.overlay.hidden, "Escape threw the whole editor away with the menu").toBe(false);
+
+      (globalThis as any).document.dispatch("keydown", { key: "Escape" });
+      expect(modal.overlay.hidden, "a second Escape closed the page -- a page is not dismissible").toBe(false);
+
+      // The Back control is what leaves, and it takes the model page's body class back with it.
+      modal.overlay.querySelector(".el-back").dispatch("click", {});
+      expect(modal.overlay.hidden).toBe(true);
+      expect((globalThis as any).document.body.classList.contains("is-electronics")).toBe(false);
     });
 
     it("places the picked part on the nearest rail, snapped to the copper, and draws it", () => {
       const { modal, edits, at } = withRails();
+      modal.selectPlaceMode("free");
       pick(modal, "C_1206");
 
       // Click just off the copper: what gets stored is the point on the run, not where the cursor was.
@@ -762,7 +1257,11 @@ describe("view/electronics-modal", () => {
       expect(modal.circuit.parts[0].component).toBe("C_1206");
       expect(modal.circuit.parts[0].x).toBeCloseTo(snap.point.x, 9);
       expect(modal.circuit.parts[0].y).toBeCloseTo(snap.point.y, 9);
-      expect(modal.circuit.parts[0].x, "stored the raw click, not the snap").not.toBeCloseTo(off.x, 9);
+      // Measured as a distance, not on x alone. The rail the click snaps to here runs very nearly
+      // straight up the sheet, so the snap moves the point in y and leaves x where it was — on x alone
+      // this read as "the click was not snapped" the moment the router's geometry shifted.
+      const moved = Math.hypot(modal.circuit.parts[0].x - off.x, modal.circuit.parts[0].y - off.y);
+      expect(moved, "stored the raw click, not the snap").toBeGreaterThan(1e-9);
       // And it is on screen, not merely in the circuit: nothing else re-renders the modal.
       expect(modal.svg.innerHTML).toContain("el-part-marks");
       expect(modal.svg.innerHTML).toContain(PCB_COLOURS.mask);
@@ -772,6 +1271,7 @@ describe("view/electronics-modal", () => {
       // `cloneCircuit` has silently dropped a newly added field before, and the symptom is nasty: the part
       // draws on the canvas and vanishes the moment the circuit reaches the store.
       const { modal, edits, at } = withRails();
+      modal.selectPlaceMode("free");
       pick(modal, "R_2010");
       tapFlat(modal, at);
 
@@ -784,6 +1284,7 @@ describe("view/electronics-modal", () => {
 
     it("selects a placed part when it is tapped again, and removes it on Delete", () => {
       const { modal, at } = withRails();
+      modal.selectPlaceMode("free");
       pick(modal, "C_1206");
       tapFlat(modal, at);
       expect(modal.circuit.parts).toHaveLength(1);
@@ -796,7 +1297,7 @@ describe("view/electronics-modal", () => {
       (globalThis as any).document.dispatch("keydown", { key: "Delete" });
       expect(modal.circuit.parts).toHaveLength(0);
       expect(modal.selected).toBeNull();
-      expect(modal.svg.innerHTML).not.toContain("el-part-marks");
+      expect(modal.drawnParts().map((d: any) => d.component)).toEqual(["LED_1206"]);
     });
 
     it("places several of the same part on one rail, and routes every one of them", () => {
@@ -804,6 +1305,7 @@ describe("view/electronics-modal", () => {
       // of the part already there -- a target sized to the pattern rather than to the part -- so the second
       // tap deleted the first and the circuit never held two of anything.
       const { modal } = withRails();
+      modal.selectPlaceMode("free");
       pick(modal, "C_1206");
       const run = modal.routed.traces.find((t: any) => t.net === "pwr");
       // Three points spread along the run, each on its own segment so they are genuinely apart.
@@ -815,7 +1317,7 @@ describe("view/electronics-modal", () => {
       // And all three are on the copper, not merely in the circuit.
       expect(modal.routedParts()).toHaveLength(3);
       expect(modal.routedParts().map((p: any) => p.source).sort()).toEqual([0, 1, 2]);
-      expect(modal.drawnParts()).toHaveLength(3);
+      expect(modal.drawnParts().filter((d: any) => d.component === "C_1206")).toHaveLength(3);
       expect(modal.statusEl.textContent).not.toContain("did not fit");
     });
 
@@ -849,6 +1351,9 @@ describe("view/electronics-modal", () => {
       const { modal } = withRails();
       const run = modal.routed.traces.find((t: any) => t.net === "pwr");
       const spots = [0.2, 0.5, 0.8].map((u) => alongRun(run, u));
+      // Not across a fold: this test is about a RAIL running out of room, so every part here has to be
+      // going onto the rail. In gap mode they would stand on hinges instead and the rail would stay empty.
+      modal.selectPlaceMode("free");
       ["R_1206", "C_1206", "R_2010"].forEach((id, i) => {
         pick(modal, id);
         tapFlat(modal, spots[i]!);
@@ -864,6 +1369,7 @@ describe("view/electronics-modal", () => {
 
     it("picks up the part that was tapped, not its neighbour", () => {
       const { modal } = withRails();
+      modal.selectPlaceMode("free");
       pick(modal, "C_1206");
       const run = modal.routed.traces.find((t: any) => t.net === "pwr");
       for (const u of [0.25, 0.75]) tapFlat(modal, alongRun(run, u));
@@ -881,6 +1387,7 @@ describe("view/electronics-modal", () => {
       // A switch is a part the rail steps ACROSS, so which way round it sits decides which side its idle
       // throw is stranded on. The router picks one; R overrules it, and R again gives the decision back.
       const { modal } = withRails();
+      modal.selectPlaceMode("free");
       pick(modal, "SW_SPDT");
       const run = modal.routed.traces.find((t: any) => t.net === "pwr");
       tapFlat(modal, alongRun(run, 0.5));
@@ -901,6 +1408,7 @@ describe("view/electronics-modal", () => {
       // In line with the rail there is no idle terminal to strand, so the turn is the swap of its two ends
       // -- which is what a polarised part needs and what the drawing has to follow.
       const { modal } = withRails();
+      modal.selectPlaceMode("free");
       pick(modal, "C_1206");
       const run = modal.routed.traces.find((t: any) => t.net === "pwr");
       tapFlat(modal, alongRun(run, 0.5));
@@ -913,6 +1421,209 @@ describe("view/electronics-modal", () => {
       const after = modal.routedParts()[0];
       expect(after.a).toEqual(ends.b);
       expect(after.b).toEqual(ends.a);
+    });
+
+    /** Declare a net through the bar, the way the author does. */
+    function addNet(modal: any, name: string): void {
+      const box = modal.overlay.querySelector(".el-net-new");
+      box.value = name;
+      modal.overlay.querySelector(".el-net-add").dispatch("click", {});
+    }
+
+    /** The net chips, as they read: name, and how many pads are on each. */
+    function netChips(modal: any): { name: string; count: string }[] {
+      return modal.overlay.querySelectorAll(".el-net").map((chip: any) => ({
+        name: chip.children.find((c: any) => c.className.includes("el-net-name")).value,
+        count: chip.children.find((c: any) => c.className.includes("el-net-count")).textContent,
+      }));
+    }
+
+    /** Put a placed part's pad on a net, through the pad panel. */
+    function wirePad(modal: any, pad: string, netName: string): void {
+      const pick = modal.overlay.querySelectorAll(".el-pad-net").find((p: any) => p.dataset.pad === pad);
+      expect(pick, `no pad row called ${pad}`).toBeTruthy();
+      const opt = pick.children.find((o: any) => o.textContent === netName);
+      expect(opt, `net ${netName} is not offered on pad ${pad}`).toBeTruthy();
+      pick.value = opt.value;
+      pick.dispatch("change", {});
+    }
+
+    /** Place one library part on the rail and select it, so its pads are on offer. */
+    function placeAndSelect(modal: any, id: string, at: { x: number; y: number }): void {
+      pick(modal, id);
+      tapFlat(modal, at);
+      const placed = modal.circuit.parts[modal.circuit.parts.length - 1];
+      tapFlat(modal, placed); // a tap on a placed part selects it
+    }
+
+    describe("nets", () => {
+      it("declares a net, and refuses a name already in use", () => {
+        const { modal } = withRails();
+        addNet(modal, "PWR");
+        addNet(modal, "GND");
+        expect(netChips(modal).map((n) => n.name)).toEqual(["PWR", "GND"]);
+
+        addNet(modal, "pwr"); // same name, different case -- a typo, not a design
+        expect(netChips(modal)).toHaveLength(2);
+        expect(modal.statusEl.textContent).toContain("already a net called pwr");
+      });
+
+      it("keeps a net's id when it is renamed, so the pads on it stay wired", () => {
+        // The id is what `Terminal.net` points at. A rename that minted a new one would unwire every pad
+        // on the net and report nothing -- the netlist would still resolve, against a net nobody is on.
+        const { modal, at } = withRails();
+        addNet(modal, "PWR");
+        const id = modal.circuit.nets[0].id;
+        placeAndSelect(modal, "C_1206", at);
+        wirePad(modal, "1", "PWR");
+        expect(modal.circuit.terminals).toEqual([{ part: 0, pad: "1", net: id }]);
+
+        const box = modal.overlay.querySelector(".el-net-name");
+        box.value = "VCC";
+        box.dispatch("change", {});
+
+        // Fields, not the whole object: a net also carries an authored `color`, and asserting the shape
+        // would fail every time the model gains a field rather than when the rename breaks.
+        expect(modal.circuit.nets[0].id).toBe(id);
+        expect(modal.circuit.nets[0].name).toBe("VCC");
+        expect(modal.circuit.terminals, "the rename unwired the pad").toEqual([
+          { part: 0, pad: "1", net: id },
+        ]);
+      });
+
+      it("unwires the pads on a net when the net is deleted", () => {
+        const { modal, at } = withRails();
+        addNet(modal, "PWR");
+        placeAndSelect(modal, "C_1206", at);
+        wirePad(modal, "1", "PWR");
+        expect(modal.circuit.terminals).toHaveLength(1);
+
+        const before = modal.circuit.nets.length;
+        const doomed = modal.circuit.nets.find((n: any) => n.name === "PWR").id;
+        modal.overlay.querySelectorAll(".el-net-del")[
+          modal.circuit.nets.findIndex((n: any) => n.id === doomed)
+        ].dispatch("click", {});
+
+        // One fewer net, and it is that one. A circuit is seeded with the battery's own PWR and GND, so
+        // "no nets left" was never the right assertion -- it only passed before those existed.
+        expect(modal.circuit.nets).toHaveLength(before - 1);
+        expect(modal.circuit.nets.map((n: any) => n.id)).not.toContain(doomed);
+        expect(modal.circuit.terminals, "a terminal was left pointing at a deleted net").toHaveLength(0);
+        expect(modal.statusEl.textContent).toContain("unwired 1 pad");
+      });
+
+      it("offers a part's terminals by name, and not its mounting pegs", () => {
+        // The pad names come from `terminals(fp)`, the same reading the router and the renderer use. The
+        // slide switch's two locating pegs are plated copper and are not terminals; offered here they
+        // would be wireable to a net that then routes to a hole.
+        const { modal, at } = withRails();
+        addNet(modal, "PWR");
+        placeAndSelect(modal, "SW_SPDT", at);
+        const offered = modal.overlay.querySelectorAll(".el-pad-net").map((p: any) => p.dataset.pad);
+        expect(offered).toEqual(terminals(SW_SPDT).map(([name]) => name));
+        expect(offered).toHaveLength(3); // the three throws, not the five copper pads
+      });
+
+      it("shows the pad panel only for a part that has pads to wire", () => {
+        const { modal, at } = withRails();
+        addNet(modal, "PWR");
+        // An LED straddles a hinge and its polarity is the router's -- there is nothing here to assign.
+        tapFlat(modal, modal.gaps[0].point);
+        expect(modal.selected.kind).toBe("led");
+        expect(modal.overlay.querySelector(".el-pads").hidden).toBe(true);
+
+        placeAndSelect(modal, "C_1206", at);
+        expect(modal.overlay.querySelector(".el-pads").hidden).toBe(false);
+      });
+
+      it("moves a pad from one net to another rather than putting it on both", () => {
+        // Two nets on one pad is a short, and the router would dutifully build it.
+        const { modal, at } = withRails();
+        addNet(modal, "PWR");
+        addNet(modal, "GND");
+        placeAndSelect(modal, "C_1206", at);
+        wirePad(modal, "1", "PWR");
+        wirePad(modal, "1", "GND");
+        expect(modal.circuit.terminals).toHaveLength(1);
+        expect(modal.circuit.terminals[0].net).toBe(modal.circuit.nets[1].id);
+
+        // And "—" takes it off entirely.
+        const pick = modal.overlay.querySelectorAll(".el-pad-net").find((p: any) => p.dataset.pad === "1");
+        pick.value = "";
+        pick.dispatch("change", {});
+        expect(modal.circuit.terminals).toHaveLength(0);
+      });
+
+      it("renumbers the terminals when a part below them is deleted", () => {
+        // `Terminal.part` is an INDEX into `circuit.parts`. Delete part 0 and every terminal above it now
+        // names its neighbour: the netlist still resolves, and wires the wrong pads. Nothing errors.
+        const { modal } = withRails();
+        addNet(modal, "PWR");
+        const net = modal.circuit.nets[0].id;
+        const run = modal.routed.traces.find((t: any) => t.net === "pwr");
+        placeAndSelect(modal, "C_1206", alongRun(run, 0.25));
+        wirePad(modal, "1", "PWR");
+        placeAndSelect(modal, "R_1206", alongRun(run, 0.75));
+        wirePad(modal, "2", "PWR");
+        expect(modal.circuit.parts.map((p: any) => p.component)).toEqual(["C_1206", "R_1206"]);
+        expect(modal.circuit.terminals).toEqual([
+          { part: 0, pad: "1", net },
+          { part: 1, pad: "2", net },
+        ]);
+
+        // Select the capacitor -- part 0 -- and delete it.
+        tapFlat(modal, modal.circuit.parts[0]);
+        expect(modal.selected).toEqual({ kind: "part", index: 0 });
+        (globalThis as any).document.dispatch("keydown", { key: "Delete" });
+
+        expect(modal.circuit.parts.map((p: any) => p.component)).toEqual(["R_1206"]);
+        // The capacitor's terminal went with it, and the resistor's came down to index 0 -- still its own.
+        expect(modal.circuit.terminals).toEqual([{ part: 0, pad: "2", net }]);
+      });
+
+      it("carries the nets and the terminals through to the controller", () => {
+        // The same trap `flip` and `component` were: drawn in the bar, gone the moment it round-trips.
+        const { modal, edits, at } = withRails();
+        addNet(modal, "PWR");
+        placeAndSelect(modal, "C_1206", at);
+        wirePad(modal, "1", "PWR");
+
+        const sent = edits[edits.length - 1] as any;
+        expect(sent.nets).toEqual(modal.circuit.nets);
+        expect(sent.terminals).toEqual(modal.circuit.terminals);
+        expect(sent.nets, "the clone shares the modal's own array").not.toBe(modal.circuit.nets);
+        expect(sent.terminals[0], "the clone shares a terminal object").not.toBe(modal.circuit.terminals[0]);
+      });
+
+      it("keeps the declared nets through Clear, and drops what they were wired to", () => {
+        const { modal, at } = withRails();
+        addNet(modal, "PWR");
+        placeAndSelect(modal, "C_1206", at);
+        wirePad(modal, "1", "PWR");
+
+        const declared = modal.circuit.nets.map((n: any) => n.name);
+        modal.overlay.querySelector(".el-clear").dispatch("click", {});
+        // Every declared net survives, the seeded PWR and GND among them: they are names the author chose
+        // or the circuit came with, they cost nothing to keep, and the parts they were wired to are what
+        // Clear is for.
+        expect(modal.circuit.nets.map((n: any) => n.name), "the net names were thrown away").toEqual(declared);
+        expect(modal.circuit.terminals, "a terminal outlived the part it was on").toHaveLength(0);
+        expect(modal.circuit.parts ?? []).toHaveLength(0);
+      });
+
+      it("offers every part in the library, all of them wirable", () => {
+        // This replaces an invariant test written a few hours ago, which asserted that no PLACEABLE part
+        // sat in the lazily-fetched half -- the condition under which a part could be placed and then not
+        // resolved. `netPlacement` made all 92 of them placeable at once, which would have fired it, and
+        // the fix landed first: there is one library now and every lookup goes through it. What is worth
+        // guarding is the property that replaced it -- nothing is offered that cannot be resolved.
+        const { modal } = openOn(grid2x2());
+        const offered = rows(modal).map((r) => r.value);
+        expect(offered.length).toBeGreaterThan(100);
+        for (const id of offered) {
+          expect(componentById(id), `${id} is offered and does not resolve`).toBeTruthy();
+        }
+      });
     });
 
     it("says so when a placed part did not fit", () => {
@@ -940,11 +1651,14 @@ describe("view/electronics-modal", () => {
       // questions you look at a footprint to answer. Every terminal is now the pad that will actually be
       // cut: its own outline, in copper with the mask opening over it.
       const { modal, at } = withRails();
+      modal.selectPlaceMode("free");
       pick(modal, "C_1206");
       tapFlat(modal, at);
 
       const html = modal.svg.innerHTML as string;
-      const drawn = modal.drawnParts();
+      // The circuit's LED is drawn through this same list and group now, so read the counts off the
+      // capacitor alone rather than off everything in the group.
+      const drawn = modal.drawnParts().filter((d: any) => d.component === "C_1206");
       expect(drawn).toHaveLength(1);
       const group = /<g class="el-part-marks">([\s\S]*?)<\/g>/.exec(html);
       expect(group, "the parts are not drawn in their own group").toBeTruthy();
@@ -954,10 +1668,12 @@ describe("view/electronics-modal", () => {
       const pins = terminals(drawn[0].footprint).length;
       expect(pins).toBe(2); // a 1206 capacitor
       expect(drawn[0].shape.leads).toHaveLength(pins);
+      // Counted over the whole group, which holds the LED's two pads as well as the capacitor's.
+      const all = modal.drawnParts().reduce((n: number, d: any) => n + terminals(d.footprint).length, 0);
       const copper = marks.match(new RegExp(`fill="${PCB_COLOURS.copper}"`, "g")) ?? [];
       const mask = marks.match(new RegExp(`fill="${PCB_COLOURS.mask}"`, "g")) ?? [];
-      expect(copper).toHaveLength(pins);
-      expect(mask).toHaveLength(pins);
+      expect(copper).toHaveLength(all);
+      expect(mask).toHaveLength(all);
       expect(marks, "the black cartoon body is still being drawn").not.toContain("#111111");
       expect(marks, "the grey cartoon contacts are still being drawn").not.toContain("#c3cad6");
       // And the origin dot that says where the part's own centre is.
@@ -975,12 +1691,15 @@ describe("view/electronics-modal", () => {
       tapFlat(modal, mid(modal.routed.traces.find((t: any) => t.net === "pwr")));
       modal.selectTool("switch");
       tapFlat(modal, mid(modal.routed.traces.find((t: any) => t.net === "gnd")));
+      modal.selectPlaceMode("free");
       pick(modal, "R_2010");
       for (const t of modal.routed.traces.filter((x: any) => x.width === undefined)) {
         tapFlat(modal, mid(t));
         if (modal.routedParts().length) break;
       }
-      expect(modal.drawnParts().map((d: any) => d.component)).toEqual(["R_1206", "SW_SPDT", "R_2010"]);
+      // The LEDs come last, which is the order both cut files take them in — see `drawnParts`.
+      expect(modal.drawnParts().map((d: any) => d.component))
+        .toEqual(["R_1206", "SW_SPDT", "R_2010", "LED_1206"]);
 
       // Zoomed in far enough that the text is worth emitting at all.
       modal.zoomBy(4);
@@ -989,7 +1708,7 @@ describe("view/electronics-modal", () => {
         new RegExp(`fill="${PCB_COLOURS.componentLabel}"[^>]*>([^<]+)<`, "g"),
       )].map((m) => m[1]);
       // The two resistors share a family and are numbered through it, whichever list each came from.
-      expect(tags).toEqual(["R1", "SW1", "R2"]);
+      expect(tags).toEqual(["R1", "SW1", "R2", "LED1"]);
     });
 
     it("holds the pin names back until a pad is big enough on screen to carry one", () => {
@@ -1004,6 +1723,7 @@ describe("view/electronics-modal", () => {
       // designator first, because it sits beside the part, then the pin names once a pad can hold one —
       // and that nothing moves to reveal either.
       const { modal, at } = withRails();
+      modal.selectPlaceMode("free");
       pick(modal, "C_1206");
       tapFlat(modal, at);
       modal.fitView();
@@ -1053,13 +1773,15 @@ describe("view/electronics-modal", () => {
         }
       };
 
-      // Nothing placed yet, so neither file has a parts layer at all.
+      // No library part placed yet. The fixture's LED is a part now, so both files already have a parts
+      // layer — what they must not have is the capacitor.
       modal.overlay.querySelector(".el-export").dispatch("click", {});
       modal.overlay.querySelector(".el-export-carrier").dispatch("click", {});
       const [stripsBefore, carrierBefore] = svgs.splice(0, 2);
-      expect(stripsBefore).not.toContain('<g id="parts">');
-      expect(carrierBefore).not.toContain('<g id="annotation"');
+      expect(stripsBefore).not.toContain(">C1<");
+      expect(carrierBefore).not.toContain(">C1<");
 
+      modal.selectPlaceMode("free");
       pick(modal, "C_1206");
       tapFlat(modal, at);
       expect(modal.routed.parts, "the router placed nothing to export").toHaveLength(1);
@@ -1070,9 +1792,480 @@ describe("view/electronics-modal", () => {
       // The part is drawn on its own layer in each file — it is annotation, never copper to cut.
       expect(stripsAfter, "the part never reached the strips file").toContain('<g id="parts">');
       expect(carrierAfter, "the part never reached the carrier file").toContain('<g id="annotation"');
+      expect(stripsAfter, "the part is not named in the strips file").toContain(">C1<");
+      expect(carrierAfter, "the part is not named in the carrier file").toContain(">C1<");
 
       delete (globalThis as any).URL;
       delete (globalThis as any).Blob;
+    });
+  });
+
+
+  describe("which LED", () => {
+    /** The LED tool's own picker — the control beside the LED button, not the library one. */
+    function ledPicker(modal: any): any {
+      return modal.overlay.querySelector(".el-led-part");
+    }
+
+    /** Choose an LED package, the way clicking that picker does. */
+    function pickLed(modal: any, id: string): void {
+      const select = ledPicker(modal);
+      select.value = id;
+      select.dispatch("change", {});
+    }
+
+    it("offers both LED packages on a control of its own, and starts on the 1206", () => {
+      // Not a row in the library picker beside it. That picker lists what a rail can pass THROUGH, and an
+      // LED bridges PWR to GND across a hinge — offered there it would be placeable on a rail, with both
+      // its pads landing on the same net.
+      const { modal } = openOn(grid2x2());
+      const options = ledPicker(modal).querySelectorAll("option");
+      expect(options.map((o: any) => o.value)).toEqual(["LED_1206", "LED_0603"]);
+      // Each row names the part it places, so the two are told apart by more than the order.
+      expect(options.map((o: any) => o.textContent).join(" ")).toContain("LED SMD 0603");
+      // And the default is the part every LED was before there was a choice.
+      expect(ledPicker(modal).value).toBe("LED_1206");
+      // It is a picker, not a tool button of its own — said as the rule rather than as a count of the
+      // toolbar, which cannot tell a second LED package from an unrelated tool arriving beside it.
+      const tools = modal.overlay.querySelectorAll(".el-tool").map((b: any) => b.dataset.tool);
+      for (const id of ["LED_1206", "LED_0603"]) expect(tools).not.toContain(id);
+    });
+
+    it("arms the LED tool when a package is chosen", () => {
+      // Choosing a package and clicking a hinge has to be one gesture, as picking a library part is. Left
+      // unarmed, choosing a 0603 and clicking would place whatever the palette was showing instead.
+      const { modal } = openOn(grid2x2());
+      modal.selectTool("battery");
+      pickLed(modal, "LED_0603");
+      expect(modal.tool).toBe("led");
+      expect(ledPicker(modal).classList.contains("is-active")).toBe(true);
+    });
+
+    it("writes the chosen package onto the LED, and the default as an absence", () => {
+      // `component` absent means LED_1206, so a circuit authored before there was a choice still loads and
+      // still means what it meant. Saying `component: "LED_1206"` out loud would make two identical
+      // circuits serialise differently depending on when they were authored.
+      const { modal, edits } = openOn(grid2x2());
+      modal.selectTool("led");
+      tapFlat(modal, modal.gaps[0].point);
+      expect(modal.circuit.leds[0]).toEqual({ a: modal.circuit.leds[0].a, b: modal.circuit.leds[0].b });
+      expect(modal.circuit.leds[0].component).toBeUndefined();
+
+      pickLed(modal, "LED_0603");
+      tapFlat(modal, modal.gaps[1].point);
+      expect(modal.circuit.leds[1].component).toBe("LED_0603");
+
+      // And it survives the clone into the store — a dropped field would draw a 0603 on the canvas and
+      // route a 1206 the moment the circuit came back.
+      const sent = edits[edits.length - 1] as any;
+      expect(sent.leds.map((l: any) => l.component)).toEqual([undefined, "LED_0603"]);
+    });
+
+    it("draws each LED from its own footprint, so two packages on one circuit differ", () => {
+      // The whole point of the choice. Reading one footprint for every LED would draw both at the 1206's
+      // pads and cut copper a 0603's legs cannot reach.
+      const { modal } = openOn(grid2x2());
+      modal.selectTool("battery");
+      tapFlat(modal, { x: 0.5, y: 0.5 });
+      modal.selectTool("led");
+      tapFlat(modal, modal.gaps[0].point);
+      pickLed(modal, "LED_0603");
+      tapFlat(modal, modal.gaps[1].point);
+
+      const leds = modal.drawnParts().filter((d: any) => d.component.startsWith("LED_"));
+      expect(leds.map((d: any) => d.component)).toEqual(["LED_1206", "LED_0603"]);
+      // A lead's segment carries the pad's own height. Read it off the footprint, not written down here.
+      for (const d of leds) {
+        const l = d.shape.leads[0];
+        expect(Math.hypot(l.b.x - l.a.x, l.b.y - l.a.y))
+          .toBeCloseTo(padSize(padNamed(d.footprint, "1")).h, 4);
+      }
+      const span = (d: any): number =>
+        Math.hypot(d.shape.leads[0].b.x - d.shape.leads[0].a.x, d.shape.leads[0].b.y - d.shape.leads[0].a.y);
+      expect(span(leds[0]), "both LEDs came out the same size").toBeGreaterThan(span(leds[1]));
+      // Each pad carries its terminal's own name, which is what says which way round to fit the part:
+      // pad 1 is the anode and it is drawn on the PWR pad the router landed on.
+      expect(leds[0].shape.leads.map((l: any) => l.name)).toEqual(["1", "2"]);
+    });
+
+    it("keeps the hinge pick radius off the LED's size", () => {
+      // The pick radius is how near a tap must land to a hinge to drop an LED there. It is the pattern's,
+      // not the part's — tied to a 0603's 0.8mm pads it would be all but untappable.
+      const { modal } = openOn(grid2x2());
+      const before = modal.pickRadius();
+      pickLed(modal, "LED_0603");
+      expect(modal.pickRadius()).toBe(before);
+      const diag = Math.hypot(
+        modal.bounds.maxX - modal.bounds.minX, modal.bounds.maxY - modal.bounds.minY,
+      );
+      expect(before).toBe(Math.max(2, diag * 0.06));
+      // And a 0603 still lands on the hinge it was tapped at.
+      modal.selectTool("led");
+      tapFlat(modal, modal.gaps[0].point);
+      expect(modal.circuit.leds).toEqual([
+        { a: modal.gaps[0].faceA, b: modal.gaps[0].faceB, component: "LED_0603" },
+      ]);
+    });
+
+    it("rings an LED the copper never reached, and the one that is selected", () => {
+      // The bespoke marker is gone, so these two marks are all that is left saying anything about an LED
+      // beyond its footprint. With no battery, nothing is reachable.
+      const { modal } = openOn(grid2x2());
+      modal.selectTool("led");
+      tapFlat(modal, modal.gaps[0].point);
+      expect(modal.routed.unreachable).toContain(0);
+      expect(modal.svg.innerHTML).toContain("el-led-orphan");
+      expect(modal.svg.innerHTML).toContain("el-led-selected");
+
+      // Ringed, not shrunk to the part: a 0603 is 1.5mm across and a ring that size is a dot inside it.
+      const r = [...(modal.svg.innerHTML as string).matchAll(
+        /r="([\d.]+)" class="el-led-(?:orphan|selected)"/g,
+      )].map((m) => Number(m[1]));
+      expect(r).toHaveLength(2);
+      for (const x of r) expect(x).toBeGreaterThanOrEqual(1.7);
+      // And the floor itself, on the size that needs it: an LED_0603's legs are 1.5mm apart, so a ring at
+      // three quarters of its span would be 1.1mm — drawn inside the part rather than around it.
+      const tiny = modal.selectionRing({ x: 0, y: 0 }, { x: 1.5, y: 0 }, "el-led-selected");
+      expect(Number(/r="([\d.]+)"/.exec(tiny)![1])).toBeGreaterThanOrEqual(1.7);
+    });
+  });
+
+
+  /**
+   * The wire tool, as the page wires it in. The gesture grammar itself is `wire-tool.test.ts`'s; what is
+   * checked here is only what the modal owns — arming it, letting it have the pointer, keeping its copper
+   * across the round trip to the store, and repainting it without repainting the canvas.
+   */
+  describe("drawing copper by hand", () => {
+    /** The palette button that arms `tool`. */
+    function toolBtn(modal: any, tool: string): any {
+      return modal.overlay.querySelectorAll(".el-tool").find((b: any) => b.dataset.tool === tool);
+    }
+
+    it("arms from the palette, and abandons a part-drawn wire when another tool is picked", () => {
+      const { modal } = openOn(grid2x2());
+      // Inert until armed: a tap on the canvas with the LED tool up is an LED, not a vertex.
+      tapFlat(modal, { x: 0.3, y: 0.3 });
+      expect(modal.wire.drawing()).toBe(false);
+
+      toolBtn(modal, "wire").click();
+      expect(toolBtn(modal, "wire").classList.contains("is-active")).toBe(true);
+      // It places no part, so the library picker must not read as armed alongside it.
+      expect(modal.activePart()).toBe(null);
+
+      tapFlat(modal, { x: 0.3, y: 0.3 });
+      expect(modal.wire.drawing()).toBe(true);
+
+      // Walking away from a half-drawn wire drops it. Committing one on the way out would leave copper
+      // nobody asked for.
+      toolBtn(modal, "led").click();
+      expect(modal.wire.drawing()).toBe(false);
+      expect(modal.circuit.wires ?? []).toHaveLength(0);
+    });
+
+    it("takes the pointer while armed, so drawing a wire never pans the canvas", () => {
+      const { modal } = openOn(grid2x2());
+      toolBtn(modal, "wire").click();
+      const box = (): string => modal.svg.getAttribute("viewBox") as string;
+      const before = box();
+      const at = modal.tp({ x: 0.3, y: 0.3 });
+      modal.svg.dispatch("pointerdown", { button: 0, clientX: at.x, clientY: at.y, pointerId: 1 });
+      modal.svg.dispatch("pointermove", { clientX: at.x + 40, clientY: at.y + 40, pointerId: 1 });
+      expect(box()).toBe(before);
+    });
+
+    it("commits the wire on the finishing tap, and the store gets it", () => {
+      const { modal, edits } = openOn(grid2x2());
+      toolBtn(modal, "wire").click();
+      const a = { x: 0.3, y: 0.3 }, b = { x: 1.7, y: 0.3 };
+      tapFlat(modal, a);
+      tapFlat(modal, b);
+      // Nothing is committed until the wire is finished — mid-draw it lives in the tool alone.
+      expect(modal.circuit.wires ?? []).toHaveLength(0);
+      tapFlat(modal, b); // tapping the last point laid is the finish gesture
+
+      expect(modal.circuit.wires).toHaveLength(1);
+      expect(modal.circuit.wires[0].pts).toHaveLength(2);
+      // And it is drawn as the outline that gets cut, like any other copper on the sheet.
+      expect(modal.svg.innerHTML).toContain("el-wire-copper");
+
+      // THE trap. `cloneCircuit` copies field by field and silently drops anything it does not name, so a
+      // wire missing from it would draw on the canvas and vanish the moment the circuit reached the store.
+      const stored = edits[edits.length - 1] as any;
+      expect(stored.wires).toHaveLength(1);
+      expect(stored.wires[0].pts).toEqual(modal.circuit.wires[0].pts);
+      // A copy, not the editor's own array: the store must not hold vertices the canvas can still move.
+      expect(stored.wires[0].pts[0]).not.toBe(modal.circuit.wires[0].pts[0]);
+    });
+
+    it("keeps a wire drawn onto a part's pad attached to that part", () => {
+      const { modal, edits } = openOn(grid2x2());
+      // A battery and an LED, so the pattern has copper on it and a terminal to snap to.
+      modal.selectTool("battery");
+      tapFlat(modal, { x: 0.5, y: 0.5 });
+      modal.selectTool("led");
+      tapFlat(modal, modal.gaps[0].point);
+      expect(modal.routed.traces.length).toBeGreaterThan(0);
+      const pwr = batteryTerminals(
+        modal.faces[0].centroid, patternDiag(modal.faces), modal.faces[0].poly, modal.tapeW(),
+      ).pwr;
+
+      toolBtn(modal, "wire").click();
+      tapFlat(modal, pwr);
+      tapFlat(modal, { x: 1.7, y: 1.7 });
+      tapFlat(modal, { x: 1.7, y: 1.7 });
+
+      const wire = modal.circuit.wires[0];
+      // Stored as WHAT it is attached to, never as where that thing happens to be — which is the whole
+      // reason a wire follows the thing it is drawn to.
+      expect(wire.pts[0].kind).toBe("battery");
+      // And it carries the rail it landed on, so it is not charged with crossing the net it is drawn on.
+      expect(wire.net).toBe("pwr");
+      expect((edits[edits.length - 1] as any).wires[0].net).toBe("pwr");
+    });
+
+    it("repaints the wire's own layer, leaving the rest of the canvas byte-identical", () => {
+      const { modal } = openOn(grid2x2());
+      toolBtn(modal, "wire").click();
+      tapFlat(modal, { x: 0.3, y: 0.3 });
+
+      // In the mock DOM the live layer is a child element with an `innerHTML` of its own, so the canvas's
+      // own markup is exactly the static half — which is what makes the two comparable here at all.
+      const staticBefore = modal.svg.innerHTML as string;
+      expect(staticBefore).toContain("el-static");
+      expect(staticBefore).toContain("el-live");
+      const liveBefore = modal.liveLayer().innerHTML as string;
+
+      const at = modal.tp({ x: 1.2, y: 0.9 });
+      modal.svg.dispatch("pointermove", { clientX: at.x, clientY: at.y, pointerId: 1 });
+
+      // The rubber band moved...
+      const liveAfter = modal.liveLayer().innerHTML as string;
+      expect(liveAfter).not.toBe(liveBefore);
+      expect(liveAfter).toContain("el-wire-band");
+      // ...and the static half came through it unaltered, which is what this test is good for: the live
+      // repaint does not corrupt the canvas under it. It is NOT evidence that the canvas was left alone —
+      // see the test below, which is where that claim actually lives.
+      expect(modal.svg.innerHTML).toBe(staticBefore);
+    });
+
+    it("does not repaint the canvas at all on a pointer move", () => {
+      // Asserted as a CALL, because the guarantee is about one. `draw()` is deterministic, so a redundant
+      // repaint regenerates byte-identical markup and an assertion on content cannot see it — content is
+      // exactly what a wasted repaint does not change. The test above passes cleanly with `this.draw()`
+      // spliced into the pointer-move guard, which is the stutter this one exists to catch.
+      //
+      // And the cost is the whole reason the canvas is split in two: a full re-plan is most of a second,
+      // and a drag that re-planned on every move would be a drag that stutters. The tool commits on
+      // pointer UP, once, and the host re-plans in its own time.
+      const { modal } = openOn(grid2x2());
+      toolBtn(modal, "wire").click();
+      tapFlat(modal, { x: 0.3, y: 0.3 });
+
+      let draws = 0;
+      const real = modal.draw.bind(modal);
+      modal.draw = () => {
+        draws++;
+        return real();
+      };
+
+      const at = modal.tp({ x: 1.2, y: 0.9 });
+      modal.svg.dispatch("pointermove", { clientX: at.x, clientY: at.y, pointerId: 1 });
+      expect(draws, "the canvas was repainted during a drag").toBe(0);
+      // The band still moved — the point is that it moved without a repaint, not that nothing happened.
+      expect(modal.liveLayer().innerHTML).toContain("el-wire-band");
+
+      // A second move is no different: this holds for every event in the gesture, not just the first.
+      const on = modal.tp({ x: 1.4, y: 1.1 });
+      modal.svg.dispatch("pointermove", { clientX: on.x, clientY: on.y, pointerId: 1 });
+      expect(draws).toBe(0);
+    });
+
+    it("puts the live layer back after the canvas is repainted under it", () => {
+      const { modal } = openOn(grid2x2());
+      toolBtn(modal, "wire").click();
+      tapFlat(modal, { x: 0.3, y: 0.3 });
+      const at = modal.tp({ x: 1.2, y: 0.9 });
+      modal.svg.dispatch("pointermove", { clientX: at.x, clientY: at.y, pointerId: 1 });
+      expect(modal.liveLayer().innerHTML).toContain("el-wire-band");
+
+      // A zoom throws the whole canvas away and builds it again; the wire being drawn must survive it.
+      modal.zoomBy(1.25);
+      modal.render();
+      expect(modal.liveLayer().innerHTML).toContain("el-wire-band");
+    });
+
+    /** Captures every SVG the modal downloads, in order. Returns the list and the teardown. */
+    function catchDownloads(): { svgs: string[]; done: () => void } {
+      const svgs: string[] = [];
+      (globalThis as any).URL = { createObjectURL: () => "blob:mock", revokeObjectURL: () => {} };
+      (globalThis as any).Blob = class {
+        constructor(parts: any[]) {
+          svgs.push(String(parts[0]));
+        }
+      };
+      return {
+        svgs,
+        done: () => {
+          delete (globalThis as any).URL;
+          delete (globalThis as any).Blob;
+        },
+      };
+    }
+
+    /** Draw one wire through the given flat points, finishing on the last. */
+    function drawWire(modal: any, pts: { x: number; y: number }[]): void {
+      toolBtn(modal, "wire").click();
+      for (const p of pts) tapFlat(modal, p);
+      tapFlat(modal, pts[pts.length - 1]!); // tapping the last point laid finishes the wire
+    }
+
+    it("exports a sheet whose only copper is hand-drawn", () => {
+      // The canvas has already told the author this copper exists. A cut file that leaves it out — while
+      // blaming them for not having placed a battery — is worse than the feature being absent.
+      const { modal } = openOn(grid2x2());
+      const { svgs, done } = catchDownloads();
+
+      modal.selectTool("battery");
+      tapFlat(modal, { x: 0.5, y: 0.5 });
+      expect(modal.routed.traces, "the router planned copper; this case is about a sheet with none")
+        .toHaveLength(0);
+
+      // Nothing drawn yet, so there is genuinely nothing to cut, and it still says so.
+      modal.overlay.querySelector(".el-export").dispatch("click", {});
+      expect(svgs).toHaveLength(0);
+      expect(modal.statusEl.textContent).toContain("Nothing to export");
+
+      // A wire off the battery's PWR terminal is copper on the PWR rail, and the file has a layer for it.
+      const term = batteryTerminals(
+        modal.faces[0].centroid, patternDiag(modal.faces), modal.faces[0].poly, modal.tapeW(),
+      );
+      drawWire(modal, [term.pwr, { x: 1.6, y: 0.6 }]);
+      expect(modal.circuit.wires[0].net).toBe("pwr");
+
+      modal.overlay.querySelector(".el-export").dispatch("click", {});
+      expect(svgs, "a sheet with copper on it exported nothing").toHaveLength(1);
+      expect(modal.statusEl.textContent).toContain("1 PWR strip");
+      done();
+    });
+
+    it("puts the drawn wire's own geometry in the strips file", () => {
+      // Not merely "a path appeared": the copper in the file has to be the copper on the canvas. Checked as
+      // geometry rather than as a string, so the assertion survives a change to how the file is written.
+      const { modal } = openOn(grid2x2());
+      const { svgs, done } = catchDownloads();
+      modal.selectTool("battery");
+      tapFlat(modal, { x: 0.5, y: 0.5 });
+      const term = batteryTerminals(
+        modal.faces[0].centroid, patternDiag(modal.faces), modal.faces[0].poly, modal.tapeW(),
+      );
+      const far = { x: 1.6, y: 0.6 };
+      drawWire(modal, [term.pwr, far]);
+
+      modal.overlay.querySelector(".el-export").dispatch("click", {});
+      const pwr = /<g id="pwr"[^>]*>([\s\S]*?)<\/g>/.exec(svgs[0]!)![1]!;
+      const nums = [...pwr.matchAll(/[-\d.]+ [-\d.]+/g)].map((m) => {
+        const [x, y] = m[0].split(" ").map(Number);
+        return { x: x!, y: y! };
+      });
+      expect(nums.length, "no copper on the PWR layer").toBeGreaterThan(3);
+
+      // The far end of the wire, in the file's own sheet coordinates, has copper within half a tape of it.
+      const { T, scale } = sheetFrame(modal.fold, { x: false, y: false }, undefined);
+      const want = T(far);
+      const near = Math.min(...nums.map((p) => Math.hypot(p.x - want.x, p.y - want.y)));
+      expect(near).toBeLessThanOrEqual(modal.tapeW() * scale);
+      done();
+    });
+
+    it("carries a wire on no rail in the carrier file, and says the strips file could not", () => {
+      // The two files disagree, and the difference is real: the carrier holds runs in a frame whatever net
+      // they are on, while the strips file sorts them onto two cut layers, PWR and GND, and has nowhere to
+      // put a third. A wire between two free points is its own net, so it lands on neither.
+      const { modal } = openOn(grid2x2());
+      const { svgs, done } = catchDownloads();
+      drawWire(modal, [{ x: 0.4, y: 0.4 }, { x: 1.6, y: 0.6 }]);
+      expect(modal.circuit.wires[0].net, "a free wire should carry no net").toBeUndefined();
+
+      modal.overlay.querySelector(".el-export").dispatch("click", {});
+      expect(svgs, "the file was not built at all").toHaveLength(1);
+      // Not silently: the author is told which file has it, and how to put it on a rail.
+      expect(modal.statusEl.textContent).toContain("1 drawn wire is not in this file");
+      expect(modal.statusEl.textContent).toContain("carrier file carries them all");
+
+      modal.overlay.querySelector(".el-export-carrier").dispatch("click", {});
+      expect(svgs).toHaveLength(2);
+      expect(modal.statusEl.textContent).toContain("holding 1 trace");
+      done();
+    });
+
+    it("tells an unbuildable wire apart from a merely costly one", () => {
+      // An ERROR means the wire cannot be cut; a WARNING means it can and will cost something. Reading
+      // alike, the author cannot tell which one they are looking at.
+      const { modal } = openOn(grid2x2());
+      toolBtn(modal, "wire").click();
+      // Off the material entirely: `off-body` is an error, so the line must say it cannot be cut.
+      tapFlat(modal, { x: -8, y: -8 });
+      tapFlat(modal, { x: -9, y: -9 });
+      const faults = modal.wire.faults();
+      expect(faults.length, "the fixture drew a wire the rules are happy with").toBeGreaterThan(0);
+      expect(faults.some((f: any) => ERRORS.has(f.kind)), "no error among the faults").toBe(true);
+      expect(modal.statusEl.textContent).toContain("cannot be cut");
+      expect(modal.statusEl.textContent).not.toContain("still cuttable");
+    });
+
+    it("gives the wire tool the keys it needs, and leaves the others alone", () => {
+      const { modal } = openOn(grid2x2());
+      toolBtn(modal, "wire").click();
+      tapFlat(modal, { x: 0.3, y: 0.3 });
+      tapFlat(modal, { x: 1.7, y: 0.3 });
+      (globalThis as any).document.dispatch("keydown", { key: "Enter" });
+      expect(modal.circuit.wires).toHaveLength(1);
+      expect(modal.wire.drawing()).toBe(false);
+
+      // Delete takes the selected wire off — and it must not also fall through to `removeSelected`.
+      (globalThis as any).document.dispatch("keydown", { key: "Delete" });
+      expect(modal.circuit.wires).toHaveLength(0);
+    });
+  });
+
+
+  describe("shelving the library", () => {
+    /** Every part the palette can shelve, which is the whole library — LEDs and the coin cell included. */
+    const shelved = LIBRARY.map((c) => ({ id: c.id, shelf: shelfFor(c.id) }));
+
+    it("leaves nothing on the catch-all shelf", () => {
+      // The point of naming the shelves: a heading that says only "not one of the others" is the one
+      // shelf a person cannot skim, and it used to hold 53 of the 129 parts. The rule stays as a
+      // backstop — a part added to the library must land somewhere — so this is the assertion that the
+      // backstop is not doing the work.
+      const stray = shelved.filter((s) => s.shelf === UNSHELVED).map((s) => s.id);
+      expect(stray, `${stray.length} parts have no named shelf`).toEqual([]);
+    });
+
+    it("keeps every shelf small enough to read", () => {
+      // Forty names in one scroll is the wall the shelves exist to knock down, so a shelf that grows
+      // back to a third of the library has stopped being a shelf. `Headers & sockets` is the largest at
+      // 27, which is a real family of near-identical parts rather than a failure to sort.
+      const size = new Map<string, number>();
+      for (const s of shelved) size.set(s.shelf, (size.get(s.shelf) ?? 0) + 1);
+      const worst = [...size].sort((a, b) => b[1] - a[1])[0]!;
+      expect(worst[1], `"${worst[0]}" holds ${worst[1]} parts`).toBeLessThanOrEqual(30);
+      expect(size.size, "the library should fill most of the shelves").toBeGreaterThanOrEqual(10);
+    });
+
+    it("shelves a part by what it does, not by the package it is moulded in", () => {
+      // This is what the rule order buys, and it is the only reason the order is not arbitrary.
+      expect(shelfFor("Multiplexer_8_1_Texas_CD74HC4051M96_SOIC_16")).toBe("Analog & logic ICs");
+      expect(shelfFor("MotorDriver_BipolarStepper_Trinamic_TMC2226_HTSSOP_28_EP")).toBe("Motor drivers");
+      expect(shelfFor("SOIC_8_3_9x4_9mm_P1_27mm")).toBe("IC packages");
+      // And the pair that shares a suffix: a transistor and a package outline one letter apart.
+      expect(shelfFor("SOT_23_5")).toBe("Diodes & transistors");
+      expect(shelfFor("TSOT_23_5")).toBe("IC packages");
+    });
+
+    it("still shelves an unrecognised part rather than dropping it", () => {
+      expect(shelfFor("Fnord_Widget_9000")).toBe(UNSHELVED);
     });
   });
 
