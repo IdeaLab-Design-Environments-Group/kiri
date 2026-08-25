@@ -87,11 +87,51 @@ export const SPDT = (() => {
  */
 const ROW_TOL_MM = 0.05;
 
+/**
+ * The axis a part's terminals are laid out along, as a pair of coordinate readings.
+ *
+ * Read off the pads rather than assumed. KiCad orients a footprint the way its datasheet drawing was
+ * oriented, so a 1206's two pads run along x while a pin header's run down y — 62 of the library's 159
+ * footprints are the second kind. Reading the rows across a hardcoded y put every one of those into a
+ * row of its own, which made a two-pin header read as a two-row part like the switch, and lost the
+ * middle pin of a three-pin header, since only three terminals are ever given a role.
+ */
+export function padAxis(fp: Footprint): PadAxis {
+  const at = terminals(fp).map(([, p]) => padAt(p));
+  // Which axis the pads line up along is what having FEW rows means, so count the rows each reading
+  // gives and take the tidier one. The obvious rule — whichever axis the pads are spread furthest along
+  // — is wrong, and a two-row part is where it breaks: rows six apart with their pads four apart spread
+  // furthest ACROSS the part, so the span rule reads the part sideways and puts every pad in a row of
+  // its own, which is the very failure this function exists to stop.
+  const groups = (v: number[]): number => {
+    const seen: number[] = [];
+    for (const x of v) if (!seen.some((s) => Math.abs(s - x) <= ROW_TOL_MM)) seen.push(x);
+    return seen.length;
+  };
+  // Ties go to x, which is what every part read correctly before this existed.
+  return groups(at.map((p) => p.x)) < groups(at.map((p) => p.y))
+    ? { alongIsY: true, along: (p) => padAt(p).y, across: (p) => padAt(p).x }
+    : { alongIsY: false, along: (p) => padAt(p).x, across: (p) => padAt(p).y };
+}
+
+/**
+ * Which way round a footprint is drawn, and the accessors that read a pad by it.
+ *
+ * `alongIsY` is the same fact the two accessors carry, said plainly: a drawing needs it to know which of
+ * a pad's own extents runs along the rail, which the accessors cannot answer because they take a pad
+ * rather than a length.
+ */
+export interface PadAxis {
+  alongIsY: boolean;
+  along: (p: Pad) => number;
+  across: (p: Pad) => number;
+}
+
 /** The part's terminals grouped into rows across it, near side first. */
-function terminalRows(fp: Footprint): { y: number; pads: Pad[] }[] {
+function terminalRows(fp: Footprint, ax = padAxis(fp)): { y: number; pads: Pad[] }[] {
   const rows: { y: number; pads: Pad[] }[] = [];
   for (const [, pad] of terminals(fp)) {
-    const y = padAt(pad).y;
+    const y = ax.across(pad);
     const row = rows.find((r) => Math.abs(r.y - y) <= ROW_TOL_MM);
     if (row) row.pads.push(pad);
     else rows.push({ y, pads: [pad] });
@@ -107,7 +147,7 @@ export interface AcrossPart {
   rowSep: number;
   /** Centre to centre along the throw row, the common's column to the throw the rail leaves by. */
   pitch: number;
-  /** One terminal, as {@link padSize} gives it: `w` across the rail, `h` along it. */
+  /** One terminal, normalised to the RUN by {@link padRunBox}: `w` across the rail, `h` along it. */
   pad: Box;
 }
 
@@ -129,20 +169,21 @@ export interface AcrossPart {
  * drawing is the worst failure this code has, because it looks right until the copper is on the sheet.
  */
 export function acrossPart(fp: Footprint): AcrossPart | null {
-  const rows = terminalRows(fp);
+  const ax = padAxis(fp);
+  const rows = terminalRows(fp, ax);
   if (rows.length === 1) {
     const row = rows[0]!;
     if (row.pads.length < 3 || Math.abs(row.y) <= ROW_TOL_MM || holes(fp).length === 0) return null;
-    const byX = [...row.pads].sort((a, b) => padAt(a).x - padAt(b).x);
+    const byX = [...row.pads].sort((a, b) => ax.along(a) - ax.along(b));
     const common = byX[Math.floor(byX.length / 2)]!;
     const live = byX[byX.length - 1]!;
     const idle = byX[0]!;
     return {
       names: nameOf(fp, common, live, idle),
       // The reflection, and nothing else: same column, opposite side.
-      rowSep: padAt(live).y - -padAt(common).y,
-      pitch: Math.abs(padAt(live).x - padAt(common).x),
-      pad: padSize(live),
+      rowSep: ax.across(live) + ax.across(common),
+      pitch: Math.abs(ax.along(live) - ax.along(common)),
+      pad: padRunBox(ax, live),
     };
   }
   if (rows.length < 2) return null;
@@ -151,9 +192,9 @@ export function acrossPart(fp: Footprint): AcrossPart | null {
   const [near, far] = rows[0]!.pads.length <= rows[rows.length - 1]!.pads.length
     ? [rows[0]!, rows[rows.length - 1]!]
     : [rows[rows.length - 1]!, rows[0]!];
-  const common = [...near.pads].sort((a, b) => padAt(a).x - padAt(b).x)[Math.floor(near.pads.length / 2)]!;
+  const common = [...near.pads].sort((a, b) => ax.along(a) - ax.along(b))[Math.floor(near.pads.length / 2)]!;
   const byReach = [...far.pads].sort(
-    (a, b) => Math.abs(padAt(a).x - padAt(common).x) - Math.abs(padAt(b).x - padAt(common).x),
+    (a, b) => Math.abs(ax.along(a) - ax.along(common)) - Math.abs(ax.along(b) - ax.along(common)),
   );
   const live = byReach[byReach.length - 1]!;
   // The idle throw is whatever else that row holds; with only one throw there is nothing to switch to and
@@ -161,10 +202,38 @@ export function acrossPart(fp: Footprint): AcrossPart | null {
   const idle = byReach.length > 1 ? byReach[0]! : live;
   return {
     names: nameOf(fp, common, live, idle),
-    rowSep: Math.abs(padAt(live).y - padAt(common).y),
-    pitch: Math.abs(padAt(live).x - padAt(common).x),
-    pad: padSize(live),
+    rowSep: Math.abs(ax.across(live) - ax.across(common)),
+    pitch: Math.abs(ax.along(live) - ax.along(common)),
+    pad: padRunBox(ax, live),
   };
+}
+
+/**
+ * One pad's extents stated in the RUN's axes rather than the footprint's own.
+ *
+ * **The transpose this file's other fields already perform, applied to the one that was missing it.**
+ * `acrossPart` returns `rowSep` through `ax.across` and `pitch` through `ax.along`, and both are consumed
+ * the other way round — `rowSep` along the run, `pitch` across it. That is not an inconsistency, it is what
+ * "across part" means: the rail steps across the part, so the part is seated **turned**, and the
+ * footprint's own along-axis becomes the run's across-axis.
+ *
+ * `pad` was returned as raw `padSize(...)` — always `{w: x-extent, h: y-extent}` — while its two siblings
+ * were normalised. That is true for a part whose terminals run along x and false for one whose terminals
+ * run along y, and **43 of the library's 87 across-parts are the second kind** (`SOT_23_3`, `TO_252`,
+ * `ESP32_WROOM_32E`, the `PinHeader_02xNN`s). Every consumer that read `.w` as "across the rail" was
+ * therefore right about 44 parts and wrong about 43, in the drawing and in the copper alike.
+ *
+ * `padAxis` already carries `alongIsY` for exactly this, and its docblock says so: it is there "because a
+ * drawing needs to know which of a pad's own extents runs along the rail, which the accessors cannot
+ * answer because they take a pad rather than a length". This is the function that asks it.
+ *
+ * Do not use it for a part seated IN LINE with the rail. There the rail runs along the terminals and no
+ * transpose happens, so the run's along-axis is the footprint's own — the opposite answer to this one, for
+ * the same question. `partFit`'s two branches sit three lines apart and need the two different readings.
+ */
+export function padRunBox(ax: PadAxis, p: Pad): Box {
+  const s = padSize(p);
+  return ax.alongIsY ? { w: s.h, h: s.w } : { w: s.w, h: s.h };
 }
 
 /** Look three chosen pads back up by the names the footprint gives them. */
@@ -182,7 +251,8 @@ export function inlineTerminals(fp: Footprint): Pad[] {
 
 /** The same, keeping each terminal's own name — what a drawing needs to label a pad. */
 export function inlineNamedTerminals(fp: Footprint): [string, Pad][] {
-  return terminals(fp).sort((a, b) => padAt(a[1]).x - padAt(b[1]).x);
+  const ax = padAxis(fp);
+  return terminals(fp).sort((a, b) => ax.along(a[1]) - ax.along(b[1]));
 }
 
 /**
@@ -214,4 +284,26 @@ export function placement(fp: Footprint): Placement {
     return { placeable: false, why: `${n} terminals — a rail passes through at most ${MAX_IN_SERIES}` };
   }
   return { placeable: true };
+}
+
+/**
+ * Whether a part can be placed on a circuit that has NETS, rather than in series on a rail.
+ *
+ * A far weaker condition, and deliberately so. {@link placement} asks whether a rail can pass *through* a
+ * part, which is why it stops at three terminals: a run of tape arrives, the part bridges a break in it,
+ * and the run leaves. A forty-pin connector has no meaning spliced into a run of copper, so it was refused,
+ * and two thirds of the library sat under "in the library, but not in series on a rail".
+ *
+ * Once the author declares nets, that question is the wrong one. A part is no longer something a rail
+ * passes through; it is a set of pads, each wired to whichever net the author says. A USB socket is then
+ * perfectly placeable — four pads, four net assignments — and so is anything else with a pad to wire.
+ *
+ * So the only real requirement is a terminal to wire. One is enough: a single-pad part is a test point or a
+ * mounting pad, and connecting it to a net is a legitimate thing to want, even though it has nothing to
+ * bridge and so could never sit in series.
+ */
+export function netPlacement(fp: Footprint): Placement {
+  return terminals(fp).length >= 1
+    ? { placeable: true }
+    : { placeable: false, why: "no terminals — nothing to wire to a net" };
 }

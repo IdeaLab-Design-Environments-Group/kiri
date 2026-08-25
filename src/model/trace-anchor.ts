@@ -27,15 +27,21 @@ export interface AnchorPoint {
  * Every corner is anchored, so the whole piece folds with the face it sits on.
  */
 export interface AnchoredMesh {
-  /** What this is, so the view can colour it as the 2D layout does. */
-  kind: "pwr" | "gnd" | "led-pwr" | "led-gnd" | "led-body" | "batt-pwr" | "batt-gnd" | "mark";
+  /**
+   * What this is, so the view can colour it as the 2D layout does.
+   *
+   * The fixed names are the pieces this file draws itself; anything else is a net id off a
+   * {@link Trace2D}, since a circuit may now carry any number of named nets rather than two rails.
+   */
+  kind: "pwr" | "gnd" | "led-pwr" | "led-gnd" | "led-body" | "batt-pwr" | "batt-gnd" | "mark" | (string & {});
   /** Corners in threes: one triangle per three entries. */
   tris: AnchorPoint[];
 }
 
 /** One trace, with every point expressed against the mesh instead of the flat plane. */
 export interface AnchoredTrace {
-  net: "pwr" | "gnd";
+  /** A net id — see {@link Trace2D.net}. `"pwr"`/`"gnd"` for the two-rail bus. */
+  net: string;
   points: { tri: [number, number, number]; bary: [number, number, number] }[];
 }
 
@@ -77,7 +83,7 @@ export function anchorOverlay(
   const out: AnchoredMesh[] = [];
 
   for (const t of traces) {
-    const tris = ribbon(t.pts, tapeW, faces);
+    const tris = ribbon(t.pts, t.width ?? tapeW, faces);
     if (tris.length) out.push({ kind: t.net, tris });
   }
 

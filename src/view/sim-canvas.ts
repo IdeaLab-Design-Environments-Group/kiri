@@ -57,6 +57,16 @@ const SETTLE_REL = 4e-4;
 /** Hard cap: freeze this many frames after reaching the target even if it never fully settles (~4s). */
 const MAX_SETTLE_FRAMES = 240;
 
+/**
+ * A run whose kind is none of the fixed names below — a declared net's id.
+ *
+ * `AnchoredMesh["kind"]` admits any string, because a circuit may carry any number of named nets rather
+ * than the two rails. So the table below cannot be exhaustive and the lookup cannot be total: indexing it
+ * with a net id returns `undefined`, and three.js reads that as white — which is `mark`'s colour, so a
+ * declared net drew as an annotation and nothing said so. This is what the table falls back to instead.
+ */
+const NET_COLOUR = 0x4a8fd8;
+
 /** The 2D layout's own colours, so the model and the layout show the same thing. */
 const OVERLAY_COLOURS: Record<AnchoredMesh["kind"], number> = {
   pwr: 0xff0000,
@@ -448,7 +458,7 @@ export class SimCanvas implements SimView {
       const mesh = new THREE.Mesh(
         geo,
         new THREE.MeshBasicMaterial({
-          color: OVERLAY_COLOURS[m.kind],
+          color: OVERLAY_COLOURS[m.kind] ?? NET_COLOUR,
           // Unlit and depth-test-free: this is a layer stuck to the surface, and shading it or fighting the
           // very faces it sits on for depth reads as flicker rather than as material.
           depthTest: false,

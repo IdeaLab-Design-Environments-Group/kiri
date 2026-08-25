@@ -43,8 +43,16 @@ import {
   switchShape,
 } from "../model/copper-svg-export.js";
 import { PCB_COLOURS, designators, partSvg } from "../model/part-render.js";
-import { netColour, nextNetColour, withDefaultNets } from "../model/net-palette.js";
+import {
+  GND_NET_ID,
+  PWR_NET_ID,
+  netColour,
+  nextNetColour,
+  withDefaultNets,
+} from "../model/net-palette.js";
+import { defaultTerminals } from "../model/netlist.js";
 import { printScale } from "../model/print-scale.js";
+import { DEFAULT_SHEET, type SheetSpec } from "../model/fold-strain.js";
 import { netPlacement, placement } from "../model/parts.js";
 import { type Footprint, padAt, padNamed, terminals } from "../model/footprint.js";
 import { type Component, BAT_COIN_20, R_1206, SW_SPDT } from "../model/footprints.generated.js";
@@ -54,7 +62,7 @@ import {
   type Terminals,
   type Trace2D,
   EMPTY_ROUTE,
-  TAPE_MM,
+  tapeMmFor,
   tapeWidthFor,
   batteryTerminals,
   partFit,
@@ -115,6 +123,22 @@ type PartKind = "part" | "resistor" | "switch";
 
 /** A selection known to be one of those. */
 type PartSelection = { kind: PartKind; index: number };
+
+/**
+ * One row under a net in the panel.
+ *
+ * `derived` rows state what the bus router did with the battery and the hinge-LEDs. They are rendered and
+ * counted like any other row and are **not** stored on the circuit, cannot be unwired, and carry no
+ * `part`/`pad` — there is no `Circuit.parts` index for a battery or a hinge-LED to point at.
+ */
+interface NetRow {
+  net: string;
+  /** What the author reads — `R1 · 2` for a wired pad, `Battery +` for a derived one. */
+  label: string;
+  derived: boolean;
+  part?: number;
+  pad?: string;
+}
 
 /** The `Circuit` field each selectable-part kind lives in. LEDs are not here: they are placed on a hinge
  *  rather than on a rail, and are handled on their own throughout. */
@@ -409,6 +433,9 @@ export class ElectronicsModal {
   private readonly netList: HTMLElement;
   private readonly netNew: HTMLInputElement;
   private readonly netTally: HTMLElement;
+  private readonly partsGroup: HTMLElement;
+  private readonly partsTally: HTMLElement;
+  private readonly partList: HTMLElement;
   private readonly padsGroup: HTMLElement;
   private readonly padPart: HTMLElement;
   private readonly padList: HTMLElement;
@@ -436,6 +463,21 @@ export class ElectronicsModal {
   /** The sheet a scale-less pattern is cut at, from the export menu's print size. Held here because both
    *  the routing and every dimension drawn are derived from it. */
   private sheetMm: number | undefined;
+  /**
+   * The sheet's physical properties — thickness, foil, fatigue, and which tape to plan for.
+   *
+   * **One field, read by all three of `replan`, `tapeW` and `tapeMm`, and that is the whole point.** Under
+   * `tapeChoice: "area"` the tape width depends on the sheet, so a spec that reached the router without
+   * reaching the two width readers would have the router plan at one width while the canvas and the folded
+   * preview drew at another — silently, each internally consistent. Passing a literal `undefined` at each
+   * site made that divergence structural; sharing one field makes it impossible.
+   *
+   * Nothing sets it yet: no part of the app constructs a `SheetSpec`, so this is `DEFAULT_SHEET` and the
+   * router plans for the {@link TAPE_MM} roll exactly as before. This is where one arrives when it does.
+   *
+   * Named `sheetSpec` rather than `sheet` because {@link sheet} is already the preview's page box.
+   */
+  private sheetSpec: SheetSpec = DEFAULT_SHEET;
   /** Inter-tile gap (shrink-toward-centroid fraction), driven by the sim's Gap slider. The tiles drawn
    *  here and the gaps an LED bridges are the same geometry the printed build is cut at, so this has to
    *  track that slider or the placement surface disagrees with what gets printed. */
@@ -564,6 +606,13 @@ export class ElectronicsModal {
                 <input type="text" class="el-net-new" placeholder="New net name" aria-label="New net name" autocomplete="off">
                 <div class="el-net-list" role="tree" aria-label="Declared nets"></div>
               </div>
+              <div class="el-side-sect el-placed" hidden>
+                <div class="el-side-head">
+                  <span class="el-side-title">Parts</span>
+                  <span class="el-side-tally el-placed-tally" aria-live="polite"></span>
+                </div>
+                <div class="el-placed-list" role="list"></div>
+              </div>
               <div class="el-side-sect el-pads" hidden>
                 <div class="el-side-head">
                   <span class="el-side-title el-pad-part"></span>
@@ -613,6 +662,12 @@ export class ElectronicsModal {
     this.netList = this.overlay.querySelector(".el-net-list")!;
     this.netNew = this.overlay.querySelector(".el-net-new")!;
     this.netTally = this.overlay.querySelector(".el-side-tally")!;
+    // Its own class rather than a second `.el-side-tally`: the nets tally is looked up by that class and
+    // takes the first in document order, so a bare copy here would be a trap for whoever adds a section
+    // above it later.
+    this.partsGroup = this.overlay.querySelector(".el-placed")!;
+    this.partsTally = this.overlay.querySelector(".el-placed-tally")!;
+    this.partList = this.overlay.querySelector(".el-placed-list")!;
     this.padsGroup = this.overlay.querySelector(".el-pads")!;
     this.padPart = this.overlay.querySelector(".el-pad-part")!;
     this.padList = this.overlay.querySelector(".el-pad-list")!;
@@ -792,7 +847,12 @@ export class ElectronicsModal {
     this.computeBounds();
     this.fitView();
     this.syncButtons();
-    if (!this.overlay.hidden) this.render();
+    // The sidebar as well as the canvas: a new pattern resets the circuit, so leaving it painted would
+    // list the old pattern's parts and offer the pads of one that no longer exists.
+    if (!this.overlay.hidden) {
+      this.renderNets();
+      this.render();
+    }
   }
 
   /**
@@ -1171,7 +1231,7 @@ export class ElectronicsModal {
     if (onPart) {
       this.selected = onPart;
       // The pad panel follows the selection: it is the selected part's pads it is offering.
-      this.renderPads();
+      this.renderSide();
       this.render();
       return;
     }
@@ -1248,13 +1308,17 @@ export class ElectronicsModal {
       };
     } else if (this.placeMode === "free") {
       // An LED asked for on a tile is an ordinary free part carrying an LED footprint. It gets no `Led`
-      // entry, so the router does not bridge it across a hinge and does not decide which leg is PWR — the
-      // author wires its two pads like any other part's. That is the whole point of the choice: which side
-      // is positive stops being a routing outcome and becomes something they said.
+      // entry, so the router does not bridge it across a hinge and does not decide which leg is PWR — which
+      // side is positive stops being a routing outcome and becomes something the author holds.
+      //
+      // Holding it does not mean having to state it. The two pads land on PWR and GND, the LED's own way
+      // round, and the author changes either from the pads panel — a default, not a decision taken from
+      // them. Landing unwired meant every LED placed on a tile needed two manual assignments before it
+      // could light, which is a chore rather than a choice.
       const id = this.armedLed().id;
       if (pointInFace(this.faces, flat) < 0) {
         this.selected = null;
-        this.renderPads();
+        this.renderSide();
         this.render();
         return;
       }
@@ -1262,6 +1326,7 @@ export class ElectronicsModal {
       this.circuit = {
         ...this.circuit,
         parts: [...placed, { component: id, x: flat.x, y: flat.y, free: true }],
+        terminals: [...this.netTerminals(), ...this.defaultLedTerminals(placed.length, id)],
       };
       this.selected = { kind: "part", index: placed.length };
     } else {
@@ -1269,7 +1334,7 @@ export class ElectronicsModal {
       const hit = nearestGap(this.gaps, flat);
       if (!hit || hit.dist > this.pickRadius()) {
         this.selected = null; // a tap on bare cloth clears the selection
-        this.renderPads();
+        this.renderSide();
         this.render();
         return;
       }
@@ -1280,7 +1345,7 @@ export class ElectronicsModal {
         // An LED already here: select it, so it can be rotated or removed. Tapping it no longer deletes it —
         // deleting on the same gesture that selects would make rotating one impossible.
         this.selected = { kind: "led", index: at };
-        this.renderPads();
+        this.renderSide();
         this.render();
         return;
       }
@@ -1310,7 +1375,7 @@ export class ElectronicsModal {
    * exported in the netlist — and invisible on the canvas, which is the worst of all the options.
    */
   private freeParts(): { component: string; a: Vec2; b: Vec2; flip?: boolean; source?: number }[] {
-    const toFlat = (mm: number): number => (mm * this.tapeW()) / TAPE_MM;
+    const toFlat = (mm: number): number => (mm * this.tapeW()) / this.tapeMm();
     const out: { component: string; a: Vec2; b: Vec2; flip?: boolean; source?: number }[] = [];
     (this.circuit.parts ?? []).forEach((p, source) => {
       if (!p.free) return;
@@ -1382,7 +1447,7 @@ export class ElectronicsModal {
   /** How near a tap must land to a part's own point to pick it up: half the part's extent along the rail,
    *  in the flat pattern's units, and never below {@link PART_PICK_FLOOR_MM}. */
   private partPickRadius(fp: Footprint | null): number {
-    const toFlat = (mm: number): number => (mm * this.tapeW()) / TAPE_MM;
+    const toFlat = (mm: number): number => (mm * this.tapeW()) / this.tapeMm();
     const fit = fp ? partFit(fp) : null;
     const along = fit ? Math.max(fit.gap, fit.before + fit.after) : 0;
     return Math.max(toFlat(PART_PICK_FLOOR_MM), toFlat(along) / 2);
@@ -1478,7 +1543,10 @@ export class ElectronicsModal {
   private renderNets(): void {
     this.netList.innerHTML = "";
     const nets = this.nets();
-    const wired = this.netTerminals();
+    // Rows, not stored terminals: the battery and the hinge-LEDs are on PWR and GND by construction and
+    // have nothing stored, so counting `circuit.terminals` alone reported `PWR 0 · GND 0` on a circuit
+    // that was fully routed. See {@link derivedRows}.
+    const wired = this.panelRows();
     this.netTally.textContent = String(nets.length);
     this.netTally.title = `${nets.length} net${nets.length === 1 ? "" : "s"} declared`;
     if (nets.length === 0) {
@@ -1488,7 +1556,7 @@ export class ElectronicsModal {
       empty.className = "el-side-empty";
       empty.textContent = "No nets yet — name one above to declare it.";
       this.netList.appendChild(empty);
-      this.renderPads();
+      this.renderSide();
       return;
     }
     nets.forEach((net, i) => {
@@ -1543,6 +1611,13 @@ export class ElectronicsModal {
       tally.textContent = String(on.length);
       tally.title = `${on.length} pad${on.length === 1 ? "" : "s"} on this net`;
 
+      // What the router made of this net, where it could not finish it. `planNets` has always written a
+      // `stranded` list and a sentence saying why, and nothing has ever read either: a net that lost a
+      // terminal to another net's copper looked, in this panel, exactly like a net that was fully wired.
+      // That is the failure this editor is least able to afford, because the circuit it draws is complete
+      // and the one you build from it is not.
+      const short = this.strandedOn(net.id);
+
       const del = document.createElement("button");
       del.type = "button";
       del.className = "el-net-del";
@@ -1554,12 +1629,13 @@ export class ElectronicsModal {
       row.appendChild(swatch);
       row.appendChild(name);
       row.appendChild(tally);
+      if (short) row.appendChild(short);
       row.appendChild(del);
       this.netList.appendChild(row);
 
       if (open && on.length) this.netList.appendChild(this.netChildren(on, colour));
     });
-    this.renderPads();
+    this.renderSide();
   }
 
   /**
@@ -1569,37 +1645,42 @@ export class ElectronicsModal {
    * the part. `Terminal.part` is an index into `circuit.parts`, and an index means nothing to a person
    * looking at a board.
    */
-  private netChildren(on: Terminal[], colour: string): HTMLElement {
+  private netChildren(on: NetRow[], colour: string): HTMLElement {
     const kids = document.createElement("div");
     kids.className = "el-net-kids";
     kids.setAttribute("role", "group");
-    const parts = this.circuit.parts ?? [];
-    // Over every part, not over the wired ones: a designator counts within its family across the whole
-    // board, so numbering a filtered list would call the second capacitor C1 whenever the first was not
-    // on this net.
-    const tags = designators(parts);
     for (const t of on) {
       const kid = document.createElement("div");
-      kid.className = "el-net-kid";
+      kid.className = t.derived ? "el-net-kid is-derived" : "el-net-kid";
       kid.setAttribute("role", "treeitem");
       const dot = document.createElement("i");
       dot.className = "el-net-kid-dot";
       dot.setAttribute("style", `background:${colour}`);
       const label = document.createElement("span");
       label.className = "el-net-kid-name";
-      const tag = tags[t.part] ?? `part ${t.part}`;
-      label.textContent = `${tag} · ${t.pad}`;
-      label.title = `Pad ${t.pad} of ${tag}`;
-      const off = document.createElement("button");
-      off.type = "button";
-      off.className = "el-net-kid-off";
-      off.textContent = "×";
-      off.title = `Take pad ${t.pad} of ${tag} off this net`;
-      off.setAttribute("aria-label", `Unwire pad ${t.pad} of ${tag} from this net`);
-      off.addEventListener("click", () => this.assignPad(t.part, t.pad, ""));
+      label.textContent = t.label;
       kid.appendChild(dot);
       kid.appendChild(label);
-      kid.appendChild(off);
+      if (t.derived) {
+        // No control, because there is nothing here the author decides: this row states what the router
+        // did. Offered an × they would take the battery off GND, the next replan would put it back, and
+        // the app would look broken while behaving correctly.
+        label.title = `${t.label} — wired by the router, not by hand`;
+        const note = document.createElement("span");
+        note.className = "el-net-kid-note";
+        note.textContent = "router";
+        kid.appendChild(note);
+      } else {
+        label.title = `Pad ${t.pad} of ${t.label.split(" · ")[0]}`;
+        const off = document.createElement("button");
+        off.type = "button";
+        off.className = "el-net-kid-off";
+        off.textContent = "×";
+        off.title = `Take ${t.label} off this net`;
+        off.setAttribute("aria-label", `Unwire ${t.label} from this net`);
+        off.addEventListener("click", () => this.assignPad(t.part!, t.pad!, ""));
+        kid.appendChild(off);
+      }
       kids.appendChild(kid);
     }
     return kids;
@@ -1639,6 +1720,94 @@ export class ElectronicsModal {
    * The names come from `terminals(fp)` — the same reading the renderer and the router use — so a
    * mounting peg is never offered as something to wire.
    */
+  /**
+   * The whole sidebar below the nets: the parts placed, and then the pads of whichever one is selected.
+   *
+   * One call rather than two at every site, because the two panels are not independent — the pads panel
+   * shows the selection, and the parts list is where the selection is now made.
+   */
+  private renderSide(): void {
+    this.renderParts();
+    this.renderPads();
+  }
+
+  /**
+   * Every library part placed on the sheet, one row each.
+   *
+   * Without this the pads panel was the only place a part existed in the sidebar, and it shows the
+   * SELECTED part alone — so placing a second part took the first one's pads, and the net dropdowns that
+   * are the only way to wire them, out of the panel entirely. The part was still there and still stored
+   * (nothing is lost from `circuit.terminals`), but the only way back to it was to find it on the canvas
+   * and click it. With free placement dropping 26-way sockets anywhere on the sheet that is the ordinary
+   * case, not an edge one.
+   *
+   * The count on each row is how many of the part's terminals are on a net. That is the number the author
+   * is working through, and until now it was not shown anywhere.
+   *
+   * No delete control here on purpose: removal goes through `removeSelected` into `reindexTerminals`, and
+   * a second door into that path wants its own tests rather than riding along with a panel that displays.
+   */
+  private renderParts(): void {
+    this.partList.innerHTML = "";
+    const parts = this.circuit.parts ?? [];
+    if (parts.length === 0) {
+      this.partsGroup.hidden = true;
+      return;
+    }
+    this.partsGroup.hidden = false;
+    this.partsTally.textContent = String(parts.length);
+    this.partsTally.title = `${parts.length} part${parts.length === 1 ? "" : "s"} placed`;
+    const tags = designators(parts);
+    const sel = this.partSelection();
+    parts.forEach((part, i) => {
+      const comp = PART_BY_ID.get(part.component);
+      const pads = comp ? terminals(comp.footprint).length : 0;
+      const on = this.netTerminals().filter((t) => t.part === i).length;
+
+      const row = document.createElement("button");
+      row.type = "button";
+      // `el-placed`, not `el-part`: the palette menu's rows are already `.el-part-row`, and a second set
+      // under the same class made every library row answer a query meant for the placed ones.
+      row.className = "el-placed-row";
+      row.setAttribute("role", "listitem");
+      row.dataset.part = String(i);
+      // Both ways round: the canvas selection lights the row, and pressing the row selects on the canvas.
+      const active = sel?.kind === "part" && sel.index === i;
+      row.classList.toggle("is-active", active);
+      row.setAttribute("aria-pressed", active ? "true" : "false");
+
+      const tag = document.createElement("span");
+      tag.className = "el-placed-tag";
+      tag.textContent = tags[i] ?? `part ${i + 1}`;
+
+      const note = document.createElement("span");
+      note.className = "el-placed-note";
+      note.textContent = comp ? comp.note || comp.id : part.component;
+
+      const count = document.createElement("span");
+      count.className = "el-placed-wired";
+      count.textContent = `${on}/${pads}`;
+      count.title = `${on} of ${pads} pad${pads === 1 ? "" : "s"} on a net`;
+      // Nothing wired is the state worth marking, for the same reason an unassigned pad is marked.
+      count.classList.toggle("is-unassigned", pads > 0 && on === 0);
+
+      row.title = `${tags[i] ?? `part ${i + 1}`} — ${comp?.note || part.component}`;
+      row.addEventListener("click", () => this.selectPart(i));
+      row.appendChild(tag);
+      row.appendChild(note);
+      row.appendChild(count);
+      this.partList.appendChild(row);
+    });
+  }
+
+  /** Select a placed part from the list, exactly as clicking it on the canvas does. */
+  private selectPart(index: number): void {
+    if (!(this.circuit.parts ?? [])[index]) return;
+    this.selected = { kind: "part", index };
+    this.renderSide();
+    this.render();
+  }
+
   private renderPads(): void {
     this.padList.innerHTML = "";
     const sel = this.partSelection();
@@ -1808,6 +1977,129 @@ export class ElectronicsModal {
     if (kept.length !== this.netTerminals().length || kept.some((t, i) => t !== this.netTerminals()[i])) {
       this.circuit = { ...this.circuit, terminals: kept };
     }
+  }
+
+  /**
+   * The nets a newly placed LED's pads should start on.
+   *
+   * Two decisions, kept in the two places they belong. **Which parts get a default at all** is a placement
+   * question and lives here: only an LED, because its pads are an anode and a cathode and PWR/GND is the
+   * only pair it can light on. A free resistor's two pads carry no polarity, and a twenty-six-way socket
+   * would be a circuit the author never drew.
+   *
+   * **What the default IS** is a netlist question and lives in `netlist.ts › defaultTerminals`, which
+   * refuses anything but a two-terminal part and refuses to point at rails the author has deleted. Calling
+   * it rather than restating it keeps one rule in one place — the same reason `acrossPart` is read by both
+   * the router and the drawing instead of each having its own version.
+   */
+  private defaultLedTerminals(part: number, component: string): Terminal[] {
+    const fp = footprintById(component);
+    if (!fp || !LED_BY_ID.has(component)) return [];
+    return defaultTerminals(part, fp, this.nets());
+  }
+
+  /**
+   * The battery's and the hinge-LEDs' membership of PWR and GND, as rows to show and never to store.
+   *
+   * Both are on those two nets by construction — the bus router puts them there — but the panel could
+   * only ever show STORED assignments, so a circuit with a battery and a routed LED read `PWR 0 · GND 0`.
+   * To the person looking at it, a rail that says 0 is not wired: the construction is invisible and
+   * therefore, for their purposes, absent.
+   *
+   * **Derived, never stored.** For a hinge-LED, which leg is PWR is a routing OUTPUT — `planRoutes`
+   * searches over `flip[]` — so it is only knowable after routing and would disagree with any stored value
+   * the moment the router flipped one. That is also why these are read off `this.routed` and recomputed
+   * every render rather than cached.
+   *
+   * Nothing is claimed for copper that did not arrive: an unreachable LED, or a plan that has not run,
+   * contributes no rows. A row saying PWR where the tape never reached is worse than no row.
+   */
+  private derivedRows(): NetRow[] {
+    const have = new Set(this.nets().map((n) => n.id));
+    if (!have.has(PWR_NET_ID) || !have.has(GND_NET_ID)) return [];
+    if (!this.routed.traces.length) return []; // nothing has been routed; claim nothing
+    const rows: NetRow[] = [];
+    if (this.circuit.battery) {
+      rows.push({ net: PWR_NET_ID, label: "Battery +", derived: true });
+      rows.push({ net: GND_NET_ID, label: "Battery −", derived: true });
+    }
+    this.circuit.leds.forEach((_led, i) => {
+      if (this.routed.unreachable.includes(i)) return;
+      const pads = this.routed.pads[i];
+      if (!pads || (isZero(pads.pwr) && isZero(pads.gnd))) return;
+      rows.push({ net: PWR_NET_ID, label: `LED ${i + 1} +`, derived: true });
+      rows.push({ net: GND_NET_ID, label: `LED ${i + 1} −`, derived: true });
+    });
+    return rows;
+  }
+
+  /**
+   * Every row the panel shows for the nets: what the author wired, and what the bus wired for them.
+   *
+   * Deliberately NOT folded into {@link netTerminals}, which four mutation paths read — `assignPad`,
+   * `deleteNet`, `reindexTerminals` and the placement default all rebuild `circuit.terminals` from it, so
+   * a derived row passing through there would be written to the circuit on the next edit. That is the one
+   * thing these rows must never do.
+   */
+  private panelRows(): NetRow[] {
+    const tags = designators(this.circuit.parts ?? []);
+    const stored = this.netTerminals().map((t) => ({
+      net: t.net,
+      label: `${tags[t.part] ?? `part ${t.part}`} · ${t.pad}`,
+      derived: false,
+      part: t.part,
+      pad: t.pad,
+    }));
+    return [...stored, ...this.derivedRows()];
+  }
+
+  /**
+   * The marker for a net the router could not finish, or null when it did.
+   *
+   * A count, not a bare warning sign: "2" beside a net of five pads is the number the author has to act
+   * on, and the reason is on the marker itself rather than in a panel somewhere else.
+   */
+  private strandedOn(netId: string): HTMLElement | null {
+    const routed = (this.routed.nets ?? []).find((n) => n.id === netId);
+    if (!routed || !routed.stranded.length) return null;
+    const warn = document.createElement("span");
+    warn.className = "el-net-short";
+    warn.textContent = String(routed.stranded.length);
+    warn.title = routed.why ?? `${routed.stranded.length} terminals could not be reached`;
+    warn.setAttribute("aria-label", warn.title);
+    return warn;
+  }
+
+  /**
+   * What is wrong with the netlist itself, as one sentence.
+   *
+   * Six kinds of fault are resolved and reported by `resolveNetlist`, carried out through `planRoutes` as
+   * `netFaults` — and read by nothing until now. A pad on a net that no longer exists, or a pad wired to
+   * two nets, simply did not route and said nothing about it.
+   */
+  private netlistTrouble(): string {
+    // An UNWIRED net is not a fault. `resolveNetlist` reports "fewer than two terminals" for both a net
+    // with one pad on it and a net with none, because for its purposes they are the same thing — neither
+    // can be routed. For an author they are opposite: one pad on a net is a mistake worth pointing at, and
+    // no pads is a net they have declared and not got to yet. A fresh circuit is seeded with PWR and GND,
+    // so reporting the empty case would greet every new pattern with two faults it did not cause.
+    const wired = new Set(this.netTerminals().map((t) => t.net));
+    const faults = (this.routed.netFaults ?? []).filter(
+      (f) => !(f.kind === "single-terminal-net" && f.net != null && !wired.has(f.net)),
+    );
+    const stranded = (this.routed.nets ?? []).reduce((a, n) => a + n.stranded.length, 0);
+    const parts: string[] = [];
+    if (faults.length) {
+      parts.push(
+        `${faults.length} netlist fault${faults.length === 1 ? "" : "s"}: ${faults[0]!.why}`,
+      );
+    }
+    if (stranded) {
+      parts.push(
+        `${stranded} terminal${stranded === 1 ? "" : "s"} could not be reached without crossing another net`,
+      );
+    }
+    return parts.length ? ` · ${parts.join(" · ")}` : "";
   }
 
   /** Which net a pad is on, or "" for unassigned. */
@@ -2001,8 +2293,12 @@ export class ElectronicsModal {
    *  The redraw must happen here: the controller does not push anything back, so an edit that only
    *  emitted would update `this.circuit` and never appear on screen. */
   private emit(): void {
-    this.renderNets();
+    // The canvas first, because `render()` re-plans and the nets panel reads the plan: the battery's and
+    // each hinge-LED's rows are derived from `this.routed` (see {@link derivedRows}). Painted first, the
+    // panel showed the plan from BEFORE this edit — one behind, so a freshly placed LED contributed
+    // nothing to its rails' counts until the next unrelated edit repainted them.
     this.render();
+    this.renderNets();
     this.editHandler(cloneCircuit(this.circuit));
   }
 
@@ -2163,6 +2459,10 @@ export class ElectronicsModal {
     if (flat && hit && hit.kind === "part" && (this.circuit.parts ?? [])[hit.index]?.free) {
       this.partDrag = { index: hit.index, from: flat, at: flat };
       this.selected = hit;
+      // The sidebar follows the press, not just the click. Selecting here and repainting only the canvas
+      // left the parts list and the pads panel showing the PREVIOUS part for the whole gesture — and for
+      // a press that never moves, for good, since a drag that goes nowhere commits nothing.
+      this.renderSide();
       this.svg.setPointerCapture(e.pointerId);
       return;
     }
@@ -2228,7 +2528,9 @@ export class ElectronicsModal {
 
   /** Re-plan copper for the current circuit. Cheap enough to do on every edit. */
   private replan(): void {
-    this.routed = this.fold ? planRoutes(this.faces, this.gaps, this.circuit, this.sheetMm) : EMPTY_ROUTE;
+    this.routed = this.fold
+      ? planRoutes(this.faces, this.gaps, this.circuit, this.sheetMm, this.sheetSpec)
+      : EMPTY_ROUTE;
   }
 
   private render(): void {
@@ -2442,7 +2744,7 @@ export class ElectronicsModal {
     const fp = part ? footprintById(part.component) : null;
     if (!part || !fp) return;
     const dx = d.at.x - d.from.x, dy = d.at.y - d.from.y;
-    const half = ((partFit(fp).gap * this.tapeW()) / TAPE_MM) / 2;
+    const half = ((partFit(fp).gap * this.tapeW()) / this.tapeMm()) / 2;
     const th = ((part.rot ?? 0) * Math.PI) / 180;
     const ux = Math.cos(th), uy = Math.sin(th);
     const c = { x: part.x + dx, y: part.y + dy };
@@ -2659,7 +2961,13 @@ export class ElectronicsModal {
 
   /** Tape width. Shared with the router, so the strips drawn are the strips it planned clearances for. */
   private tapeW(): number {
-    return tapeWidthFor(this.faces, this.sheetMm);
+    return tapeWidthFor(this.faces, this.sheetMm, this.sheetSpec, this.circuit);
+  }
+
+  /** The same tape in millimetres. `tapeW() / tapeMm()` is this pattern's scale, and any millimetre figure
+   *  converted with `TAPE_MM` instead would be off by whatever roll the router actually chose. */
+  private tapeMm(): number {
+    return tapeMmFor(this.faces, this.sheetMm, this.sheetSpec, this.circuit);
   }
 
   private diag(): number {
@@ -2671,8 +2979,17 @@ export class ElectronicsModal {
     const batt = this.circuit.battery ? "battery set" : "no battery";
     let msg = `${n} LED${n === 1 ? "" : "s"} · ${batt}`;
     if (!this.circuit.battery && n > 0) msg += " · add a battery";
-    const un = this.routed.unreachable.length;
+    // Two faults, said apart. An LED the copper cannot get to and an LED whose package will not sit on its
+    // hinge were both reported as "unreachable", and they send the author to different places: one is
+    // solved by moving the LED or bridging by hand, the other by a smaller package. On some patterns every
+    // failure is the second kind — akde-square-pyramid loses 8 of 12 that way and none the other — so the
+    // single word was wrong every time it appeared there.
+    const unseated = (this.routed.unseated ?? []).length;
+    const un = this.routed.unreachable.length - unseated;
     if (un > 0 && this.circuit.battery) msg += ` · ${un} unreachable`;
+    if (unseated > 0) {
+      msg += ` · ${unseated} ${unseated === 1 ? "LED does" : "LEDs do"} not fit on ${unseated === 1 ? "its" : "their"} hinge`;
+    }
     // A part that would not fit is dropped by the router, and without this it disappeared without a word:
     // the click registered, the circuit kept it, and nothing appeared on the canvas.
     const short = [
@@ -2705,6 +3022,7 @@ export class ElectronicsModal {
             ? " · tap to lay a point, tap the last one or press Enter to finish"
             : " · tap the pattern to start a wire";
     }
+    msg += this.netlistTrouble();
     const sel = this.selected;
     const selPart = this.partSelection();
     const picked = sel

@@ -103,6 +103,8 @@ interface Lead {
   b: Vec2;
   width: number;
   name?: string;
+  /** That this pad's footprint x runs across the rail and its y along it — see {@link padRing}. */
+  swap?: boolean;
 }
 
 /** A lead's rectangle read back as a frame: where its centre is and which way its two axes point. */
@@ -162,8 +164,17 @@ function padRing(fp: Footprint, l: Lead, f: Frame, rim: number): Vec2[] {
   const bw = maxX - minX, bh = maxY - minY;
   if (!(bw > 1e-9) || !(bh > 1e-9)) return rectRing(f, rim);
   const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
-  const kl = (f.len - 2 * rim) / bh, kw = (f.wid - 2 * rim) / bw;
-  return pts.map((q) => at(f, (q.y - cy) * kl, (q.x - cx) * kw));
+  // Which of the outline's own extents runs across the rail. A part whose terminals go down y has its
+  // pads a quarter turn from one whose terminals go along x, and the lead rectangle cannot say so —
+  // `swap` is the shape's word for it, and mapping without it turned every pin header's pads sideways.
+  const [along, across] = l.swap ? [bh, bw] : [bw, bh];
+  const kl = (f.len - 2 * rim) / across, kw = (f.wid - 2 * rim) / along;
+  // The segment carries the outline's across-the-rail extent and the width its along-the-rail one, so
+  // `swap` picks the coordinate as well as the scale — taking one without the other would map the
+  // outline onto the far side's dimensions and stretch every pad instead of turning it.
+  return l.swap
+    ? pts.map((q) => at(f, (q.x - cx) * kl, (q.y - cy) * kw))
+    : pts.map((q) => at(f, (q.y - cy) * kl, (q.x - cx) * kw));
 }
 
 function ringPath(ring: Vec2[]): string {

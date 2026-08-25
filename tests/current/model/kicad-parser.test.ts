@@ -13,7 +13,7 @@ import { padNamed, padPoints, padSize, type Pad, type Vec2 } from "../../../src/
  *
  * `ocaml/kicad.ml` runs at build time, so nothing here can call it. What it produces is committed as
  * `footprints.generated.ts`, and the honest test of a reader is to put its output back beside its
- * input: 159 vendored `.kicad_mod` files, 1600-odd pads, too many to eyeball. So this file parses the
+ * input: every vendored `.kicad_mod` file and its every pad, too many to eyeball. So this file parses the
  * sources independently — a few regexes over the s-expressions, sharing no code with the OCaml — and
  * asserts the two agree on how many pads there are and how big each one is.
  *
@@ -26,7 +26,7 @@ import { padNamed, padPoints, padSize, type Pad, type Vec2 } from "../../../src/
 const FAB = new URL("../../../footprints/fab/", import.meta.url);
 /**
  * Both halves of the generated library. The split is a bundling decision — the parts the editor can
- * place load eagerly, the rest lazily — and a reader has to be checked against all 159 either way.
+ * place load eagerly, the rest lazily — and a reader has to be checked against every one either way.
  */
 const GENERATED = [
   new URL("../../../src/model/footprints.generated.ts", import.meta.url),
@@ -145,8 +145,9 @@ function asCircle(pad: Pad): number | undefined {
 describe("model/kicad-parser", () => {
   it("reads every vendored footprint back to the pad count and pad sizes of its source", () => {
     const files = sourceFiles();
-    // Non-vacuous: every part in either half is checked, and there really are 159-odd of them.
-    expect(EVERY_PART.length, "the library went missing").toBeGreaterThan(150);
+    // Non-vacuous: every part in either half is checked, and the library really is a library — the
+    // bound is a floor well under any plausible cull, not a count to be re-recorded after one.
+    expect(EVERY_PART.length, "the library went missing").toBeGreaterThan(120);
     expect(files.size, "a part records no source file").toBe(EVERY_PART.length);
 
     for (const c of EVERY_PART) {

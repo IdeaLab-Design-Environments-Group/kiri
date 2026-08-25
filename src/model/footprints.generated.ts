@@ -7,11 +7,17 @@
  * here to fall out of step with what is on disk.
  *
  * The FabLib is 159 footprints and about a megabyte of pad outlines, which is four times the rest of
- * the app. Most of it is parts a rail cannot pass through — a forty-pin connector has no meaning
- * spliced into a run of copper tape — so this module holds only the ones that can be placed, and
- * `footprints.rest.generated.ts` holds the others for the palette to pull in on demand. That split is
- * a bundling decision and nothing more: whether a part can be placed is `placement()` in `parts.ts`,
- * which is asked about parts from both halves.
+ * the app. Most of it is parts the router will not put in series today — `placement()` in `parts.ts`
+ * takes 2 or 3 terminals, which is what a rail can pass through — so this module holds those and
+ * `footprints.rest.generated.ts` holds the others for the palette to pull in on demand.
+ *
+ * The split was meant to be a bundling decision and nothing more. It is not, and the comment here used
+ * to claim otherwise: the router (`electronics-routing.ts`) and both cut files
+ * (`copper-svg-export.ts`) resolve a component id against THIS module alone, so a part in the other
+ * half cannot be routed or drawn even if something offered it. Only the palette merges the two. The
+ * arrangement is consistent today, because the palette offers only what `placement()` accepts and that
+ * is exactly this half — but it is a coincidence held in place by one policy constant, not a boundary,
+ * and moving that constant would have the palette offer parts the router silently skips.
  *
  * A footprint is its pads, keyed by the pad name the part's own datasheet uses. Each pad carries its
  * outline as an SVG path about its own origin, where that origin sits in the part, which layers it
@@ -105,24 +111,6 @@ export const CP_Elec_100uF_Panasonic_EEE_FN1E101UL: Footprint = {
     pos: [0.102362, 0],
     layers: ["F.Cu", "F.Paste", "F.Mask"],
     index: 2,
-  },
-};
-
-/** CAP LITH HYBRID 10F 3.8V T/H — from `CP_Elec_10F_Tecate_TPLC-3R8.kicad_mod`. */
-export const CP_Elec_10F_Tecate_TPLC_3R8: Footprint = {
-  "1": {
-    shape: "M 0.023622 0 L 0.02303 0.005256 L 0.021283 0.010249 L 0.018468 0.014728 L 0.014728 0.018468 L 0.010249 0.021283 L 0.005256 0.02303 L 0 0.023622 L -0.005256 0.02303 L -0.010249 0.021283 L -0.014728 0.018468 L -0.018468 0.014728 L -0.021283 0.010249 L -0.02303 0.005256 L -0.023622 0 L -0.02303 -0.005256 L -0.021283 -0.010249 L -0.018468 -0.014728 L -0.014728 -0.018468 L -0.010249 -0.021283 L -0.005256 -0.02303 L 0 -0.023622 L 0.005256 -0.02303 L 0.010249 -0.021283 L 0.014728 -0.018468 L 0.018468 -0.014728 L 0.021283 -0.010249 L 0.02303 -0.005256 L 0.023622 0 ",
-    pos: [-0.068898, 0],
-    layers: ["F.Cu", "B.Cu", "F.Mask", "B.Mask"],
-    index: 1,
-    drill: { diameter: 0.031496, start: "F.Cu", end: "B.Cu", plated: true },
-  },
-  "2": {
-    shape: "M 0.023622 0 L 0.02303 0.005256 L 0.021283 0.010249 L 0.018468 0.014728 L 0.014728 0.018468 L 0.010249 0.021283 L 0.005256 0.02303 L 0 0.023622 L -0.005256 0.02303 L -0.010249 0.021283 L -0.014728 0.018468 L -0.018468 0.014728 L -0.021283 0.010249 L -0.02303 0.005256 L -0.023622 0 L -0.02303 -0.005256 L -0.021283 -0.010249 L -0.018468 -0.014728 L -0.014728 -0.018468 L -0.010249 -0.021283 L -0.005256 -0.02303 L 0 -0.023622 L 0.005256 -0.02303 L 0.010249 -0.021283 L 0.014728 -0.018468 L 0.018468 -0.014728 L 0.021283 -0.010249 L 0.02303 -0.005256 L 0.023622 0 ",
-    pos: [0.068898, 0],
-    layers: ["F.Cu", "B.Cu", "F.Mask", "B.Mask"],
-    index: 2,
-    drill: { diameter: 0.031496, start: "F.Cu", end: "B.Cu", plated: true },
   },
 };
 
@@ -418,42 +406,6 @@ export const PinHeader_01x02_P2_54mm_Horizontal_SMD: Footprint = {
   },
 };
 
-/** Through hole straight pin header, 2.54mm pitch, single row — from `PinHeader_01x02_P2.54mm_Vertical_THT_D1.4mm.kicad_mod`. */
-export const PinHeader_01x02_P2_54mm_Vertical_THT_D1_4mm: Footprint = {
-  "1": {
-    shape: "M 0.041339 0 L 0.040711 0.007178 L 0.038846 0.014139 L 0.0358 0.020669 L 0.031667 0.026572 L 0.026572 0.031667 L 0.020669 0.0358 L 0.014139 0.038846 L 0.007178 0.040711 L 0 0.041339 L -0.007178 0.040711 L -0.014139 0.038846 L -0.020669 0.0358 L -0.026572 0.031667 L -0.031667 0.026572 L -0.0358 0.020669 L -0.038846 0.014139 L -0.040711 0.007178 L -0.041339 0 L -0.040711 -0.007178 L -0.038846 -0.014139 L -0.0358 -0.020669 L -0.031667 -0.026572 L -0.026572 -0.031667 L -0.020669 -0.0358 L -0.014139 -0.038846 L -0.007178 -0.040711 L 0 -0.041339 L 0.007178 -0.040711 L 0.014139 -0.038846 L 0.020669 -0.0358 L 0.026572 -0.031667 L 0.031667 -0.026572 L 0.0358 -0.020669 L 0.038846 -0.014139 L 0.040711 -0.007178 L 0.041339 0 ",
-    pos: [0, 0],
-    layers: ["F.Cu", "B.Cu", "F.Mask", "B.Mask"],
-    index: 1,
-    drill: { diameter: 0.055118, start: "F.Cu", end: "B.Cu", plated: true },
-  },
-  "2": {
-    shape: "M 0.041339 0 L 0.040711 0.007178 L 0.038846 0.014139 L 0.0358 0.020669 L 0.031667 0.026572 L 0.026572 0.031667 L 0.020669 0.0358 L 0.014139 0.038846 L 0.007178 0.040711 L 0 0.041339 L -0.007178 0.040711 L -0.014139 0.038846 L -0.020669 0.0358 L -0.026572 0.031667 L -0.031667 0.026572 L -0.0358 0.020669 L -0.038846 0.014139 L -0.040711 0.007178 L -0.041339 0 L -0.040711 -0.007178 L -0.038846 -0.014139 L -0.0358 -0.020669 L -0.031667 -0.026572 L -0.026572 -0.031667 L -0.020669 -0.0358 L -0.014139 -0.038846 L -0.007178 -0.040711 L 0 -0.041339 L 0.007178 -0.040711 L 0.014139 -0.038846 L 0.020669 -0.0358 L 0.026572 -0.031667 L 0.031667 -0.026572 L 0.0358 -0.020669 L 0.038846 -0.014139 L 0.040711 -0.007178 L 0.041339 0 ",
-    pos: [0, -0.1],
-    layers: ["F.Cu", "B.Cu", "F.Mask", "B.Mask"],
-    index: 2,
-    drill: { diameter: 0.055118, start: "F.Cu", end: "B.Cu", plated: true },
-  },
-};
-
-/** Through hole straight pin header, 2.54mm pitch, single row — from `PinHeader_01x02_P2.54mm_Vertical_THT_D1mm.kicad_mod`. */
-export const PinHeader_01x02_P2_54mm_Vertical_THT_D1mm: Footprint = {
-  "1": {
-    shape: "M -0.033465 0 L -0.032822 -0.006529 L -0.030917 -0.012806 L -0.027825 -0.018592 L -0.023663 -0.023663 L -0.018592 -0.027825 L -0.012806 -0.030917 L -0.006529 -0.032822 L 0 -0.033465 L 0 -0.033465 L 0.006529 -0.032822 L 0.012806 -0.030917 L 0.018592 -0.027825 L 0.023663 -0.023663 L 0.027825 -0.018592 L 0.030917 -0.012806 L 0.032822 -0.006529 L 0.033465 0 L 0.033465 0 L 0.032822 0.006529 L 0.030917 0.012806 L 0.027825 0.018592 L 0.023663 0.023663 L 0.018592 0.027825 L 0.012806 0.030917 L 0.006529 0.032822 L 0 0.033465 L 0 0.033465 L -0.006529 0.032822 L -0.012806 0.030917 L -0.018592 0.027825 L -0.023663 0.023663 L -0.027825 0.018592 L -0.030917 0.012806 L -0.032822 0.006529 L -0.033465 0 L -0.033465 0 ",
-    pos: [0, 0],
-    layers: ["F.Cu", "B.Cu", "F.Mask", "B.Mask"],
-    index: 1,
-    drill: { diameter: 0.03937, start: "F.Cu", end: "B.Cu", plated: true },
-  },
-  "2": {
-    shape: "M -0.033465 0 L -0.032822 -0.006529 L -0.030917 -0.012806 L -0.027825 -0.018592 L -0.023663 -0.023663 L -0.018592 -0.027825 L -0.012806 -0.030917 L -0.006529 -0.032822 L 0 -0.033465 L 0 -0.033465 L 0.006529 -0.032822 L 0.012806 -0.030917 L 0.018592 -0.027825 L 0.023663 -0.023663 L 0.027825 -0.018592 L 0.030917 -0.012806 L 0.032822 -0.006529 L 0.033465 0 L 0.033465 0 L 0.032822 0.006529 L 0.030917 0.012806 L 0.027825 0.018592 L 0.023663 0.023663 L 0.018592 0.027825 L 0.012806 0.030917 L 0.006529 0.032822 L 0 0.033465 L 0 0.033465 L -0.006529 0.032822 L -0.012806 0.030917 L -0.018592 0.027825 L -0.023663 0.023663 L -0.027825 0.018592 L -0.030917 0.012806 L -0.032822 0.006529 L -0.033465 0 L -0.033465 0 ",
-    pos: [0, -0.1],
-    layers: ["F.Cu", "B.Cu", "F.Mask", "B.Mask"],
-    index: 2,
-    drill: { diameter: 0.03937, start: "F.Cu", end: "B.Cu", plated: true },
-  },
-};
-
 /** horizontal pin header SMD 2.54mm — from `PinHeader_01x03_P2.54mm_Horizontal_SMD.kicad_mod`. */
 export const PinHeader_01x03_P2_54mm_Horizontal_SMD: Footprint = {
   "1": {
@@ -473,56 +425,6 @@ export const PinHeader_01x03_P2_54mm_Horizontal_SMD: Footprint = {
     pos: [0, -0.2],
     layers: ["F.Cu", "F.Paste", "F.Mask"],
     index: 3,
-  },
-};
-
-/** Through hole straight pin header, 2.54mm pitch, single row — from `PinHeader_01x03_P2.54mm_Vertical_THT_D1.4mm.kicad_mod`. */
-export const PinHeader_01x03_P2_54mm_Vertical_THT_D1_4mm: Footprint = {
-  "1": {
-    shape: "M 0.041339 0 L 0.040711 0.007178 L 0.038846 0.014139 L 0.0358 0.020669 L 0.031667 0.026572 L 0.026572 0.031667 L 0.020669 0.0358 L 0.014139 0.038846 L 0.007178 0.040711 L 0 0.041339 L -0.007178 0.040711 L -0.014139 0.038846 L -0.020669 0.0358 L -0.026572 0.031667 L -0.031667 0.026572 L -0.0358 0.020669 L -0.038846 0.014139 L -0.040711 0.007178 L -0.041339 0 L -0.040711 -0.007178 L -0.038846 -0.014139 L -0.0358 -0.020669 L -0.031667 -0.026572 L -0.026572 -0.031667 L -0.020669 -0.0358 L -0.014139 -0.038846 L -0.007178 -0.040711 L 0 -0.041339 L 0.007178 -0.040711 L 0.014139 -0.038846 L 0.020669 -0.0358 L 0.026572 -0.031667 L 0.031667 -0.026572 L 0.0358 -0.020669 L 0.038846 -0.014139 L 0.040711 -0.007178 L 0.041339 0 ",
-    pos: [0, 0],
-    layers: ["F.Cu", "B.Cu", "F.Mask", "B.Mask"],
-    index: 1,
-    drill: { diameter: 0.055118, start: "F.Cu", end: "B.Cu", plated: true },
-  },
-  "2": {
-    shape: "M 0.041339 0 L 0.040711 0.007178 L 0.038846 0.014139 L 0.0358 0.020669 L 0.031667 0.026572 L 0.026572 0.031667 L 0.020669 0.0358 L 0.014139 0.038846 L 0.007178 0.040711 L 0 0.041339 L -0.007178 0.040711 L -0.014139 0.038846 L -0.020669 0.0358 L -0.026572 0.031667 L -0.031667 0.026572 L -0.0358 0.020669 L -0.038846 0.014139 L -0.040711 0.007178 L -0.041339 0 L -0.040711 -0.007178 L -0.038846 -0.014139 L -0.0358 -0.020669 L -0.031667 -0.026572 L -0.026572 -0.031667 L -0.020669 -0.0358 L -0.014139 -0.038846 L -0.007178 -0.040711 L 0 -0.041339 L 0.007178 -0.040711 L 0.014139 -0.038846 L 0.020669 -0.0358 L 0.026572 -0.031667 L 0.031667 -0.026572 L 0.0358 -0.020669 L 0.038846 -0.014139 L 0.040711 -0.007178 L 0.041339 0 ",
-    pos: [0, -0.1],
-    layers: ["F.Cu", "B.Cu", "F.Mask", "B.Mask"],
-    index: 2,
-    drill: { diameter: 0.055118, start: "F.Cu", end: "B.Cu", plated: true },
-  },
-  "3": {
-    shape: "M 0.041339 0 L 0.040711 0.007178 L 0.038846 0.014139 L 0.0358 0.020669 L 0.031667 0.026572 L 0.026572 0.031667 L 0.020669 0.0358 L 0.014139 0.038846 L 0.007178 0.040711 L 0 0.041339 L -0.007178 0.040711 L -0.014139 0.038846 L -0.020669 0.0358 L -0.026572 0.031667 L -0.031667 0.026572 L -0.0358 0.020669 L -0.038846 0.014139 L -0.040711 0.007178 L -0.041339 0 L -0.040711 -0.007178 L -0.038846 -0.014139 L -0.0358 -0.020669 L -0.031667 -0.026572 L -0.026572 -0.031667 L -0.020669 -0.0358 L -0.014139 -0.038846 L -0.007178 -0.040711 L 0 -0.041339 L 0.007178 -0.040711 L 0.014139 -0.038846 L 0.020669 -0.0358 L 0.026572 -0.031667 L 0.031667 -0.026572 L 0.0358 -0.020669 L 0.038846 -0.014139 L 0.040711 -0.007178 L 0.041339 0 ",
-    pos: [0, -0.2],
-    layers: ["F.Cu", "B.Cu", "F.Mask", "B.Mask"],
-    index: 3,
-    drill: { diameter: 0.055118, start: "F.Cu", end: "B.Cu", plated: true },
-  },
-};
-
-/** Through hole straight pin header, 2.54mm pitch, single row — from `PinHeader_01x03_P2.54mm_Vertical_THT_D1mm.kicad_mod`. */
-export const PinHeader_01x03_P2_54mm_Vertical_THT_D1mm: Footprint = {
-  "1": {
-    shape: "M -0.033465 0 L -0.032822 -0.006529 L -0.030917 -0.012806 L -0.027825 -0.018592 L -0.023663 -0.023663 L -0.018592 -0.027825 L -0.012806 -0.030917 L -0.006529 -0.032822 L 0 -0.033465 L 0 -0.033465 L 0.006529 -0.032822 L 0.012806 -0.030917 L 0.018592 -0.027825 L 0.023663 -0.023663 L 0.027825 -0.018592 L 0.030917 -0.012806 L 0.032822 -0.006529 L 0.033465 0 L 0.033465 0 L 0.032822 0.006529 L 0.030917 0.012806 L 0.027825 0.018592 L 0.023663 0.023663 L 0.018592 0.027825 L 0.012806 0.030917 L 0.006529 0.032822 L 0 0.033465 L 0 0.033465 L -0.006529 0.032822 L -0.012806 0.030917 L -0.018592 0.027825 L -0.023663 0.023663 L -0.027825 0.018592 L -0.030917 0.012806 L -0.032822 0.006529 L -0.033465 0 L -0.033465 0 ",
-    pos: [0, 0],
-    layers: ["F.Cu", "B.Cu", "F.Mask", "B.Mask"],
-    index: 1,
-    drill: { diameter: 0.03937, start: "F.Cu", end: "B.Cu", plated: true },
-  },
-  "2": {
-    shape: "M -0.033465 0 L -0.032822 -0.006529 L -0.030917 -0.012806 L -0.027825 -0.018592 L -0.023663 -0.023663 L -0.018592 -0.027825 L -0.012806 -0.030917 L -0.006529 -0.032822 L 0 -0.033465 L 0 -0.033465 L 0.006529 -0.032822 L 0.012806 -0.030917 L 0.018592 -0.027825 L 0.023663 -0.023663 L 0.027825 -0.018592 L 0.030917 -0.012806 L 0.032822 -0.006529 L 0.033465 0 L 0.033465 0 L 0.032822 0.006529 L 0.030917 0.012806 L 0.027825 0.018592 L 0.023663 0.023663 L 0.018592 0.027825 L 0.012806 0.030917 L 0.006529 0.032822 L 0 0.033465 L 0 0.033465 L -0.006529 0.032822 L -0.012806 0.030917 L -0.018592 0.027825 L -0.023663 0.023663 L -0.027825 0.018592 L -0.030917 0.012806 L -0.032822 0.006529 L -0.033465 0 L -0.033465 0 ",
-    pos: [0, -0.1],
-    layers: ["F.Cu", "B.Cu", "F.Mask", "B.Mask"],
-    index: 2,
-    drill: { diameter: 0.03937, start: "F.Cu", end: "B.Cu", plated: true },
-  },
-  "3": {
-    shape: "M -0.033465 0 L -0.032822 -0.006529 L -0.030917 -0.012806 L -0.027825 -0.018592 L -0.023663 -0.023663 L -0.018592 -0.027825 L -0.012806 -0.030917 L -0.006529 -0.032822 L 0 -0.033465 L 0 -0.033465 L 0.006529 -0.032822 L 0.012806 -0.030917 L 0.018592 -0.027825 L 0.023663 -0.023663 L 0.027825 -0.018592 L 0.030917 -0.012806 L 0.032822 -0.006529 L 0.033465 0 L 0.033465 0 L 0.032822 0.006529 L 0.030917 0.012806 L 0.027825 0.018592 L 0.023663 0.023663 L 0.018592 0.027825 L 0.012806 0.030917 L 0.006529 0.032822 L 0 0.033465 L 0 0.033465 L -0.006529 0.032822 L -0.012806 0.030917 L -0.018592 0.027825 L -0.023663 0.023663 L -0.027825 0.018592 L -0.030917 0.012806 L -0.032822 0.006529 L -0.033465 0 L -0.033465 0 ",
-    pos: [0, -0.2],
-    layers: ["F.Cu", "B.Cu", "F.Mask", "B.Mask"],
-    index: 3,
-    drill: { diameter: 0.03937, start: "F.Cu", end: "B.Cu", plated: true },
   },
 };
 
@@ -860,73 +762,11 @@ export const TerminalBlock_1pos_Metz_SM99S01VBNN05G7: Footprint = {
   },
 };
 
-/** 2 Position Wire to Board Terminal Block Horizontal with Board 0.138" (3.50mm) Through Hole — from `TerminalBlock_OnShore_1x02_P3.50mm_Horizontal.kicad_mod`. */
-export const TerminalBlock_OnShore_1x02_P3_50mm_Horizontal: Footprint = {
-  "1": {
-    shape: "M -0.059055 0.059055 L 0.059055 0.059055 L 0.059055 -0.059055 L -0.059055 -0.059055 L -0.059055 0.059055 ",
-    pos: [0, 0],
-    layers: ["F.Cu", "B.Cu", "F.Mask", "B.Mask"],
-    index: 1,
-    drill: { diameter: 0.055118, start: "F.Cu", end: "B.Cu", plated: true },
-  },
-  "2": {
-    shape: "M 0.059055 0 L 0.058328 0.009238 L 0.056165 0.018249 L 0.052618 0.02681 L 0.047777 0.034712 L 0.041758 0.041758 L 0.034712 0.047777 L 0.02681 0.052618 L 0.018249 0.056165 L 0.009238 0.058328 L 0 0.059055 L -0.009238 0.058328 L -0.018249 0.056165 L -0.02681 0.052618 L -0.034712 0.047777 L -0.041758 0.041758 L -0.047777 0.034712 L -0.052618 0.02681 L -0.056165 0.018249 L -0.058328 0.009238 L -0.059055 0 L -0.058328 -0.009238 L -0.056165 -0.018249 L -0.052618 -0.02681 L -0.047777 -0.034712 L -0.041758 -0.041758 L -0.034712 -0.047777 L -0.02681 -0.052618 L -0.018249 -0.056165 L -0.009238 -0.058328 L 0 -0.059055 L 0.009238 -0.058328 L 0.018249 -0.056165 L 0.02681 -0.052618 L 0.034712 -0.047777 L 0.041758 -0.041758 L 0.047777 -0.034712 L 0.052618 -0.02681 L 0.056165 -0.018249 L 0.058328 -0.009238 L 0.059055 0 ",
-    pos: [0.137795, 0],
-    layers: ["F.Cu", "B.Cu", "F.Mask", "B.Mask"],
-    index: 2,
-    drill: { diameter: 0.055118, start: "F.Cu", end: "B.Cu", plated: true },
-  },
-};
-
-/** 2 Position Wire to Board Terminal Block Horizontal with Board 0.197" (5.00mm) Through Hole — from `TerminalBlock_OnShore_1x02_P5.00mm_Horizontal.kicad_mod`. */
-export const TerminalBlock_OnShore_1x02_P5_00mm_Horizontal: Footprint = {
-  "1": {
-    shape: "M -0.059055 0.059055 L 0.059055 0.059055 L 0.059055 -0.059055 L -0.059055 -0.059055 L -0.059055 0.059055 ",
-    pos: [0, 0],
-    layers: ["F.Cu", "B.Cu", "F.Mask", "B.Mask"],
-    index: 1,
-    drill: { diameter: 0.055118, start: "F.Cu", end: "B.Cu", plated: true },
-  },
-  "2": {
-    shape: "M 0.059055 0 L 0.058328 0.009238 L 0.056165 0.018249 L 0.052618 0.02681 L 0.047777 0.034712 L 0.041758 0.041758 L 0.034712 0.047777 L 0.02681 0.052618 L 0.018249 0.056165 L 0.009238 0.058328 L 0 0.059055 L -0.009238 0.058328 L -0.018249 0.056165 L -0.02681 0.052618 L -0.034712 0.047777 L -0.041758 0.041758 L -0.047777 0.034712 L -0.052618 0.02681 L -0.056165 0.018249 L -0.058328 0.009238 L -0.059055 0 L -0.058328 -0.009238 L -0.056165 -0.018249 L -0.052618 -0.02681 L -0.047777 -0.034712 L -0.041758 -0.041758 L -0.034712 -0.047777 L -0.02681 -0.052618 L -0.018249 -0.056165 L -0.009238 -0.058328 L 0 -0.059055 L 0.009238 -0.058328 L 0.018249 -0.056165 L 0.02681 -0.052618 L 0.034712 -0.047777 L 0.041758 -0.041758 L 0.047777 -0.034712 L 0.052618 -0.02681 L 0.056165 -0.018249 L 0.058328 -0.009238 L 0.059055 0 ",
-    pos: [0.19685, 0],
-    layers: ["F.Cu", "B.Cu", "F.Mask", "B.Mask"],
-    index: 2,
-    drill: { diameter: 0.055118, start: "F.Cu", end: "B.Cu", plated: true },
-  },
-};
-
-/** 3 Position Wire to Board Terminal Block Horizontal with Board 0.138" (3.50mm) Through Hole — from `TerminalBlock_OnShore_1x03_P3.50mm_Horizontal.kicad_mod`. */
-export const TerminalBlock_OnShore_1x03_P3_50mm_Horizontal: Footprint = {
-  "1": {
-    shape: "M -0.059055 -0.059055 L -0.059055 0.059055 L 0.059055 0.059055 L 0.059055 -0.059055 L -0.059055 -0.059055 ",
-    pos: [0, 0],
-    layers: ["F.Cu", "B.Cu", "F.Mask", "B.Mask"],
-    index: 1,
-    drill: { diameter: 0.055118, start: "F.Cu", end: "B.Cu", plated: true },
-  },
-  "2": {
-    shape: "M 0.059055 0 L 0.058328 0.009238 L 0.056165 0.018249 L 0.052618 0.02681 L 0.047777 0.034712 L 0.041758 0.041758 L 0.034712 0.047777 L 0.02681 0.052618 L 0.018249 0.056165 L 0.009238 0.058328 L 0 0.059055 L -0.009238 0.058328 L -0.018249 0.056165 L -0.02681 0.052618 L -0.034712 0.047777 L -0.041758 0.041758 L -0.047777 0.034712 L -0.052618 0.02681 L -0.056165 0.018249 L -0.058328 0.009238 L -0.059055 0 L -0.058328 -0.009238 L -0.056165 -0.018249 L -0.052618 -0.02681 L -0.047777 -0.034712 L -0.041758 -0.041758 L -0.034712 -0.047777 L -0.02681 -0.052618 L -0.018249 -0.056165 L -0.009238 -0.058328 L 0 -0.059055 L 0.009238 -0.058328 L 0.018249 -0.056165 L 0.02681 -0.052618 L 0.034712 -0.047777 L 0.041758 -0.041758 L 0.047777 -0.034712 L 0.052618 -0.02681 L 0.056165 -0.018249 L 0.058328 -0.009238 L 0.059055 0 ",
-    pos: [0.137795, 0],
-    layers: ["F.Cu", "B.Cu", "F.Mask", "B.Mask"],
-    index: 2,
-    drill: { diameter: 0.055118, start: "F.Cu", end: "B.Cu", plated: true },
-  },
-  "3": {
-    shape: "M 0.059055 0 L 0.058328 0.009238 L 0.056165 0.018249 L 0.052618 0.02681 L 0.047777 0.034712 L 0.041758 0.041758 L 0.034712 0.047777 L 0.02681 0.052618 L 0.018249 0.056165 L 0.009238 0.058328 L 0 0.059055 L -0.009238 0.058328 L -0.018249 0.056165 L -0.02681 0.052618 L -0.034712 0.047777 L -0.041758 0.041758 L -0.047777 0.034712 L -0.052618 0.02681 L -0.056165 0.018249 L -0.058328 0.009238 L -0.059055 0 L -0.058328 -0.009238 L -0.056165 -0.018249 L -0.052618 -0.02681 L -0.047777 -0.034712 L -0.041758 -0.041758 L -0.034712 -0.047777 L -0.02681 -0.052618 L -0.018249 -0.056165 L -0.009238 -0.058328 L 0 -0.059055 L 0.009238 -0.058328 L 0.018249 -0.056165 L 0.02681 -0.052618 L 0.034712 -0.047777 L 0.041758 -0.041758 L 0.047777 -0.034712 L 0.052618 -0.02681 L 0.056165 -0.018249 L 0.058328 -0.009238 L 0.059055 0 ",
-    pos: [0.275591, 0],
-    layers: ["F.Cu", "B.Cu", "F.Mask", "B.Mask"],
-    index: 3,
-    drill: { diameter: 0.055118, start: "F.Cu", end: "B.Cu", plated: true },
-  },
-};
-
 /** Every part a rail can take, by id. Whether it can is `placement()`'s to say, not this list's. */
 export const COMPONENTS: Component[] = [
   { id: "BAT_COIN_20", note: "Battery-Holder Coin-Cell CR2032 Linx BAT-HLD-001", footprint: BAT_COIN_20 },
   { id: "BatteryContact_Keystone_555", note: "BatteryContact Keystone 555", footprint: BatteryContact_Keystone_555 },
   { id: "CP_Elec_100uF_Panasonic_EEE_FN1E101UL", note: "SMD capacitor, aluminum electrolytic, Nichicon, 10.0x10.0mm", footprint: CP_Elec_100uF_Panasonic_EEE_FN1E101UL },
-  { id: "CP_Elec_10F_Tecate_TPLC_3R8", note: "CAP LITH HYBRID 10F 3.8V T/H", footprint: CP_Elec_10F_Tecate_TPLC_3R8 },
   { id: "CP_Elec_47uF_Panasonic_EEE_FN1H470XL", note: "CP Elec 47uF Panasonic EEE-FN1H470XL", footprint: CP_Elec_47uF_Panasonic_EEE_FN1H470XL },
   { id: "C_0603", note: "Capacitor SMD 0603", footprint: C_0603 },
   { id: "C_1206", note: "Capacitor SMD 1206, hand soldering", footprint: C_1206 },
@@ -943,11 +783,7 @@ export const COMPONENTS: Component[] = [
   { id: "LED_Luminus_1206", note: "LED Luminus 1206", footprint: LED_Luminus_1206 },
   { id: "L_1210", note: "Inductor SMD 1210, hand soldering", footprint: L_1210 },
   { id: "PinHeader_01x02_P2_54mm_Horizontal_SMD", note: "horizontal pin header SMD 2.54mm", footprint: PinHeader_01x02_P2_54mm_Horizontal_SMD },
-  { id: "PinHeader_01x02_P2_54mm_Vertical_THT_D1_4mm", note: "Through hole straight pin header, 2.54mm pitch, single row", footprint: PinHeader_01x02_P2_54mm_Vertical_THT_D1_4mm },
-  { id: "PinHeader_01x02_P2_54mm_Vertical_THT_D1mm", note: "Through hole straight pin header, 2.54mm pitch, single row", footprint: PinHeader_01x02_P2_54mm_Vertical_THT_D1mm },
   { id: "PinHeader_01x03_P2_54mm_Horizontal_SMD", note: "horizontal pin header SMD 2.54mm", footprint: PinHeader_01x03_P2_54mm_Horizontal_SMD },
-  { id: "PinHeader_01x03_P2_54mm_Vertical_THT_D1_4mm", note: "Through hole straight pin header, 2.54mm pitch, single row", footprint: PinHeader_01x03_P2_54mm_Vertical_THT_D1_4mm },
-  { id: "PinHeader_01x03_P2_54mm_Vertical_THT_D1mm", note: "Through hole straight pin header, 2.54mm pitch, single row", footprint: PinHeader_01x03_P2_54mm_Vertical_THT_D1mm },
   { id: "PinSocket_01x02_P2_54mm_Horizontal_SMD", note: "Pin socket, 2.54mm pitch, horizontal, surface mount", footprint: PinSocket_01x02_P2_54mm_Horizontal_SMD },
   { id: "PinSocket_01x02_P2_54mm_Vertical_SMD", note: "vertical pin socket SMD 2.54mm", footprint: PinSocket_01x02_P2_54mm_Vertical_SMD },
   { id: "PinSocket_01x03_P2_54mm_Horizontal_SMD", note: "Pin socket, 2.54mm pitch, horizontal, surface mount", footprint: PinSocket_01x03_P2_54mm_Horizontal_SMD },
@@ -965,7 +801,4 @@ export const COMPONENTS: Component[] = [
   { id: "Switch_Slide_Top_CnK_JS102011SCQN_8_5x3_5mm", note: "switch slide top spdt smd JS102011SCQN", footprint: Switch_Slide_Top_CnK_JS102011SCQN_8_5x3_5mm },
   { id: "TO_252", note: "TO-252 Package", footprint: TO_252 },
   { id: "TerminalBlock_1pos_Metz_SM99S01VBNN05G7", note: "TERM BLOCK 1POS SIDE ENTRY SMD", footprint: TerminalBlock_1pos_Metz_SM99S01VBNN05G7 },
-  { id: "TerminalBlock_OnShore_1x02_P3_50mm_Horizontal", note: "2 Position Wire to Board Terminal Block Horizontal with Board 0.138\" (3.50mm) Through Hole", footprint: TerminalBlock_OnShore_1x02_P3_50mm_Horizontal },
-  { id: "TerminalBlock_OnShore_1x02_P5_00mm_Horizontal", note: "2 Position Wire to Board Terminal Block Horizontal with Board 0.197\" (5.00mm) Through Hole", footprint: TerminalBlock_OnShore_1x02_P5_00mm_Horizontal },
-  { id: "TerminalBlock_OnShore_1x03_P3_50mm_Horizontal", note: "3 Position Wire to Board Terminal Block Horizontal with Board 0.138\" (3.50mm) Through Hole", footprint: TerminalBlock_OnShore_1x03_P3_50mm_Horizontal },
 ];

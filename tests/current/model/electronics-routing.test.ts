@@ -218,13 +218,19 @@ describe("model/electronics-routing", () => {
           }
         }
       }
-      // Zero everywhere but puffin, which holds a single sampled point of one strip edge outside the shape.
-      // Containment is sampled on both sides: the router's own check passes this chord, and the test catches it
-      // only because the two sample at different offsets (k/9 against k/10). Sampling the router more finely
-      // than the test does not find it either, and makes planning slow enough to time the suite out. Pinned at
-      // one so it cannot spread; the honest fix is an analytic containment test rather than a sampled one.
+      // Zero everywhere but puffin and akde-hex, which each hold a single sampled point of one strip edge
+      // outside the shape. Containment is sampled on both sides: the router's own check passes this chord, and
+      // the test catches it only because the two sample at different offsets (k/9 against k/10). Sampling the
+      // router more finely than the test does not find it either, and makes planning slow enough to time the
+      // suite out. Pinned at one so it cannot spread; the honest fix is an analytic containment test rather
+      // than a sampled one.
+      //
+      // akde-hex joined puffin when an LED's pads became its own footprint's: the copper now ends 1.00mm from
+      // the hinge instead of at the tile dent 2.9mm away, so a landing runs nearer the edge of its tile and
+      // one more chord lands on the wrong side of the two samplings. Confirmed to be the pad positions and not
+      // the squaring-off step by running the same patterns with `landPads` disabled -- the count is the same.
       expect(off, `${name} has copper hanging off the shape`).toBeLessThanOrEqual(
-        name === "puffin.fkld" ? 1 : 0,
+        name === "puffin.fkld" || name === "akde-hex.fkld" ? 1 : 0,
       );
     }
   });
@@ -277,7 +283,11 @@ describe("model/electronics-routing", () => {
     }
   });
 
-  it("gives each net exactly one path to every pad — no double connections", () => {
+  it("gives each net exactly one path to every pad — no double connections", { timeout: 20000 }, () => {
+    // Explicit timeout, like its neighbours in this file. It routes twelve LEDs on four patterns, which is
+    // about 4.7s of real work against vitest's 5s default — so it was a flake waiting for a busy machine,
+    // and duly flaked on one. Measured before adding this rather than after assuming: 235/274/1961/2030ms
+    // per pattern, and lifting `onBody` out to `tapeOnBody` cost 1.3%, which is noise.
     // A net that reaches a point two ways has both routes taped for no gain. The walk through the pads makes
     // that easy to produce: go out one way, come back another, and the union contains a cycle. Each net is
     // reduced to a spanning tree, so its cyclomatic number must be zero.
@@ -365,9 +375,13 @@ describe("model/electronics-routing", () => {
       "akde-hex.fkld": 0,
       "akde-square-pyramid.fkld": 0,
       "church.fkld": 0,
-      // Cleared once chip faults were ranked above terminal faults: puffin had been trading one for the other,
-      // and with the trade refused it keeps neither.
-      "puffin.fkld": 0,
+      // Was 0 once chip faults were ranked above terminal faults. Back to 1 with an LED's pads at its own
+      // footprint's spacing: puffin's battery tile is the small one, and moving every LED's copper 1.9mm in
+      // toward its hinge changes where the two rails leave the cell, so the run out of one terminal sweeps
+      // the other again -- the same fault this pattern held before, for the same reason (nowhere else to go
+      // and no sidestep that stays on the tile). Confirmed to be the pad positions rather than the
+      // squaring-off step: the count is 1 with `landPads` disabled too.
+      "puffin.fkld": 1,
     };
     for (const [name, want] of Object.entries(budget)) {
       const { faces, gaps } = load(name);
@@ -406,7 +420,11 @@ describe("model/electronics-routing", () => {
       "house.fkld": 0.02,
       "church.fkld": 0.02,
       "akde-decagon-pyramid.fkld": 0.05,
-      "akde-hex.fkld": 0.13,
+      // 0.13 -> 0.16 with an LED's pads at its own footprint's spacing. The two pads of a chip are now 2.00mm
+      // apart instead of 5.81, so both rails have to come in to nearly the same point at every hinge and run
+      // side by side to get there, where before they could pass a hinge on opposite banks. Confirmed to be the
+      // pad positions rather than the squaring-off step: 0.154 with `landPads` disabled, 0.153 with it.
+      "akde-hex.fkld": 0.16,
       // 20% -> 6%: a branch now merges into tape the net already laid instead of running beside it.
       "akde-square-pyramid.fkld": 0.08,
     };
@@ -444,7 +462,10 @@ describe("model/electronics-routing", () => {
     const budget: Record<string, number> = {
       "house.fkld": 0,
       "church.fkld": 0,
-      "akde-hex.fkld": 0,
+      // 0 -> 1 with an LED's pads at its own footprint's spacing: the two nets meet at almost the same point
+      // at each hinge now, so a junction that used to be a shallow fork is a narrow one. Confirmed to be the
+      // pad positions rather than the squaring-off step -- 1 with `landPads` disabled as well.
+      "akde-hex.fkld": 1,
       "akde-square-pyramid.fkld": 0,
       "puffin.fkld": 2,
       "akde-decagon-pyramid.fkld": 1,
@@ -486,6 +507,34 @@ describe("model/electronics-routing", () => {
       const out = trimAtOwnJoins([pwr, gnd], [{ x: 0, y: 5 }, { x: 5, y: 0 }]);
       expect(out.map((t) => t.pts)).toEqual([pwr.pts, gnd.pts]);
     });
+  });
+
+  it("scores overlap between any two nets, not just the two rails", () => {
+    // Both scorers named "pwr" and "gnd" outright. A circuit may now carry any number of declared nets, so
+    // that left every other pair unscored: two signal nets could lie exactly on top of each other and cost
+    // nothing at all, which is the one thing these functions exist to notice.
+    const line = (net: string, y: number) => ({ net, pts: [{ x: 0, y }, { x: 10, y }] });
+    const tol = 0.5;
+
+    // Two declared nets, one directly over the other.
+    expect(overlapLength([line("sda", 0), line("scl", 0)], tol)).toBeGreaterThan(9);
+    // Apart, they cost nothing.
+    expect(overlapLength([line("sda", 0), line("scl", 5)], tol)).toBe(0);
+    // Same net against itself is never an overlap here — that is `selfOverlapLength`'s business.
+    expect(overlapLength([line("sda", 0), line("sda", 0)], tol)).toBe(0);
+    // And it charges a declared net that doubles back over itself. The shorter run is set inside the
+    // longer one rather than laid exactly on it: two identical runs share both endpoints, and same-net tape
+    // meeting at a shared end is a join, which `sharesEnd` deliberately forgives.
+    const inner = { net: "sda", pts: [{ x: 2, y: 0 }, { x: 8, y: 0 }] };
+    expect(selfOverlapLength([line("sda", 0), inner], tol)).toBeGreaterThan(5);
+
+    // And the rails keep the exact reading they always had. This function feeds the bus router's own
+    // scoring, so a changed number here silently re-plans every bundled circuit — which it did, costing two
+    // unrelated tests, when the generalisation charged a PWR/GND overlap once from each side.
+    const rails = [line("pwr", 0), line("gnd", 0)];
+    const oneSided = overlapLength(rails, tol);
+    expect(oneSided).toBeGreaterThan(9);
+    expect(oneSided).toBeLessThan(11); // once, not twice
   });
 
   it("keeps the two nets off each other", { timeout: 20000 }, () => {

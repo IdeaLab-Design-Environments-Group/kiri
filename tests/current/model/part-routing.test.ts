@@ -117,7 +117,12 @@ describe("model/part-routing", () => {
     expect(fit.gap).toBe(SWITCH_GAP_MM);
     expect(fit.gap).toBe(SWITCH_ROW_MM + SWITCH_NECK_MM);
     // Its terminals run on past the break, so unlike a resistor it wants a pad beyond its own half-gap.
-    expect(fit.before).toBe(SWITCH_GAP_MM / 2 + SPDT.pad.w);
+    //
+    // `pad.h`, and it used to say `pad.w` — that was the bug, not drift. `before`/`after` are reserves
+    // measured ALONG the rail, and `acrossPart.pad` is now normalised to the run (`parts.ts › padRunBox`),
+    // so the along-run extent is `h`. On the SPDT that is 1.2mm against the 1.0mm this pinned, so the
+    // assertion was under-reserving by a fifth of a pad and passing because the code agreed with it.
+    expect(fit.before).toBe(SWITCH_GAP_MM / 2 + SPDT.pad.h);
     expect(fit.after).toBe(fit.before);
   });
 
@@ -153,11 +158,32 @@ describe("model/part-routing", () => {
     expect(fit.rows).toBe(2);
     // Six millimetres between the rows, plus the neck the pitch and pad ask for.
     expect(fit.gap).toBeGreaterThan(6);
-    // A pad beyond the half-gap, as any part the rail steps across gets. The pad is 1mm across.
-    expect(fit.before).toBeCloseTo(fit.gap / 2 + 1, 12);
+    // A pad beyond the half-gap, as any part the rail steps across gets — and it is the pad's extent ALONG
+    // the rail that matters, because that is the axis a reserve is measured in. These pads are 1mm across
+    // and 2mm along, and the part is seated turned, so the reserve is 2. This pinned 1 — the across extent
+    // — and passed because `partFit` read the same wrong axis. That was the bug, not drift.
+    expect(fit.before).toBeCloseTo(fit.gap / 2 + 2, 12);
     expect(fit.after).toBe(fit.before);
     // One row of the same pads is the in-line case instead: no rows to step across.
     expect(partFit({ "1": rect(1, 2, -2, 0, 1), "2": rect(1, 2, 2, 0, 2) }).rows).toBe(1);
+  });
+
+  it("measures a part's gap along the part's own axis, not along x", () => {
+    // A footprint whose pads run down y instead of across x. Ten of the library's forty-five placeable
+    // parts are built this way — every pin header and socket — and every one of them was undroppable at
+    // any run length, because the gap was measured between the two pads on x, where they are at the same
+    // coordinate. `PinHeader_01x03_P2_54mm_Horizontal_SMD` came out at -2.500mm, and `breakRuns` refuses a
+    // gap that is not positive, so the user got "that run is too short for the part" for a part no run
+    // could ever hold.
+    //
+    // Two pads 5mm apart down y, each 1mm along that axis: 4mm of bare pattern between them.
+    const downY: Footprint = { "1": rect(2, 1, 0, -2.5, 1), "2": rect(2, 1, 0, 2.5, 2) };
+    const fit = partFit(downY);
+    expect(fit.rows).toBe(1);
+    expect(fit.gap).toBeCloseTo(4, GRID_DP);
+    // The same part turned a quarter turn reads identically — the axis is read, not assumed.
+    const acrossX: Footprint = { "1": rect(1, 2, -2.5, 0, 1), "2": rect(1, 2, 2.5, 0, 2) };
+    expect(partFit(acrossX).gap).toBeCloseTo(fit.gap, 12);
   });
 
   it("places a 1206 resistor from the library exactly as the resistor tool does", () => {
@@ -175,6 +201,40 @@ describe("model/part-routing", () => {
     expect(viaLibrary.parts[0]!.a).toEqual(viaTool.resistors[0]!.a);
     expect(viaLibrary.parts[0]!.b).toEqual(viaTool.resistors[0]!.b);
     expect(viaLibrary.parts[0]!.net).toBe(viaTool.resistors[0]!.net);
+  });
+
+  it("cuts no copper for a free part, and leaves the plan as if it were not there", () => {
+    // A free part stands on the sheet: its pads are joined by nets or by hand-drawn copper, not by a rail
+    // passing through it. Cutting a run for one would break copper somewhere the part is not.
+    const { faces, gaps, base, mid } = fixture();
+    const seated = planRoutes(faces, gaps, { ...base, parts: [{ component: "R_1206", x: mid.x, y: mid.y }] });
+    const free = planRoutes(faces, gaps, {
+      ...base,
+      parts: [{ component: "R_1206", x: mid.x, y: mid.y, free: true }],
+    });
+    // Same point, same part -- the only difference is the flag, and it is the difference between a run
+    // broken in two and a run left whole.
+    expect(free.traces).toEqual(planRoutes(faces, gaps, base).traces);
+    expect(free.traces).not.toEqual(seated.traces);
+    expect(free.parts).toHaveLength(0);
+  });
+
+  it("counts a free part in the author's list when it numbers the parts it did seat", () => {
+    // `PartPlacement.source` is an index into `circuit.parts` -- the author's list -- and the canvas matches
+    // it against its own selection index. Skipping free parts by filtering the array before `byComponent`
+    // would renumber every part after one, so clicking the second part would show the first one's span and
+    // flip. Nothing crashes and nothing else in the suite notices, which is why this test exists.
+    const { faces, gaps, base, mid } = fixture();
+    const r = planRoutes(faces, gaps, {
+      ...base,
+      parts: [
+        { component: "C_1206", x: mid.x, y: mid.y, free: true }, // index 0, seated for nothing
+        { component: "R_1206", x: mid.x, y: mid.y },             // index 1, the one that gets a break
+      ],
+    });
+    expect(r.parts).toHaveLength(1);
+    expect(r.parts[0]!.source).toBe(1);
+    expect(r.parts[0]!.component).toBe("R_1206");
   });
 
   it("places an SPDT from the library exactly as the switch tool does, lands and all", () => {
@@ -255,26 +315,41 @@ describe("model/part-routing", () => {
   });
 
   it("routes a circuit with no parts exactly as it did before parts existed", () => {
-    // Recorded from the router as it stood before this change — every bundled pattern, at one LED and at
-    // three, run count and total copper. The whole generic path hangs off `circuit.parts` being empty, so
-    // if any of these moved, it leaked.
+    // Recorded from the router — every bundled pattern, at one LED and at three, run count and total
+    // copper. The whole generic path hangs off `circuit.parts` being empty, so if any of these moves
+    // without a reason, it leaked.
+    //
+    // Re-recorded once, deliberately, when LEDs became real footprints. These circuits have no PARTS but
+    // they do have LEDs, and an LED's copper now reaches in over the tile gap to meet the chip's own legs
+    // instead of stopping at the tile dent, so more copper is the point rather than a leak. What it cost,
+    // stated plainly rather than hidden in the numbers:
+    //
+    //  - Copper is up on every pattern that routes at all: akde-decagon 68.11 -> 118.65mm at one LED,
+    //    puffin 12.93 -> 17.61, house 0.70 -> 1.07. The pad coverage that buys went from 19-53% to
+    //    96-100%, which is the difference between a chip that lights and one that does not.
+    //  - Strips are up where a run had to split to reach two legs: house at three LEDs 3 -> 6 runs,
+    //    church 4 -> 6, akde-decagon 3 -> 6. Each is one more piece to peel and lay by hand.
+    //  - `akde-square-pyramid` LOSES its LED at one (2 runs -> 0) and half of them at three (4 -> 2).
+    //    A real 1206's legs are 3.40mm apart and its hinges are too short to seat that. The router now
+    //    refuses it rather than drawing copper the part cannot reach, which is the honest outcome, but it
+    //    is a pattern that used to light and now does not.
     const before: [string, number, number, number][] = [
-      ["akde-decagon-pyramid", 1, 2, 68.11195868628627],
-      ["akde-decagon-pyramid", 3, 3, 372.6076617278911],
-      ["akde-hex", 1, 2, 96.29369589946293],
-      ["akde-hex", 3, 3, 322.9897264838064],
-      ["akde-square-pyramid", 1, 2, 36.874058422683746],
-      ["akde-square-pyramid", 3, 4, 142.67336194263746],
+      ["akde-decagon-pyramid", 1, 2, 118.65060300341332],
+      ["akde-decagon-pyramid", 3, 6, 423.09782939693173],
+      ["akde-hex", 1, 2, 104.77435715972814],
+      ["akde-hex", 3, 5, 378.9178899950901],
+      ["akde-square-pyramid", 1, 0, 0],
+      ["akde-square-pyramid", 3, 2, 53.11895205965313],
       ["bistable-star-tiling", 1, 0, 0],
       ["bistable-star-tiling", 3, 0, 0],
-      ["church", 1, 2, 0.465791970607236],
-      ["church", 3, 4, 8.739131867153544],
-      ["house", 1, 2, 0.6968144071905864],
-      ["house", 3, 3, 3.9713582398958804],
-      ["kirigami-flap", 1, 2, 68.17575053727609],
-      ["kirigami-flap", 3, 2, 68.17575053727609],
-      ["puffin", 1, 2, 12.93370909112397],
-      ["puffin", 3, 3, 95.58639962767194],
+      ["church", 1, 2, 0.8272180434935242],
+      ["church", 3, 6, 9.859213200678369],
+      ["house", 1, 2, 1.071943083675749],
+      ["house", 3, 6, 5.391382774563586],
+      ["kirigami-flap", 1, 2, 68.30122499128879],
+      ["kirigami-flap", 3, 2, 68.30122499128879],
+      ["puffin", 1, 2, 17.60583155015367],
+      ["puffin", 3, 5, 99.68414715034869],
     ];
     for (const [name, leds, runs, copper] of before) {
       const fold = JSON.parse(readFileSync(`${EXAMPLES}${name}.fkld`, "utf8"));

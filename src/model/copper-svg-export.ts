@@ -14,11 +14,14 @@
  */
 import type { FoldFile } from "./fold-file.js";
 import type { Vec2 } from "./electronics.js";
-import { type Trace2D, acrossRun, landingWidth } from "./electronics-routing.js";
+// `DEFAULT_LED` comes from the router rather than being written again here: the part an LED means
+// when its circuit does not say is one decision, and a second copy of it is a second thing to drift.
+import { DEFAULT_LED, type Trace2D, acrossRun, landingWidth } from "./electronics-routing.js";
 import { printScale } from "./print-scale.js";
-import { type Box, type Footprint, holes, MM_PER_INCH, padAt, padSize } from "./footprint.js";
-import { type AcrossPart, acrossPart, inlineNamedTerminals } from "./parts.js";
-import { COMPONENTS, R_1206, SW_SPDT } from "./footprints.generated.js";
+import { type Box, type Footprint, type Pad, holes, MM_PER_INCH, padAt, padSize, terminals } from "./footprint.js";
+import { type AcrossPart, acrossPart, inlineNamedTerminals, padAxis, padRunBox } from "./parts.js";
+import { R_1206, SW_SPDT } from "./footprints.generated.js";
+import { footprintById } from "./library.js";
 import { designators, partSvg } from "./part-render.js";
 
 const MARGIN = 8; // mm — must match the FKLD SVG export or the layers import misaligned
@@ -100,7 +103,26 @@ const GND_FILL = "#222222";
  * around it — is derived and explained in `parts.ts`, not hidden in here.
  */
 /** The library, by component id — so a placed part can be drawn from the id the circuit stores. */
-const BY_ID = new Map(COMPONENTS.map((c) => [c.id, c.footprint]));
+
+
+/**
+ * An LED, as the cut files take it: the two cut ends of the copper its legs bridge, and which part it is.
+ *
+ * `pwr` and `gnd` are the ends of the two nets' tape, in flat coordinates — the same points the runs are
+ * narrowed against, so the drawing and the narrowing cannot disagree about where the chip sits. They are
+ * NOT the pad centres: {@link inlineShape} puts a pad centre half a pad-length outboard of each cut end,
+ * exactly as it does for a resistor, so an LED's pads land at the part's own pitch when the router has
+ * brought the copper to within the part's own bare gap. One code path, one meaning for the two points.
+ */
+export interface LedPads {
+  pwr: Vec2;
+  gnd: Vec2;
+  /** A `Component.id`. Absent means `DEFAULT_LED` — an LED saved before they had a choice of part. */
+  component?: string;
+}
+
+/** An LED the router could not reach keeps its zeroed pads; there is no chip to draw there. */
+const unplaced = (p: Vec2): boolean => p.x === 0 && p.y === 0;
 
 
 export interface CopperSvgExport {
@@ -108,14 +130,35 @@ export interface CopperSvgExport {
   svg: string;
   /** How many strips each net is cut into — what the user has to peel and lay. */
   counts: { pwr: number; gnd: number };
-  /** Strip width in the file's own units, which the SVG declares as mm. */
+  /** NOMINAL strip width in the file's own units, which the SVG declares as mm. See {@link narrowestMm}. */
   widthMm: number;
   /**
-   * Set when the strips come out too narrow to cut.
+   * The narrowest copper actually in the file, in millimetres.
+   *
+   * **Not {@link widthMm}, and routinely a third of it.** A strip carries a width per point: it narrows
+   * where it passes between an LED's legs, and a part's land is cut at the pad's own size. Measured on a
+   * plain three-LED circuit with a battery — no switch, no library part — the nominal tape is 3.25mm and
+   * the narrowest emitted copper is **1.14mm**; add a switch and it is 1.00mm; a `SOT_23_3`, 0.70mm.
+   *
+   * Reported because {@link tooNarrow} cannot see any of it, and because the difference is what a person
+   * setting blade depth actually needs.
+   */
+  narrowestMm: number;
+  /**
+   * Set when the NOMINAL strip width is below what a blade will track.
    *
    * The width is a fraction of the pattern, and a flat pattern carries no guaranteed physical scale — a
    * kirigamized one can be 19mm across, which puts the strips at 0.3mm. A cutter will not follow that, and no
    * copper tape is made that narrow. Better to say so than to hand over a file that cannot be cut.
+   *
+   * **It reads {@link widthMm} only, and this docblock used to claim it was about "the strips".** It is
+   * not: every per-point narrowing happens after this is computed and nothing re-checks it, so a file whose
+   * narrowest copper is 1.14mm against a 3mm limit is handed over with this flag `false`. That is not an
+   * oversight to fix by flipping the test — measured across the bundled patterns, EVERY circuit this tool
+   * can produce emits copper under 3mm, so a flag reading the emitted widths would be permanently true and
+   * would say nothing. The local narrowing is deliberate and long-standing; what was wrong was the claim.
+   * {@link narrowestMm} reports the real figure, and whether 3mm is the right bar for a local pinch is a
+   * question for whoever owns the cutter, not one this flag should answer silently.
    */
   tooNarrow: boolean;
 }
@@ -192,8 +235,8 @@ export function buildCopperSvgExport(
   traces: Trace2D[],
   tapeW: number,
   baseName = "kiri",
-  /** LED pads, so a run can be narrowed where it lands between an LED's legs. */
-  pads: { pwr: Vec2; gnd: Vec2 }[] = [],
+  /** The LEDs: a run is narrowed where it lands between one's legs, and the chip itself is drawn there. */
+  pads: LedPads[] = [],
   mirror: Mirror = NO_MIRROR,
   sheetMm?: number,
   /** Where each resistor bridges a break in the PWR run. Drawn on the parts layer, never cut. */
@@ -232,7 +275,7 @@ export function buildCopperSvgExport(
   const gnd = layer("gnd");
   // Named once, for this export: the carrier builds the same list from the same arguments, so a part is
   // the same R1 on both files.
-  const marks = partsLayer(drawnParts(resistors, switches, parts), T);
+  const marks = partsLayer(drawnParts(resistors, switches, parts, pads), T);
   const body =
     `  <g id="pwr" fill="${PWR_FILL}" stroke="none" fill-rule="evenodd">\n    ${pwr.body}\n  </g>\n` +
     `  <g id="gnd" fill="${GND_FILL}" stroke="none" fill-rule="evenodd">\n    ${gnd.body}\n  </g>` +
@@ -241,6 +284,7 @@ export function buildCopperSvgExport(
 
   return {
     widthMm: tapeMm,
+    narrowestMm: narrowestMmOf(traces, tapeW, pads, scale, tapeMm),
     tooNarrow: tapeMm < MIN_CUTTABLE_MM,
     filename: `${baseName}-copper${mirrorSuffix(mirror)}.svg`,
     svg:
@@ -261,10 +305,43 @@ export function buildCopperSvgExport(
 export function stripOutline(
   t: Trace2D,
   tapeW: number,
-  pads: { pwr: Vec2; gnd: Vec2 }[] = [],
+  pads: LedPads[] = [],
 ): Vec2[] {
   // Land copper under a part's terminals carries its own width; ordinary tape has none and takes the tape's.
   return outlineStrip(t.pts, widthsFor(t, t.width ?? tapeW, pads));
+}
+
+/**
+ * The narrowest copper this trace is actually cut at, in the pattern's own units.
+ *
+ * **The width that reaches the blade, which is not the width the export reports.** {@link stripOutline}
+ * takes a width per point, so a run narrows where it passes an LED's legs and a part's land carries its own
+ * width entirely — see {@link widthsFor} and `electronics-routing.ts › switchLand`. Every one of those is
+ * narrower than the nominal tape, and none of them is visible in {@link CopperSvgExport.widthMm}.
+ *
+ * Reads through the same `widthsFor` the outline is built from, deliberately: a second reading of "how wide
+ * is this strip here" is a second thing to drift, and this whole file has spent a night proving that.
+ */
+export function narrowestWidth(t: Trace2D, tapeW: number, pads: LedPads[] = []): number {
+  const ws = widthsFor(t, t.width ?? tapeW, pads);
+  return ws.length ? Math.min(...ws) : tapeW;
+}
+
+/** The narrowest copper across a whole export, in millimetres. `scale` is flat units to mm. */
+function narrowestMmOf(
+  traces: Trace2D[],
+  tapeW: number,
+  pads: LedPads[],
+  scale: number,
+  nominalMm: number,
+): number {
+  let min = Infinity;
+  for (const t of traces) {
+    if (t.pts.length < 2) continue;
+    min = Math.min(min, narrowestWidth(t, tapeW, pads));
+  }
+  // No copper at all is not "infinitely narrow": with nothing to cut, the nominal width is the honest answer.
+  return Number.isFinite(min) ? min * scale : nominalMm;
 }
 
 /**
@@ -274,17 +351,39 @@ export function stripOutline(
  * full-width strip would reach across the chip. The two nets would otherwise meet under the part and short it,
  * and a vinyl cutter could not weed the gap between them.
  */
-function widthsFor(t: Trace2D, tapeW: number, pads: { pwr: Vec2; gnd: Vec2 }[]): number[] {
-  return t.pts.map((p) => {
+function widthsFor(t: Trace2D, tapeW: number, pads: LedPads[]): number[] {
+  const last = t.pts.length - 1;
+  return t.pts.map((p, i) => {
     let w = tapeW;
     for (const pad of pads) {
       const own = t.net === "pwr" ? pad.pwr : pad.gnd;
       const mate = t.net === "pwr" ? pad.gnd : pad.pwr;
       if (Math.hypot(p.x - own.x, p.y - own.y) > tapeW) continue; // not landing here
+      // A run that STOPS here, square to the line between the two legs, needs no narrowing: its end is
+      // capped across its own direction, so the two nets are held apart by the bare gap along the axis —
+      // the part's own `pitch - padW` — and full-width tape cannot reach over it.
+      //
+      // Narrowing regardless is what put a taper under every LED pad and pinched the strip to 1.14mm
+      // beneath a 1.70mm pad, which capped how much of the leg had copper under it at two thirds. It is
+      // needed only where a strip passes the part sideways, and that is what the angle test asks.
+      if ((i === 0 || i === last) && squareToAxis(t.pts, i, own, mate)) continue;
       w = Math.min(w, landingWidth(own, mate, tapeW));
     }
     return w;
   });
+}
+
+/** Whether the run's end at `i` runs along the line between an LED's two legs, rather than across it. */
+function squareToAxis(pts: Vec2[], i: number, own: Vec2, mate: Vec2): boolean {
+  const prev = i === 0 ? pts[1] : pts[pts.length - 2];
+  if (!prev) return false;
+  const seg = Math.hypot(pts[i]!.x - prev.x, pts[i]!.y - prev.y);
+  const axisLen = Math.hypot(own.x - mate.x, own.y - mate.y);
+  if (seg < 1e-12 || axisLen < 1e-12) return false;
+  const dot =
+    ((pts[i]!.x - prev.x) / seg) * ((own.x - mate.x) / axisLen) +
+    ((pts[i]!.y - prev.y) / seg) * ((own.y - mate.y) / axisLen);
+  return Math.abs(dot) > 0.99;   // within about 8 degrees of the axis
 }
 
 /**
@@ -689,7 +788,7 @@ function unit(a: Vec2): Vec2 {
  */
 function annotationLayer(
   traces: Trace2D[],
-  pads: { pwr: Vec2; gnd: Vec2 }[],
+  pads: LedPads[],
   resistors: { a: Vec2; b: Vec2 }[],
   switches: { a: Vec2; b: Vec2; flip?: boolean }[],
   tapeW: number,
@@ -705,7 +804,7 @@ function annotationLayer(
   // are left: where they go, and which way round.
   // The resistors, over the breaks they bridge. Drawn after the copper so a part reads as sitting on top of
   // the tape, which is how it goes down.
-  marks.push(...partsLayer(drawnParts(resistors, switches, parts), T));
+  marks.push(...partsLayer(drawnParts(resistors, switches, parts, pads), T));
 
   if (!marks.length) return "";
   return `  <g id="annotation" stroke-linejoin="round">\n    ${marks.join("\n    ")}\n  </g>\n`;
@@ -725,7 +824,17 @@ export interface ResistorShape {
    * `name` is the terminal's own name in the footprint — "1", "GND", "throw_a" — so a renderer can look
    * the pad back up and draw its true outline and its label rather than a stand-in rectangle.
    */
-  leads: { a: Vec2; b: Vec2; width: number; name?: string }[];
+  leads: {
+    a: Vec2; b: Vec2; width: number; name?: string;
+    /**
+     * That this lead's pad has its footprint x across the run and its y along it, not the other way.
+     *
+     * A lead is a rectangle, so it cannot say which way round the outline that fills it goes. Absent, a
+     * renderer maps the pad's y onto the segment and its x onto the width, which is right for a part
+     * whose terminals run along x and a quarter turn out for one whose terminals run down y.
+     */
+    swap?: boolean;
+  }[];
   /** The body, square across the run. */
   body: { x: number; y: number; w: number; h: number; angle: number; cx: number; cy: number };
   /** Mounting holes, where the part has them. Drawn, never cut: a hole through the pattern is the user's
@@ -761,41 +870,78 @@ export function partShape(fp: Footprint, a: Vec2, b: Vec2, flip?: boolean): Resi
   const across = acrossPart(fp);
   return across
     ? rowShape(fp, across, a, ux, uy, flip)
-    : inlineShape(padSize(ts[0]![1]), [ts[0]![0], ts[ts.length - 1]![0]], a, b, ux, uy, dx, dy);
+    : inlineShape(fp, ts, a, b, ux, uy, dx, dy);
 }
 
 /**
  * The in-line form: the rail runs along the terminals, and the part bridges the break between them.
  *
- * The leads reach a pad's length past each cut end, because that is the part that matters: it lies on
- * the copper, and it is what holds the part down and carries the current. Drawn only to the edge of the
- * gap they would show a part touching nothing.
+ * Every terminal is drawn, at the part's own pitch, centred on the break — not just the two the router
+ * measured the gap from. Those two still reach a pad's length past each cut end, because that is the
+ * part that matters: it lies on the copper, and it is what holds the part down and carries the current.
+ * Drawn only to the edge of the gap they would show a part touching nothing.
+ *
+ * It used to draw exactly two contacts, one at each cut end, and a three-pin header lost its middle pin
+ * entirely: a pad with no part in the routing had no lead, and no lead meant nothing painted.
  */
 function inlineShape(
-  pad: Box, names: [string, string],
+  fp: Footprint, ts: [string, Pad][],
   a: Vec2, b: Vec2, ux: number, uy: number, dx: number, dy: number,
 ): ResistorShape {
+  const ax = padAxis(fp);
+  const pad = padSize(ts[0]![1]);
   const L = Math.hypot(dx, dy);
   const px = -uy, py = ux;               // across the run
-  const over = pad.w;                    // a contact's length along the run — the pad's own
-  const half = pad.h / 2;                // and how far across it
-  const bodyW = pad.h * 0.85;            // the body, a little inside its contacts
+  const over = ax.alongIsY ? pad.h : pad.w;  // a contact's length along the run — the pad's own
+  const bodyW = (ax.alongIsY ? pad.w : pad.h) * 0.85;  // the body, a little inside its contacts
   // The body spans the whole break and laps a little onto each contact. At four fifths of the gap it fell
   // short of both, leaving the part drawn as three pieces with bare pattern showing between them.
   const bodyL = L + over * 0.5;
   const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-  // A contact at each cut end, lying across the tape rather than along it: that is the shape of the join,
-  // a band of lead pressed down over the full width of the copper, not a line running down the middle.
-  const contact = (p: Vec2, dir: number): { a: Vec2; b: Vec2; width: number } => {
-    const c = { x: p.x + ux * dir * (over / 2), y: p.y + uy * dir * (over / 2) };
-    return {
-      a: { x: c.x - px * half, y: c.y - py * half },
-      b: { x: c.x + px * half, y: c.y + py * half },
-      width: over,
+  // The outermost two contacts, at the cut ends, exactly where this drawing has always put them: a band
+  // of lead pressed down over the full width of the copper, not a line running down the middle.
+  const endA = { x: a.x - ux * (over / 2), y: a.y - uy * (over / 2) };
+  const endB = { x: b.x + ux * (over / 2), y: b.y + uy * (over / 2) };
+  // And every terminal between them, at its own place along the part.
+  //
+  // The two the router measured the break from stay pinned to the ends, because a contact is what lies
+  // on the copper and carries the current; the rest are read off the footprint and land in proportion
+  // between them. On a break the length of the part's own `fit.gap` that proportion IS the datasheet
+  // pitch, so this is the part's spacing and not a stretch of it. The middle pin of a three-pin header
+  // had no role in the routing, so it had no lead and was not drawn at all; this is what puts it back.
+  //
+  // The guarantee is the library-part break specifically, not every break. `breakRuns` is also called
+  // at a constant width for the two fixed tools — `SWITCH_GAP_MM` and `RESISTOR_MM` — and on one of
+  // those the proportion would not be the pitch. Neither can show it today: the resistor has two
+  // terminals and so nothing between them to place, and the switch is drawn by `rowShape`, not here.
+  // A three-terminal part routed down the switch path would be the case that parts them.
+  const first = ax.along(ts[0]![1]), last = ax.along(ts[ts.length - 1]![1]);
+  const span = last - first;
+  const leads = ts.map(([name, t], i) => {
+    const size = padSize(t);
+    // The pad's own extents, told apart by the axis the part is drawn on rather than by x and y: a pin
+    // header runs down y, and reading its pads as though it ran along x turned every one of them a
+    // quarter turn.
+    const alongExt = ax.alongIsY ? size.h : size.w;
+    const acrossExt = ax.alongIsY ? size.w : size.h;
+    // Degenerate parts — every terminal at one point — keep the old two-contact reading rather than
+    // divide by nothing.
+    const f = Math.abs(span) < 1e-9 ? (i === 0 ? 0 : 1) : (ax.along(t) - first) / span;
+    const o = ax.across(t);
+    const c = {
+      x: endA.x + (endB.x - endA.x) * f + px * o,
+      y: endA.y + (endB.y - endA.y) * f + py * o,
     };
-  };
+    return {
+      a: { x: c.x - px * acrossExt / 2, y: c.y - py * acrossExt / 2 },
+      b: { x: c.x + px * acrossExt / 2, y: c.y + py * acrossExt / 2 },
+      width: alongExt,
+      name,
+      ...(ax.alongIsY ? { swap: true } : {}),
+    };
+  });
   return {
-    leads: [{ ...contact(a, -1), name: names[0] }, { ...contact(b, +1), name: names[1] }],
+    leads,
     body: {
       x: mid.x - bodyL / 2, y: mid.y - bodyW / 2, w: bodyL, h: bodyW,
       angle: (Math.atan2(dy, dx) * 180) / Math.PI, cx: mid.x, cy: mid.y,
@@ -814,6 +960,66 @@ function inlineShape(
  * the legs reach out to the copper and the housing stands beside them. Drawn centred on the rail it
  * covered the very tape it is soldered to.
  */
+/**
+ * Every terminal of a genuinely two-row part, at its own place on the part.
+ *
+ * {@link rowShape} was written for the SPDT slide switch and draws exactly three contacts — idle, common,
+ * live — synthesised from `pitch` and `rowSep`. That is right for a switch and wrong for everything else,
+ * and `acrossPart` matches 87 of the 129 parts in the library. A 26-way USB-C socket came out with three
+ * contacts. Worse, `PinSocket_01x02` has TWO terminals and came out with THREE: the third was not a pad
+ * being dropped but a pad being INVENTED, at a place the part has no metal, on a file someone solders to.
+ *
+ * The mapping is a rigid one, anchored on the common pad, and it is exact rather than fitted: `rowSep` and
+ * `pitch` are themselves `|across(live) - across(common)|` and `|along(live) - along(common)|` (`parts.ts`
+ * :204-205), so sending the footprint's across-axis to the run and its along-axis across the run puts
+ * `common` at `a` and `live` at `row ± pitch` — exactly where this function already put them. The routing
+ * anchors do not move; the other terminals stop being invented.
+ *
+ * Returns `null` for a one-row part, which keeps the switch on the path it was written for. There the row
+ * separation is a reflection `acrossPart` fabricates (`parts.ts:184`) rather than a distance the footprint
+ * has: every terminal shares one across value, so there is no second row to map a pad onto and no honest
+ * position to give it.
+ *
+ * That leaves two parts still drawn wrong, and they are named in the test rather than hidden here:
+ * `Conn_USB_microB_Socket_WurthElektronik_629105136821` and `Conn_USB_miniB_Socket_CUIDevices_UJ2_MBH_1`,
+ * both five terminals in one row, both still drawn with three. They cannot be fixed from this side. Drawing
+ * their five pads where the footprint actually has them — all on one row — would contradict the routing,
+ * which breaks the rail across a separation the part does not have. The root cause is that `acrossPart`
+ * answers "is this a switch?" and "does this part sit across the run?" with one function; splitting those
+ * is the owning session's work, and this returns `null` rather than guess at it.
+ */
+function rowLeads(
+  fp: Footprint,
+  names: { common: string; live: string; idle: string },
+  a: Vec2, ux: number, uy: number, px: number, py: number,
+  pad: (c: Vec2, size?: Box) => { a: Vec2; b: Vec2; width: number },
+): { a: Vec2; b: Vec2; width: number; name: string }[] | null {
+  const ax = padAxis(fp);
+  const ts = terminals(fp);
+  const common = ts.find(([n]) => n === names.common)?.[1];
+  const live = ts.find(([n]) => n === names.live)?.[1];
+  if (!common || !live) return null;
+
+  const c0 = ax.across(common), a0 = ax.along(common);
+  const dC = ax.across(live) - c0;
+  if (Math.abs(dC) < 1e-9) return null; // one row: the separation is fabricated, not measured
+
+  // Signs only — the magnitudes are the footprint's own. `live` must land on the far row, on the side the
+  // router chose, which is what `rowShape` means by +`rowSep` and +`pitch`.
+  const sC = Math.sign(dC);
+  const sA = Math.sign(ax.along(live) - a0) || 1;
+
+  return ts.map(([name, t]) => {
+    const along = (ax.across(t) - c0) * sC;   // the part's row axis runs along the rail
+    const across = (ax.along(t) - a0) * sA;   // and its pad axis runs across it
+    const c = { x: a.x + ux * along + px * across, y: a.y + uy * along + py * across };
+    // Normalised to the run, not raw: `pad()` reads `w` as the across-rail extent and `h` as the
+    // along-rail one, and a turned part's footprint axes are the other way round. Raw `padSize` here drew
+    // 43 of the library's 87 across-parts with their two extents swapped — see {@link padRunBox}.
+    return { ...pad(c, padRunBox(ax, t)), name };
+  });
+}
+
 function rowShape(
   fp: Footprint, g: AcrossPart, a: Vec2, ux: number, uy: number, flip?: boolean,
 ): ResistorShape {
@@ -844,12 +1050,12 @@ function rowShape(
   // terminal fell inside the outline, leaving the legs as slivers at the corners.
   const bodyW = g.rowSep;
   // A pad at its own size: `w` across the part's long axis, `h` along the rail.
-  const pad = (c: Vec2): { a: Vec2; b: Vec2; width: number } => {
-    const half = p0.h / 2;
+  const pad = (c: Vec2, size: Box = p0): { a: Vec2; b: Vec2; width: number } => {
+    const half = size.h / 2;
     return {
       a: { x: c.x - ux * half, y: c.y - uy * half },
       b: { x: c.x + ux * half, y: c.y + uy * half },
-      width: p0.w,
+      width: size.w,
     };
   };
   // The mounting holes, on the body's own centre line. Drawn, never cut.
@@ -861,7 +1067,7 @@ function rowShape(
     };
   });
   return {
-    leads: [
+    leads: rowLeads(fp, names, a, ux, uy, px, py, pad) ?? [
       { ...pad(idle), name: names.idle },
       { ...pad(common), name: names.common },
       { ...pad(live), name: names.live },
@@ -911,7 +1117,7 @@ export interface PlacedPartMark {
 
 /** {@link partShape} for a placed part, or `null` if its component is not in the library. */
 function partShapeOf(r: PlacedPartMark, T: (p: Vec2) => Vec2): ResistorShape | null {
-  const fp = BY_ID.get(r.component);
+  const fp = footprintById(r.component);
   return fp ? partShape(fp, T(r.a), T(r.b), r.flip) : null;
 }
 
@@ -936,13 +1142,24 @@ function drawnParts(
   resistors: { a: Vec2; b: Vec2 }[],
   switches: { a: Vec2; b: Vec2; flip?: boolean }[],
   parts: PlacedPartMark[],
+  leds: LedPads[] = [],
 ): DrawnPart[] {
   return [
     ...resistors.map((r) => ({ component: "R_1206", fp: R_1206, a: r.a, b: r.b })),
     ...switches.map((s) => ({ component: "SW_SPDT", fp: SW_SPDT, a: s.a, b: s.b, flip: s.flip })),
     ...parts.flatMap((p) => {
-      const fp = BY_ID.get(p.component);
+      const fp = footprintById(p.component);
       return fp ? [{ component: p.component, fp, a: p.a, b: p.b, flip: p.flip }] : [];
+    }),
+    // The LEDs come last, and the editor's canvas builds its own list in this same order, so a chip is
+    // the same LED1 on the screen and on both files. An LED the router could not seat is dropped here
+    // rather than drawn at the sheet's corner, and so consumes no designator either.
+    ...leds.flatMap((l) => {
+      const id = l.component ?? DEFAULT_LED;
+      const fp = footprintById(id);
+      if (!fp || unplaced(l.pwr) || unplaced(l.gnd)) return [];
+      // Anode first: pad "1" is the anode, and it is the PWR end of the break that its leg reaches.
+      return [{ component: id, fp, a: l.pwr, b: l.gnd }];
     }),
   ];
 }
@@ -1018,6 +1235,9 @@ export interface CopperCarrierExport {
   /** The frame's window and outer edge in sheet coordinates, likewise. */
   frame: { window: Win; outer: Win };
   widthMm: number;
+  /** The narrowest copper actually in the file, in millimetres — see {@link CopperSvgExport.narrowestMm}. */
+  narrowestMm: number;
+  /** Reads {@link widthMm} only — see {@link CopperSvgExport.tooNarrow} for what that does and does not mean. */
   tooNarrow: boolean;
 }
 
@@ -1050,9 +1270,9 @@ export function buildCopperCarrierExport(
   keepOff: Vec2[] = [],
   mirror: Mirror = NO_MIRROR,
   sheetMm?: number,
-  /** LED pads, so a run narrows where it lands between an LED's legs — exactly as the strips file does.
-   *  Without them the carrier meets itself under the chip and shorts the two nets together. */
-  pads: { pwr: Vec2; gnd: Vec2 }[] = [],
+  /** The LEDs. A run narrows where it lands between one's legs — exactly as the strips file does; without
+   *  them the carrier meets itself under the chip and shorts the two nets. The chip is drawn there too. */
+  pads: LedPads[] = [],
   /** Where each resistor bridges a break in the PWR run — drawn, never cut. */
   resistors: { a: Vec2; b: Vec2 }[] = [],
   /** Where each switch bridges a break — drawn, never cut. */
@@ -1301,6 +1521,7 @@ export function buildCopperCarrierExport(
     unclosedCuts: stitched.open.length,
     frame: { window: win, outer: { x0: ox0, y0: oy0, x1: ox1, y1: oy1 } },
     widthMm: tape,
+    narrowestMm: narrowestMmOf(traces, tapeW, pads, scale, tape),
     tooNarrow: tape < MIN_CUTTABLE_MM,
   };
 }

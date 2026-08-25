@@ -24,6 +24,8 @@ import { resolveStlExport } from "../services/stl-export-service.js";
 import { DEFAULT_PRINT_SIZE } from "../model/stl-export.js";
 import { EMPTY_CIRCUIT, type Circuit, flatFaces, gapGraph } from "../model/electronics.js";
 import { batteryTerminals, patternDiag, planRoutes, tapeWidthFor } from "../model/electronics-routing.js";
+import { DEFAULT_SHEET } from "../model/fold-strain.js";
+import { manualTraces } from "../model/manual-wire.js";
 import { type AnchoredMesh, anchorOverlay } from "../model/trace-anchor.js";
 import type { ConvertPanel } from "../view/convert-panel.js";
 import type { ViewerFrame } from "../view/viewer-frame.js";
@@ -142,19 +144,34 @@ export class AppController {
   private tracesForSim(fold: FoldFile | null): AnchoredMesh[] {
     const { circuit: stored, simTileGap } = this.store.getState();
     const circuit = stored ?? EMPTY_CIRCUIT;
-    if (!fold || (!circuit.leds.length && !circuit.battery)) return [];
+    // A sheet carrying only hand-drawn wires has real copper on it. Asking for an LED or a battery first
+    // would leave the author looking at a folded model with nothing on it, having just drawn a run.
+    if (!fold || (!circuit.leds.length && !circuit.battery && !circuit.wires?.length)) return [];
     try {
       const faces = flatFaces(fold);
       // Same gap as the Electronics tool and the printed tiles — the legs have to land where the pads are.
       const gaps = gapGraph(fold, faces, simTileGap).gaps;
       const sheetMm = this.exporter.printSizeMm();
-      const routed = planRoutes(faces, gaps, circuit, sheetMm);
-      const tapeW = tapeWidthFor(faces, sheetMm);
+      // One spec, read by the plan and by the width below. Under `tapeChoice: "area"` the width depends on
+      // the sheet, so handing the router a spec the width reader did not see would draw the overlay at a
+      // width no copper was routed for. Nothing constructs a `SheetSpec` yet, so this is the default and
+      // the plan is unchanged; it is one place to change rather than two when one arrives.
+      const sheet = DEFAULT_SHEET;
+      const routed = planRoutes(faces, gaps, circuit, sheetMm, sheet);
+      // The circuit, not just the sheet: the width depends on how many runs have to fit, so a tape width
+      // computed without it would differ from the one `planRoutes` just planned to, and the overlay would
+      // be drawn at a width no copper was ever routed for.
+      const tapeW = tapeWidthFor(faces, sheetMm, sheet, circuit);
       const face = circuit.battery ? faces[circuit.battery.face] : null;
       const term = face
         ? batteryTerminals(face.centroid, patternDiag(faces), face.poly, tapeW)
         : null;
-      return anchorOverlay(routed.traces, routed.pads, term, tapeW, faces);
+      // The wires the author drew, ahead of the routed copper and on the same footing: they resolve to
+      // ordinary `Trace2D`s, so the overlay needs no branch for them. Drawn here rather than read back from
+      // the Electronics page for the reason the whole method exists — the page may never have been opened,
+      // and copper the author committed belongs on the model either way.
+      const drawn = manualTraces({ faces, gaps, circuit, tapeW });
+      return anchorOverlay([...drawn, ...routed.traces], routed.pads, term, tapeW, faces);
     } catch {
       // A pattern the router cannot read is not a reason to break the simulation.
       return [];

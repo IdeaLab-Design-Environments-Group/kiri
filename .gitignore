@@ -14,3 +14,6 @@ ocaml/*.cm*
 ocaml/*.o
 ocaml/footprints
 ocaml/*.tmp.ts
+
+# Agent scratch space.
+.scratch/

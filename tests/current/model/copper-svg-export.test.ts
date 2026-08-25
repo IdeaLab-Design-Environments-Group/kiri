@@ -10,6 +10,8 @@ import {
   stripOutline,
 } from "../../../src/model/copper-svg-export.js";
 import { buildFkldSvgExport } from "../../../src/model/fkld-svg-export.js";
+import { COMPONENTS } from "../../../src/model/footprints.generated.js";
+import { padAt, padNamed, padSize } from "../../../src/model/footprint.js";
 import { PCB_COLOURS } from "../../../src/model/part-render.js";
 import { flatFaces, gapGraph, ledOf, type Circuit, type Led, type Vec2 } from "../../../src/model/electronics.js";
 import {
@@ -637,20 +639,48 @@ describe("model/copper-svg-export", () => {
   });
 
   describe("the gap under an LED", () => {
-    it("narrows a run where it lands between an LED's legs", () => {
-      // A run passing over a pad whose partner leg is closer than the tape is wide has to pinch in, or the
-      // two nets meet under the chip and short it.
-      const t = { net: "pwr" as const, pts: [{ x: 0, y: 0 }, { x: 10, y: 0 }] };
-      const pads = [{ pwr: { x: 10, y: 0 }, gnd: { x: 11, y: 0 } }];
-      const wide = outlineStrip(t.pts, 3.25);
-      const pinched = stripOutline(t, 3.25, pads);
-      const spread = (ring: { x: number; y: number }[]): number => {
-        const ys = ring.filter((p) => Math.abs(p.x - 10) < 1e-6).map((p) => p.y);
-        return Math.max(...ys) - Math.min(...ys);
+    it("narrows a run that passes an LED's pad, but not one that ends on it", () => {
+      // Two cases, and they used to be treated as one. Narrowing exists so the two nets cannot meet under
+      // the chip, and a run passing SIDEWAYS across a pad really can: its full width spills over the bare
+      // strip towards the other leg, so it has to pinch in.
+      //
+      // A run that ENDS on its pad cannot. It is capped square across its own direction, so the copper
+      // stops at the pad and the two nets are held apart by the part's own pitch — 2.00mm of bare pattern
+      // on an LED_1206 — not by their widths. Pinching there did real harm: it cut a 3.25mm strip to the
+      // 1.14mm floor directly beneath a 1.70mm pad, which is where the reported 68-93% pad coverage came
+      // from, and it drew as a spike tapering into the body gap. Exempting the end-on case took coverage
+      // to 96-100%.
+      // The ring's height where a vertical line crosses it. Measured by intersecting the edges rather
+      // than by looking for vertices at that x: a strip only has vertices where its width changes, so a
+      // full-width run has none in the middle and a vertex search reports nothing at all.
+      const spreadAt = (ring: { x: number; y: number }[], x: number): number => {
+        const ys: number[] = [];
+        for (let i = 0; i < ring.length; i++) {
+          const a = ring[i]!, b = ring[(i + 1) % ring.length]!;
+          if (a.x === b.x) continue;
+          const t = (x - a.x) / (b.x - a.x);
+          if (t < 0 || t > 1) continue;
+          ys.push(a.y + t * (b.y - a.y));
+        }
+        return ys.length ? Math.max(...ys) - Math.min(...ys) : 0;
       };
-      expect(spread(wide)).toBeCloseTo(3.25, 6);
-      expect(spread(pinched)).toBeLessThan(3.25);
-      expect(spread(pinched)).toBeGreaterThan(0);
+
+      // Passing: the pad sits mid-run, its partner across the tape. Still narrowed.
+      const across = {
+        net: "pwr" as const,
+        pts: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 20, y: 0 }],
+      };
+      const passing = stripOutline(across, 3.25, [{ pwr: { x: 10, y: 0 }, gnd: { x: 10, y: 1 } }]);
+      expect(spreadAt(outlineStrip(across.pts, 3.25), 10)).toBeCloseTo(3.25, 6);
+      expect(spreadAt(passing, 10)).toBeLessThan(3.25);
+      expect(spreadAt(passing, 10)).toBeGreaterThan(0);
+
+      // End-on: the run stops at its pad, running along the line between the two legs. Full width.
+      const endOn = { net: "pwr" as const, pts: [{ x: 0, y: 0 }, { x: 10, y: 0 }] };
+      const landed = stripOutline(endOn, 3.25, [{ pwr: { x: 10, y: 0 }, gnd: { x: 11, y: 0 } }]);
+      expect(spreadAt(landed, 10)).toBeCloseTo(3.25, 6);
+      // And it does not overrun the pad it landed on.
+      expect(Math.max(...landed.map((p) => p.x))).toBeCloseTo(10, 6);
     });
 
     it("cuts the carrier to the same shape as the strips, so it does not short the LEDs", () => {
@@ -658,10 +688,18 @@ describe("model/copper-svg-export", () => {
       // LEDs had the two nets meeting under the chip, while the strips file for the same circuit left a
       // clean gap. One outline definition now feeds both files.
       const { fold, traces, tapeW, keepOff, pads } = planned("puffin.fkld");
-      const near = (ps: { x: number; y: number }[][], qs: { x: number; y: number }[][]): number => {
+      // How far the two nets' copper stays apart: the true distance between the two outlines, edges
+      // included. This used to compare their vertices, which is not the same thing and was only ever a
+      // proxy — two strips can cross with no vertex of one anywhere near a vertex of the other, and once
+      // the LED legs came in over the tile gap that is exactly what happened: the proxy reported the gap
+      // closing while the real one was opening. Measured properly, the point the test was written for is
+      // much starker than it could show — at full width the two nets do not merely come close, they
+      // TOUCH, which is the short.
+      const near = (ps: Vec2[][], qs: Vec2[][]): number => {
         let m = Infinity;
-        for (const a of ps) for (const b of qs) for (const p of a) for (const q of b) {
-          m = Math.min(m, Math.hypot(p.x - q.x, p.y - q.y));
+        for (const a of ps) for (const b of qs) {
+          for (const p of a) for (let i = 0; i < b.length; i++) m = Math.min(m, ptSeg(p, b[i]!, b[(i + 1) % b.length]!));
+          for (const q of b) for (let i = 0; i < a.length; i++) m = Math.min(m, ptSeg(q, a[i]!, a[(i + 1) % a.length]!));
         }
         return m;
       };
@@ -670,6 +708,7 @@ describe("model/copper-svg-export", () => {
 
       const before = near(rings([], "pwr"), rings([], "gnd"));
       const after = near(rings(pads, "pwr"), rings(pads, "gnd"));
+      expect(before).toBeCloseTo(0, 6);
       expect(after).toBeGreaterThan(before);
 
       // And the carrier really does use them — the file changes when they are supplied.
@@ -733,8 +772,20 @@ describe("model/copper-svg-export", () => {
      * so this asks the markup for its geometry rather than for a particular tag. Text is included: a
      * label that did not travel with the part it names would be marking the wrong component.
      */
+    /**
+     * The x extent of what the annotation DRAWS — its pads, holes and origins.
+     *
+     * The designators are left out, and deliberately. A label is always upright, in both files, because a
+     * part on a diagonal break would otherwise carry its name sideways on one and upside down on the
+     * other; and which side of the part it stands on is chosen from the part's own narrowest way out,
+     * which is a fact about the footprint rather than about the sheet. So a label is not a mirrored
+     * quantity and never was — it just could not be seen until LEDs, which are symmetric end to end,
+     * started being drawn: on a symmetric part the two ways out tie, and the tie breaks the same way
+     * whichever way round the sheet is, putting the name a designator's offset out on the other side.
+     * The copper is what has to reflect, and that is what this measures.
+     */
     const annotationXs = (svg: string): number[] => {
-      const ann = svg.slice(svg.indexOf('<g id="annotation"'));
+      const ann = svg.slice(svg.indexOf('<g id="annotation"')).replace(/<text[^>]*>[^<]*<\/text>/g, "");
       const xs: number[] = [];
       for (const m of ann.matchAll(/\b(?:x|cx|x1|x2)="(-?[\d.]+)"/g)) xs.push(Number(m[1]));
       for (const m of ann.matchAll(/\bpoints="([^"]+)"/g)) {
@@ -825,9 +876,11 @@ describe("model/copper-svg-export", () => {
       const svg = buildCopperSvgExport(
         fold, traces, tapeW, "k", pads, undefined, undefined, res, sw,
       ).svg;
-      // Two resistors and a switch: the resistors count 1, 2 between themselves and the switch starts
-      // its own family at 1 rather than carrying on from theirs.
-      expect(new Set(labels(svg))).toEqual(new Set(["R1", "R2", "SW1"]));
+      // Two resistors, a switch and the fixture's three LEDs: the resistors count 1, 2 between themselves
+      // and each other family starts at 1 rather than carrying on from theirs. The LEDs are here because
+      // an LED is now drawn as its own footprint from the same `pads` the runs are narrowed against —
+      // before that it was the one component the cut files left off the drawing entirely.
+      expect(new Set(labels(svg))).toEqual(new Set(["R1", "R2", "SW1", "LED1", "LED2", "LED3"]));
     });
 
     it("drops a part it cannot draw without spending its number", () => {
@@ -843,7 +896,9 @@ describe("model/copper-svg-export", () => {
       const svg = buildCopperSvgExport(
         fold, traces, tapeW, "k", pads, undefined, undefined, [], [], parts,
       ).svg;
-      expect(labels(svg)).toEqual(["R1"]);
+      // The R_2010 is R1, so `NOT_A_PART` before it spent nothing. The three LEDs come after every part
+      // in the list and are the fixture's, drawn from `pads` as their own footprints.
+      expect(labels(svg)).toEqual(["R1", "LED1", "LED2", "LED3"]);
     });
   });
 
@@ -1084,5 +1139,176 @@ describe("model/copper-svg-export", () => {
       expect(length(openAround(ring, 0, 1000))).toBeGreaterThan(0);
       expect(openAround([{ x: 0, y: 0 }, { x: 1, y: 1 }], 0, 1)).toHaveLength(2);
     });
+  });
+});
+
+/**
+ * The LED, drawn as the library part it is.
+ *
+ * An LED used to be the one component the cut files did not draw at all — it was a pair of points the
+ * runs were narrowed against and nothing else, and what the editor showed instead was a bespoke pair of
+ * coloured circles invented for this app. It now goes through `partShape`/`partSvg` on the same code
+ * path as a resistor, from the same two points, so an LED on screen is the footprint that gets cut.
+ *
+ * The two points a cut file is handed are the CUT ENDS of the two nets' copper, not the pad centres:
+ * the in-line form puts each pad centre half a pad-length outboard of the end it is given. That is what
+ * makes an LED's legs land on copper — the router brings the two ends to within the part's own bare gap
+ * and the pads then fall at the part's own pitch, half on the tape either side.
+ */
+describe("model/copper-svg-export LEDs", () => {
+  /** The part's own numbers, read from the library rather than written down here. */
+  const dims = (id: string) => {
+    const fp = BY_ID(id);
+    const [p1, p2] = [padNamed(fp, "1"), padNamed(fp, "2")];
+    const pad = padSize(p1);
+    const pitch = Math.abs(padAt(p2).x - padAt(p1).x);
+    return { pitch, pad, gap: pitch - pad.w };
+  };
+
+  const BY_ID = (id: string) => COMPONENTS.find((c) => c.id === id)!.footprint;
+
+  /** Just the parts layer — everything the file draws and nothing it cuts. */
+  const partsOf = (svg: string): string => {
+    const from = svg.indexOf('<g id="parts"');
+    return from < 0 ? "" : svg.slice(from);
+  };
+
+  /** The full-size pad outlines in a drawing: the copper rings, as their bounding boxes and centres. */
+  const padsDrawn = (svg: string): { c: Vec2; w: number; h: number }[] => {
+    const out: { c: Vec2; w: number; h: number }[] = [];
+    const re = new RegExp(`<path d="([^"]+)" fill="${PCB_COLOURS.copper}"`, "g");
+    for (const m of svg.matchAll(re)) {
+      const n = m[1]!.replace(/[MLZ]/g, " ").trim().split(/\s+/).map(Number);
+      const xs: number[] = [], ys: number[] = [];
+      for (let i = 0; i + 1 < n.length; i += 2) { xs.push(n[i]!); ys.push(n[i + 1]!); }
+      const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+      out.push({ c: { x: (x0 + x1) / 2, y: (y0 + y1) / 2 }, w: x1 - x0, h: y1 - y0 });
+    }
+    return out;
+  };
+
+  /**
+   * One LED on `house.fkld`, with its two copper ends the part's own bare gap apart across the hinge.
+   *
+   * Built by hand rather than taken from the router so that this file tests its own half of the job: the
+   * router owns where the copper ends up, this owns what is drawn once it is there.
+   */
+  function oneLed(component?: string) {
+    const { fold, traces, tapeW } = planned("house.fkld", 1);
+    const { scale } = sheetFrame(fold);
+    const d = dims(component ?? "LED_1206");
+    const pwrRun = traces.find((t) => t.net === "pwr")!;
+    const c = pwrRun.pts[Math.floor(pwrRun.pts.length / 2)]!;
+    // Flat units: the gap is a millimetre length, and the cut files scale flat to sheet by `scale`.
+    const halfFlat = d.gap / 2 / scale;
+    const pads = [{
+      pwr: { x: c.x, y: c.y + halfFlat },
+      gnd: { x: c.x, y: c.y - halfFlat },
+      ...(component ? { component } : {}),
+    }];
+    return { fold, traces, tapeW, pads, d, scale };
+  }
+
+  it("lands an LED's legs on the copper: pads at the part's own pitch, over the cut ends", () => {
+    // The whole point of the change. The two ends of copper are a bare gap apart; the pads must come out
+    // a PITCH apart, which means each one overlaps half its length of tape. Pads placed on the cut ends
+    // themselves would sit in the bare pattern between the two nets and touch neither.
+    const { fold, traces, tapeW, pads, d } = oneLed();
+    // Read back out of the file, so the tolerance is the file's: coordinates are written to four
+    // decimal places, and a centre averaged over rounded corners can be that much out.
+    const drawn = padsDrawn(partsOf(buildCopperSvgExport(fold, traces, tapeW, "k", pads).svg));
+    expect(drawn).toHaveLength(2);
+    const sep = Math.hypot(drawn[0]!.c.x - drawn[1]!.c.x, drawn[0]!.c.y - drawn[1]!.c.y);
+    expect(sep).toBeCloseTo(d.pitch, 3);
+    // And at the part's own size: `w` runs along the break, `h` across it. The break is vertical here.
+    for (const p of drawn) {
+      expect(p.h).toBeCloseTo(d.pad.w, 3);
+      expect(p.w).toBeCloseTo(d.pad.h, 3);
+    }
+  });
+
+  it("draws an 0603 at 0603's size, not at 1206's", () => {
+    // Nothing may hard-code the 1206's dimensions: a smaller LED has to come out smaller.
+    const big = oneLed("LED_1206");
+    const small = oneLed("LED_0603");
+    const a = padsDrawn(partsOf(buildCopperSvgExport(big.fold, big.traces, big.tapeW, "k", big.pads).svg));
+    const b = padsDrawn(partsOf(buildCopperSvgExport(small.fold, small.traces, small.tapeW, "k", small.pads).svg));
+    expect(a).toHaveLength(2);
+    expect(b).toHaveLength(2);
+    const sep = (p: typeof a) => Math.hypot(p[0]!.c.x - p[1]!.c.x, p[0]!.c.y - p[1]!.c.y);
+    expect(sep(a)).toBeCloseTo(big.d.pitch, 3);
+    expect(sep(b)).toBeCloseTo(small.d.pitch, 3);
+    expect(sep(b)).toBeLessThan(sep(a) * 0.6);
+    expect(b[0]!.w).toBeLessThan(a[0]!.w);
+    expect(b[0]!.h).toBeLessThan(a[0]!.h);
+  });
+
+  it("means LED_1206 when the circuit does not say, so an old file draws what it always drew", () => {
+    const { fold, traces, tapeW, pads } = oneLed();
+    const bare = buildCopperSvgExport(fold, traces, tapeW, "k", pads).svg;
+    const named = buildCopperSvgExport(
+      fold, traces, tapeW, "k", pads.map((p) => ({ ...p, component: "LED_1206" })),
+    ).svg;
+    expect(partsOf(bare)).toBe(partsOf(named));
+  });
+
+  it("draws the LED on both cut files, and cuts it on neither", () => {
+    // A cut along a pad would slice the very tape the leg is soldered to.
+    const { fold, traces, tapeW, pads } = oneLed();
+    const strips = buildCopperSvgExport(fold, traces, tapeW, "k", pads);
+    const carrier = buildCopperCarrierExport(fold, traces, tapeW, "k", [], undefined, undefined, pads);
+    for (const svg of [strips.svg, carrier.svg]) {
+      expect(padsDrawn(partsOf(svg) || svg.slice(svg.indexOf('<g id="annotation"')))).toHaveLength(2);
+    }
+    // Nothing the part is painted in may appear in what the blade follows — on either file.
+    const paint = [PCB_COLOURS.copper, PCB_COLOURS.mask, PCB_COLOURS.padLabel, PCB_COLOURS.origin];
+    const stripCut = strips.svg.slice(0, strips.svg.indexOf('<g id="parts"'));
+    for (const colour of paint) {
+      expect(stripCut).not.toContain(colour);
+      expect(cutLayer(carrier.svg)).not.toContain(colour);
+    }
+    // And drawn on the carrier, not merely absent from its cuts.
+    expect(carrier.svg).toContain('<g id="annotation"');
+    expect(carrier.svg.slice(carrier.svg.indexOf('<g id="annotation"'))).toContain(PCB_COLOURS.copper);
+  });
+
+  it("names LEDs after every other part, so the canvas and the files agree", () => {
+    // The editor's canvas builds the same list in the same order — resistors, switches, parts, LEDs —
+    // and hands out designators over it. A chip called LED1 on screen and LED2 on the file would be
+    // worse than no designator at all.
+    const { fold, traces, tapeW, pads } = oneLed();
+    const pwr = traces.find((t) => t.net === "pwr")!;
+    const res = [{ a: pwr.pts[0]!, b: pwr.pts[1]! }];
+    const svg = buildCopperSvgExport(fold, traces, tapeW, "k", pads, undefined, undefined, res).svg;
+    expect([...svg.matchAll(/>([A-Z]+\d+)</g)].map((m) => m[1]!)).toEqual(["R1", "LED1"]);
+  });
+
+  it("skips an LED the router could not place, and spends no number on it", () => {
+    // An unreachable LED keeps its zeroed pads, and `pads` stays index-aligned with the circuit's LEDs
+    // so that it can. Drawn from those, the chip would land at the sheet's own origin; numbered from
+    // them, every LED after it would be one too high and the file would disagree with the canvas.
+    //
+    // Both shapes of the fault are here. Two zeroed pads are the router's actual convention, and a
+    // degenerate placement is already refused for having no length. One zeroed pad is not something the
+    // router emits today, and is exactly why the check is on the pads rather than on the length: half a
+    // placement has plenty of length, and would be drawn as a chip stretched from the sheet's corner
+    // out to the hinge.
+    const { fold, traces, tapeW, pads } = oneLed();
+    const dead = [
+      { pwr: { x: 0, y: 0 }, gnd: { x: 0, y: 0 } },
+      { pwr: { x: 0, y: 0 }, gnd: pads[0]!.gnd },
+      { pwr: pads[0]!.pwr, gnd: { x: 0, y: 0 } },
+    ];
+    const svg = buildCopperSvgExport(fold, traces, tapeW, "k", [...dead, ...pads]).svg;
+    expect(padsDrawn(partsOf(svg))).toHaveLength(2);
+    expect([...svg.matchAll(/>([A-Z]+\d+)</g)].map((m) => m[1]!)).toEqual(["LED1"]);
+  });
+
+  it("draws nothing for a component that is not in the library", () => {
+    const { fold, traces, tapeW, pads } = oneLed();
+    const svg = buildCopperSvgExport(
+      fold, traces, tapeW, "k", pads.map((p) => ({ ...p, component: "NOT_A_PART" })),
+    ).svg;
+    expect(svg).not.toContain('<g id="parts"');
   });
 });

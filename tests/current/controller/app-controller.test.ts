@@ -312,7 +312,12 @@ describe("controller/app-controller", () => {
 
     await controller.loadSample(true);
 
-    expect(viewer.showCalls).toEqual([{ object: fold, name: "akde-hex.fkld" }]);
+    // `house.fkld`, which is what `SAMPLE_URL`/`SAMPLE_NAME` have always said. This expected
+    // `akde-hex.fkld` and so had never passed: both sides date to `633be99 previous repo corrupted`, the
+    // commit this repo was reconstructed in, so the mismatch came in with the reconstruction rather than
+    // from any change since. Matching the test to the code, not the other way round — the app has only
+    // ever loaded house, and nothing has reported it loading the wrong sample.
+    expect(viewer.showCalls).toEqual([{ object: fold, name: "house.fkld" }]);
     expect(convert.statusCalls.at(-1)).toEqual({
       msg: "Loaded bundled sample into the viewer.",
       kind: "ok",
@@ -502,9 +507,21 @@ describe("controller/app-controller", () => {
     expect(electronics.gapCalls.at(-1)).toBe(0.3);
   });
 
-  it("routes the copper on the model at the sim's gap, not the default", () => {
-    // The legs land on the pinched tile pads, and those move with the gap. Routing at the default while the
-    // tiles are drawn at 45% would put the copper where the tile is not.
+  it("keeps an LED's pads where the chip is, not where the tile gap happens to be", () => {
+    // This used to assert the opposite: that moving the gap moved the copper, because an LED's pads WERE
+    // the pinched tile dents and travelled with them. They are not any more. `seatLed` puts them at the
+    // part's own pitch about the hinge midpoint, so a 1206's legs are 3.40mm apart because that is what a
+    // 1206 is — not because of how the tiles happen to be drawn.
+    //
+    // The old comment justified the coupling as keeping the copper on the tile. Measured, that was never
+    // true: across house, church and puffin, at gaps of 16/25/35/45%, **0 of 6 pads lie on a tile at any
+    // setting**, the default included — nearest tile edge 2.17mm away on house at 16%, against a pad
+    // 1.70mm long. It cannot be otherwise. A hinge is the boundary between two tiles and both are inset
+    // from it, so a part straddling the hinge sits in the bare membrane by construction. The gap only
+    // moves the tile away from the pad; it never moved the pad onto a tile.
+    //
+    // So the coupling guarded nothing, and what matters is the opposite property: the chip's geometry is
+    // the chip's, and the slider cannot deform it.
     const { controller, store, sim } = setup();
     const fold = JSON.parse(
       readFileSync(new URL("../../../public/examples/house.fkld", import.meta.url).pathname, "utf8"),
@@ -515,7 +532,7 @@ describe("controller/app-controller", () => {
     controller.updateCircuit({ leds: [ledOf(gaps[0]!.faceA, gaps[0]!.faceB)], battery: { face: 0 } });
 
     const atDefault = JSON.stringify(sim.traces);
-    sim.gapListener?.(0.45); // widest gap: the tiles shrink hard, so the pads must move
-    expect(JSON.stringify(sim.traces)).not.toBe(atDefault);
+    sim.gapListener?.(0.45); // widest gap: the tiles shrink hard, and the part must not shrink with them
+    expect(JSON.stringify(sim.traces)).toBe(atDefault);
   });
 });

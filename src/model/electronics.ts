@@ -18,6 +18,7 @@
  * a copper layer with the cut/score layers.
  */
 import type { FoldFile } from "./fold-file.js";
+import type { ManualWire } from "./manual-wire.js";
 import { TILE_INSET_FRAC } from "./tile-subdiv.js";
 export interface Vec2 {
   x: number;
@@ -39,15 +40,72 @@ export interface Vec2 {
    * is what makes rotating one a decision rather than a suggestion.
    */
   flip?: boolean;
+  /**
+   * Which library part this is — a `Component.id`, so the router can seat the copper at the part's own
+   * pad spacing instead of at whatever the tile geometry happened to give.
+   *
+   * Absent means `LED_1206`: circuits saved before an LED had a choice still load, and still mean the
+   * part this app has always drawn.
+   */
+  component?: string;
 }
 /** The single power source, pinned to a face (its two terminals are derived around it). */export interface Battery {
   face: number;
 }
 /**
- * The two-net circuit. There is no series chain: every LED bridges PWR↔GND, so the only nets are
- * power and ground. Copper tape may freely cross (its underside is insulated), so the router needs
- * no crossing avoidance.
+ * One electrical net: the terminals that have to end up on the same piece of copper.
+ *
+ * Named the way a schematic names them, because that is what the author is thinking in. The id is what
+ * everything else refers to, so renaming a net does not re-wire the circuit.
+ */
+export interface Net {
+  id: string;
+  /** What the author calls it — "PWR", "GND", "SDA". Unique within a circuit. */
+  name: string;
+  /**
+   * How this net is drawn, as a CSS colour — the sidebar's swatch and the copper on the canvas.
+   *
+   * Authored, not derived: the author picks it and it is saved with the circuit, so a net stays the
+   * colour they made it whatever order the nets are listed in afterwards. Optional because every
+   * circuit saved before colours existed has none; `netColour` in `net-palette.ts` stands one in.
+   */
+  color?: string;
+}
+
+/**
+ * One pad of one part, and the net it belongs to. A netlist, entry by entry.
+ *
+ * The pad is named, not indexed: `terminals()` yields a footprint's pads by their own names, so "2" is
+ * the pad the datasheet calls 2 whatever order the file happens to list them in. An index would silently
+ * re-point at a different pin the moment a footprint was regenerated.
+ */
+export interface Terminal {
+  /** Index into {@link Circuit.parts}. */
+  part: number;
+  /** The pad's own name in its footprint. */
+  pad: string;
+  /** A {@link Net.id}. */
+  net: string;
+}
+
+/**
+ * The circuit.
+ *
+ * Two models live here at once, on purpose. The original one is a **bus**: every LED bridges PWR to GND
+ * and parts sit in series on one of those two rails, which is what {@link planRoutes} routes today. The
+ * one being added is a **netlist**: nets the author names, terminals assigned to them, and a router that
+ * connects each net's terminals without letting two nets touch.
+ *
+ * A circuit with no `nets` is the bus, and every file saved before this existed is one — which is why
+ * both fields are optional rather than the bus being expressed as two rows of the netlist. Once a
+ * circuit has nets, PWR and GND are ordinary entries in that list with no special handling.
  */export interface Circuit {
+  /** The nets the author has declared. Absent or empty means the two-rail bus. */
+  nets?: Net[];
+  /** Which pad is on which net. Only meaningful alongside {@link nets}. */
+  terminals?: Terminal[];
+  /** Copper the author drew by hand. Fixed: the router treats it as an obstacle, never re-plans it. */
+  wires?: ManualWire[];
   leds: Led[];
   battery: Battery | null;
   /** Series resistors. Optional so circuits saved before they existed still load. */
@@ -78,6 +136,26 @@ export interface PlacedPart {
   y: number;
   /** Which way round the author wants it — see {@link PartFlip}. */
   flip?: boolean;
+  /**
+   * Standing on the sheet rather than sitting in a rail: no copper is cut for it.
+   *
+   * A part in series is a break in a run — the rail arrives, crosses the part, and leaves — which is why
+   * `placement()` stops at three terminals. A free part is not in series with anything. It is a set of pads
+   * at a place the author chose, and its pads are joined by declared nets or by hand-drawn copper, the way
+   * a forty-pin connector has to be. The router skips it when it cuts rails and still routes nets to it.
+   *
+   * This needs no new geometry: `padPosition` already resolves a pad from `x`, `y`, `flip` and the
+   * footprint alone, with no reference to routed copper, so a free part's pads are as real as a seated
+   * part's the moment it is dropped.
+   */
+  free?: boolean;
+  /**
+   * Turn on the sheet, in degrees anticlockwise, for a part the author placed freely.
+   *
+   * Only meaningful with {@link free}. A seated part takes its angle from the run it breaks, which is the
+   * router's to decide; a free part has no run to take one from, so the author's angle is all there is.
+   */
+  rot?: number;
 }
 
 /**
@@ -158,7 +236,14 @@ export const EMPTY_CIRCUIT: Circuit = { leds: [], battery: null, resistors: [], 
   legB: Vec2;
   /** The FOLD assignment of this hinge: `M` mountain, `V` valley, `C` cut (or `""` when untagged). */
   assignment: string;
-  /** Target dihedral angle in degrees where the pattern records one, else null. */
+  /**
+   * Target fold angle in **degrees**, signed by {@link GapEdge.assignment} — mountain positive, valley
+   * negative — or null where the pattern records none. 0 is flat, ±180 is folded back on itself.
+   *
+   * Degrees because that is what this field has always claimed to be and what every consumer compares
+   * against. The sign is taken from the assignment rather than from the file: the two sources this is read
+   * from do not agree on a sign convention, and M/V is unambiguous. See {@link dihedralMap}.
+   */
   dihedral: number | null;
 }
 /** One gray rigid tile (the printed inset hexagon/polygon) in flat mm, aligned 1:1 with the faces. */export interface TilePoly {
@@ -224,20 +309,34 @@ const edgeKey = (a: number, b: number): string => (a < b ? `${a}_${b}` : `${b}_$
   });
   return shared;
 }
-/** edgeKey → target dihedral angle in degrees, where the pattern records one.
+/**
+ * edgeKey → target fold angle **magnitude in degrees**, where the pattern records one.
  *
- *  FOLD's own `edges_foldAngle` is honoured first; FKLD patterns carry the same thing as
- *  `fkld:edges_dihedralTarget`. Used to tell a gentle valley from one folded almost flat against itself. */
+ * Two sources, in two different units, and reading them as one number is a bug this file carried for a
+ * long time. FOLD's own `edges_foldAngle` is in degrees by the FOLD specification. FKLD's
+ * `fkld:edges_dihedralTarget` is written by our own pipeline from `signedDihedral`, which is an `atan2`
+ * — so it is in **radians**. Taken together and compared against a degree threshold, every FKLD pattern
+ * read as almost flat: the largest magnitude across the six bundled patterns that carry the field is 2.8,
+ * which is 160 degrees of fold reported as 2.8 degrees. The `> 170` steep-valley test downstream could
+ * therefore never fire on a real pattern, and nothing failed to say so.
+ *
+ * Magnitude only. The two sources also disagree about which way the sign runs — FOLD's convention and the
+ * pipeline's "mountain positive" are not the same statement — and `edges_assignment` says M or V without
+ * ambiguity, so the caller signs it from there. Guessing a sign convention from a file that does not
+ * declare one is how a mountain gets routed as a valley.
+ */
 function dihedralMap(fold: FoldFile): Map<string, number> {
   const out = new Map<string, number>();
   const ev = (fold.edges_vertices as number[][] | undefined) ?? [];
-  const raw =
-    ((fold as Record<string, unknown>).edges_foldAngle as number[] | undefined) ??
-    ((fold as Record<string, unknown>)["fkld:edges_dihedralTarget"] as number[] | undefined) ??
-    [];
+  const degrees = (fold as Record<string, unknown>).edges_foldAngle as number[] | undefined;
+  const radians = (fold as Record<string, unknown>)["fkld:edges_dihedralTarget"] as number[] | undefined;
+  const raw = degrees ?? radians ?? [];
+  const toDeg = degrees ? 1 : 180 / Math.PI;
   ev.forEach((e, i) => {
     const v = raw[i];
-    if (typeof v === "number" && Number.isFinite(v)) out.set(edgeKey(num(e[0]), num(e[1])), v);
+    if (typeof v === "number" && Number.isFinite(v)) {
+      out.set(edgeKey(num(e[0]), num(e[1])), Math.abs(v) * toDeg);
+    }
   });
   return out;
 }
@@ -363,12 +462,28 @@ function dihedralMap(fold: FoldFile): Map<string, number> {
     gaps.push({
       mid: midNode, faceA: fA, faceB: fB, point, ends: [pa, pb], verts: [rec.a, rec.b], legA, legB,
       assignment: assignOf.get(key) ?? "",
-      dihedral: dihedralOf.get(key) ?? null,
+      // Signed here, from the assignment: a mountain carries copper on the outside of the bend and puts it
+      // in tension, a valley on the inside and puts it in compression, and that sign is the whole of the
+      // difference between a trace that survives folding and one that cracks.
+      dihedral: signedFold(dihedralOf.get(key), assignOf.get(key)),
     });
   }
 
   return { faceCount, pos, adj, gaps };
 }
+/**
+ * The recorded fold magnitude, signed by the assignment: mountain positive, valley negative.
+ *
+ * An edge with no recorded angle stays null rather than being given a default here — what to assume about
+ * an unstated fold is the router's judgement to make and to document, not something to invent at the point
+ * of reading a file.
+ */
+function signedFold(deg: number | undefined, assignment: string | undefined): number | null {
+  if (deg == null) return null;
+  if (assignment === "V") return -deg;
+  return deg;
+}
+
 /** The gap that an LED straddles (matching its unordered face pair), or null if that gap is gone. */export function gapForLed(gaps: GapEdge[], led: Led): GapEdge | null {
   return (
     gaps.find(

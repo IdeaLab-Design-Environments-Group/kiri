@@ -722,14 +722,66 @@ body {
 }
 
 /* ---- Electronics modal (LED copper-tape routing) ------------------------- */
-.el-modal {
-  width: min(980px, 96vw);
+/* The electronics editor is a PAGE, not a dialog: no backdrop, no floating card, nothing that reads as
+   something to dismiss. It sits where the model page sits and takes the same room, and the URL says which
+   of the two you are on. `.sim-overlay`/`.sim-modal` are deliberately untouched — sim, export and the
+   pattern editor all share them, and changing three modals to move one is how this file goes wrong. */
+.el-page {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 14px;
 }
-.el-body {
+.el-page[hidden] { display: none; }
+/* The model page steps aside while the editor is up. Hidden by class rather than emptied or moved:
+   `installResizableLayout` is bound to `#app`, and the viewer's iframe reloads to a blank preview if it
+   is ever re-parented. Hiding an ancestor keeps its document intact; moving it does not. */
+body.is-electronics #app,
+body.is-electronics .app-legend {
+  display: none;
+}
+.el-page-inner {
+  height: 100%;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  padding: 0.75rem 1rem 0.9rem;
+  background: var(--card, #fff);
+  border: 1px solid var(--border, #e4e7ec);
+  border-radius: var(--radius, 12px);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.el-page-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--border, #e4e7ec);
+}
+.el-page-title {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+/* Back, where the dismiss × used to be. A page is left, not closed. */
+.el-back {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.28rem 0.7rem;
+  border: 1px solid var(--border, #e4e7ec);
+  border-radius: var(--radius-sm, 8px);
+  background: #fff;
+  color: #344054;
+  cursor: pointer;
+}
+.el-back:hover {
+  background: var(--surface-soft, #f3f5f9);
+  border-color: #cdd3df;
+  color: var(--accent-strong, #1741c4);
+}
+/* The header trigger is now a nav link to a page, so it shows which page you are on. */
+.el-nav.is-active {
+  background: var(--accent-soft, #eef3ff);
+  border-color: var(--accent, #1f6feb);
+  color: var(--accent-strong, #1741c4);
+  font-weight: 600;
 }
 /* Calm, low-clutter toolbar: groups separated by a hairline divider, soft neutral buttons,
    a gentle (not loud) active state. */
@@ -739,11 +791,24 @@ body {
   gap: 0.8rem;
   padding: 0.9rem 1.1rem 1rem;
   background: #fff;
+  /* On a page the editor has the window's height to fill, so the canvas grows instead of sitting in a
+     fixed card with dead space under it. */
+  flex: 1 1 auto;
+  min-height: 0;
 }
+/* The toolbar reads as two jobs, one per row: WHAT to place, then HOW to see and save it. Flat, it was a
+   dozen identically-styled buttons in one wrapping line, and nothing said which of them were modes, which
+   were actions, or which belonged together — so each group now carries its own small caption and the
+   modes are joined into segmented controls that look like the one choice they are. */
 .el-toolbar {
   display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.el-toolbar-row {
+  display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  gap: 0.5rem 0.35rem;
   align-items: center;
 }
 .el-group {
@@ -751,16 +816,49 @@ body {
   align-items: center;
   gap: 0.3rem;
 }
+/* The caption over each group. Quiet and small: it names the group without competing with the controls. */
+.el-group-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted, #98a2b3);
+  white-space: nowrap;
+}
 .el-group + .el-group {
-  margin-left: 0.6rem;
-  padding-left: 0.85rem;
+  margin-left: 0.5rem;
+  padding-left: 0.75rem;
   border-left: 1px solid var(--border, #e4e7ec);
 }
+/* Clear sits away from everything it would undo, at the far end of the row. */
+.el-group-end {
+  margin-left: auto;
+  border-left: 0;
+}
+/* A segmented control: buttons that are one choice, so they are drawn as one control with dividers
+   rather than as separate things that happen to be adjacent. */
+.el-seg {
+  display: inline-flex;
+  border: 1px solid var(--border, #d7dbe4);
+  border-radius: var(--radius-sm, 8px);
+  overflow: hidden;
+  background: #fff;
+}
+.el-seg > button {
+  border: 0;
+  border-left: 1px solid var(--border, #e4e7ec);
+  border-radius: 0;
+}
+.el-seg > button:first-child { border-left: 0; }
+/* The chosen segment keeps the accent fill it has everywhere else; inside the control a border would
+   only draw a box round one of three. */
+.el-seg > button.is-active { border-color: var(--border, #e4e7ec); }
 .el-tool,
 .el-clear,
 .el-export,
 .el-export-carrier,
 .el-view,
+.el-place,
 .el-mirror,
 .el-zoom-in,
 .el-zoom-out,
@@ -786,10 +884,30 @@ body {
 .el-export:hover,
 .el-export-carrier:hover,
 .el-view:hover,
+.el-place:hover,
 .el-mirror:hover,
 .el-zoom-in:hover,
 .el-zoom-out:hover,
 .el-fit:hover { background: var(--surface-soft, #f3f5f9); border-color: #cdd3df; }
+/* Clear is the one control on the row that throws work away, so it says so quietly — after the shared
+   hover rule above, which it has to override rather than be overridden by. */
+.el-clear { color: #a4404a; }
+.el-clear:hover { background: #fdf1f2; border-color: #e4b7bc; color: #8e2f39; }
+/* The LED picker, beside the LED button. Deliberately not a row in the library picker: that one lists the
+   parts a rail can pass THROUGH, and an LED bridges two nets across a hinge instead — offered there it
+   would be placeable on a rail, with both its pads on the same net. Sized to its own two names rather than
+   to the library's, so it reads as part of the LED tool and not as a second library. */
+.el-led-part {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border, #d7dbe4);
+  border-radius: 0.4rem;
+  background: var(--surface, #fff);
+  color: inherit;
+  max-width: 13rem;
+}
+.el-led-part:hover { background: var(--surface-soft, #f3f5f9); border-color: #cdd3df; }
 /* The library picker. One control for the whole library: parts are added to `footprints.generated.ts`
    all the time, and a button each would push the rest of the toolbar off the row by the tenth one. */
 .el-part-label {
@@ -798,18 +916,134 @@ body {
   text-transform: uppercase;
   color: var(--muted, #6b7280);
 }
+/* The native select is still the model — it holds the value and fires `change` — but it is no longer the
+   menu. Opened, it was one flat scroll of 43 rows with the group names as unclickable dividers, which is
+   the whole library every time you want a capacitor. It stays in the DOM, out of sight and out of the tab
+   order, with the button and the shelves below drawn over it. */
 .el-part {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+.el-part-menu-wrap {
+  position: relative;
+  display: inline-flex;
+}
+/* The button that stands in for the select: same size and weight, so the row is unchanged until it opens. */
+.el-part-trigger {
   font: inherit;
   font-size: 0.85rem;
-  padding: 0.3rem 0.5rem;
+  text-align: left;
+  padding: 0.3rem 1.6rem 0.3rem 0.5rem;
   border: 1px solid var(--border, #d7dbe4);
   border-radius: 0.4rem;
   background: var(--surface, #fff);
   color: inherit;
+  cursor: pointer;
+  min-width: 14rem;
   max-width: 20rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  position: relative;
 }
-.el-part:hover { background: var(--surface-soft, #f3f5f9); border-color: #cdd3df; }
-/* The library is 159 footprints and most of their names are datasheet part numbers, so the picker is a
+.el-part-trigger::after {
+  content: "▾";
+  position: absolute;
+  right: 0.55rem;
+  color: var(--muted, #98a2b3);
+}
+.el-part-trigger:hover { background: var(--surface-soft, #f3f5f9); border-color: #cdd3df; }
+.el-part-trigger.is-open { border-color: var(--accent, #1f6feb); }
+.el-part-trigger.is-empty { color: var(--muted, #98a2b3); }
+/* The menu proper: shelves, shut until asked for. Wider than the button, because a datasheet name is
+   longer than the control that shows it, and capped in height so it is a panel and not a page. */
+.el-part-menu {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  z-index: 20;
+  width: max(100%, 30rem);
+  max-height: 22rem;
+  overflow-y: auto;
+  padding: 0.25rem;
+  background: #fff;
+  border: 1px solid var(--border, #d7dbe4);
+  border-radius: var(--radius-sm, 8px);
+  box-shadow: var(--shadow-md, 0 6px 20px rgba(16, 24, 40, 0.1));
+}
+.el-part-menu[hidden] { display: none; }
+.el-part-shelf-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-align: left;
+  padding: 0.35rem 0.5rem;
+  border: 0;
+  border-radius: 0.35rem;
+  background: none;
+  color: #344054;
+  cursor: pointer;
+}
+/* Shut and open, said with the arrow the rest of the interface uses for the same idea. */
+.el-part-shelf-head::before {
+  content: "▸";
+  color: var(--muted, #98a2b3);
+  font-size: 0.7rem;
+}
+.el-part-shelf-head.is-open::before { content: "▾"; }
+.el-part-shelf-head:hover { background: var(--surface-soft, #f3f5f9); }
+.el-part-shelf-head:disabled { cursor: default; color: var(--muted, #98a2b3); }
+.el-part-shelf-head:disabled:hover { background: none; }
+/* How many parts are behind a shut shelf — the one thing you need to know before opening it. */
+.el-part-shelf-count {
+  margin-left: auto;
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--muted, #6b7280);
+  background: var(--surface-soft, #f3f5f9);
+  border-radius: 999px;
+  padding: 0 0.4rem;
+}
+.el-part-shelf-body {
+  display: flex;
+  flex-direction: column;
+}
+.el-part-shelf-body[hidden] { display: none; }
+.el-part-row {
+  font: inherit;
+  font-size: 0.82rem;
+  text-align: left;
+  padding: 0.28rem 0.5rem 0.28rem 1.5rem;
+  border: 0;
+  border-radius: 0.35rem;
+  background: none;
+  color: #344054;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.el-part-row:hover { background: var(--accent-soft, #eef3ff); color: var(--accent-strong, #1741c4); }
+.el-part-row.is-armed {
+  background: var(--accent-soft, #eef3ff);
+  color: var(--accent-strong, #1741c4);
+  font-weight: 600;
+}
+/* A part the rail cannot pass through: found, named, and said to be unavailable rather than missing. */
+.el-part-row.is-dead {
+  color: var(--muted, #98a2b3);
+  font-style: italic;
+  cursor: default;
+}
+.el-part-row.is-dead:hover { background: none; color: var(--muted, #98a2b3); }
+/* The library is over a hundred footprints and most of their names are datasheet part numbers, so the picker is a
    search box and a grouped list rather than one long scroll. The count beside it is what keeps the list
    honest: it says how much of the library is on offer and that the rest is a search away. */
 .el-part-search {
@@ -826,26 +1060,354 @@ body {
   outline: none;
   border-color: var(--accent, #1f6feb);
 }
-.el-part optgroup { font-style: normal; font-weight: 600; color: var(--muted, #6b7280); }
-.el-part option { font-weight: 400; color: #344054; }
-.el-part option:disabled { color: var(--muted, #9aa1ad); font-style: italic; }
+/* The picker is a column: the two fields on one line, and the count under them. Beside them it was a
+   two-line paragraph wedged between the select and the next group, and it pushed the whole row wider than
+   the modal — under them it is a caption, which is what it is. */
+.el-part-picker {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.el-part-fields {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
 .el-part-count {
   font-size: 0.72rem;
-  color: var(--muted, #6b7280);
-  max-width: 15rem;
+  color: var(--muted, #98a2b3);
   line-height: 1.2;
+  /* Wide enough for the sentence on one line, capped so a long one wraps instead of stretching the row. */
+  max-width: 26rem;
 }
 .el-view.is-active,
+.el-place.is-active,
 .el-mirror.is-active,
 .el-part.is-active,
+.el-led-part.is-active,
 .el-tool.is-active {
   background: var(--accent-soft, #eef3ff);
   color: var(--accent-strong, #1741c4);
   border-color: var(--accent, #1f6feb);
   font-weight: 600;
 }
+/* Nets live in a rail down the left, beside the canvas rather than above it — the way a file tree sits
+   beside an editor. A wrapping row of chips could not show what is ON a net without a second panel; a
+   column can simply open the net out and list its pads underneath, and it stays readable at twenty nets
+   where a row was already unreadable at eight. */
+.el-workspace {
+  display: flex;
+  align-items: stretch;
+  gap: 0.75rem;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.el-side {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  flex: 0 0 15rem;
+  min-width: 11rem;
+  max-width: 22rem;
+  /* Its own scroller: a long netlist scrolls the rail, never the page, so the canvas beside it stays put. */
+  overflow-y: auto;
+  padding: 0.5rem 0.55rem;
+  background: var(--surface-soft, #f7f8fa);
+  border: 1px solid var(--border, #e4e7ec);
+  border-radius: 4px;
+}
+.el-side-sect { display: flex; flex-direction: column; gap: 0.3rem; }
+.el-side-head {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.1rem 0.1rem 0.25rem;
+  border-bottom: 1px solid var(--border, #e4e7ec);
+}
+/* The section header reads as a header, not as a row of the tree: small, spaced, and quiet. */
+.el-side-title {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted, #6b7280);
+}
+.el-side-tally {
+  font-size: 0.66rem;
+  color: var(--muted, #98a2b3);
+  background: #fff;
+  border: 1px solid var(--border, #e4e7ec);
+  border-radius: 999px;
+  padding: 0 0.32rem;
+}
+/* The + sits hard right, where "add one of these" lives in every tree that has one. */
+.el-side-empty {
+  margin: 0.35rem 0.1rem;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--muted, #98a2b3);
+}
+.el-net-list { display: flex; flex-direction: column; gap: 0.05rem; }
+/* One row per net. Flat and full-bleed rather than a pill: rows have to align down a common left edge to
+   read as a tree, and a pill's rounded ends break that line. */
+.el-net {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.12rem 0.15rem;
+  border: 1px solid transparent;
+  border-radius: 0.3rem;
+}
+.el-net:hover { background: #fff; border-color: var(--border, #e4e7ec); }
+/* The twisty. Fixed width whether or not it can be pressed, so every name starts at the same x. */
+.el-net-twist {
+  font: inherit;
+  font-size: 0.7rem;
+  line-height: 1;
+  width: 1.1rem;
+  flex: 0 0 auto;
+  padding: 0.15rem 0;
+  border: 0;
+  background: none;
+  color: var(--muted, #6b7280);
+  cursor: pointer;
+}
+.el-net-twist:disabled { color: #cdd3df; cursor: default; }
+/* The colour swatch. A native colour input, stripped of its chrome so it reads as a swatch and not as a
+   form control -- the picker it opens is still the browser's own. */
+.el-net-colour {
+  flex: 0 0 auto;
+  width: 0.85rem;
+  height: 0.85rem;
+  padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.22);
+  border-radius: 0.2rem;
+  background: none;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+.el-net-colour::-webkit-color-swatch-wrapper { padding: 0; }
+.el-net-colour::-webkit-color-swatch { border: 0; border-radius: 0.12rem; }
+.el-net-colour::-moz-color-swatch { border: 0; border-radius: 0.12rem; }
+/* A net the router could not finish. Amber rather than red: the copper it did lay is still good, and the
+   rest of the panel is telling the truth -- this is the one row that is not. */
+.el-net-short {
+  flex: 0 0 auto;
+  font-size: 0.66rem;
+  font-weight: 700;
+  color: #8a5a00;
+  background: #fff4e0;
+  border: 1px solid #e6c27a;
+  border-radius: 999px;
+  padding: 0 0.32rem;
+  cursor: help;
+}
+/* The pads on an opened net, indented under it and hung off a guide line -- the one thing that makes a
+   list of rows read as a tree rather than as a list. */
+.el-net-kids {
+  display: flex;
+  flex-direction: column;
+  margin-left: 1.35rem;
+  padding-left: 0.45rem;
+  border-left: 1px solid var(--border, #e4e7ec);
+}
+.el-net-kid {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.08rem 0.15rem;
+  border-radius: 0.25rem;
+}
+.el-net-kid:hover { background: #fff; }
+.el-net-kid-dot {
+  flex: 0 0 auto;
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 999px;
+}
+.el-net-kid-name {
+  flex: 1 1 auto;
+  font-size: 0.72rem;
+  color: #475467;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.el-net-kid-off {
+  font: inherit;
+  font-size: 0.75rem;
+  line-height: 1;
+  padding: 0 0.15rem;
+  border: 0;
+  background: none;
+  color: var(--muted, #98a2b3);
+  cursor: pointer;
+}
+/* A row the router wired, not the author: the battery's poles and each hinge-LED's two legs. Quieter than
+   an authored row and carrying no control, because there is nothing here to decide — the × that unwires a
+   pad would be a lie on a row the next replan puts straight back. */
+.el-net-kid.is-derived .el-net-kid-name {
+  color: var(--muted, #98a2b3);
+  font-style: italic;
+}
+.el-net-kid.is-derived .el-net-kid-dot {
+  opacity: 0.55;
+}
+.el-net-kid-note {
+  margin-left: auto;
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted, #98a2b3);
+  border: 1px solid var(--border, #e4e7ec);
+  border-radius: 999px;
+  padding: 0 0.35rem;
+}
+.el-net-kid-off:hover { color: #a4404a; }
+/* The name is editable in place — renaming is the common edit, and the id behind it never moves. */
+.el-net-name {
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0.05rem 0.15rem;
+  border: 1px solid transparent;
+  border-radius: 0.25rem;
+  background: none;
+  color: #344054;
+}
+.el-net-name:hover { border-color: var(--border, #d7dbe4); background: #fff; }
+.el-net-name:focus { outline: none; border-color: var(--accent, #1f6feb); background: #fff; }
+.el-net-count {
+  font-size: 0.68rem;
+  color: var(--muted, #6b7280);
+  background: #fff;
+  border-radius: 999px;
+  padding: 0 0.32rem;
+}
+.el-net-del {
+  font: inherit;
+  font-size: 0.85rem;
+  line-height: 1;
+  padding: 0 0.2rem;
+  border: 0;
+  background: none;
+  color: var(--muted, #98a2b3);
+  cursor: pointer;
+}
+.el-net-del:hover { color: #a4404a; }
+.el-net-new {
+  font: inherit;
+  font-size: 0.75rem;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--border, #d7dbe4);
+  border-radius: 0.4rem;
+  background: #fff;
+}
+.el-net-new:focus { outline: none; border-color: var(--accent, #1f6feb); }
+.el-net-add {
+  font: inherit;
+  font-size: 0.95rem;
+  line-height: 1;
+  margin-left: auto;
+  padding: 0.05rem 0.3rem 0.15rem;
+  border: 1px solid var(--border, #d7dbe4);
+  border-radius: 0.3rem;
+  background: #fff;
+  color: #344054;
+  cursor: pointer;
+}
+.el-net-add:hover { background: var(--surface-soft, #f3f5f9); border-color: #cdd3df; }
+/* The selected part's pads. Hidden entirely when nothing with pads is selected — an empty row would read
+   as "this part has no pads", which is a different and wrong statement. */
+.el-pads[hidden] { display: none; }
+/* The placed parts, one row each. A button, not a div: it selects, so it has to be reachable from the
+   keyboard and say what it does -- and it is the only route back to a part once a later one is placed. */
+.el-placed-list { display: flex; flex-direction: column; gap: 0.1rem; }
+.el-placed-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  padding: 0.16rem 0.28rem;
+  border: 1px solid transparent;
+  border-radius: 0.3rem;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.el-placed-row:hover { background: #fff; border-color: var(--border, #e4e7ec); }
+.el-placed-row.is-active {
+  background: #fff;
+  border-color: var(--accent, #2f6feb);
+  box-shadow: inset 2px 0 0 var(--accent, #2f6feb);
+}
+.el-placed-tag {
+  flex: 0 0 auto;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+/* The description takes what is left and gives it up first: the designator and the wired count are what
+   the author scans, and a long `descr` from a footprint file would push both out of a narrow rail. */
+.el-placed-note {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.7rem;
+  color: var(--muted, #6b7280);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.el-placed-wired {
+  flex: 0 0 auto;
+  font-size: 0.66rem;
+  color: var(--muted, #98a2b3);
+  background: #fff;
+  border: 1px solid var(--border, #e4e7ec);
+  border-radius: 999px;
+  padding: 0 0.32rem;
+}
+.el-placed-wired.is-unassigned { border-style: dashed; border-color: #d9b26a; color: #a5762a; }
+.el-pad-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.el-pad {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.1rem 0.3rem;
+  border: 1px solid var(--border, #e4e7ec);
+  border-radius: 0.4rem;
+  background: #fff;
+}
+.el-pad-name {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--muted, #6b7280);
+}
+.el-pad-net {
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 0.1rem 0.2rem;
+  border: 1px solid var(--border, #d7dbe4);
+  border-radius: 0.3rem;
+  background: #fff;
+  color: inherit;
+}
+/* A pad on no net is the likeliest authoring mistake, so it is marked rather than merely blank. */
+.el-pad.is-unassigned { border-style: dashed; border-color: #d9b26a; }
 .el-canvas-wrap {
   display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
   justify-content: center;
   align-items: stretch;
   background: #fff;
@@ -892,22 +1454,34 @@ body {
   vector-effect: non-scaling-stroke;
   pointer-events: none;
 }
-/* The two part keys take their colour inline from `PCB_COLOURS`, so the legend cannot drift from the canvas.
-   Both are bright layer colours meant for a dark board, so they get the same dark halo the canvas text does —
-   without it the cyan is all but invisible on the modal's white footer. */
-.el-key-pad,
-.el-key-des {
-  font-weight: 600;
-  text-shadow: 0 0 2px rgba(0, 0, 0, 0.8);
+/* Each key is a swatch and a word. The colours are the canvas's own — the two part keys take theirs inline
+   from `PCB_COLOURS`, so the legend cannot drift from what is drawn — but they belong on the swatch, not on
+   the text: coloured, bolded and haloed to stay legible on white, the words read as a different typeface
+   from the rest of the interface, which is exactly how the old footer looked. */
+.el-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.el-swatch {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 0.15rem;
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  background: currentColor;
+  flex: 0 0 auto;
+}
+/* The unreached-LED key is a ring on the canvas, so it is a ring here too. */
+.el-swatch-ring {
+  background: none;
+  border: 2px dashed currentColor;
+  border-radius: 50%;
 }
 .el-tape-pwr { fill: #ff0000; }
 .el-tape-gnd { fill: #222222; }
-/* Each LED = two distinct pads (PWR red +, GND dark −) bridged by an amber chip body. */
-.el-led-body { stroke: #d8b24a; stroke-linecap: round; }
-.el-led-pwr { fill: #ee3b30; stroke: #fff; stroke-width: 1; vector-effect: non-scaling-stroke; }
-.el-led-gnd { fill: #2b2f36; stroke: #fff; stroke-width: 1; vector-effect: non-scaling-stroke; }
-.el-led-body.el-led-orphan { stroke: #e6a3a3; }
-/* The selected LED, which R turns round. */
+/* An LED is drawn as its own footprint by `part-render.ts`, exactly as every other part is, so it has no
+   colour of its own here — the pads are the PCB palette's and the polarity is readable from which net's
+   tape reaches which pad. What is left is the two rings that say something about the LED's state. */
 /* The selection ring — the same mark whether it is round an LED or round a part on a rail. */
 .el-led-selected,
 .el-part-selected {
@@ -916,8 +1490,71 @@ body {
   stroke-width: 2;
   vector-effect: non-scaling-stroke;
 }
-.el-led-pwr.el-led-orphan,
-.el-led-gnd.el-led-orphan { stroke: #d24545; stroke-width: 1.6; }
+/* An LED the copper never reached. Ringed rather than recoloured: the part is still drawn as the part
+   that would be cut, and what is wrong with it is the routing, not the footprint. */
+.el-led-orphan {
+  fill: none;
+  stroke: #d24545;
+  stroke-width: 2;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+}
+/* Copper the author drew by hand. Cut from the same tape as a planned run and drawn as the same outline,
+   so it takes `.el-tape`'s shape rules; the colour is its own because the one thing the canvas has to say
+   about it is that a person put it there and the router will not move it. */
+.el-wire-copper { fill: #c07a00; }
+/* The wire tool's own overlay: the wire being drawn, its handles and its faults. Repainted on every
+   pointer move while the rest of the canvas stands still, so nothing in here may cost a re-plan.
+   Pointer-transparent as a whole — the tool hit-tests geometrically, never by `event.target`, so an
+   overlay that caught clicks would only take them away from the canvas underneath. */
+.el-live { pointer-events: none; }
+/* The wire being drawn, and the finished one under the cursor's selection. Both are strokes rather than
+   cut outlines, and deliberately: this is a preview of copper, not copper, and it must not read as
+   something already on the sheet. */
+.el-wire-draft {
+  stroke: #c07a00;
+  stroke-opacity: 0.9;
+}
+.el-wire-sel {
+  stroke: #1f6feb;
+  stroke-opacity: 0.8;
+}
+/* The rubber band from the last point laid to the cursor: dashed, because it is where the wire would go
+   and not where it is. Its width is the tape's, in world units and set inline by the painter, so it stays
+   the same copper as the run it continues — no `vector-effect` here, which would shrink it to a hairline
+   at any zoom. */
+.el-wire-band {
+  stroke: #c07a00;
+  stroke-opacity: 0.55;
+  stroke-dasharray: 3 3;
+}
+/* A vertex the author can grab. Filled white with a dark rim, as a drag handle is everywhere, so it stays
+   visible over tape, tile and cloth alike. */
+.el-wire-handle {
+  fill: #fff;
+  stroke: #1f2937;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+/* A vertex whose anchor no longer resolves. A handle in every other respect — the author has to be able
+   to grab it and put it back — so it keeps the handle's white fill and stays legible over tape, tile and
+   cloth. What is wrong with it is said in the rim: `.el-wire-fault`'s red, dashed like `.el-led-orphan`,
+   because the copper does not run through this point and a solid rim would claim it does. */
+.el-wire-dangling {
+  fill: #fff;
+  stroke: #d24545;
+  stroke-width: 2;
+  stroke-dasharray: 3 2;
+  vector-effect: non-scaling-stroke;
+}
+/* Where the rules say the wire is wrong. Hollow, so the geometry underneath stays readable — the point of
+   the mark is to send the author to the spot, not to cover it. */
+.el-wire-fault {
+  fill: none;
+  stroke: #d24545;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
 /* Battery = two terminal squares: a red PWR (+) and a dark GND (−), matching the tape colours. */
 .el-batt { stroke: #fff; stroke-width: 1; vector-effect: non-scaling-stroke; }
 .el-batt-pwr { fill: #ee3b30; }
@@ -952,6 +1589,7 @@ body {
   font-size: 0.78rem;
   color: var(--muted, #667085);
 }
-.el-key-led { color: #b5860a; }
+.el-key-led { color: #d24545; }
 .el-key-pwr { color: #ff0000; }
 .el-key-gnd { color: #222222; }
+.el-key-batt { color: #2b2f36; }

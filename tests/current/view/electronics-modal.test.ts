@@ -167,6 +167,165 @@ describe("view/electronics-modal", () => {
     }
   });
 
+  describe("what the router wired, shown but not stored", () => {
+    /** The nets panel's counts, by net name — what the author actually looks at. */
+    function netCounts(modal: any): Record<string, number> {
+      const out: Record<string, number> = {};
+      modal.overlay.querySelectorAll(".el-net").forEach((row: any) => {
+        const name = row.children.find((c: any) => c.className.includes("el-net-name"));
+        const tally = row.children.find((c: any) => c.className.includes("el-net-count"));
+        if (name && tally) out[name.value] = Number(tally.textContent);
+      });
+      return out;
+    }
+
+    it("stops PWR and GND reading zero once there is a battery and a routed LED", () => {
+      // The report that prompted this: a battery placed, an LED routed, and the panel reading PWR 0 GND 0.
+      // Both are on those rails by construction, but the panel could only see STORED assignments -- and to
+      // the person looking at it, a rail that says 0 is not wired.
+      const { modal } = openOn(grid2x2());
+      modal.selectTool("battery");
+      tapFlat(modal, { x: 0.5, y: 0.5 });
+      modal.selectTool("led");
+      tapFlat(modal, modal.gaps[0].point);
+      expect(modal.routed.traces.length, "nothing routed, so nothing to derive").toBeGreaterThan(0);
+
+      const counts = netCounts(modal);
+      expect(counts.PWR, "PWR still reads zero on a routed circuit").toBeGreaterThan(0);
+      expect(counts.GND, "GND still reads zero on a routed circuit").toBeGreaterThan(0);
+    });
+
+    it("claims nothing before anything is routed", () => {
+      // A row saying PWR where the copper never arrived is worse than an absent row.
+      const { modal } = openOn(grid2x2());
+      expect(modal.routed.traces).toHaveLength(0);
+      const counts = netCounts(modal);
+      expect(counts.PWR ?? 0).toBe(0);
+      expect(counts.GND ?? 0).toBe(0);
+    });
+
+    it("keeps the derived rows out of the circuit, and out of the store", () => {
+      // The load-bearing one. Something real now flows INTO the panel that must never flow back out: if a
+      // save path picked a derived row up, the router's `flip[]` and the stored value would disagree the
+      // moment it flipped one -- the drift the whole stored/derived split exists to prevent.
+      const { modal, edits } = openOn(grid2x2());
+      modal.selectTool("battery");
+      tapFlat(modal, { x: 0.5, y: 0.5 });
+      modal.selectTool("led");
+      tapFlat(modal, modal.gaps[0].point);
+      expect(netCounts(modal).PWR).toBeGreaterThan(0); // the rows are really there...
+
+      // ...and none of them is on the circuit or in what the controller was handed.
+      expect(modal.circuit.terminals ?? [], "a derived row was written to the circuit").toHaveLength(0);
+      const sent = edits[edits.length - 1] as any;
+      expect(sent.terminals ?? [], "a derived row reached the store").toHaveLength(0);
+    });
+
+    it("does not let an edit elsewhere write the derived rows into the circuit", () => {
+      // `assignPad` and `deleteNet` rebuild `circuit.terminals` from what they read. Reading the panel's
+      // rows there -- rather than the stored terminals -- would persist every derived row on the next edit.
+      const { modal } = openOn(grid2x2());
+      modal.selectTool("battery");
+      tapFlat(modal, { x: 0.5, y: 0.5 });
+      modal.selectTool("led");
+      tapFlat(modal, modal.gaps[0].point);
+
+      // Any edit that goes through the terminal-rebuilding path.
+      const gnd = modal.circuit.nets.findIndex((n: any) => n.id === "gnd");
+      modal.overlay.querySelectorAll(".el-net-del")[gnd].dispatch("click", {});
+
+      expect(modal.circuit.terminals ?? [], "an edit persisted the derived rows").toHaveLength(0);
+    });
+  });
+
+  describe("an LED placed on a tile", () => {
+    /** Arm the LED tool in free-placement mode — an LED on a tile rather than across a hinge. */
+    function armFreeLed(modal: any): void {
+      modal.selectTool("led");
+      const seat = modal.overlay.querySelectorAll(".el-place").find((b: any) => b.dataset.place === "free");
+      expect(seat, "no free-placement control").toBeTruthy();
+      seat.dispatch("click", {});
+    }
+
+    it("lands with its pads already on PWR and GND, the LED's own way round", () => {
+      // Placed on a tile an LED is an ordinary part, so the router does not decide which leg is positive —
+      // the author does. Landing unwired meant two manual assignments before it could ever light, which is
+      // a chore rather than a choice. The default is still theirs to change from the pads panel.
+      const { modal } = openOn(grid2x2());
+      armFreeLed(modal);
+      tapFlat(modal, { x: 0.5, y: 0.5 });
+
+      expect(modal.circuit.parts).toHaveLength(1);
+      const wired = modal.circuit.terminals.filter((t: any) => t.part === 0);
+      expect(wired, "the LED landed unwired").toHaveLength(2);
+      expect(wired.map((t: any) => t.net)).toEqual(["pwr", "gnd"]);
+      // Anode to PWR: the pads come back in pad-number order and pad 1 of an LED is the anode.
+      const pads = terminals(modal.armedLed().footprint).map(([name]) => name);
+      expect(wired.map((t: any) => t.pad)).toEqual([pads[0], pads[1]]);
+    });
+
+    it("stores nothing for an LED on a hinge, whose polarity is the router's to decide", () => {
+      // A hinge-LED's membership of PWR and GND is true by construction and is NOT stored: which leg is
+      // positive is a routing OUTPUT — `planRoutes` searches over `flip[]` — so a stored assignment would
+      // state as fact something the router is still deciding, and the two would disagree the moment it
+      // flipped one. The panel may show it; the circuit must not carry it.
+      //
+      // Guarded through the round trip rather than at the write, because `cloneCircuit` carries fields it
+      // was never taught about: a derived row picked up by a save path is exactly how the drift gets in.
+      const { modal, edits } = openOn(grid2x2());
+      modal.selectTool("led");
+      tapFlat(modal, modal.gaps[0].point);
+      expect(modal.circuit.leds, "no hinge LED was placed").toHaveLength(1);
+
+      expect(modal.circuit.terminals ?? [], "a hinge LED wrote terminals into the circuit").toHaveLength(0);
+      const sent = edits[edits.length - 1] as any;
+      expect(sent.terminals ?? [], "terminals for a hinge LED reached the store").toHaveLength(0);
+    });
+
+    it("wires the second one to its own pads, not the first one's", () => {
+      // `Terminal.part` is an index, and a default that always wrote `part: 0` would look right on the
+      // first LED and wire every later one to it.
+      const { modal } = openOn(grid2x2());
+      armFreeLed(modal);
+      tapFlat(modal, { x: 0.5, y: 0.5 });
+      tapFlat(modal, { x: 1.5, y: 0.5 });
+
+      expect(modal.circuit.parts).toHaveLength(2);
+      expect(modal.circuit.terminals.map((t: any) => t.part).sort()).toEqual([0, 0, 1, 1]);
+    });
+
+    it("leaves the pads unwired when the rails it would use are gone", () => {
+      // The author may delete PWR. Recreating it under them, or pointing a terminal at a net that is not
+      // there, would be the app raising a `no-such-net` fault on its own behalf — worse than no default.
+      const { modal } = openOn(grid2x2());
+      const pwr = modal.circuit.nets.findIndex((n: any) => n.id === "pwr");
+      modal.overlay.querySelectorAll(".el-net-del")[pwr].dispatch("click", {});
+      expect(modal.circuit.nets.map((n: any) => n.id)).not.toContain("pwr");
+
+      armFreeLed(modal);
+      tapFlat(modal, { x: 0.5, y: 0.5 });
+      expect(modal.circuit.parts).toHaveLength(1);
+      expect(modal.circuit.terminals, "wired to a net that does not exist").toHaveLength(0);
+    });
+
+    it("defaults nothing for a part that is not an LED", () => {
+      // A free resistor's two pads carry no polarity, so PWR and GND would be an invented circuit.
+      const { modal } = openOn(grid2x2());
+      modal.selectTool("battery");
+      tapFlat(modal, { x: 0.5, y: 0.5 });
+      const at = { x: 0.5, y: 0.5 };
+      const select = modal.overlay.querySelector(".el-part");
+      select.value = "R_1206";
+      select.dispatch("change", {});
+      tapFlat(modal, at);
+
+      const parts = modal.circuit.parts ?? [];
+      expect(parts.length, "no resistor was placed at all").toBeGreaterThan(0);
+      const last = parts.length - 1;
+      expect(modal.circuit.terminals.filter((t: any) => t.part === last)).toHaveLength(0);
+    });
+  });
+
   describe("the round trip to the store", () => {
     /**
      * A circuit with every optional field populated.
@@ -1456,6 +1615,164 @@ describe("view/electronics-modal", () => {
       tapFlat(modal, placed); // a tap on a placed part selects it
     }
 
+    /** Two spots that hold two distinct, free-standing parts.
+     *
+     *  Two hinges, not two points on a tile: on a pattern this small `pickRadius` floors at 2 units --
+     *  wider than the whole sheet -- so a part put down anywhere in free mode seats itself in the nearest
+     *  rail, and a seated part cannot be dragged. Distinct gaps also keep the two parts off each other,
+     *  which matters because the hit test can only ever find the lower of two parts on the same point.
+     *  Gap 0 is where `withRails` put its LED. */
+    function spots(modal: any): { x: number; y: number }[] {
+      expect(modal.gaps.length, "this pattern has too few hinges to hold two parts apart").toBeGreaterThan(2);
+      return [modal.gaps[1].point, modal.gaps[2].point];
+    }
+
+    /** The parts list, as it reads: designator, and how many of its pads are on a net. */
+    function partRows(modal: any): { tag: string; wired: string; active: boolean }[] {
+      return modal.overlay.querySelectorAll(".el-placed-row").map((row: any) => ({
+        tag: row.children.find((c: any) => c.className.includes("el-placed-tag")).textContent,
+        wired: row.children.find((c: any) => c.className.includes("el-placed-wired")).textContent,
+        active: row.classList.contains("is-active"),
+      }));
+    }
+
+    describe("what the router could not do", () => {
+      it("says so when a net has only one pad on it, the commonest authoring slip", () => {
+        // `resolveNetlist` has always reported this -- a net with one terminal has nothing to connect to,
+        // so it is dropped from the routing set -- and `netFaults` was carried all the way out to the view
+        // and read by nothing. Wiring one pad and forgetting the other looked exactly like success.
+        const { modal, at } = withRails();
+        addNet(modal, "SIG");
+        placeAndSelect(modal, "C_1206", at);
+        wirePad(modal, "1", "SIG");
+
+        expect(modal.routed.netFaults.map((f: any) => f.kind)).toContain("single-terminal-net");
+        expect(modal.statusEl.textContent).toContain("netlist fault");
+        expect(modal.statusEl.textContent).toContain("only one terminal");
+      });
+
+      it("marks the net the router could not finish, with the count and the reason", () => {
+        // Driven from a router result rather than from a geometry that happens to strand: what is under
+        // test is that the panel reads `stranded` and `why` at all, and a fixture that strands today can
+        // stop stranding for reasons that have nothing to do with this panel.
+        const { modal } = withRails();
+        addNet(modal, "SIG");
+        const id = modal.circuit.nets.find((n: any) => n.name === "SIG").id;
+        modal.routed = {
+          ...modal.routed,
+          nets: [{ id, name: "SIG", traces: [], stranded: [1, 2], why: "two of three terminals on \"SIG\" could not be reached" }],
+        };
+        modal.renderNets();
+        modal.renderStatus();
+
+        const row = modal.overlay.querySelectorAll(".el-net")
+          .find((r: any) => r.children.some((c: any) => c.className.includes("el-net-name") && c.value === "SIG"));
+        const mark = row.children.find((c: any) => c.className.includes("el-net-short"));
+        expect(mark, "the net the router gave up on is not marked").toBeTruthy();
+        expect(mark.textContent).toBe("2");
+        expect(mark.title).toContain("could not be reached");
+        expect(modal.statusEl.textContent).toContain("2 terminals could not be reached");
+      });
+
+      it("does not greet a fresh pattern with faults it did not cause", () => {
+        // A circuit is seeded with PWR and GND, and an unwired net resolves as "fewer than two terminals"
+        // exactly as a half-wired one does. Reporting that would put two faults on every new pattern
+        // before the author had touched anything -- which teaches them to ignore the line entirely.
+        const { modal } = withRails();
+        expect(modal.circuit.nets.length).toBeGreaterThan(0);
+        expect(modal.statusEl.textContent).not.toContain("netlist fault");
+      });
+
+      it("leaves a net alone when the router finished it", () => {
+        const { modal } = withRails();
+        addNet(modal, "SIG");
+        const id = modal.circuit.nets.find((n: any) => n.name === "SIG").id;
+        modal.routed = { ...modal.routed, nets: [{ id, name: "SIG", traces: [], stranded: [] }] };
+        modal.renderNets();
+        expect(modal.overlay.querySelectorAll(".el-net-short")).toHaveLength(0);
+      });
+    });
+
+    describe("the parts list", () => {
+      it("keeps the first part reachable, and its wiring readable, once a second is placed", () => {
+        // The reported defect: "the first added component disappears". Nothing was lost from the model --
+        // this asserts through the SIDEBAR, because the pads panel shows the SELECTED part alone and
+        // placing a part selects it. A test on `circuit.terminals` passes against the bug.
+        const { modal, at } = withRails();
+        addNet(modal, "SIG");
+        const [a, b] = spots(modal);
+        placeAndSelect(modal, "C_1206", a!);
+        wirePad(modal, "1", "SIG");
+        const wired = modal.circuit.nets.find((n: any) => n.name === "SIG").id;
+
+        placeAndSelect(modal, "R_1206", b!);
+        expect(partRows(modal)).toHaveLength(2);
+
+        // Back to the first part from the list alone -- no hunting for it on the canvas.
+        modal.overlay.querySelectorAll(".el-placed-row")[0].dispatch("click", {});
+        expect(modal.selected).toEqual({ kind: "part", index: 0 });
+        expect(modal.overlay.querySelector(".el-pad-part").textContent).toContain("C_1206");
+        const pick = modal.overlay.querySelectorAll(".el-pad-net").find((p: any) => p.dataset.pad === "1");
+        expect(pick.value, "the first part's assignment is not readable again").toBe(wired);
+      });
+
+      it("says how many of each part's pads are on a net, and marks one with none", () => {
+        const { modal, at } = withRails();
+        addNet(modal, "SIG");
+        placeAndSelect(modal, "SW_SPDT", at); // three terminals, none defaulted
+        expect(partRows(modal)[0]!.wired).toBe("0/3");
+
+        wirePad(modal, "1", "SIG");
+        expect(partRows(modal)[0]!.wired).toBe("1/3");
+      });
+
+      it("marks the selected row, and follows the canvas selection", () => {
+        const { modal, at } = withRails();
+        const [a, b] = spots(modal);
+        placeAndSelect(modal, "C_1206", a!);
+        placeAndSelect(modal, "R_1206", b!);
+        expect(partRows(modal).map((r) => r.active)).toEqual([false, true]);
+
+        tapFlat(modal, modal.circuit.parts[0]); // picked up on the canvas instead
+        expect(partRows(modal).map((r) => r.active)).toEqual([true, false]);
+      });
+
+      it("follows a part picked up on the canvas, from the press rather than the click", () => {
+        // Pressing a free part starts a drag and selects it there and then. A press that never moves
+        // commits nothing, so if the sidebar waited for the click it would show the previous part for the
+        // whole gesture -- and for a tap, for good.
+        const { modal, at } = withRails();
+        const [a, b] = spots(modal);
+        placeAndSelect(modal, "C_1206", a!);
+        placeAndSelect(modal, "R_1206", b!);
+        const p0 = modal.circuit.parts[0];
+        expect(p0.free, "the part was seated in a rail, so pressing it starts no drag").toBe(true);
+        const { x: clientX, y: clientY } = modal.tp(p0);
+        modal.svg.dispatch("pointerdown", { button: 0, clientX, clientY, pointerId: 1 });
+        expect(partRows(modal).map((r) => r.active)).toEqual([true, false]);
+        expect(modal.overlay.querySelector(".el-pad-part").textContent).toContain("C_1206");
+      });
+
+      it("empties itself when a new pattern is loaded under it", () => {
+        // The circuit is reset with the pattern; a list left painted names parts that are gone, and the
+        // pads panel offers the pads of one of them.
+        const { modal, at } = withRails();
+        placeAndSelect(modal, "C_1206", at);
+        expect(partRows(modal)).toHaveLength(1);
+        modal.setPattern(grid2x2());
+        expect(partRows(modal)).toHaveLength(0);
+        expect(modal.overlay.querySelector(".el-placed").hidden).toBe(true);
+        expect(modal.overlay.querySelector(".el-pads").hidden).toBe(true);
+      });
+
+      it("is not shown at all until something is placed", () => {
+        const { modal, at } = withRails();
+        expect(modal.overlay.querySelector(".el-placed").hidden).toBe(true);
+        placeAndSelect(modal, "C_1206", at);
+        expect(modal.overlay.querySelector(".el-placed").hidden).toBe(false);
+      });
+    });
+
     describe("nets", () => {
       it("declares a net, and refuses a name already in use", () => {
         const { modal } = withRails();
@@ -1561,6 +1878,10 @@ describe("view/electronics-modal", () => {
         addNet(modal, "PWR");
         const net = modal.circuit.nets[0].id;
         const run = modal.routed.traces.find((t: any) => t.net === "pwr");
+        // Free placement, so the two parts land where they are put. In the default gap mode both taps
+        // snap to the nearest hinge midpoint -- the same point -- and the second part sits exactly on top
+        // of the first, where the hit test can only ever find the lower one.
+        modal.selectPlaceMode("free");
         placeAndSelect(modal, "C_1206", alongRun(run, 0.25));
         wirePad(modal, "1", "PWR");
         placeAndSelect(modal, "R_1206", alongRun(run, 0.75));

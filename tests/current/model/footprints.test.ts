@@ -18,7 +18,8 @@ import {
   padSize,
   terminals,
 } from "../../../src/model/footprint.js";
-import { LED, placement, RESISTOR, SPDT } from "../../../src/model/parts.js";
+import { LED, netPlacement, placement, RESISTOR, SPDT } from "../../../src/model/parts.js";
+import { footprintById } from "../../../src/model/library.js";
 
 /** The whole FabLib, both halves of the split. Tests bundle nothing, so both can be imported. */
 const ALL = [...COMPONENTS, ...REST_COMPONENTS];
@@ -33,10 +34,12 @@ const ALL = [...COMPONENTS, ...REST_COMPONENTS];
  */
 describe("model/footprints", () => {
   it("gives every part pads with an outline, numbered from one", () => {
-    expect(ALL.length).toBe(159);
+    expect(ALL.length).toBe(129);
     for (const c of ALL) {
-      // A part need not have terminals — `MountingHole_M3` is a hole and nothing else — but it must
-      // have pads, because a footprint with none is a file the scan failed to read.
+      // Every part must have pads, because a footprint with none is a file the scan failed to read.
+      // Terminals are a weaker claim: the reading below still tolerates a part with none, though the
+      // library no longer holds one — the `MountingHole_*` parts were the only such parts and went with
+      // the through-hole cull.
       expect(Object.keys(c.footprint).length, `${c.id} has no pads`).toBeGreaterThan(0);
       const t = terminals(c.footprint);
       // Pad numbers are the part's own, so they start at 1 and do not repeat.
@@ -145,11 +148,11 @@ describe("model/footprints", () => {
  * whatever is on disk and adding a part is dropping a file in a directory. That moves where the risk
  * lives: nothing can be *wrong* in a list any more, but a file can be silently missed, two files can
  * collide onto one name, and the name or the blurb can drift from what the file actually says. None of
- * those is visible by reading the generated output — there are 159 parts in it — so all four are
+ * those is visible by reading the generated output — the parts are listed in it — so all four are
  * checked here against the directory itself rather than against a copy of the answer.
  *
  * `kicad-parser.test.ts` checks the other direction: every generated part back against its own source
- * file's pad count and pad sizes. Between the two, all 159 footprints are accounted for both ways —
+ * file's pad count and pad sizes. Between the two, all the footprints are accounted for both ways —
  * nothing on disk is missing from the library, and nothing in the library was invented.
  */
 describe("model/footprints — the scan", () => {
@@ -230,11 +233,11 @@ describe("model/footprints — the scan", () => {
     // The directory is vendored wholesale, so it holds the FabLib's licence too. A scan that took
     // every file would either crash on it or, worse, emit an empty part named LICENSE.
     expect(readdirSync(FAB)).toContain("LICENSE");
-    expect(files.length).toBe(159);
+    expect(files.length).toBe(129);
 
     // Every file is in the library exactly once, and every part in the library is one of those files.
-    // Checked as a bijection rather than as a count: 159 parts from 158 files plus one duplicate
-    // counts the same as 159 from 159, and is a part silently missing.
+    // Checked as a bijection rather than as a count: one part short with one part twice counts the
+    // same as one from each file, and is a part silently missing.
     const byFile = new Map<string, string[]>();
     for (const c of ALL) {
       const file = provenance.get(c.id);
@@ -321,14 +324,45 @@ describe("model/footprints — the scan", () => {
     }
   });
 
-  it("puts a part in the eagerly-loaded half exactly when a rail can take it", () => {
-    // The split exists to keep the main bundle small: 159 parts is a megabyte of pad outlines and most
-    // of them cannot go on a rail. But it duplicates a decision `placement()` already owns, and this
-    // codebase has been bitten once by two readings of a footprint disagreeing. So the two are checked
-    // against each other over the whole library, every time.
+  it("offers the whole library once the circuit has nets, not just the parts a rail can take", () => {
+    // The two questions are different and the difference is the point. `placement()` asks whether a rail
+    // can pass THROUGH a part, so it stops at three terminals — a forty-pin connector spliced into a run of
+    // copper tape means nothing. `netPlacement()` asks only whether there is a pad to wire, because once
+    // the author declares nets a part is a set of pads and a USB socket is perfectly placeable.
     //
-    // Drift here costs bytes, not correctness — the palette asks `placement()` about parts from both
-    // halves and never reads the split — which is exactly why it would otherwise go unnoticed.
+    // This is what the user asked for: the palette's "in the library, but not in series on a rail" section
+    // is empty in netlist mode.
+    const inSeries = ALL.filter((c) => placement(c.footprint).placeable);
+    const withNets = ALL.filter((c) => netPlacement(c.footprint).placeable);
+    expect(inSeries.length).toBe(37);
+    expect(withNets.length).toBe(129);
+    // Nothing a rail can take is refused by the weaker test — it has to be strictly more permissive, or
+    // turning nets on would take parts away.
+    for (const c of inSeries) expect(netPlacement(c.footprint).placeable, c.id).toBe(true);
+    // And every part it accepts can actually be resolved, or the palette is offering what nothing can wire.
+    for (const c of withNets) expect(footprintById(c.id), c.id).toBeDefined();
+  });
+
+  it("refuses a part with nothing to wire, even with nets", () => {
+    // One terminal is enough — a test point wired to a net is a legitimate thing to want, even though it
+    // has nothing to bridge and so could never sit in series. Zero is not.
+    expect(netPlacement({}).placeable).toBe(false);
+    const one = Object.fromEntries([Object.entries(R_1206)[0]!]);
+    expect(netPlacement(one).placeable).toBe(true);
+    expect(placement(one).placeable).toBe(false); // and the series test still refuses it
+  });
+
+  it("puts a part in the eagerly-loaded half exactly when a rail can take it", () => {
+    // The split USED to keep the main bundle small, holding back the parts a rail could not take. It no
+    // longer does anything at load time: `library.ts` imports both halves statically, because once nets
+    // arrived every part became placeable (see `netPlacement`) and the app was offering 92 parts that the
+    // router, the cut files and the netlist could not resolve. Merging cost about 21kB gzipped and removed
+    // a class of bug where the palette hands you a part it cannot wire.
+    //
+    // So this now checks the generator's rule against `placement()` and nothing more: two readings of a
+    // footprint that must agree, which is a thing this codebase has been bitten by before. It costs
+    // neither bytes nor correctness today — kept because the day the split is made load-bearing again is
+    // the day a silent disagreement would matter.
     for (const c of ALL) {
       const eager = COMPONENTS.some((x) => x.id === c.id);
       expect(eager, `${c.id}: ${JSON.stringify(placement(c.footprint))}`).toBe(
@@ -336,9 +370,9 @@ describe("model/footprints — the scan", () => {
       );
     }
     // The two halves are one library between them: disjoint, and everything is in one of them.
-    expect(COMPONENTS.length + REST_COMPONENTS.length).toBe(159);
-    expect(new Set(ALL.map((c) => c.id)).size).toBe(159);
-    // And the split is worth having: most of the library is in the half that is not loaded up front.
+    expect(COMPONENTS.length + REST_COMPONENTS.length).toBe(129);
+    expect(new Set(ALL.map((c) => c.id)).size).toBe(129);
+    // Most of the library is in the half a rail cannot take, which is what made the split look worthwhile.
     expect(REST_COMPONENTS.length).toBeGreaterThan(COMPONENTS.length);
   });
 });

@@ -8,7 +8,7 @@ import {
   switchShape,
 } from "../../../src/model/copper-svg-export.js";
 import { flatFaces, gapGraph, ledOf, type Circuit, type Vec2 } from "../../../src/model/electronics.js";
-import { planRoutes, tapeWidthFor } from "../../../src/model/electronics-routing.js";
+import { acrossRun, planRoutes, tapeWidthFor } from "../../../src/model/electronics-routing.js";
 import {
   BAT_COIN_20,
   COMPONENTS,
@@ -17,8 +17,9 @@ import {
   R_2010,
   SW_SPDT,
 } from "../../../src/model/footprints.generated.js";
-import { padNamed, padSize } from "../../../src/model/footprint.js";
-import { acrossPart } from "../../../src/model/parts.js";
+import { padNamed, padSize, terminals } from "../../../src/model/footprint.js";
+import { LIBRARY } from "../../../src/model/library.js";
+import { acrossPart, padAxis } from "../../../src/model/parts.js";
 import type { ResistorShape } from "../../../src/model/copper-svg-export.js";
 
 /** Two breaks: one slanted, one straight up the page, so a rotation bug cannot hide in either. */
@@ -115,6 +116,96 @@ describe("model/part-shape", () => {
     expect(partShape(C_1206, C, D)).toEqual(small);
   });
 
+  it("draws one contact per terminal, for every part in the library", () => {
+    // A part is drawn so someone can see where its legs land. A drawing with fewer contacts than the part
+    // has legs is not a simplification -- it is a picture of a different part, and it goes onto the cut
+    // file that a person solders to.
+    //
+    // `inlineShape` was fixed for this when a three-pin header lost its middle pin. `rowShape` was not, and
+    // it is the path 87 of the 129 parts take: it is written for the SPDT slide switch and returns exactly
+    // three contacts -- idle, common, live -- whatever the footprint actually has.
+    const wrong: string[] = [];
+    for (const c of LIBRARY) {
+      const want = terminals(c.footprint).length;
+      const sh = partShape(c.footprint, A, B, false);
+      if (!sh) continue; // a part with fewer than two terminals is not drawn on a break at all
+      if (sh.leads.length !== want) wrong.push(`${c.id}: ${want} terminals, ${sh.leads.length} drawn`);
+    }
+    // Two remain, and they are listed rather than tolerated by a `length <= 2` fudge, so that fixing the
+    // cause fails this test and asks for it to be tightened. Both are five terminals in ONE row, where
+    // `acrossPart` fabricates the second row by reflection (`parts.ts:184`). Drawing their pads where the
+    // footprint really has them would contradict the routing, which breaks the rail across a separation the
+    // part does not have. That is `acrossPart` conflating "is a switch" with "sits across the run", and it
+    // belongs to the session that owns `parts.ts` — not to the drawing.
+    expect(wrong).toEqual([
+      "Conn_USB_microB_Socket_WurthElektronik_629105136821: 5 terminals, 3 drawn",
+      "Conn_USB_miniB_Socket_CUIDevices_UJ2_MBH_1_SMT_TR: 5 terminals, 3 drawn",
+    ]);
+  });
+
+  it("puts each contact where the footprint has that pad, and at that pad's own size", () => {
+    // Counting contacts and naming them is not enough: a drawing with the right number of pads in the wrong
+    // places is still a picture of a different part. This pins the mapping itself.
+    //
+    // `TO_252` is a three-terminal two-row part whose pads are wildly unequal -- 3.0x1.5 against 6.6x6.0 --
+    // so a drawing that gave every contact the same size would be visibly wrong and is caught here.
+    const c = LIBRARY.find((x) => x.id === "TO_252")!;
+    const g = acrossPart(c.footprint)!;
+    const sh = partShape(c.footprint, C, D, false)!;
+    const mid = (l: { a: Vec2; b: Vec2 }): Vec2 => ({ x: (l.a.x + l.b.x) / 2, y: (l.a.y + l.b.y) / 2 });
+    const at = (name: string) => mid(sh.leads.find((l) => l.name === name)!);
+
+    // C->D runs straight up the page, so the run axis is +y and across it is -x. The common pad anchors the
+    // part: the router breaks the rail there, so it must land exactly on the break.
+    expect(at(g.names.common).x).toBeCloseTo(C.x, 9);
+    expect(at(g.names.common).y).toBeCloseTo(C.y, 9);
+    // And the live throw sits one row separation ALONG the run and one pitch ACROSS it -- the two distances
+    // `acrossPart` measured off this very footprint.
+    //
+    // Asserted SIGNED, in the run's own frame, not as `Math.abs`. The signs are the whole job the mapping
+    // does: `TO_252`'s live pad is at NEGATIVE across and NEGATIVE along in footprint coordinates, and the
+    // mapping's two sign factors are what put it on the far row on the side the router chose. Taking
+    // magnitudes here passes just as happily with either sign dropped, which is a drawing with the part
+    // reflected -- contacts on the wrong side of the break, off the copper cut for them.
+    const u = { x: (D.x - C.x) / 12, y: (D.y - C.y) / 12 };  // C->D is 12 long, straight up the page
+    const p = acrossRun(u, false);
+    const live = at(g.names.live);
+    const d = { x: live.x - C.x, y: live.y - C.y };
+    expect(d.x * u.x + d.y * u.y).toBeCloseTo(g.rowSep, 9);
+    expect(d.x * p.x + d.y * p.y).toBeCloseTo(g.pitch, 9);
+
+    // Each contact is drawn at its OWN pad's size, not at the live pad's -- and at that size in the RUN's
+    // axes, which is not the same as the footprint's.
+    //
+    // This line used to read `want!.w` and it was WRONG, not drift: `TO_252` is an `alongIsY` part, so its
+    // pad's across-run extent is the footprint's y-extent, 1.5mm, while `.w` is the x-extent, 3.0mm. The
+    // assertion passed because the drawing had the same transposition the test did -- both read the raw
+    // `padSize` where the run's frame was meant. It held for the 44 library across-parts whose terminals
+    // run along x and hid the bug on the 43 that run along y, `TO_252` among them. See
+    // `parts.ts › padRunBox` and the sweep in `pad-axis-sweep.test.ts`.
+    const alongIsY = padAxis(c.footprint).alongIsY;
+    const byName = new Map(terminals(c.footprint).map(([n, p]) => [n, padSize(p)]));
+    for (const l of sh.leads) {
+      const want = l.name === undefined ? undefined : byName.get(l.name);
+      expect(want, `lead ${l.name} names no terminal of this footprint`).toBeDefined();
+      expect(l.width, `lead ${l.name} across-run width`)
+        .toBeCloseTo(alongIsY ? want!.h : want!.w, 9);
+    }
+    expect(new Set(sh.leads.map((l) => l.width)).size).toBeGreaterThan(1);
+  });
+
+  it("names every contact it draws after the pad it is, so the cut file can label them", () => {
+    // Two parts the switch path claims, neither of which is a switch: a 26-way USB-C socket and a two-way
+    // pin socket. The socket is the sharper case -- it has TWO terminals and is currently drawn with THREE,
+    // so the extra contact is not merely a missing pin but an invented one.
+    for (const id of ["Conn_USB_C_Socket_Molex_2171790001", "PinSocket_01x02_P2_54mm_Vertical_SMD"]) {
+      const c = LIBRARY.find((x) => x.id === id)!;
+      const sh = partShape(c.footprint, A, B, false)!;
+      const names = sh.leads.map((l) => l.name).sort();
+      expect(names).toEqual(terminals(c.footprint).map(([n]) => n).sort());
+    }
+  });
+
   it("takes its one-row/two-row dispatch from acrossPart, the rule the router cuts by", () => {
     // The rule lives in parts.ts and nowhere else. This asserts the DRAWING follows it for every part in
     // the library, because the router breaks the copper by the same call: a part cut in line and drawn
@@ -123,7 +214,18 @@ describe("model/part-shape", () => {
       const sh = partShape(c.footprint, C, D);
       if (!sh) continue;
       const across = acrossPart(c.footprint);
-      expect([c.id, sh.leads.length]).toEqual([c.id, across ? 3 : 2]);
+      // BOTH forms draw every terminal. This used to read `across ? 3 : terminals(...).length`, which was
+      // not a description of the rule but a record of a bug: the two-row form drew the switch's three
+      // contacts whatever the part was, so a 26-way USB-C socket came out with three and a two-terminal pin
+      // socket came out with three — one of them INVENTED, at a place the part has no metal.
+      //
+      // The exception is a part whose terminals all sit in ONE row, where `acrossPart` fabricates the row
+      // separation by reflection: there is no second row to place a pad on. `SW_SPDT` is one of those, which
+      // is why the switch is unaffected by any of this.
+      const ax = padAxis(c.footprint);
+      const oneRow = new Set(terminals(c.footprint).map(([, p]) => ax.across(p).toFixed(6))).size === 1;
+      const drawn = across && oneRow ? 3 : terminals(c.footprint).length;
+      expect([c.id, sh.leads.length]).toEqual([c.id, drawn]);
       if (across) {
         // The housing stands off the near row by half a row separation, beside the pads.
         expect(sh.body.h).toBeCloseTo(across.rowSep, 9);
@@ -143,7 +245,66 @@ describe("model/part-shape", () => {
     // And the coin cell: three terminals but no mounting pegs, so there is no line to reflect a common
     // through. It is in line with the rail, and drawn that way.
     expect(acrossPart(BAT_COIN_20)).toBeNull();
-    expect(partShape(BAT_COIN_20, C, D)!.leads).toHaveLength(2);
+    // All three of its terminals are drawn, on one line along the rail. That it is in line rather than
+    // across is `acrossPart` being null above; the lead count says how many pads it has, not which form
+    // it takes, and reading the form off the count is what this test exists to stop.
+    expect(partShape(BAT_COIN_20, C, D)!.leads).toHaveLength(3);
+  });
+
+  it("draws every pin of a three-pin header, not just the two the rail reaches", () => {
+    // The bug this replaces: a pad the routing gave no role to had no lead, and no lead meant nothing
+    // painted, so a 01x03 header came out as two pads with a hole in the middle of the part.
+    const fp = COMPONENTS.find((c) => c.id === "PinHeader_01x03_P2_54mm_Horizontal_SMD")!.footprint;
+    const sh = partShape(fp, C, D)!;
+    expect(sh.leads.map((l) => l.name).sort()).toEqual(["1", "2", "3"]);
+    // Outermost first, so the middle pin is the middle lead — and it lands midway, because the part's
+    // three pins are evenly pitched and the drawing keeps their spacing.
+    expect(sh.leads[1]!.name).toBe("2");
+    const centre = (l: { a: Vec2; b: Vec2 }): Vec2 => ({
+      x: (l.a.x + l.b.x) / 2, y: (l.a.y + l.b.y) / 2,
+    });
+    const [p1, p2, p3] = sh.leads.map(centre) as [Vec2, Vec2, Vec2];
+    expect(p2.x).toBeCloseTo((p1.x + p3.x) / 2, 9);
+    expect(p2.y).toBeCloseTo((p1.y + p3.y) / 2, 9);
+  });
+
+  it("keeps a pad the way round its own footprint has it", () => {
+    // This header's pins run DOWN Y — a large minority of the library is that way round — so a pad's
+    // y extent is what lies along the rail. Read as though every part ran along x, each pad came out a
+    // quarter turn from the part it belongs to.
+    const fp = COMPONENTS.find((c) => c.id === "PinHeader_01x03_P2_54mm_Horizontal_SMD")!.footprint;
+    for (const l of partShape(fp, C, D)!.leads) {
+      expect(l.swap).toBe(true);
+      // `width` is the lead's extent along the rail, which for this part is the pad's own height.
+      expect(l.width).toBeCloseTo(padSize(padNamed(fp, l.name!)).h, 9);
+    }
+    // A 1206 runs along x, so it is the other way round and says nothing.
+    for (const l of partShape(R_1206, C, D)!.leads) {
+      expect(l.swap).toBeUndefined();
+      expect(l.width).toBeCloseTo(padSize(padNamed(R_1206, l.name!)).w, 9);
+    }
+  });
+
+  it("adds no pad smaller than the two the drawing already had", () => {
+    // A tripwire for the view, which does not own what it depends on here. `padMinOf` in
+    // `electronics-modal.ts` takes the smallest extent of ANY lead to decide whether a pad has room for
+    // its pin name, so drawing the terminals that used to be left out can only lower that minimum and
+    // make labels appear later than they did.
+    //
+    // Today it cannot: every in-line part in the library with more than two terminals is evenly pitched
+    // with identical pads, so the middle ones are never the smallest. That is a fact about the FabLib,
+    // not a rule the code enforces — a part with a pinched middle pad would move the label threshold
+    // silently, and this is what would say so instead.
+    const smallest = (ls: { a: Vec2; b: Vec2; width: number }[]): number =>
+      Math.min(...ls.map((l) => Math.min(l.width, Math.hypot(l.b.x - l.a.x, l.b.y - l.a.y))));
+    for (const c of COMPONENTS) {
+      if (acrossPart(c.footprint)) continue;
+      const sh = partShape(c.footprint, C, D);
+      if (!sh || sh.leads.length <= 2) continue;
+      const outer = smallest([sh.leads[0]!, sh.leads[sh.leads.length - 1]!]);
+      expect(smallest(sh.leads), `${c.id} has a middle pad smaller than its outermost two`)
+        .toBeCloseTo(outer, 9);
+    }
   });
 
   it("draws placed parts on both cut files without cutting them", () => {

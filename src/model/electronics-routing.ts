@@ -47,14 +47,34 @@ import {
   pointInFace,
 } from "./electronics.js";
 import { DEFAULT_PRINT_SIZE } from "./stl-export.js";
-import { RESISTOR, SPDT, acrossPart, inlineTerminals } from "./parts.js";
-import { COMPONENTS } from "./footprints.generated.js";
-import { type Box, type Footprint, padAt, padSize } from "./footprint.js";
+import { RESISTOR, SPDT, acrossPart, inlineTerminals, padAxis } from "./parts.js";
+import { footprintById } from "./library.js";
+import {
+  DEFAULT_SHEET,
+  creaseCostFraction,
+  maxTraceWidthMm,
+  overStrainLimit,
+  type SheetSpec,
+} from "./fold-strain.js";
+import { CALIBRATED_DEMAND, tapeMmForDemand, traceDemand } from "./tape-demand.js";
+import { resolveNetlist, type NetlistFault } from "./netlist.js";
+import { planNets, type RoutedNet } from "./net-routing.js";
+import { type Box, type Footprint, type Pad, padAt, padSize } from "./footprint.js";
 
 /** One continuous strip of copper tape: a centreline polyline plus which net it carries. */
 export interface Trace2D {
   pts: Vec2[];
-  net: "pwr" | "gnd";
+  /**
+   * Which net this run carries.
+   *
+   * `"pwr"` and `"gnd"` for the two-rail bus, and a {@link Net.id} for a run laid by {@link planNets}. Kept
+   * as a plain string rather than a union so both routers emit the same kind of trace and everything
+   * downstream — the strips file, the carrier, the canvas, the folded model — handles a run without
+   * knowing which router laid it or how many nets there are.
+   *
+   * Anything that needs to *paint* a net has to map ids to colours rather than switching on two names.
+   */
+  net: string;
   /**
    * Width in pattern units, where this run is not ordinary tape.
    *
@@ -65,17 +85,34 @@ export interface Trace2D {
   width?: number;
 }
 
-/** Where an LED's two pads ended up, per net. Index-aligned with `circuit.leds`. */
+/**
+ * Where an LED's two pads ended up, per net. Index-aligned with `circuit.leds`.
+ *
+ * These are the copper **ends**: the two points the tape stops at, {@link LedSeat.gap} apart along the
+ * chip's axis. The part's own legs then sit outboard of them, at its `pitch`, each leg overlapping half
+ * its own length of copper — the same relationship a resistor's cut ends have to its terminals, so an
+ * LED and a resistor can be drawn by one code path.
+ */
 export interface PadPair {
   pwr: Vec2;
   gnd: Vec2;
+  /**
+   * The `Component.id` seated here, so whatever draws the part can look its footprint up without
+   * re-deriving which LED this was. Absent on a zeroed (unseatable) entry.
+   */
+  component?: string;
 }
 
 export interface RoutedCircuit {
   traces: Trace2D[];
   /** Index-aligned with `circuit.leds` (including unroutable ones, which get zeroed pads). */
   pads: PadPair[];
-  /** Indices of LEDs that could not be reached (no gap, or no battery). */
+  /**
+   * Indices of LEDs that got no copper: no battery, no gap left under them, no path across the material
+   * to their tiles — or a part that cannot be seated on the hinge they sit on (see {@link seatLed}).
+   * Their entry in {@link pads} is zeroed. Reported rather than drawn wrong, like any other part that
+   * does not fit.
+   */
   unreachable: number[];
   /** Where each resistor ended up: the two ends of the break its leads bridge. */
   resistors: PartSpan[];
@@ -86,6 +123,26 @@ export interface RoutedCircuit {
    * look its footprint up. Always an array — `[]` when the circuit has none.
    */
   parts: PartPlacement[];
+  /**
+   * How each declared net fared — the copper laid for it and any terminals it could not reach.
+   *
+   * Empty on a circuit with no `nets`, which is every file saved before the netlist existed.
+   */
+  nets: RoutedNet[];
+  /** Everything wrong with the netlist itself, as opposed to the routing of it. Always an array. */
+  netFaults: NetlistFault[];
+  /**
+   * LEDs that could not be **seated** on their hinge, as indices into `circuit.leds`.
+   *
+   * A subset of {@link unreachable}, separated because the two are different faults with different fixes
+   * and were indistinguishable to the author. An unreachable LED sits on a tile the copper cannot get to:
+   * the answer is to move it, or to bridge by hand. An unseated one is on a hinge its own package does not
+   * fit — its two pads, stepped off the hinge by the tape's width, do not land on their own tiles — and the
+   * answer is a smaller package or a coarser sheet. Measured on `akde-square-pyramid`, where 8 of 12 LEDs
+   * fail this way and none fail the other; reported as "unreachable" it reads as a routing failure and
+   * sends the author looking in the wrong place entirely.
+   */
+  unseated: number[];
 }
 
 /** Where a placed library part ended up. */
@@ -104,8 +161,8 @@ export interface PartPlacement extends PartSpan {
 export interface PartSpan {
   a: Vec2;
   b: Vec2;
-  /** Which rail it was placed on, so land copper joins the right net. */
-  net: "pwr" | "gnd";
+  /** Which net it was placed on, so land copper joins the right one — see {@link Trace2D.net}. */
+  net: string;
   /**
    * Which way round a three-terminal part sits: which side of the rail the live throw takes, and so
    * which side the idle one is stranded on. Chosen when the part is placed — see {@link idleSide} —
@@ -126,7 +183,7 @@ export interface PartSpan {
 export type ResistorSpan = PartSpan;
 
 export const EMPTY_ROUTE: RoutedCircuit = {
-  traces: [], pads: [], unreachable: [], resistors: [], switches: [], parts: [],
+  traces: [], pads: [], unreachable: [], unseated: [], resistors: [], switches: [], parts: [], nets: [], netFaults: [],
 };
 
 /** How much dearer it is to travel through a hinge that has an LED on it than an empty one. Large enough to
@@ -155,7 +212,7 @@ const EDGE_CROSSINGS = [1 / 4, 3 / 4];
  * regresses and most of the gain remains: akde-decagon 39 -> 25 with a third less copper, akde-hex's valley
  * crossings 13 -> 11. At 0.15 the penalty stops changing any route.
  */
-const FOLD_PENALTY_FRAC = 0.5;
+export const FOLD_PENALTY_FRAC = 0.5;
 
 /** How much dearer each previous use of a waypoint by the other net makes it, so the two nets take genuinely
  *  different routes instead of one shadowing the other.
@@ -203,8 +260,54 @@ export const PRINT_SHEET_MM = DEFAULT_PRINT_SIZE;
  * Floor, never a normalisation: a pattern larger than the sheet is left alone. Shrinking it to sheet size
  * would make the tape coarser than the file intends, which measurably degrades routing on the large
  * patterns (akde-decagon picks up crossing tabs, puffin picks up copper over a chip).
+ *
+ * `circuit` is optional and is read only for how many runs it needs — see {@link widthMmFor}. **Every
+ * caller that has a circuit should pass it**, because a site that omits it while another passes it gets a
+ * different width for the same sheet, and the canvas, the folded preview and the cut file then disagree
+ * silently, each internally consistent. Omitting it is right only where there is genuinely no circuit yet.
  */
-export function tapeWidthFor(faces: FlatFace[], sheetMm: number = PRINT_SHEET_MM): number {
+export function tapeWidthFor(
+  faces: FlatFace[],
+  sheetMm: number = PRINT_SHEET_MM,
+  sheet: SheetSpec = DEFAULT_SHEET,
+  circuit?: Circuit,
+): number {
+  return tapeMmFor(faces, sheetMm, sheet, circuit) * unitsPerMm(faces, sheetMm);
+}
+
+/**
+ * The tape's width in **millimetres** — the roll the cutter is actually asked for.
+ *
+ * The companion to {@link tapeWidthFor}, and the two must always be read together: every millimetre
+ * figure in this codebase is converted to pattern units by the ratio between them. Using {@link TAPE_MM}
+ * as that denominator while this returns something else is the one way to get a plan that looks right and
+ * is the wrong size — the mistake this file's header warns about, made systematic.
+ */
+export function tapeMmFor(
+  faces: FlatFace[],
+  sheetMm: number = PRINT_SHEET_MM,
+  sheet: SheetSpec = DEFAULT_SHEET,
+  circuit?: Circuit,
+): number {
+  return widthMmFor(faces, unitsPerMm(faces, sheetMm), sheet, circuit);
+}
+
+/**
+ * Pattern units per millimetre.
+ *
+ * A pattern at or above sheet size is taken at its word: the file says how big the model is, so a
+ * millimetre is a unit. A pattern smaller than the sheet on BOTH axes carries no usable scale — it is
+ * kirigamize output at unit scale, nominally "mm" — so it is read as though it will be cut at `sheetMm`.
+ *
+ * Floor, never a normalisation: a pattern larger than the sheet is left alone. Shrinking it to sheet size
+ * would make the tape coarser than the file intends, which measurably degrades routing on the large
+ * patterns (akde-decagon picks up crossing tabs, puffin picks up copper over a chip).
+ *
+ * **The longest axis, deliberately, because that is how the model is exported.** `buildStlExport` scales
+ * the pattern so its longest XY dimension is the print size; deriving the router's scale any other way —
+ * from area, say — would have the router and the cutter disagree about how big the model is.
+ */
+function unitsPerMm(faces: FlatFace[], sheetMm: number): number {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const f of faces) {
     for (const p of f.poly) {
@@ -214,11 +317,65 @@ export function tapeWidthFor(faces: FlatFace[], sheetMm: number = PRINT_SHEET_MM
       if (p.y > maxY) maxY = p.y;
     }
   }
-  if (!Number.isFinite(minX)) return TAPE_MM;
+  if (!Number.isFinite(minX)) return 1;
   const longest = Math.max(maxX - minX, maxY - minY);
-  if (!(longest > 0)) return TAPE_MM;
-  // Both axes under the sheet ⇔ the longest is: scale-less, so the tape is a fraction of the assumed sheet.
-  return longest < sheetMm ? (TAPE_MM * longest) / sheetMm : TAPE_MM;
+  if (!(longest > 0)) return 1;
+  return longest < sheetMm ? longest / sheetMm : 1;
+}
+
+/**
+ * Which roll to plan for, in millimetres.
+ *
+ * Two ceilings, and the narrower wins.
+ *
+ * **The tile, and how much has to fit on it.** Under `tapeChoice: "area"` the model's own surface picks
+ * the width: wider tape is better copper — less resistance, easier to lay, harder to lift — and what stops
+ * it is crowding, which is relative to the tile it sits on rather than absolute. `sqrt(area / faces)` is
+ * that tile, and it is where the total surface area of the model enters. Area alone would not do: the same
+ * area cut into 96 tiles and into 10 are not the same sheet to lay tape on.
+ *
+ * The tile is only half the question, though, and `tape-demand.ts › tapeMmForDemand` is the other half:
+ * a 40mm tile carrying one run and a 40mm tile carrying six are not the same tile either. `circuit` is how
+ * the demand gets here, and it is **the circuit rather than a count** on purpose — a caller cannot pass a
+ * stale demand, only a stale circuit, and a stale circuit is the thing every site that computes a width is
+ * already written to avoid. Left out, the demand is `CALIBRATED_DEMAND`, which reproduces the tile-only
+ * answer exactly.
+ *
+ * Under the default `"roll"` none of this is consulted and the answer is {@link TAPE_MM}, as it always was.
+ *
+ * **The hinge.** A strip splints the hinge it crosses, and the substrate's thickness bounds how much of
+ * that it may add — {@link maxTraceWidthMm}, measured against the shortest crease, which is the one a
+ * given width splints hardest. This does not bind on the sheets this system prints: 0.4mm of substrate
+ * against 0.035mm of foil leaves it two orders of magnitude above any roll. It is computed anyway,
+ * because "the roll governs" is only worth saying if something checked, and because a thin-film substrate
+ * brings it down under 3.25mm and this same code then routes differently with nobody editing it.
+ */
+function widthMmFor(
+  faces: FlatFace[],
+  perMm: number,
+  sheet: SheetSpec,
+  circuit?: Circuit,
+): number {
+  let shortest = Infinity;
+  let area2 = 0;
+  for (const f of faces) {
+    const n = f.poly.length;
+    for (let i = 0; i < n; i++) {
+      const a = f.poly[i]!, b = f.poly[(i + 1) % n]!;
+      const d = Math.hypot(b.x - a.x, b.y - a.y);
+      if (d > 0 && d < shortest) shortest = d;
+      area2 += a.x * b.y - b.x * a.y; // shoelace, twice the signed area
+    }
+  }
+  if (!Number.isFinite(shortest) || !(perMm > 0)) return TAPE_MM;
+  const roll = sheet.tapeChoice === "area" && faces.length > 0
+    ? tapeMmForDemand(
+        Math.sqrt(Math.abs(area2) / 2 / faces.length) / perMm,
+        circuit ? traceDemand(circuit) : CALIBRATED_DEMAND,
+        sheet,
+      )
+    : TAPE_MM;
+  return Math.min(roll, maxTraceWidthMm(shortest / perMm, sheet));
 }
 
 /**
@@ -231,6 +388,17 @@ export function tapeWidthFor(faces: FlatFace[], sheetMm: number = PRINT_SHEET_MM
  */
 const PAD_STEP_OFF = 0.5;
 const PAD_INTRUDE_MAX = 0.35;
+
+/**
+ * How much of a fold a landing may make to come in along the chip's axis: the cosine of the angle between
+ * the two arms meeting at the bend, measured from the bend outward. Straight through is -1; a complete
+ * doubling-back is +1.
+ *
+ * Only genuine folds are refused, and nothing in between matters: 0.3, 0.6 and 0.9 give byte-identical
+ * geometry on all six bundled patterns, while 0 (refusing anything sharper than a right angle) throws away
+ * most of the landings and takes house's worst-covered leg back from 42% of its area on copper to 20%.
+ */
+const LANDING_FOLD_MAX = 0.3;
 
 /** What a step along tape this net already laid costs, as a fraction of its length. Cheap, so a branch merges
  *  into the trunk rather than running alongside it -- which is the doubling back. */
@@ -252,7 +420,7 @@ const LANE_TOLL = 3;
 const TERMINAL_TOLL = 400;
 
 /** Positional key, for marking a hinge as occupied. Rounded well below any real feature size. */
-const ptKey = (p: Vec2): string => `${Math.round(p.x * 1e6)}_${Math.round(p.y * 1e6)}`;
+export const ptKey = (p: Vec2): string => `${Math.round(p.x * 1e6)}_${Math.round(p.y * 1e6)}`;
 
 // ---- small vector helpers ---------------------------------------------------
 
@@ -277,7 +445,7 @@ function sideOf(origin: Vec2, dir: Vec2, p: Vec2): number {
 }
 
 /** Whether segment ab properly crosses any of the given polylines. */
-function crossesAny(a: Vec2, b: Vec2, lines: Vec2[][]): boolean {
+export function crossesAny(a: Vec2, b: Vec2, lines: Vec2[][]): boolean {
   for (const line of lines) {
     for (let i = 1; i < line.length; i++) {
       if (segsCross(a, b, line[i - 1]!, line[i]!)) return true;
@@ -340,6 +508,97 @@ export function landingWidth(pad: Vec2, mate: Vec2, tapeW: number): number {
   const sep = Math.hypot(pad.x - mate.x, pad.y - mate.y);
   const room = sep - tapeW * LED_GAP_FRAC;
   return Math.max(tapeW * 0.35, Math.min(tapeW, room));
+}
+
+/**
+ * The narrowest strip of bare substrate this process can produce, in millimetres.
+ *
+ * The same number {@link LED_GAP_FRAC} has always meant — `TAPE_MM * LED_GAP_FRAC` ≈ 1.14mm — said in
+ * millimetres rather than in tape widths, because a footprint is in millimetres and the comparison has to
+ * happen in one unit or the other. It is not tape-relative in truth: a vinyl cutter's blade does not know
+ * how wide the roll is, and `tapeWidthFor` only ever rescales the *pattern*, never the physical tape, so
+ * `tapeW / TAPE_MM` cancels out of every such comparison anyway.
+ */
+export const MIN_WEED_MM = TAPE_MM * LED_GAP_FRAC;
+
+/** The part an LED is when its circuit does not say — every LED saved before they had a choice. */
+export const DEFAULT_LED = "LED_1206";
+
+/** What an LED's own footprint asks of the copper, in millimetres. */
+export interface LedSeat {
+  /** The `Component.id` this came from. */
+  component: string;
+  footprint: Footprint;
+  /** Centre to centre between the two legs. */
+  pitch: number;
+  /** How much of that line one leg covers. */
+  padW: number;
+  /** The bare pattern between the legs: the copper the chip's own body bridges, and the strip the cutter
+   *  has to weed. This, not `pitch`, is how far apart the two nets' copper ends go. */
+  gap: number;
+}
+
+/**
+ * Read an LED's seating off its own footprint, or null when the library has no such part.
+ *
+ * The same reading `parts.ts` gives a resistor — outermost terminal to outermost terminal — done per
+ * placed LED rather than once for the 1206, because two LEDs of different types on one circuit each get
+ * their own copper.
+ */
+export function ledSeat(component: string = DEFAULT_LED): LedSeat | null {
+  const footprint = footprintById(component);
+  if (!footprint) return null;
+  const ends = inlineTerminals(footprint);
+  if (ends.length !== 2) return null;
+  const [p, q] = ends as [Pad, Pad];
+  const padW = padSize(p).w;
+  const pitch = Math.abs(padAt(q).x - padAt(p).x);
+  if (!(pitch > 0) || !(padW > 0)) return null;
+  return { component, footprint, pitch, padW, gap: pitch - padW };
+}
+
+/**
+ * Whether this part can be cut on this hinge at all, and if so where its two copper ends go.
+ *
+ * The copper stops `gap` apart, straddling the hinge midpoint along the hinge's own normal, so the chip's
+ * legs land at its `pitch` with each leg half on copper. That means the tape reaches **in over the tile
+ * gap**: the pads are no longer the tile dents (`pinchMid`) they used to be, because the dents are the
+ * printed joinery and sit wherever the tiling puts them — 5.81mm apart on `house.fkld`, where a 1206's
+ * legs are 3.40mm apart and could not reach their own copper. The joinery does not move; the pad does.
+ *
+ * Two ways a part is refused rather than drawn wrong:
+ *
+ *  - **Weeding.** The bare strip between the two nets is the footprint's own `gap`, and below
+ *    {@link MIN_WEED_MM} it tears instead of lifting. `LED_1206` asks 2.00mm and clears it with 0.86mm to
+ *    spare; `LED_0603` asks 0.70mm and does not, at any pattern size — both numbers are physical
+ *    millimetres, so scaling the pattern scales the tape with it and never changes the verdict. There is
+ *    no landing width that rescues it either: to hold copper at its own {@link landingWidth} floor on both
+ *    legs *and* leave a weedable strip between them needs `pitch >= 2 * MIN_WEED_MM` = 2.28mm, and the
+ *    0603's pitch is 1.50mm. So it is reported, not shrunk to fit.
+ *  - **Room.** A part longer than the tile it half sits on would put its copper end off the material.
+ */
+export function seatLed(
+  gap: GapEdge,
+  faces: FlatFace[],
+  seat: LedSeat,
+  tapeW: number,
+  /** The tape's width in mm — {@link tapeMmFor}. Together with `tapeW` this is the pattern's scale, and
+   *  the two must come from the same call or every millimetre here converts to the wrong length. */
+  tapeMm: number = TAPE_MM,
+): [Vec2, Vec2] | null {
+  if (seat.gap < MIN_WEED_MM) return null;
+  const half = (seat.gap * tapeW) / tapeMm / 2; // millimetres into this pattern's units
+  const [pa, pb] = gap.ends;
+  const n = leftOf(unit(sub(pb, pa))); // unit normal to the hinge; sign settled per face below
+  const toward = (face: number): Vec2 => {
+    const c = faces[face]?.centroid;
+    const s = c && (n.x * (c.x - gap.point.x) + n.y * (c.y - gap.point.y)) < 0 ? -1 : 1;
+    return add(gap.point, scale(n, s * half));
+  };
+  const padA = toward(gap.faceA);
+  const padB = toward(gap.faceB);
+  if (pointInFace(faces, padA) !== gap.faceA || pointInFace(faces, padB) !== gap.faceB) return null;
+  return [padA, padB];
 }
 
 /** Half-width a battery pad wants: a bit over a trace, enough of a landing to fix a cell to while still
@@ -412,8 +671,13 @@ interface Target {
    *  on opposite banks: across the hinge they would be ahead-of and behind the path instead, and "which
    *  side" would be meaningless. */
   ends: [Vec2, Vec2];
-  /** The two landing pads (the pinched tile legs). */
+  /** The two copper ends, seated at this part's own pad spacing — see {@link seatLed}. */
   legs: [Vec2, Vec2];
+  /** The `Component.id` seated here, so the pads can report what was placed on them. */
+  component: string;
+  /** How far outboard of each copper end this part's own leg reaches, in flat pattern units — its `padW`.
+   *  {@link Rail} landings are brought in along the chip axis over exactly this length; see `landPads`. */
+  reach: number;
   /** The face each of `legs` sits on, so a pad can be joined to the corridor graph at its own tile. */
   legFaces: [number, number];
   /** Orientation the author fixed for this LED, if they did. The search may not change it. */
@@ -435,26 +699,53 @@ export function planRoutes(
    *  width, which is derived from this, so routing a pattern for a bigger sheet really does give it more
    *  room -- the tape is the same 3.25mm of copper on a larger piece of paper. */
   sheetMm: number = PRINT_SHEET_MM,
+  /** The sheet the copper is stuck to. Sets the crease price through the strain it puts in the copper,
+   *  and bounds the tape width and the net clearance — see {@link creaseFraction} and `fold-strain.ts`. */
+  sheet: SheetSpec = DEFAULT_SHEET,
 ): RoutedCircuit {
+  // **New parameters APPEND. Never insert one.** Every optional parameter here has a default, so an
+  // inserted one leaves every existing call compiling while it silently receives the wrong argument —
+  // a sheet size read as a trace list, or a `SheetSpec` where a number was meant. Some of those are type
+  // errors and some are not, and the ones that are not are the reason this rule is written down.
   const pads: PadPair[] = circuit.leds.map(() => ({ pwr: { x: 0, y: 0 }, gnd: { x: 0, y: 0 } }));
   const unreachable: number[] = [];
   const battery: Battery | null = circuit.battery;
   if (!battery || !faces[battery.face]) {
     circuit.leds.forEach((_, i) => unreachable.push(i));
-    return { traces: [], pads, unreachable, resistors: [], switches: [], parts: [] };
+    // Still route the netlist: it does not need a battery, and a circuit may be nothing but nets.
+    const only = routeDeclaredNets(
+      circuit, faces, gaps, tapeWidthFor(faces, sheetMm, sheet, circuit), [], sheet,
+      tapeMmFor(faces, sheetMm, sheet, circuit),
+    );
+    return {
+      traces: only.traces, pads, unreachable, unseated: [], resistors: [], switches: [], parts: [],
+      nets: only.nets, netFaults: only.faults,
+    };
   }
 
   const diag = patternDiag(faces);
-  const tapeW = tapeWidthFor(faces, sheetMm); // the tape in THIS pattern's units — see tapeWidthFor
+  const tapeW = tapeWidthFor(faces, sheetMm, sheet, circuit); // the tape in THIS pattern's units — see tapeWidthFor
+  // Its width in millimetres, from the same call. `tapeW / tapeMm` is this pattern's scale, and every
+  // millimetre figure below is converted by that ratio — so the two have to be derived together. Reading
+  // one from `TAPE_MM` while the other came from `tapeWidthFor` is how a plan comes out plausible and the
+  // wrong size, which is the mistake this file's header opens with.
+  const tapeMm = tapeMmFor(faces, sheetMm, sheet, circuit);
   const centre = faces[battery.face]!.centroid;
   const term = batteryTerminals(centre, diag, faces[battery.face]!.poly, tapeW);
 
-  // Collect the LEDs we can wire. An LED whose gap has gone (the pattern changed under it) has no pads.
+  // Collect the LEDs we can wire. An LED whose gap has gone (the pattern changed under it) has no pads,
+  // and neither has one whose part cannot be seated on the hinge it sits on -- see `seatLed`.
   const targets: Target[] = [];
+  const unseated: number[] = [];
   circuit.leds.forEach((led, slot) => {
     const gap = gapForLed(gaps, led);
-    if (!gap) {
+    const seat = ledSeat(led.component);
+    const legs = gap && seat ? seatLed(gap, faces, seat, tapeW, tapeMm) : null;
+    if (!gap || !seat || !legs) {
       unreachable.push(slot);
+      // The hinge and the part both exist and the part still will not sit on it — that is the package
+      // against the tile, not the copper against the pattern. Kept apart so the author is told which.
+      if (gap && seat && !legs) unseated.push(slot);
       return;
     }
     targets.push({
@@ -462,18 +753,29 @@ export function planRoutes(
       slot,
       hinge: gap.point,
       ends: gap.ends,
-      legs: [gap.legA, gap.legB],
+      legs,
       legFaces: [gap.faceA, gap.faceB],
+      component: seat.component,
+      reach: (seat.padW * tapeW) / tapeMm,
     });
   });
-  if (!targets.length) return { traces: [], pads, unreachable, resistors: [], switches: [], parts: [] };
+  if (!targets.length) {
+    // No LEDs to bus, which does not mean nothing to route: with nets declared, a circuit of parts and no
+    // LEDs is an ordinary circuit and the whole point of not needing a rail. Returning early here left a
+    // netlist-only circuit with no copper at all.
+    const only = routeDeclaredNets(circuit, faces, gaps, tapeW, [], sheet, tapeMm);
+    return {
+      traces: only.traces, pads, unreachable, unseated: [], resistors: [], switches: [], parts: [],
+      nets: only.nets, netFaults: only.faults,
+    };
+  }
 
   // Drop LEDs the battery cannot reach across the material. Their tiles sit on a separate island of the
   // pattern, and the only way to "reach" them would be a straight line through empty space -- which is what
   // used to happen, and is what put copper outside the body. Better to report them honestly.
   // The crossing penalty is the pattern's bounding-box diagonal, as in the paper: larger than any single step
   // in the graph, so a crease is crossed only when nothing else reaches the tile.
-  const corridor = buildCorridor(faces, gaps, patternDiag(faces) * FOLD_PENALTY_FRAC, tapeW);
+  const corridor = buildCorridor(faces, gaps, patternDiag(faces) * FOLD_PENALTY_FRAC, tapeW, sheet, tapeMm);
   const reach = reachableFaces(corridor, battery.face);
   for (let i = targets.length - 1; i >= 0; i--) {
     const t = targets[i]!;
@@ -482,7 +784,16 @@ export function planRoutes(
     targets.splice(i, 1);
   }
   unreachable.sort((a, b) => a - b);
-  if (!targets.length) return { traces: [], pads, unreachable, resistors: [], switches: [], parts: [] };
+  if (!targets.length) {
+    // No LEDs to bus, which does not mean nothing to route: with nets declared, a circuit of parts and no
+    // LEDs is an ordinary circuit and the whole point of not needing a rail. Returning early here left a
+    // netlist-only circuit with no copper at all.
+    const only = routeDeclaredNets(circuit, faces, gaps, tapeW, [], sheet, tapeMm);
+    return {
+      traces: only.traces, pads, unreachable, unseated: [], resistors: [], switches: [], parts: [],
+      nets: only.nets, netFaults: only.faults,
+    };
+  }
 
   // The tour: the order the bus passes the LEDs. Nearest-neighbour from the battery, then 2-opt.
   // 2-opt is what earns the no-crossing guarantee: a self-crossing tour is always strictly longer than
@@ -560,7 +871,9 @@ export function planRoutes(
     for (let i = 0; i < order.length; i++) {
       const t = targets[order[i]!]!;
       const [l0, l1] = t.legs;
-      out[t.slot] = f[i] ? { pwr: l1, gnd: l0 } : { pwr: l0, gnd: l1 };
+      out[t.slot] = f[i]
+        ? { pwr: l1, gnd: l0, component: t.component }
+        : { pwr: l0, gnd: l1, component: t.component };
     }
     return out;
   };
@@ -575,7 +888,7 @@ export function planRoutes(
   // centre.
   const termClear = term.half + clearW;
   const overlapTol = tapeW * 0.75; // closer than this and the strips are on each other
-  const score = (tr: Trace2D[], f: boolean[]): number =>
+  const score = (tr: Trace2D[], f: boolean[]): PlanKey => [
     // The width-aware measure, not countOverLed: that one tests zero-width centrelines for a crossing, so it
     // reads zero while tape is sitting on top of a chip. Scoring on it left the search blind to the very
     // constraint it was supposed to be enforcing first.
@@ -585,38 +898,92 @@ export function planRoutes(
     // Chips first, and separately: tape under a chip destroys the component, while tape across a battery pad
     // shorts the supply. Both are faults, but they are not the same fault, and weighing them equally let the
     // router swap one for the other -- puffin traded its terminal fault for a chip fault and called it even.
-    (countUnderLed(tr, padsFor(f), clearW, clearW * 1.2) + countOverLed(tr, padsFor(f))) * 1e12 +
-    countUnderTerminal(tr, term, termClear) * 1e9 +
-    countNetCrossings(tr) * 1e6 +
+    countUnderLed(tr, padsFor(f), clearW, clearW * 1.2) + countOverLed(tr, padsFor(f)),
+    countUnderTerminal(tr, term, termClear),
+    countNetCrossings(tr),
+    // ONE tier, summed on purpose, and this is the only place in the key where two measures are traded.
+    //
     // Both kinds of overlap: the two nets shadowing each other, and a net laid twice over itself. Only the
     // first was scored, so nothing in the search had any reason to stop a net doubling back -- and it did,
     // over a fifth of its length on some patterns.
     // A sharp join is a cutting defect -- the wedge of substrate between two strips leaving a point at a narrow
-    // angle tears rather than weeding -- so it ranks with the overlaps rather than below them.
-    countAcuteJoins(tr) * overlapTol * 4 +
-    overlapLength(tr, overlapTol) +
-    selfOverlapLength(tr, overlapTol) +
+    // angle tears rather than weeding -- so it ranks with the overlaps rather than below them. The `overlapTol
+    // * 4` converts a join into a LENGTH so the two can be weighed in the same currency: four sharp joins
+    // against three tape widths of overlap is a trade the router is meant to be able to make. Splitting this
+    // into two components of the tuple would make one of them absolute and silently change the objective.
+    countAcuteJoins(tr) * overlapTol * 4 + overlapLength(tr, overlapTol) + selfOverlapLength(tr, overlapTol),
     // Length ranks last: of two plans equal on everything that matters more, the shorter and straighter wins.
-    totalLength(tr) * 1e-6;
+    totalLength(tr),
+  ];
 
-  /** Whether a strip of tape laid from a to b stays on the material.
+  const onBody = (a: Vec2, b: Vec2): boolean => tapeOnBody(faces, tapeW, a, b);
+
+  /** Each LED's body as a segment between its two copper ends, and each pad with the mate it faces. */
+  const bodies = targets.map((t) => [t.legs[0], t.legs[1]] as [Vec2, Vec2]);
+  const padOf = new Map<string, { own: Vec2; mate: Vec2; reach: number }>();
+  for (const t of targets) {
+    padOf.set(ptKey(t.legs[0]), { own: t.legs[0], mate: t.legs[1], reach: t.reach });
+    padOf.set(ptKey(t.legs[1]), { own: t.legs[1], mate: t.legs[0], reach: t.reach });
+  }
+  const hitsAnyBody = (a: Vec2, b: Vec2): boolean => bodies.some(([c, d]) => segsCross(a, b, c, d));
+
+  /**
+   * Bring each landing in along the chip's own axis, over the length of the leg it is landing.
    *
-   *  Both edges are checked, not just the centreline. Tape has width, so a run tracking the boundary keeps its
-   *  centre on the material while half the strip hangs off it -- which is what put copper outside the shape. */
-  const onBody = (a: Vec2, b: Vec2): boolean => {
-    const L = Math.hypot(b.x - a.x, b.y - a.y);
-    const half = tapeW * 0.5;
-    const nx = L < 1e-12 ? 0 : (-(b.y - a.y) / L) * half;
-    const ny = L < 1e-12 ? 0 : ((b.x - a.x) / L) * half;
-    const steps = Math.max(9, Math.ceil(L / half));
-    for (let k = 0; k <= steps; k++) {
-      const u = k / steps;
-      const m = { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u };
-      if (pointInFace(faces, { x: m.x + nx, y: m.y + ny }) < 0) return false;
-      if (pointInFace(faces, { x: m.x - nx, y: m.y - ny }) < 0) return false;
+   * The copper now stops at the part's own bare gap, which puts the leg OUTBOARD of the point the run
+   * ends at -- it has to be, or the two nets would meet under the chip. So the leg is on copper only if
+   * the tape arrives from outboard: a run that comes in sideways ends in a cap lying ACROSS the leg
+   * rather than under it, and on house.fkld that left half of every anode off its own copper even
+   * though the two ends were the right distance apart. Rendered and looked at; a number would not have
+   * shown it.
+   *
+   * So the last `padW` of a landing is the leg itself, laid straight along the axis, and the run makes
+   * its turn at the far end of the leg instead of at the pad. That is very nearly where the pad used to
+   * be -- 2.40mm off the hinge against the old dent's 2.9mm on house -- so the route as a whole barely
+   * moves; only its last millimetre and a half becomes the part's own.
+   *
+   * Additive and conditional like every other correction here: where the straight run in would leave
+   * the material or cross a chip, the landing is left exactly as it was.
+   */
+  /** Whether a bend at `c` has material all the way round it out to `r` — the mitre's worst reach. */
+  const clearAround = (c: Vec2, r: number): boolean => {
+    for (let k = 0; k < 8; k++) {
+      const a = (k / 8) * Math.PI * 2;
+      if (pointInFace(faces, { x: c.x + Math.cos(a) * r, y: c.y + Math.sin(a) * r }) < 0) return false;
     }
     return true;
   };
+
+  const landPads = (t: Trace2D): Trace2D => {
+    if (t.pts.length < 2) return t;
+    const pts = t.pts.slice();
+    // Last end first: splicing at the front would shift the back one's index.
+    for (const end of [pts.length - 1, 0]) {
+      if (pts.length < 2) break;
+      const pad = padOf.get(ptKey(pts[end]!));
+      if (!pad) continue;
+      const anchor = add(pad.own, scale(unit(sub(pad.own, pad.mate)), pad.reach));
+      const nb = pts[end === 0 ? 1 : pts.length - 2]!;
+      if (dist2(nb, anchor) < pad.reach * 0.05) continue; // the run already comes in along the axis
+      // The bend at the anchor must be a corner, not a fold. A run that has to double back on itself to come
+      // in square leaves a wedge of substrate at the bend that tears rather than weeding, and the mitre on
+      // the inside of the fold reaches outside the shape: unguarded, this put copper off akde-hex and gave
+      // it a sharp join. Where the approach cannot be squared off cleanly the run lands as it was, and that
+      // LED's leg is the one that ends up only partly on copper.
+      const toNb = unit(sub(nb, anchor));
+      const toPad = unit(sub(pad.own, anchor));
+      if (toNb.x * toPad.x + toNb.y * toPad.y > LANDING_FOLD_MAX) continue;
+      if (!onBody(nb, anchor) || !onBody(anchor, pad.own) || hitsAnyBody(nb, anchor)) continue;
+      // `onBody` walks the two straight stretches; the mitre at the bend between them sticks out past both,
+      // and on akde-hex that was enough to put copper off the shape. So the bend itself has to stand clear
+      // of the boundary on every side, not merely have its two arms on the material.
+      if (!clearAround(anchor, tapeW * 0.75)) continue;
+      pts.splice(end === 0 ? 1 : pts.length - 1, 0, anchor);
+    }
+    return { ...t, pts };
+  };
+
+
 
   // Tours are memoised on the pads they order. The descent flips one LED at a time and revisits the same
   // assignments repeatedly, and a 2-opt per net per build is what made a plan take 1.9s.
@@ -762,7 +1129,6 @@ export function planRoutes(
       });
 
     const finish = (r: { pwr: Rail; gnd: Rail }): Trace2D[] => {
-      const bodies = targets.map((t) => [t.legs[0], t.legs[1]] as [Vec2, Vec2]);
       const keepPwr = [term.pwr, ...padsOf(f, "pwr")];
       const keepGnd = [term.gnd, ...padsOf(f, "gnd")];
       // Straighten each net in turn. PWR goes first with only the chips to avoid; GND is then straightened
@@ -843,12 +1209,6 @@ export function planRoutes(
        * and comes back round. Additive, so it can only be applied where it is safe — if the detour would
        * leave the material or cross any chip, the run is left exactly as it was.
        */
-      const padOf = new Map<string, { own: Vec2; mate: Vec2 }>();
-      for (const t of targets) {
-        padOf.set(ptKey(t.legs[0]), { own: t.legs[0], mate: t.legs[1] });
-        padOf.set(ptKey(t.legs[1]), { own: t.legs[1], mate: t.legs[0] });
-      }
-      const hitsAnyBody = (a: Vec2, b: Vec2): boolean => bodies.some(([c, d]) => segsCross(a, b, c, d));
       const clearPads = (rail: Vec2[]): Vec2[] => {
         const out: Vec2[] = [rail[0]!];
         for (let i = 1; i < rail.length; i++) {
@@ -885,7 +1245,6 @@ export function planRoutes(
       };
       const padClear = (ts: Trace2D[]): Trace2D[] => ts.map((t) => ({ ...t, pts: clearPads(t.pts) }));
 
-
       const rawGnd = asTree(r.gnd.paths.map((b: Vec2[]) => dedupe(dodgeChips(b, targets, onBody))), "gnd", term.gnd, padsOf(f, "gnd"))
         .map((t) => ({ ...t, pts: clearChips(clearTerm(t.pts, term.pwr), "gnd", f) }));
       const rawPwr = asTree(r.pwr.paths.map((b: Vec2[]) => dedupe(dodgeChips(b, targets, onBody))), "pwr", term.pwr, padsOf(f, "pwr"))
@@ -909,7 +1268,7 @@ export function planRoutes(
       const keep = [...keepPwr, ...keepGnd];
       const a = trimAtOwnJoins(straightened, keep);
       const b = trimAtOwnJoins(asRouted, keep);
-      return score(a, f) <= score(b, f) ? a : b;
+      return lexLess(score(b, f), score(a, f)) ? b : a;
     };
     // Two visiting orders, judged by the same objective. The shared one walks both nets through the hinges in
     // step, which keeps them parallel; the per-net one orders each net's own pads, which stops a net zigzagging
@@ -923,7 +1282,7 @@ export function planRoutes(
     // shared -- so the score decides.
     const shared = finish(routeBoth(false, branching));
     const perNet = finish(routeBoth(true, branching));
-    return score(perNet, f) < score(shared, f) ? perNet : shared;
+    return lexLess(score(perNet, f), score(shared, f)) ? perNet : shared;
   };
 
 
@@ -937,14 +1296,14 @@ export function planRoutes(
     const f = pin(seed.slice());
     let tr = build(f);
     let sc = score(tr, f);
-    for (let sweep = 0; sweep < order.length && sc > 0; sweep++) {
+    for (let sweep = 0; sweep < order.length && !flawless(sc); sweep++) {
       let moved = false;
-      for (let i = 0; i < order.length && sc > 0; i++) {
+      for (let i = 0; i < order.length && !flawless(sc); i++) {
         if (targets[order[i]!]!.pinned !== undefined) continue; // the author fixed this one
         f[i] = !f[i];
         const cand = build(f);
         const cs = score(cand, f);
-        if (cs < sc) {
+        if (lexLess(cs, sc)) {
           tr = cand;
           sc = cs;
           moved = true;
@@ -954,7 +1313,7 @@ export function planRoutes(
       }
       if (!moved) break;
     }
-    if (sc < bestS) {
+    if (lexLess(sc, bestS)) {
       bestS = sc;
       best = tr;
       flip = f.slice();
@@ -967,7 +1326,7 @@ export function planRoutes(
   // PWR/GND crossing -- a short. The score ranks crossings above overlap, so it is kept only where it does not.
   merging = true;
   const merged = build(flip);
-  if (score(merged, flip) < bestS) {
+  if (lexLess(score(merged, flip), bestS)) {
     best = merged;
     bestS = score(merged, flip);
   } else {
@@ -976,7 +1335,7 @@ export function planRoutes(
 
   branching = true;
   const branched = build(flip);
-  if (score(branched, flip) < bestS) {
+  if (lexLess(score(branched, flip), bestS)) {
     best = branched;
     bestS = score(branched, flip);
   } else {
@@ -991,13 +1350,42 @@ export function planRoutes(
     dirGnd = dg;
     const cand = build(flip);
     const sc = score(cand, flip);
-    if (sc < bestS) {
+    if (lexLess(sc, bestS)) {
       bestS = sc;
       best = cand;
     } else {
       dirPwr = keepP;
       dirGnd = keepG;
     }
+  }
+
+  // Landing runs last, on the finished plan.
+  //
+  // Unconditional, unlike squaring below, and not inside the descent either. It is not a candidate: the
+  // last stretch of a run has to lie along the chip's axis or the part is not soldered to anything, so
+  // there is nothing for the objective to weigh. `landPads` refuses itself where the straight run in would
+  // leave the material or cross a chip, and that is the whole of the judgement.
+  //
+  // Measured three ways over the six bundled patterns, worst-covered pad per pattern: inside the descent
+  // 27-51% and four times as slow; scored as one all-or-nothing edit at the end 20-34%, because one costly
+  // landing took every other pattern's with it; run by run with the same gate 20-42%. Unconditional gives
+  // 27-51% -- the in-descent result at the end-of-plan cost.
+  // Run by run, and only where the objective does not object. The fold guard inside `landPads` catches the
+  // bends that tear or reach off the shape; this catches what is only visible in the plan as a whole -- a
+  // squared-off landing that now sweeps the other net's battery terminal, or doubles back along tape its own
+  // net already laid. akde-hex needed both: with the guard alone it kept a landing that took its repeated
+  // tape from 13% to 15% of its length and gave it a sharp join.
+  for (let i = 0; i < best.length; i++) {
+    const landed = landPads(best[i]!);
+    if (landed === best[i]) continue;
+    const cand = best.slice();
+    cand[i] = landed;
+    // Length is deliberately taken back out of the comparison. A squared-off landing is always a little
+    // longer than a diagonal one -- that is what it is for -- and the objective's length tie-breaker was
+    // enough to refuse every single landing on every pattern when the gate first went in.
+    // `upto: 4` is that exclusion said exactly, rather than subtracting the length term back out of a
+    // weighted sum — which was itself a trick that depended on the scale separation holding.
+    if (!lexLess(score(best, flip), score(cand, flip), 4)) best = cand;
   }
 
   // Squaring runs last, on the finished plan, and only if it does not score worse. Kept out of the polarity
@@ -1007,17 +1395,19 @@ export function planRoutes(
   for (let i = 0; i < order.length; i++) {
     const t = targets[order[i]!]!;
     const [l0, l1] = t.legs;
-    pads[t.slot] = flip[i] ? { pwr: l1, gnd: l0 } : { pwr: l0, gnd: l1 };
+    pads[t.slot] = flip[i]
+      ? { pwr: l1, gnd: l0, component: t.component }
+      : { pwr: l0, gnd: l1, component: t.component };
   }
 
-  const withRes = breakForResistors(best, circuit.resistors ?? [], tapeW);
+  const withRes = breakForResistors(best, circuit.resistors ?? [], tapeW, tapeMm);
   // A resistor is in line with the rail, so turning one round swaps which of its terminals lands on which
   // cut end. Indifferent on a resistor itself, and the whole point on anything polarised.
   const resistorFlips = circuit.resistors ?? [];
   withRes.placed = withRes.placed.map((s) => (resistorFlips[s.source]?.flip ? turnRound(s) : s));
   // Across the break the part needs only its own half-gap plus a pad either side: the terminals run square
   // to the rail now, not along it, so a much shorter run will take one.
-  const toFlat = (mm: number): number => (mm * tapeW) / TAPE_MM;
+  const toFlat = (mm: number): number => (mm * tapeW) / tapeMm;
   const swPad = SPDT.pad;
   const swReach = toFlat(SWITCH_GAP_MM / 2 + swPad.w);
   const withSw = breakRuns(withRes.traces, circuit.switches ?? [], toFlat(SWITCH_GAP_MM), {
@@ -1046,8 +1436,8 @@ export function planRoutes(
     switchLand(
       span,
       toFlat(SWITCH_PITCH_MM),
-      toFlat(swPad.h),
       toFlat(swPad.w),
+      toFlat(swPad.h),
       toFlat(SWITCH_ROW_MM),
     ),
   );
@@ -1060,7 +1450,7 @@ export function planRoutes(
   const partLands: Trace2D[] = [];
   let partTraces = withSw.traces;
   for (const [id, group] of byComponent(circuit.parts ?? [])) {
-    const fp = COMPONENTS.find((c) => c.id === id)?.footprint;
+    const fp = footprintById(id);
     // A part the library no longer has is left unplaced rather than guessed at — same as one that
     // does not fit, and the status line reports it the same way.
     if (!fp) continue;
@@ -1096,8 +1486,8 @@ export function planRoutes(
           ...switchLand(
             span,
             toFlat(across.pitch),
-            toFlat(across.pad.h),
             toFlat(across.pad.w),
+            toFlat(across.pad.h),
             toFlat(across.rowSep),
           ),
         );
@@ -1111,15 +1501,261 @@ export function planRoutes(
     }
   }
 
+  const busTraces = [...seatLedLegs(partTraces, targets, pads), ...swLands, ...partLands];
+  // The declared netlist, routed on top of the bus and kept clear of it.
+  //
+  // The bus goes first and the nets route around it, rather than the other way round: the bus carries the
+  // LEDs and the battery, which are pinned to hinges and faces and have nowhere else to go, while a net is
+  // free to take any path across the material. Handing the nets the immovable copper as an obstacle is the
+  // only ordering that can honour the no-overlap condition for both at once.
+  const netted = routeDeclaredNets(circuit, faces, gaps, tapeW, busTraces, sheet, tapeMm);
+
   return {
-    traces: [...partTraces, ...swLands, ...partLands],
+    traces: [...busTraces, ...netted.traces],
     pads,
     unreachable,
+    unseated,
     resistors: withRes.placed,
     switches: withSw.placed,
     parts: placedParts,
+    nets: netted.nets,
+    netFaults: netted.faults,
   };
 }
+
+/**
+ * Whether a strip of tape laid from `a` to `b` stays on the material.
+ *
+ * Both edges are checked, not just the centreline. Tape has width, so a run tracking the boundary keeps its
+ * centre on the material while half the strip hangs off it — which is what put copper outside the shape.
+ *
+ * Top-level and exported rather than a closure in the router, so that anything else needing to know
+ * whether copper fits on the sheet — a hand-drawn wire, for one — asks this rather than growing a second
+ * reading of the same question. Two readings of one footprint have already disagreed in this codebase
+ * once, over the coin cell, and the cost was a cut file that contradicted its own drawing.
+ */
+/**
+ * Zero-width cuts: two faces that touch along an edge which is **not** a shared hinge.
+ *
+ * A cut in these patterns is a lip — two boundary edges — and where the lip has opened it is a hole in the
+ * silhouette, so {@link pointInFace} refuses copper there and nothing more is needed. A cut that has *not*
+ * opened is the dangerous one: the two lips sit on the same line in the flat pattern, every point on both
+ * sides is inside some face, and containment cannot see the join at all. The material is still severed.
+ *
+ * Measured on `kirigami-flap`, which carries three such edges: with the battery on face 2 the router laid
+ * two runs straight across them. Every other bundled pattern has none, which is why this went unnoticed —
+ * "no crossings" was measured on the seven patterns that cannot have any.
+ *
+ * Told apart by **vertex indices against coordinates**: a shared hinge is one edge, so both faces name the
+ * same two vertices; a seam is two edges that happen to coincide, so the indices differ. That distinction
+ * is the whole detection, and it needs nothing the router is not already given.
+ */
+function seamsOf(faces: FlatFace[]): [Vec2, Vec2][] {
+  const hit = SEAM_CACHE.get(faces);
+  if (hit) return hit;
+  const at = (p: Vec2): string => `${Math.round(p.x * 1e6)}_${Math.round(p.y * 1e6)}`;
+  const byLine = new Map<string, { idx: string; seg: [Vec2, Vec2] }[]>();
+  for (const f of faces) {
+    const n = f.poly.length;
+    for (let i = 0; i < n; i++) {
+      const pa = f.poly[i]!, pb = f.poly[(i + 1) % n]!;
+      const va = f.verts[i], vb = f.verts[(i + 1) % n];
+      const ka = at(pa), kb = at(pb);
+      const line = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+      const idx = va == null || vb == null ? "?" : String(Math.min(va, vb)) + "_" + String(Math.max(va, vb));
+      const list = byLine.get(line) ?? [];
+      list.push({ idx, seg: [pa, pb] });
+      byLine.set(line, list);
+    }
+  }
+  const out: [Vec2, Vec2][] = [];
+  for (const list of byLine.values()) {
+    if (list.length < 2) continue;
+    const names = new Set(list.map((e) => e.idx));
+    if (names.size > 1) out.push(list[0]!.seg); // same line, different vertices: a cut, not a hinge
+  }
+  SEAM_CACHE.set(faces, out);
+  return out;
+}
+
+/** One computation per pattern. `flatFaces` returns a fresh array, so identity is a safe key. */
+const SEAM_CACHE = new WeakMap<FlatFace[], [Vec2, Vec2][]>();
+
+/**
+ * Where a strip from `a` to `b` would span a cut the material is severed along, or null if it does not.
+ *
+ * The point, not a boolean, because the point cannot be recovered afterwards. The usual way to report a
+ * strip that has left the sheet is to sample along it for somewhere off the material — and on an unopened
+ * cut **both sides are on material**, which is the entire property of the thing. A sampler finds nothing
+ * to report and any point it named would be one it had not derived. So the crossing is handed back by
+ * whatever found it.
+ *
+ * Exported for `wire-rules.ts`, which needs to tell a wire that spans a cut apart from a wire that runs
+ * off the edge of the sheet. Deliberately one reading rather than two: this codebase has already paid for
+ * two independent readings of one footprint, and "is this a cut" is the same kind of question.
+ */
+export function seamCrossing(faces: FlatFace[], a: Vec2, b: Vec2): Vec2 | null {
+  for (const [p, q] of seamsOf(faces)) {
+    if (!segsCross(a, b, p, q)) continue;
+    // A proper crossing is never parallel, so `intersection` has an answer here. The seam's own midpoint
+    // is the fallback rather than null, which would read as "no crossing" and quietly undo the refusal.
+    return intersection(a, b, p, q) ?? { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 };
+  }
+  return null;
+}
+
+/** Whether a strip from `a` to `b` would cross a cut. {@link seamCrossing} is the one reading. */
+function crossesSeam(faces: FlatFace[], a: Vec2, b: Vec2): boolean {
+  return seamCrossing(faces, a, b) !== null;
+}
+
+export function tapeOnBody(faces: FlatFace[], tapeW: number, a: Vec2, b: Vec2): boolean {
+  // Before the sampling, because it is the case sampling cannot see: a zero-width cut leaves material on
+  // both sides and severed material in between. See {@link seamsOf}.
+  if (crossesSeam(faces, a, b)) return false;
+  const L = Math.hypot(b.x - a.x, b.y - a.y);
+  const half = tapeW * 0.5;
+  const nx = L < 1e-12 ? 0 : (-(b.y - a.y) / L) * half;
+  const ny = L < 1e-12 ? 0 : ((b.x - a.x) / L) * half;
+  const steps = Math.max(9, Math.ceil(L / half));
+  for (let k = 0; k <= steps; k++) {
+    const u = k / steps;
+    const m = { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u };
+    if (pointInFace(faces, { x: m.x + nx, y: m.y + ny }) < 0) return false;
+    if (pointInFace(faces, { x: m.x - nx, y: m.y - ny }) < 0) return false;
+  }
+  return true;
+}
+
+/**
+ * Route the nets the author declared, keeping them clear of the bus and of each other.
+ *
+ * Separated from {@link planRoutes} so the netlist path can be read on its own, and so a circuit with no
+ * nets pays nothing for it beyond one length check.
+ *
+ * The bus copper is handed over as a set of already-laid polylines, which {@link planNets} treats exactly
+ * as it treats an earlier net's copper: nothing may come within a tape width of it. That is what keeps the
+ * no-overlap guarantee true of the whole sheet rather than only of the netlist.
+ */
+function routeDeclaredNets(
+  circuit: Circuit,
+  faces: FlatFace[],
+  gaps: GapEdge[],
+  tapeW: number,
+  bus: Trace2D[],
+  sheet: SheetSpec = DEFAULT_SHEET,
+  tapeMm: number = TAPE_MM,
+): { traces: Trace2D[]; nets: RoutedNet[]; faults: NetlistFault[] } {
+  if (!circuit.nets?.length) return { traces: [], nets: [], faults: [] };
+  const { nets, faults } = resolveNetlist(circuit, tapeW, tapeMm);
+  if (!nets.length) return { traces: [], nets: [], faults };
+  const routed = planNets(nets, faces, gaps, tapeW, bus.map((t) => t.pts), sheet, tapeMm);
+  return { traces: routed.traces, nets: routed.nets, faults };
+}
+
+/**
+ * The copper under each LED leg.
+ *
+ * Laid as an extension of the run that already ends on the pad, not as a strip of its own. As its own
+ * run it doubled the strip count — one LED came out as four runs rather than two — and a second strip
+ * lying against the first is also what produced the self-overlap and the acute joins the router is
+ * measured on. A leg is the last inch of the rail, so it is the same piece of tape.
+ *
+ * A leg is `padW` long and sits **outboard** of the copper end the rail arrives at: the two nets stop
+ * `gap` apart so the chip's body has bare pattern under it, which puts every millimetre of both legs
+ * past where the rail stops. So the leg's own copper is not something routing produces — it is part of
+ * seating the part, like the switch's lands, and it is laid whether or not the route happened to arrive
+ * in a shape that covers it.
+ *
+ * It had to become unconditional. `landPads` squares an approach into the axis where it can, and where it
+ * can it lays exactly this rectangle as part of the rail, so nothing is added; but it only ever sees a pad
+ * a run *ends* at, and it refuses a bend that would fold back or reach off the shape. Over the six bundled
+ * patterns that left most legs partly or wholly off their own copper — measured on a 19x19 grid over each
+ * leg, the worst leg on a pattern held 24-42% of its area, and the best 91%, scattered by which landings
+ * happened to square rather than by anything about the part. With the land laid every leg sits on copper
+ * along its whole length, and what is left uncovered is only the overhang across the axis that
+ * {@link landingWidth} deliberately leaves (see its floor).
+ *
+ * Skipped where the rail already runs down the leg — that is `landPads` having done it — so a squared
+ * landing stays one continuous strip of tape rather than gaining a second one lying exactly on top.
+ */
+function seatLedLegs(laid: Trace2D[], targets: Target[], pads: PadPair[]): Trace2D[] {
+  // Worked on a copy: `laid` is the routed set and the caller still holds it.
+  const runs: Trace2D[] = laid.map((t) => ({ ...t, pts: [...t.pts] }));
+  for (const t of targets) {
+    const pair = pads[t.slot];
+    if (!pair?.component) continue;
+    for (const net of ["pwr", "gnd"] as const) {
+      const own = net === "pwr" ? pair.pwr : pair.gnd;
+      const mate = net === "pwr" ? pair.gnd : pair.pwr;
+      const axis = unit(sub(own, mate));
+      const anchor = add(own, scale(axis, t.reach));
+      const already = runs.some(
+        (r) =>
+          r.net === net &&
+          r.pts.some(
+            (p, i) =>
+              i > 0 &&
+              ((near(p, own) && near(r.pts[i - 1]!, anchor)) ||
+                (near(p, anchor) && near(r.pts[i - 1]!, own))),
+          ),
+      );
+      if (already) continue;
+      // Extend the run that already ends on this pad rather than laying a second strip beside it — but
+      // only where the leg carries on the way the run was already going.
+      //
+      // The leg points outboard, away from the other pad. A run that arrived at the pad FROM outboard has
+      // already laid that copper, and appending the leg folds it back along itself: the strip doubles up,
+      // and the outline's miter at a 180-degree reversal throws a long spike out past the pad and into the
+      // bare gap the chip body has to sit on. That spike was copper across the LED's own terminals —
+      // measured before this guard, every LED on house, church and puffin had copper in its body gap,
+      // covering up to 12 of 19 samples across it.
+      const host = runs.find((r) => r.net === net && (near(r.pts[0]!, own) || near(r.pts[r.pts.length - 1]!, own)));
+      if (host) {
+        const atEnd = near(host.pts[host.pts.length - 1]!, own);
+        const prev = atEnd ? host.pts[host.pts.length - 2] : host.pts[1];
+        // Which way the run was travelling as it arrived, against the way the leg goes.
+        const came = prev ? unit(sub(own, prev)) : axis;
+        const carriesOn = came.x * axis.x + came.y * axis.y > 0;
+        if (carriesOn) {
+          if (atEnd) host.pts.push(anchor);
+          else host.pts.unshift(anchor);
+          continue;
+        }
+        // The run already covers the leg, but it arrives at an ANGLE to the LED's axis, and a strip's end
+        // is squared off across its own direction — so one corner of that cap swings round and pokes into
+        // the bare gap the chip body sits on. Measured on house: the gnd run reached about a third of the
+        // way across five of the six gaps. Bringing the last stretch onto the axis turns the cap square to
+        // the gap instead, and squares the pad onto the tape at the same time.
+        if (prev && Math.abs(came.x * axis.x + came.y * axis.y) < 0.999) {
+          // Outboard of the pad, the side the run is already coming from — inboard would lay copper
+          // straight across the gap, which is the very thing this is here to stop.
+          const along = anchor;
+          if (atEnd) host.pts.splice(host.pts.length - 1, 0, along);
+          else host.pts.splice(1, 0, along);
+        }
+      } else {
+        // A separate strip from the pad outboard along the leg, where no run ENDS on this pad.
+        //
+        // It looks redundant when a run already passes through the pad, and guarding on that does cut the
+        // strip count hard — puffin at twelve LEDs goes 25 runs to 14. But it is not redundant, and the
+        // measurement says so: a run that merely passes the pad is narrowed by {@link landingWidth} to
+        // keep the two nets apart under the chip, which caps it at 1.14mm beneath a 1.70mm pad. Guarding
+        // the stub took GND coverage from 96-100% down to 30-99%, LEDs at 42%, 50%, 30%. The stub lands
+        // END-ON, which is exempt from that narrowing, and full-width copper under the leg is the whole
+        // reason the chip lights.
+        //
+        // So the extra strips are bought, not accidental: strip count against pad coverage, and coverage
+        // is the one that decides whether the circuit works.
+        runs.push({ net, pts: [own, anchor] });
+      }
+    }
+  }
+  return runs;
+}
+
+/** Two points the same to well inside any feature — the tolerance {@link ptKey} rounds at. */
+const near = (a: Vec2, b: Vec2): boolean => Math.hypot(a.x - b.x, a.y - b.y) < 1e-6;
 
 /**
  * The placed parts by component id, each group in the order the parts were dropped.
@@ -1131,6 +1767,13 @@ export function planRoutes(
 function byComponent(parts: PlacedPart[]): [string, { part: PlacedPart; at: number }[]][] {
   const by = new Map<string, { part: PlacedPart; at: number }[]>();
   parts.forEach((part, at) => {
+    // A free part stands on the sheet and has no rail cut for it, so it is not grouped for breaking. It is
+    // skipped HERE rather than filtered out by the caller, and that distinction is the whole point: `at` is
+    // the index of the part in the AUTHOR'S list, it escapes as `PartPlacement.source`, and the canvas
+    // matches that against its own selection index (`electronics-modal.ts:1503`, `:1616`). Filter the array
+    // before this and every `at` after a free part is off by one — no crash and no red test, just the wrong
+    // part's span and flip shown when you click one.
+    if (part.free) return;
     const group = by.get(part.component);
     if (group) group.push({ part, at });
     else by.set(part.component, [{ part, at }]);
@@ -1197,6 +1840,12 @@ const SWITCH_KEEPOUT_MM = 1;
 function neckFor(part: { pitch: number; pad: Box }): number {
   const reach = part.pad.h / 2 + SWITCH_KEEPOUT_MM;
   // How far past the tape's edge the idle pad's column sits — sideways clearance we get for free.
+  //
+  // `TAPE_MM`, not the roll the router actually chose, and knowingly: this feeds module-level constants
+  // (`SWITCH_NECK_MM` and friends) that are computed once at load, so it cannot see a per-pattern choice.
+  // Under `tapeChoice: "area"` on a large-tiled model the tape is wider than this assumes and the neck
+  // comes out slightly generous — the part gets a little more room than it strictly needs, which is the
+  // safe direction to be wrong in. Making it exact means making those constants per-pattern.
   const lateral = Math.max(0, part.pitch - TAPE_MM / 2);
   // Sideways alone may already clear it, on a part whose pads are far enough out; then the neck is only
   // what keeps the tape from ending inside the housing.
@@ -1236,12 +1885,30 @@ export function partFit(fp: Footprint): PartFit {
     if (row.length < 2) return { rows: 1, gap: 0, before: 0, after: 0 };
     const [first, last] = [row[0]!, row[row.length - 1]!];
     // Centre to centre, less half of each outermost pad: the bare pattern the body covers.
-    const gap = Math.abs(padAt(last).x - padAt(first).x) - (padSize(first).w + padSize(last).w) / 2;
+    //
+    // Measured along the part's OWN axis, not along x. `inlineTerminals` picks the right two pads by that
+    // axis, but measuring the distance between them on x reads zero for a footprint whose pads run down y
+    // — and a negative gap is refused outright at the call site, so all ten of the library's y-oriented
+    // in-line parts were undroppable at any run length. `PinHeader_01x03_P2_54mm_Horizontal_SMD` came out
+    // at -2.500mm. The pad's extent has to follow the same axis: `padSize` gives `w` as the x-extent, so
+    // along a y axis it is `h` that lies along the rail.
+    const ax = padAxis(fp);
+    const alongExt = (pad: Pad): number => (ax.alongIsY ? padSize(pad).h : padSize(pad).w);
+    const gap = Math.abs(ax.along(last) - ax.along(first)) - (alongExt(first) + alongExt(last)) / 2;
     return { rows: 1, gap, before: gap, after: gap };
   }
   const gap = across.rowSep + neckFor(across);
   // As the switch pass has always reserved it: the part's own half-gap plus a pad, either side.
-  const reach = gap / 2 + across.pad.w;
+  //
+  // `pad.h`, the ALONG-run extent, because that is the axis a reserve is measured in — `before`/`after` are
+  // copper either side of the break's centre, along the rail. It used to read `pad.w`, and that was the bug
+  // rather than drift: a two-row part is seated TURNED to the rail, so its along-run extent is the
+  // footprint's across-axis one, which `padRunBox` now reports as `h`.
+  //
+  // Do NOT copy `alongExt` from the one-row branch above. A one-row part is not turned — the rail runs
+  // along its terminals — so there the same question has the opposite answer. Same field, two branches,
+  // three lines apart, and the working implementation next door is the wrong one to imitate.
+  const reach = gap / 2 + across.pad.h;
   return { rows: 2, gap, before: reach, after: reach };
 }
 
@@ -1261,9 +1928,11 @@ export function breakForResistors(
   traces: Trace2D[],
   resistors: { x: number; y: number }[],
   tapeW: number,
+  /** The tape in mm — see {@link seatLed}. */
+  tapeMm: number = TAPE_MM,
 ): { traces: Trace2D[]; placed: ResistorSpan[] } {
-  // The body in the pattern's own units: the tape is TAPE_MM wide and `tapeW` units, so this follows it.
-  return breakRuns(traces, resistors, (RESISTOR_MM * tapeW) / TAPE_MM);
+  // The body in the pattern's own units: the tape is `tapeMm` wide and `tapeW` units, so this follows it.
+  return breakRuns(traces, resistors, (RESISTOR_MM * tapeW) / tapeMm);
 }
 
 /**
@@ -1446,6 +2115,16 @@ function distToSeg(r: Vec2, a: Vec2, b: Vec2): number {
   return Math.hypot(r.x - (a.x + t * dx), r.y - (a.y + t * dy));
 }
 
+/**
+ * The two pieces of pad-sized copper an across-the-rail part lands on: the common, and the live throw.
+ *
+ * `padW` is the pad's extent **across the run** and becomes each land's width; `padL` is its extent
+ * **along the run** and is how far past the terminal the land reaches. The part is seated turned to the
+ * rail — `acrossPart` is what turns it — so the footprint's own along-axis becomes the run's across-axis,
+ * and a caller reading `pad.w`/`pad.h` off the footprint must cross that turn. `pad.w` is the across-run
+ * extent as drawn: measured on a seated SPDT, each lead is 1.0mm across the run and 1.2mm along it, and
+ * `pad.w` is 1.0. `clearOfOtherNet` takes the box the same way round.
+ */
 function switchLand(
   span: PartSpan,
   pitch: number,
@@ -1462,9 +2141,20 @@ function switchLand(
   // The common is at the near cut end. The throws are a row's separation along from it — not at the far cut
   // end, which is pulled back a neck further so the idle throw sits in clear pattern. The outgoing tape
   // reaches neither throw on its own: one gets a land, the other is left bare, which opens the circuit.
+  // Two half-pads, in two different axes, and they are not the same number.
+  //
+  // `over` is a half-length ALONG the run: how far past the terminal the common land reaches, so the whole
+  // pad has copper under it. That is the pad's along-run extent, `padL`.
+  //
+  // `reach` is a positional offset ACROSS the run: how far past the throw the stub carries, for the same
+  // reason in the other axis. That is the pad's across-run extent, `padW`. Sharing one `over` between them
+  // read as a simplification and was a transpose — measured on a seated SPDT, the common land runs along
+  // the run and the live stub leaves it at 67-89 degrees depending on the seating, so the two ends are in
+  // different axes and no single half-pad is right for both.
   const over = padL / 2;
+  const reach = padW / 2;
   const row = { x: a.x + u.x * rowSep, y: a.y + u.y * rowSep };
-  const live = { x: row.x + p.x * (pitch + over), y: row.y + p.y * (pitch + over) };
+  const live = { x: row.x + p.x * (pitch + reach), y: row.y + p.y * (pitch + reach) };
   // Each land runs half a pad past its terminal, so the whole pad has copper under it. Stopped dead on the
   // centre, half of it sat over bare pattern and the terminal made contact along one edge if at all.
   // Centred on the terminal, not started at it: run from the cut end only forwards, the pad's centre sits on
@@ -1824,6 +2514,9 @@ function chordKey(a: Vec2, b: Vec2): string {
 /** Whether the straight line between two boundary points stays on the face. Sampled, so a chord that leaves
  *  and re-enters a concave face is rejected too. */
 function chordInside(f: FlatFace, a: Vec2, b: Vec2, faces: FlatFace[], tapeW: number): boolean {
+  // A chord may not span a cut, even one whose two lips still sit on the same line — the tile looks whole
+  // in the flat pattern and is not. See {@link seamsOf}.
+  if (crossesSeam(faces, a, b)) return false;
   const L = Math.hypot(b.x - a.x, b.y - a.y);
   const half = tapeW * 0.5;
   const nx = L < 1e-12 ? 0 : (-(b.y - a.y) / L) * half;
@@ -1854,12 +2547,16 @@ function pointInPolyLocal(poly: Vec2[], p: Vec2): boolean {
 }
 
 /** Faces reachable from `start` by travelling over the material. */
-function reachableFaces(c: Corridor, start: number): Set<number> {
+export function reachableFaces(c: Corridor, start: number): Set<number> {
   const seen = new Set<number>([start]);
   const queue = [start];
   while (queue.length) {
     const at = queue.shift()!;
     for (const m of c.mids.get(at) ?? []) {
+      // Refused nodes are not a way through, so a tile behind one is genuinely out of reach. This has to
+      // agree with `searchCorridor` or an LED is called reachable and then never routed — reported as
+      // wired, drawn with no copper.
+      if (c.refused.has(ptKey(m))) continue;
       for (const f of c.faceOf.get(ptKey(m)) ?? []) {
         if (seen.has(f)) continue;
         seen.add(f);
@@ -1906,7 +2603,7 @@ function dodgeChips(pts: Vec2[], targets: Target[], onBody: (a: Vec2, b: Vec2) =
  * boundary, so a path over this graph never leaves the silhouette -- which is what keeps copper on the
  * material, and what makes it follow the tiling instead of cutting across it.
  */
-interface Corridor {
+export interface Corridor {
   /** Per face: the midpoints of its own edges — the ways in and out of that tile. */
   mids: Map<number, Vec2[]>;
   /** Faces owning each midpoint, by key. A midpoint on a shared edge belongs to both tiles, which is what
@@ -1917,10 +2614,69 @@ interface Corridor {
   chords: Map<number, Set<string>>;
   /** Extra cost for crossing at this node — a mountain fold, a steep valley or a cut. */
   cost: Map<string, number>;
+  /**
+   * Nodes copper may not use at all, because the crease there strains it past
+   * {@link SheetSpec.strainLimit}.
+   *
+   * Empty unless a limit is set. Separate from {@link cost} because it is a different kind of statement: a
+   * cost says "go round if you can", and this says "there is no route through here" — which is why a tile
+   * behind one comes back from {@link reachableFaces} as unreachable rather than expensively reachable.
+   */
+  refused: Set<string>;
 }
 
 /** Unordered key for the edge between two vertex ids. */
 const edgeKeyOf = (a: number, b: number): string => (a < b ? `${a}_${b}` : `${b}_${a}`);
+
+/**
+ * What one crossing of this hinge costs, as a fraction of the full crease price.
+ *
+ * The strain the fold puts in the copper, where the pattern says how far the crease folds — see
+ * {@link creaseCostFraction}. The hinge is a real width, not an assumption: `legA` and `legB` are the two
+ * tiles' pinched edge midpoints, so the distance between them is the strip of bare substrate that takes
+ * the bend, and {@link TAPE_MM} over `tapeW` is the pattern's own scale in millimetres.
+ *
+ * Two things are deliberately not strain questions.
+ *
+ * A **cut** pays the full price whatever the geometry says: the material is severed there, so tape over it
+ * is bridging a hole rather than bending on a substrate, and there is no bending member to compute a
+ * strain in. **This branch is currently unreachable and is kept on purpose.** A cut in these patterns is a
+ * lip — two boundary edges, each belonging to one face — so it fails `isGapEdge`'s "exactly two faces
+ * share it" and never becomes a `GapEdge`: all eight bundled patterns carry cut edges (12 in church, 98 in
+ * puffin) and none of them arrive here. What actually keeps copper off a cut is containment, since a cut
+ * that has opened is a hole in the silhouette and `chordInside` refuses it — measured at zero crossings
+ * over six patterns. A cut shared by two faces is still conceivable, and a zero-width seam would be one,
+ * so pricing it stays.
+ *
+ * A crease with **no recorded fold angle** falls back to the classification this replaces — a mountain
+ * costs full price, anything else costs nothing. Two of the eight bundled patterns record no angles at
+ * all, and inventing one for them would be worse than admitting the model cannot run: an assumed 180
+ * degrees would put a full-price crease on every mountain that in fact barely folds, and an assumed
+ * gentle fold would wave copper over one that folds flat. The fallback is stated here so that a result
+ * from such a pattern can be reported as the classification it is.
+ */
+/**
+ * Whether copper may not cross this hinge at all — see {@link SheetSpec.strainLimit}.
+ *
+ * A cut is refused whatever the limit says, since there is no material to carry the tape. A crease with no
+ * recorded angle is never refused: the model cannot compute a strain for it, and refusing on a guess would
+ * make a pattern unroutable because of what its file failed to record.
+ */
+function creaseRefused(g: GapEdge, tapeW: number, tapeMm: number, sheet: SheetSpec): boolean {
+  if (sheet.strainLimit == null) return false;
+  if (g.dihedral == null) return false;
+  const mmPerUnit = tapeW > 0 ? tapeMm / tapeW : 0;
+  const hingeMm = Math.hypot(g.legB.x - g.legA.x, g.legB.y - g.legA.y) * mmPerUnit;
+  return overStrainLimit(hingeMm, g.dihedral, sheet);
+}
+
+function creaseFraction(g: GapEdge, tapeW: number, tapeMm: number, sheet: SheetSpec): number {
+  if (g.assignment === "C") return 1;
+  if (g.dihedral == null) return g.assignment === "M" ? 1 : 0;
+  const mmPerUnit = tapeW > 0 ? tapeMm / tapeW : 0;
+  const hingeMm = Math.hypot(g.legB.x - g.legA.x, g.legB.y - g.legA.y) * mmPerUnit;
+  return creaseCostFraction(hingeMm, g.dihedral, sheet);
+}
 
 /**
  * The pattern's travel network. Nodes are **edge midpoints**, and crossing a tile means taking a chord from
@@ -1932,7 +2688,16 @@ const edgeKeyOf = (a: number, b: number): string => (a < b ? `${a}_${b}` : `${b}
  * waypoint diverted nothing even at 400x. Chords give a face many ways through, so the second net has
  * somewhere else to go.
  */
-function buildCorridor(faces: FlatFace[], gaps: GapEdge[], foldPenalty: number, tapeW: number): Corridor {
+export function buildCorridor(
+  faces: FlatFace[],
+  gaps: GapEdge[],
+  foldPenalty: number,
+  tapeW: number,
+  sheet: SheetSpec = DEFAULT_SHEET,
+  /** The tape in mm — see {@link seatLed}. Only the crease strain needs it, and only to read the hinge
+   *  width in millimetres; the graph itself is built in pattern units. */
+  tapeMm: number = TAPE_MM,
+): Corridor {
   const mids = new Map<number, Vec2[]>();
   const faceOf = new Map<string, number[]>();
   const point = new Map<string, Vec2>();
@@ -1950,11 +2715,13 @@ function buildCorridor(faces: FlatFace[], gaps: GapEdge[], foldPenalty: number, 
   // Cuts are ours to add: the material is severed there, so tape spanning one is bridging a hole rather than
   // lying on a substrate.
   const penaltyOf = new Map<string, number>();
+  const refusedEdges = new Set<string>();
   for (const g of gaps) {
-    const steepValley = g.dihedral != null && Math.abs(g.dihedral) > 170;
-    const bad = g.assignment === "M" || g.assignment === "C" || (g.assignment === "V" && steepValley);
-    if (bad) penaltyOf.set(edgeKeyOf(g.verts[0], g.verts[1]), foldPenalty);
+    const price = foldPenalty * creaseFraction(g, tapeW, tapeMm, sheet);
+    if (price > 0) penaltyOf.set(edgeKeyOf(g.verts[0], g.verts[1]), price);
+    if (creaseRefused(g, tapeW, tapeMm, sheet)) refusedEdges.add(edgeKeyOf(g.verts[0], g.verts[1]));
   }
+  const refused = new Set<string>();
   const gapKeys = new Set(gaps.map((g) => ptKey(g.point)));
 
   faces.forEach((f, fi) => {
@@ -1982,6 +2749,7 @@ function buildCorridor(faces: FlatFace[], gaps: GapEdge[], foldPenalty: number, 
         faceOf.set(key, owners);
         const pen = penaltyOf.get(edgeKeyOf(va, vb));
         if (pen) cost.set(key, pen);
+        if (refusedEdges.has(edgeKeyOf(va, vb))) refused.add(key);
       }
     }
     mids.set(fi, list);
@@ -2007,7 +2775,7 @@ function buildCorridor(faces: FlatFace[], gaps: GapEdge[], foldPenalty: number, 
   for (const key of gapKeys) {
     if (!point.has(key)) continue;
   }
-  return { mids, faceOf, point, chords, cost };
+  return { mids, faceOf, point, chords, cost, refused };
 }
 
 /**
@@ -2018,7 +2786,7 @@ function buildCorridor(faces: FlatFace[], gaps: GapEdge[], foldPenalty: number, 
  * `taken` makes a waypoint dearer each time the other net has already used it, which with chords available
  * actually buys a different route rather than the same one at a higher price.
  */
-function corridorPath(
+export function corridorPath(
   c: Corridor,
   from: number,
   to: number,
@@ -2041,7 +2809,7 @@ function corridorPath(
   return searchCorridor(c, from, to, blocked, taken, forbid, false, origin, legOk, mine, theirs);
 }
 
-function searchCorridor(
+export function searchCorridor(
   c: Corridor,
   from: number,
   to: number,
@@ -2055,8 +2823,8 @@ function searchCorridor(
   theirs: Vec2[][] | null,
 ): Vec2[] {
   if (from === to) return [];
-  const starts = c.mids.get(from) ?? [];
-  const goal = new Set((c.mids.get(to) ?? []).map(ptKey));
+  const starts = (c.mids.get(from) ?? []).filter((m) => !c.refused.has(ptKey(m)));
+  const goal = new Set((c.mids.get(to) ?? []).map(ptKey).filter((k) => !c.refused.has(k)));
   if (!starts.length || !goal.size) return [];
 
   const cost = (key: string, step: number): number => {
@@ -2094,8 +2862,10 @@ function searchCorridor(
 
   let end: string | null = null;
   while (true) {
-    // A binary heap, not a scan of every distance: this runs inside a rip-up loop inside a descent, and the
-    // scan made a 12-LED puffin plan take two seconds -- far too slow to re-plan on every click.
+    // A binary heap, not a scan of every distance: this runs inside the polarity descent, once per net per
+    // build, and the scan made a 12-LED puffin plan take two seconds -- far too slow to re-plan on every
+    // click. (It said "rip-up loop" for a long time. There is no rip-up in this router and never has been:
+    // a net that cannot be routed clear is reported, not torn up and retried. See `planNets`.)
     const top = heap.pop();
     if (!top) break;
     const at: string | null = top;
@@ -2111,6 +2881,7 @@ function searchCorridor(
       for (const m of c.mids.get(f) ?? []) {
         const k = ptKey(m);
         if (k === at) continue;
+        if (c.refused.has(k)) continue; // the crease there would crack the trace — see `strainLimit`
         if (ok && !ok.has(chordKey(here, m))) continue; // that chord would leave the tile
         // A chord may pass close to the other net's terminal even when both its ends are clear of it: tolling
         // nodes cannot see that, so the chord itself is measured.
@@ -2244,6 +3015,55 @@ function dedupe(pts: Vec2[]): Vec2[] {
   return out;
 }
 
+/**
+ * How good a plan is, as a tuple ranked worst-fault-first — the router's objective.
+ *
+ * `[ chips, terminals, crossings, defects, length ]`, every entry a count or a length and all of them
+ * "lower is better". Compared by {@link lexLess}: the first entry that differs decides, and nothing below
+ * it is consulted. Tape under a chip destroys the part, tape over a battery terminal shorts the supply, a
+ * PWR×GND crossing shorts the layout, a defect makes the sheet hard to weed, and length is only a
+ * tie-breaker — so no amount of one may ever buy a unit of the one above it.
+ *
+ * **This used to be a weighted sum**, `chips·1e12 + terms·1e9 + crossings·1e6 + defects + length·1e-6`,
+ * whose comments claimed exactly the ranking above. It behaved that way only because the constants were far
+ * apart: nothing clamped a tier, so a large enough lower tier would have outranked a higher one and the
+ * guarantee held by arithmetic accident rather than by construction. Measured before the change, the worst
+ * defect tier on the bundled patterns was 214.5 against the 1e6 crossing weight — a margin of about 4,700×,
+ * so the separation was in no danger here. That is why the change is output-identical, and it is also why
+ * it was worth making: a property that is true by construction does not have to be re-measured whenever a
+ * pattern gets bigger.
+ *
+ * **Index 3 is deliberately a sum, and it is the one place two measures are traded.** See {@link planRoutes}.
+ */
+export type PlanKey = readonly [
+  chips: number,
+  terminals: number,
+  crossings: number,
+  defects: number,
+  length: number,
+];
+
+/**
+ * Whether `a` is a strictly better plan than `b` — lexicographic, short-circuiting at the first difference.
+ *
+ * `upto` limits the comparison to the leading entries, which is how a caller asks "better on everything
+ * except length": pass 4. That replaces subtracting the length term back out of a weighted sum, which was
+ * itself a trick that depended on the scale separation holding.
+ *
+ * Equal keys give `false`, so this is a strict order and `!lexLess(b, a)` is "a is no worse than b".
+ */
+export function lexLess(a: PlanKey, b: PlanKey, upto: number = a.length): boolean {
+  for (let i = 0; i < upto; i++) {
+    if (a[i] !== b[i]) return a[i]! < b[i]!;
+  }
+  return false;
+}
+
+/** A plan with no fault of any kind left to fix — every entry zero, so the search can stop. */
+function flawless(k: PlanKey): boolean {
+  return k.every((v) => v === 0);
+}
+
 /** Count PWR×GND proper crossings in `traces` — the property this router exists to keep at zero. */
 export function countNetCrossings(traces: Trace2D[]): number {
   let n = 0;
@@ -2301,7 +3121,13 @@ export function countUnderLed(
     if (isOrigin(pad.pwr) && isOrigin(pad.gnd)) continue;
     let bad = false;
     for (const t of traces) {
-      const own = t.net === "pwr" ? pad.pwr : pad.gnd;
+      // The pad this run is allowed to land on — a rail's own. A declared net has none: it has no business
+      // on either of the chip's legs, so nothing is exempt and any copper over the body counts.
+      //
+      // `t.net === "pwr" ? pad.pwr : pad.gnd` gave every non-rail net GND's pad as its own, which both
+      // excused it from real copper over the chip and scored it against the wrong leg.
+      const own: Vec2 | null =
+        t.net === "pwr" ? pad.pwr : t.net === "gnd" ? pad.gnd : null;
       for (let i = 1; i < t.pts.length && !bad; i++) {
         const a = t.pts[i - 1]!, b = t.pts[i]!;
         const L = len(sub(b, a));
@@ -2309,7 +3135,7 @@ export function countUnderLed(
         for (let k = 0; k <= steps; k++) {
           const u = k / steps;
           const m = { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u };
-          if (len(sub(m, own)) <= padR) continue; // landing on its own pad is the point
+          if (own && len(sub(m, own)) <= padR) continue; // landing on its own pad is the point
           if (segPointDist(pad.pwr, pad.gnd, m) < clear) { bad = true; break; }
         }
       }
@@ -2353,9 +3179,16 @@ export function countUnderTerminal(
 ): number {
   let n = 0;
   for (const t of traces) {
-    const forbidden = t.net === "pwr" ? term.gnd : term.pwr;
+    // A rail must clear the OTHER rail's terminal; its own is where it starts. Anything else — a declared
+    // net — has no terminal of its own here and must clear both.
+    //
+    // `t.net === "pwr" ? term.gnd : term.pwr` read every non-PWR net as GND, so a net called `sig` was
+    // forbidden from the PWR terminal and free to sweep the GND one. Wrong in both directions at once.
+    const forbidden =
+      t.net === "pwr" ? [term.gnd] : t.net === "gnd" ? [term.pwr] : [term.pwr, term.gnd];
     for (let i = 1; i < t.pts.length; i++) {
-      if (segPointDist(t.pts[i - 1]!, t.pts[i]!, forbidden) < clear) {
+      const a = t.pts[i - 1]!, b = t.pts[i]!;
+      if (forbidden.some((f) => segPointDist(a, b, f) < clear)) {
         n++;
         break; // one fault per run is enough to report
       }
@@ -2375,10 +3208,28 @@ export function countUnderTerminal(
  *  instead lets the two lanes swap sides, which measured 5 -> 44 crossings on puffin and put copper back
  *  over chips, so it is not shipped. */
 export function overlapLength(traces: Trace2D[], tol: number): number {
-  const pwr = traces.filter((t) => t.net === "pwr");
-  const gnd = traces.filter((t) => t.net === "gnd");
+  // Each unordered PAIR of distinct nets, once, rather than PWR against GND by name. With declared nets a
+  // circuit has more than two, and naming the rails left every other pair unscored — two signal nets could
+  // lie on each other for free.
+  //
+  // Pairs and not "each run against all the others", which is the same idea and is wrong: it charges a
+  // PWR/GND overlap twice, once from each side, which is a different number from the one this function has
+  // always returned. That number feeds the bus router's own scoring, so doubling it silently re-planned
+  // every bundled circuit and cost two tests that had nothing to do with nets. The rails keep their exact
+  // reading; the new pairs are additive.
+  const nets = [...new Set(traces.map((t) => t.net))];
+  const pairs: [string, string][] = [];
+  for (let i = 0; i < nets.length; i++) {
+    for (let j = i + 1; j < nets.length; j++) {
+      // PWR first when this is the rail pair, so the sampled side is the one it has always been.
+      const [a, b] = [nets[i]!, nets[j]!];
+      pairs.push(b === "pwr" ? [b, a] : [a, b]);
+    }
+  }
   let shared = 0;
-  for (const a of pwr) {
+  for (const [from, to] of pairs) {
+  const gnd = traces.filter((t) => t.net === to);
+  for (const a of traces.filter((t) => t.net === from)) {
     for (let i = 1; i < a.pts.length; i++) {
       const p = a.pts[i - 1]!, q = a.pts[i]!;
       const L = len(sub(q, p));
@@ -2392,6 +3243,7 @@ export function overlapLength(traces: Trace2D[], tol: number): number {
       }
       shared += (L * hits) / steps;
     }
+  }
   }
   return shared;
 }
@@ -2419,7 +3271,9 @@ function nearPolyline(pts: Vec2[], p: Vec2): number {
  */
 export function selfOverlapLength(traces: Trace2D[], tol: number): number {
   let sum = 0;
-  for (const net of ["pwr", "gnd"] as const) {
+  // Every net present, not the two rails by name. A circuit may now carry any number of declared nets, and
+  // naming the rails made a routed declared net free to lie on top of itself and cost nothing.
+  for (const net of new Set(traces.map((t) => t.net))) {
     const mine = traces.filter((t) => t.net === net);
     for (let ti = 0; ti < mine.length; ti++) {
       const a = mine[ti]!;
@@ -2468,7 +3322,10 @@ function sharesEnd(a: Vec2, b: Vec2, c: Vec2, d: Vec2): boolean {
  */
 export function countAcuteJoins(traces: Trace2D[], minAngle = Math.PI / 6): number {
   let n = 0;
-  for (const net of ["pwr", "gnd"] as const) {
+  // Every net present, not the two rails by name: a declared net's runs meet at sharp angles and tear the
+  // substrate exactly as a rail's do. For a bus circuit the set is precisely {pwr, gnd}, so this reads the
+  // same number it always has.
+  for (const net of new Set(traces.map((t) => t.net))) {
     const mine = traces.filter((t) => t.net === net);
     const at = new Map<string, Vec2[]>();
     for (const t of mine) {

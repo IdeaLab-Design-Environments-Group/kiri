@@ -67,8 +67,22 @@ describe("model/resistor", () => {
     const pwrAfter = withRes.traces.filter((t) => t.net === "pwr").length;
     expect(pwrAfter).toBe(pwrBefore + 1); // one run became two
 
-    const removed = (totalLength(plain.traces) - totalLength(withRes.traces)) * k;
-    expect(removed).toBeCloseTo(RESISTOR_MM, 1); // exactly the body's length of copper
+    // Measured as the gap itself: the two cut ends, a body's length apart with bare pattern between them.
+    //
+    // This used to subtract the two plans' total copper and expect the difference to be RESISTOR_MM. That
+    // was always a proxy, and it stopped being a sound one when an LED's legs began reaching in over the
+    // tile gap: breaking one run into two changes which run hosts a leg, so the seating adds length back
+    // and the subtraction reports 0.796mm for a gap that is exactly 1.8mm wide. The proxy was measuring
+    // the LED, not the resistor. The gap is what the comment above is about, so measure the gap.
+    const ends = withRes.traces
+      .filter((t) => t.net === "pwr")
+      .map((t) => [t.pts[0]!, t.pts[t.pts.length - 1]!] as const);
+    let gap = Infinity;
+    for (let i = 0; i < ends.length; i++)
+      for (let j = i + 1; j < ends.length; j++)
+        for (const p of ends[i]!) for (const q of ends[j]!)
+          gap = Math.min(gap, Math.hypot(p.x - q.x, p.y - q.y) * k);
+    expect(gap).toBeCloseTo(RESISTOR_MM, 6); // exactly the body's length of bare pattern
   });
 
   it("reports where the leads land, so the part can be drawn on the break", () => {
@@ -397,11 +411,17 @@ describe("model/switch", () => {
 
   it("lands on pad-sized copper, not on full tape", () => {
     // The terminals are .098in apart. Two full-width stubs would meet between them and short the part.
+    //
+    // `pad.w`, and it used to say `pad.h` — that was the bug, not drift. A land's width is its extent
+    // ACROSS the run, and an across-the-rail part is seated turned, so the footprint's own along-axis
+    // becomes the run's across-axis. Measured on a seated SPDT each lead is 1.0mm across and 1.2mm along,
+    // and `SPDT.pad` is `{w: 1.0, h: 1.2}`. `clearOfOtherNet` three lines from the same call site already
+    // took the box that way round, so the file contradicted itself and this test pinned the wrong half.
     const { r, tapeW, k } = withSwitch();
     const lands = r.traces.filter((t) => t.width !== undefined);
     expect(lands).toHaveLength(2);
     for (const l of lands) {
-      expect(l.width! * k).toBeCloseTo(SPDT.pad.h, 4);
+      expect(l.width! * k).toBeCloseTo(SPDT.pad.w, 4);
       expect(l.width!).toBeLessThan(tapeW);
     }
   });
