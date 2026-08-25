@@ -1,3 +1,10 @@
+# Dependencies and build output — never committed. Both were tracked until now, which is how
+# eight iCloud "name 2.ext" conflict copies got into the repo.
+node_modules/
+dist/
+
+# macOS junk
+.DS_Store
 
 # Scratch git worktrees used by background agents — never part of the repo.
 .claude/worktrees/
