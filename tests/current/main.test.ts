@@ -114,7 +114,7 @@ describe("main.ts", () => {
   });
 
   it("wires the composition root and loads the sample quietly", async () => {
-    await import("../../src/main.ts");
+    await import("../../src/main.js");
 
     expect(state.appChildren.map((x) => x.id)).toEqual(["convert", "viewer"]);
     expect(state.headerChildren.map((x) => x.id)).toEqual(["header-actions"]);
@@ -132,13 +132,13 @@ describe("main.ts", () => {
 
   it("throws when the #app root is missing", async () => {
     (globalThis as any).document.getElementById = vi.fn(() => null);
-    await expect(import("../../src/main.ts")).rejects.toThrow(/Missing #app root/);
+    await expect(import("../../src/main.js")).rejects.toThrow(/Missing #app root/);
   });
 
   it("tolerates a missing .app-header host", async () => {
     (globalThis as any).document.querySelector = vi.fn(() => null);
 
-    await import("../../src/main.ts");
+    await import("../../src/main.js");
 
     expect(state.appChildren.map((x) => x.id)).toEqual(["convert", "viewer"]);
     expect(state.headerChildren).toEqual([]);

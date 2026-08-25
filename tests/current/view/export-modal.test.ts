@@ -42,6 +42,7 @@ describe("view/export-modal", () => {
     const modal = new ExportModal();
     modal.setProvider(() => ({
       previews: { cut: "<svg>cut</svg>", score: "<svg>score</svg>", both: "<svg>both</svg>" },
+      files: [],
       archive: { filename: "cut.zip", bytes: new Uint8Array([1, 2, 3]) },
       combined: { filename: "all.svg", svg: "<svg />" },
     }));
@@ -60,6 +61,7 @@ describe("view/export-modal", () => {
     const modal = new ExportModal();
     modal.setProvider(() => ({
       previews: { cut: "", score: "", both: "" },
+      files: [],
       archive: { filename: "cut.zip", bytes: new Uint8Array([1, 2]) },
       combined: { filename: "all.svg", svg: "<svg />" },
     }));
