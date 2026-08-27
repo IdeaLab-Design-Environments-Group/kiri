@@ -4,6 +4,8 @@ import type { FoldNet, FoldScene, FoldSolver, SimMaterial } from "../sim/index.j
 import { kineticDamp, removeRigidBodyMotion } from "../sim/index.js";
 import { DEFAULT_MAX_SUBDIV, MAX_TILE_GAP, MIN_TILE_GAP, TILE_INSET_FRAC } from "../model/tile-subdiv.js";
 import type { AnchoredMesh } from "../model/trace-anchor.js";
+import { GND_COLOUR, PWR_COLOUR } from "../model/net-palette.js";
+import { SVGPCB_COLOURS } from "../model/part-render.js";
 import type { SimView } from "./sim-view.js";
 
 /**
@@ -67,15 +69,50 @@ const MAX_SETTLE_FRAMES = 240;
  */
 const NET_COLOUR = 0x4a8fd8;
 
-/** The 2D layout's own colours, so the model and the layout show the same thing. */
+/**
+ * The one `#rrggbb` the palettes are written in, as the `0xrrggbb` three.js materials take.
+ *
+ * Private on purpose: it exists so the tables below can name a palette entry instead of re-typing its
+ * digits, not as a general colour utility. Nothing here parses `rgb()`, names or short `#rgb` — the two
+ * sources it is pointed at are six-digit hex and are checked in as such.
+ */
+const hexColour = (css: string): number => Number.parseInt(css.slice(1), 16);
+
+/**
+ * The 2D layout's own colours, so the model and the layout show the same thing — read from the layout's
+ * palettes rather than copied out of them, which is the only version of that claim a later edit cannot
+ * quietly falsify. The rails come from `net-palette.ts` (the same constants the sidebar and the tape CSS
+ * are pinned to) and the parts from `part-render.ts › SVGPCB_COLOURS`.
+ *
+ * The four pad kinds collapse onto one colour because they ARE one thing: four pads. The 2D layout draws
+ * every pad the same — an LED's anode is not a different metal from a battery terminal — and the
+ * red/dark pair they used to carry was a leftover from when a part was a cartoon of itself rather than a
+ * real footprint, colour-coding polarity because there was no shape to say it. There is now: the `mark`
+ * bars carry the `+`/`−`, which is why they stay white against the pad and are the one entry here that no
+ * palette owns (see `trace-anchor.ts › marks` for why they are geometry and not a glyph).
+ *
+ * The one colour to take is `mask`, not `copper`, even though a pad is copper. In the `"svgpcb"` style the
+ * editor paints with, `partLayers` holds the mask opening back by no rim at all (`RIM` applies only to the
+ * `"kiri"` style), so the mask polygon is the copper polygon, opaque, drawn in the `F.Mask` group over
+ * `F.Cu` — the copper never shows, and the gold is the whole of what a pad looks like over there. Taking
+ * `copper` here would put a darker pad on the model than the layout has, which is precisely the drift this
+ * table exists to prevent.
+ *
+ * `led-body` is the exception, because it is the one piece with no counterpart to match: the layout draws
+ * no body at all (`ResistorShape.body` is read only to place the designator and the origin dot). Copper is
+ * the stand-in — the darker metal beneath the brighter pads, the way a board reads, and the thing that
+ * keeps the body legible against them now that all four pads are one colour. It does end up beneath them:
+ * every mesh here shares a `renderOrder` of 4 and sits at the group origin with `depthTest` off, so what
+ * decides is creation order, and `trace-anchor.ts` pushes a pad pair's body before its two pads.
+ */
 const OVERLAY_COLOURS: Record<AnchoredMesh["kind"], number> = {
-  pwr: 0xff0000,
-  gnd: 0x222222,
-  "led-pwr": 0xee3b30,
-  "led-gnd": 0x2b2f36,
-  "led-body": 0xd8b24a,
-  "batt-pwr": 0xee3b30,
-  "batt-gnd": 0x2b2f36,
+  pwr: hexColour(PWR_COLOUR),
+  gnd: hexColour(GND_COLOUR),
+  "led-pwr": hexColour(SVGPCB_COLOURS.mask),
+  "led-gnd": hexColour(SVGPCB_COLOURS.mask),
+  "led-body": hexColour(SVGPCB_COLOURS.copper),
+  "batt-pwr": hexColour(SVGPCB_COLOURS.mask),
+  "batt-gnd": hexColour(SVGPCB_COLOURS.mask),
   mark: 0xffffff,
 };
 

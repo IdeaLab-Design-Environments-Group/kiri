@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PCB_COLOURS, designators, partSvg } from "../../../src/model/part-render.js";
+import { PCB_COLOURS, SVGPCB_COLOURS, designators, partLayers, partSvg } from "../../../src/model/part-render.js";
 import { partShape, type ResistorShape } from "../../../src/model/copper-svg-export.js";
 import { BAT_COIN_20, R_1206, SW_SPDT, type Footprint } from "../../../src/model/footprints.generated.js";
 import { padNamed, padPoints, padSize } from "../../../src/model/footprint.js";
@@ -42,6 +42,28 @@ describe("PCB_COLOURS", () => {
       componentLabel: "#00e5e5",
       origin: "#8b1a1a",
     });
+  });
+});
+
+describe("SVGPCB_COLOURS", () => {
+  it("is the svg-pcb palette, exactly", () => {
+    expect(SVGPCB_COLOURS).toEqual({
+      copper: "#be7a27",
+      mask: "#ffa50a",
+      padLabel: "#ffff99",
+      componentLabel: "#00e5e5",
+      origin: "#8b1a1a",
+      backCopper: "#ff4c00",
+      backMask: "#ff814b",
+      outline: "#002d00",
+      drill: "#ffffff",
+    });
+  });
+
+  it("adds to the cut-file palette without repainting any of it", () => {
+    for (const [layer, colour] of Object.entries(PCB_COLOURS)) {
+      expect(SVGPCB_COLOURS[layer as keyof typeof PCB_COLOURS]).toBe(colour);
+    }
   });
 });
 
@@ -311,5 +333,133 @@ describe("partSvg on the library's real placements", () => {
         expect(Number(texts[i]!.match(/y="([^"]*)"/)![1])).toBeCloseTo((l.a.y + l.b.y) / 2, 3);
       }
     }
+  });
+});
+
+describe("partLayers buckets", () => {
+  const sw = partShape(SW_SPDT, { x: 10, y: 20 }, { x: 34, y: 27 })!;
+
+  it("puts each element on the layer it belongs to", () => {
+    const l = partLayers(SW_SPDT, sw, "SW1", { scale: 8 });
+    expect(l.copper).toHaveLength(sw.leads.length);
+    expect(l.mask).toHaveLength(sw.leads.length);
+    expect(l.drills).toHaveLength(2 * (sw.holes ?? []).length);
+    expect(l.padLabels).toHaveLength(sw.leads.length);
+    expect(l.componentLabels).toHaveLength(1);
+    expect(l.origin).toHaveLength(1);
+    for (const e of l.copper) expect(e).toContain(`fill="${PCB_COLOURS.copper}"`);
+    for (const e of l.mask) expect(e).toContain(`fill="${PCB_COLOURS.mask}"`);
+    for (const e of l.padLabels) expect(e).toContain(PCB_COLOURS.padLabel);
+    for (const e of l.componentLabels) expect(e).toContain(PCB_COLOURS.componentLabel);
+    for (const e of l.origin) expect(e).toContain(PCB_COLOURS.origin);
+  });
+
+  it("flattens, in paint order, into exactly what partSvg draws", () => {
+    for (const style of ["kiri", "svgpcb"] as const) {
+      const l = partLayers(SW_SPDT, sw, "SW1", { scale: 8, style });
+      expect([...l.copper, ...l.mask, ...l.drills, ...l.padLabels, ...l.componentLabels, ...l.origin])
+        .toEqual(partSvg(SW_SPDT, sw, "SW1", { scale: 8, style }));
+    }
+  });
+
+  it("keeps the copper and the designator when the caller asks for no pad names", () => {
+    const l = partLayers(SW_SPDT, sw, "SW1", { scale: 8, style: "svgpcb", labels: false });
+    expect(l.padLabels).toHaveLength(0);
+    expect(l.copper).toHaveLength(sw.leads.length);
+    expect(l.componentLabels).toHaveLength(1);
+  });
+
+  it("draws a part with no leads at all as just its origin and its designator", () => {
+    const l = partLayers(R_1206, leadShape([]), "R1", { style: "svgpcb" });
+    expect(l.copper).toEqual([]);
+    expect(l.mask).toEqual([]);
+    expect(l.padLabels).toEqual([]);
+    expect(l.componentLabels).toHaveLength(1);
+    expect(l.origin).toHaveLength(1);
+  });
+});
+
+describe("partSvg style", () => {
+  const sw = partShape(SW_SPDT, { x: 10, y: 20 }, { x: 34, y: 27 })!;
+  const sizeOf = (el: string) => Number(el.match(/font-size="([^"]*)"/)![1]);
+
+  it("draws the kiri style when the caller names none — the cut files' own output", () => {
+    for (const fp of [R_1206, SW_SPDT, BAT_COIN_20]) {
+      const sh = partShape(fp, { x: 10, y: 20 }, { x: 34, y: 27 })!;
+      expect(partSvg(fp, sh, "X1", { scale: 8 })).toEqual(partSvg(fp, sh, "X1", { scale: 8, style: "kiri" }));
+    }
+  });
+
+  it("fills the mask on the pad's own outline, so a svgpcb pad reads as one flat shape", () => {
+    const l = partLayers(SW_SPDT, sw, "SW1", { style: "svgpcb" });
+    for (let i = 0; i < l.copper.length; i++) expect(dOf(l.mask[i]!)).toBe(dOf(l.copper[i]!));
+    for (const e of l.copper) expect(e).not.toContain("stroke-width");
+  });
+
+  it("holds the kiri mask back inside the copper instead, and outlines it", () => {
+    const l = partLayers(SW_SPDT, sw, "SW1");
+    for (let i = 0; i < l.copper.length; i++) {
+      expect(dOf(l.mask[i]!)).not.toBe(dOf(l.copper[i]!));
+      expect(Number(l.copper[i]!.match(/stroke-width="([^"]*)"/)![1])).toBeGreaterThan(0);
+    }
+  });
+
+  it("punches each hole white, at the drill's own radius", () => {
+    const holes = sw.holes ?? [];
+    expect(holes.length).toBeGreaterThan(0);
+    const l = partLayers(SW_SPDT, sw, "SW1", { style: "svgpcb" });
+    expect(l.drills).toHaveLength(holes.length);
+    for (let i = 0; i < holes.length; i++) {
+      const c = l.drills[i]!;
+      expect(c).toContain(`fill="${SVGPCB_COLOURS.drill}"`);
+      expect(c).not.toContain('fill="none"');
+      expect(Number(c.match(/ r="([^"]*)"/)![1])).toBeCloseTo(holes[i]!.r, 3);
+      expect(Number(c.match(/cx="([^"]*)"/)![1])).toBeCloseTo(holes[i]!.c.x, 3);
+      expect(Number(c.match(/cy="([^"]*)"/)![1])).toBeCloseTo(holes[i]!.c.y, 3);
+    }
+  });
+
+  it("writes a pad's name only where the pad is on copper", () => {
+    const bare: Footprint = { MECH: { ...padNamed(R_1206, "1"), layers: ["F.Mask"], index: 1 } };
+    const lead = leadShape([{ a: { x: 0, y: -3 }, b: { x: 0, y: 3 }, width: 2, name: "MECH" }]);
+    expect(partLayers(bare, lead, "R1", { scale: 4, style: "svgpcb" }).padLabels).toHaveLength(0);
+    // The same pad on copper does get its name, so it is the layers deciding and not the drawing.
+    const wired: Footprint = { MECH: { ...padNamed(R_1206, "1"), index: 1 } };
+    expect(partLayers(wired, lead, "R1", { scale: 4, style: "svgpcb" }).padLabels).toHaveLength(1);
+    // kiri names it either way — the copper test is svg-pcb's rule, not the drawing's.
+    expect(partLayers(bare, lead, "R1", { scale: 4 }).padLabels).toHaveLength(1);
+  });
+
+  it("leaves a name the footprint does not have unwritten, rather than throwing", () => {
+    const lead = leadShape([{ a: { x: 0, y: -3 }, b: { x: 0, y: 3 }, width: 2, name: "99" }]);
+    const l = partLayers(R_1206, lead, "R1", { style: "svgpcb" });
+    expect(l.padLabels).toHaveLength(0);
+    expect(l.copper).toHaveLength(1);
+  });
+
+  it("writes nothing on a lead with no name", () => {
+    const lead = leadShape([{ a: { x: 0, y: -3 }, b: { x: 0, y: 3 }, width: 2 }]);
+    expect(partLayers(R_1206, lead, "R1", { style: "svgpcb" }).padLabels).toHaveLength(0);
+  });
+
+  it("sets every pad's name at svg-pcb's own size, whatever size the pad is", () => {
+    const of = (w: number, len: number) =>
+      sizeOf(partLayers(R_1206, leadShape([{ a: { x: 0, y: -len / 2 }, b: { x: 0, y: len / 2 }, width: w, name: "1" }]),
+        "R1", { style: "svgpcb" }).padLabels[0]!);
+    expect(of(2, 1.7)).toBe(0.508);
+    expect(of(8, 6.8)).toBe(0.508);
+  });
+
+  it("sets the designator at svg-pcb's own size too", () => {
+    expect(sizeOf(partLayers(SW_SPDT, sw, "SW1", { style: "svgpcb" }).componentLabels[0]!)).toBe(0.635);
+  });
+
+  it("keeps the pad names at a zoom the kiri floor would have dropped them at", () => {
+    // 0.508mm crosses the svgpcb floor of 0.4 at a scale of about 0.79 — and the kiri floor of 0.62
+    // not until 1.22, so a name emitted here is a name the lower floor saved.
+    const l = (scale: number) => partLayers(SW_SPDT, sw, "SW1", { scale, style: "svgpcb" }).padLabels;
+    expect(l(0.7)).toHaveLength(0);
+    expect(l(0.9)).toHaveLength(sw.leads.length);
+    expect(0.508 * 0.9).toBeLessThan(0.62);
   });
 });
