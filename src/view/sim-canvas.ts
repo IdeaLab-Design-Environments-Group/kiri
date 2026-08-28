@@ -606,9 +606,11 @@ export class SimCanvas implements SimView {
     const isPinch = (u: number, w: number): boolean => {
       const key = u < w ? `${u}_${w}` : `${w}_${u}`;
       const a = assign.get(key);
-      if (a === "C") return true; // cut → the kirigami opening
       if (a === "F") return false; // flat facet (triangulation interior) → keep tiles merged, no fold here
-      return (edgeFaces.get(key) ?? 0) >= 2; // real interior fold (M/V) → hinge joint between two tiles
+      // A "C" is not automatically a joint: FKLD's "C" means "cut layer, not score layer", and a closed
+      // shape's whole silhouette is cut open to flatten it (house.fkld: C×18, B×0). Pinching a rim with
+      // no tile behind it scallops the outline the SVG export cuts straight. Two faces = a real joint.
+      return (edgeFaces.get(key) ?? 0) >= 2; // interior fold (M/V) or a true slit → hinge between tiles
     };
     this.tileSign = new Float32Array(nTris);
     this.tileEdgePinch = [];

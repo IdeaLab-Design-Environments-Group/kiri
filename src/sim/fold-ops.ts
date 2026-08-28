@@ -93,6 +93,28 @@ function sortVerticesEdges(fold: WorkFold): void {
   }
 }
 
+/**
+ * Relabel every `"C"` that has fewer than two incident faces as `"B"` — see `splitCuts`. Such an
+ * edge is the sheet's own edge, not a slit through it: there is no far side to open.
+ */
+function demoteBoundaryCuts(fold: WorkFold): void {
+  const faceCount = new Map<string, number>();
+  for (const face of fold.faces_vertices) {
+    for (let i = 0; i < face.length; i++) {
+      const a = face[i];
+      const b = face[(i + 1) % face.length];
+      const key = a < b ? `${a}_${b}` : `${b}_${a}`;
+      faceCount.set(key, (faceCount.get(key) ?? 0) + 1);
+    }
+  }
+  for (let e = 0; e < fold.edges_vertices.length; e++) {
+    if (fold.edges_assignment[e] !== "C") continue;
+    const [a, b] = fold.edges_vertices[e];
+    const key = a < b ? `${a}_${b}` : `${b}_${a}`;
+    if ((faceCount.get(key) ?? 0) < 2) fold.edges_assignment[e] = "B";
+  }
+}
+
 function connectedByFace(fold: WorkFold, verticesFaces: number[], vert1: number, vert2: number): boolean {
   if (vert1 === vert2) return false;
   for (const fi of verticesFaces) {
@@ -105,6 +127,28 @@ function connectedByFace(fold: WorkFold, verticesFaces: number[], vert1: number,
 /**
  * Split every `"C"` cut edge into two boundary edges and duplicate the vertices around each cut
  * discontinuity, so the two sides of a cut separate freely. Direct port of `pattern.js:621`.
+ *
+ * **A cut is a slit through material, and that is what this opens.** Upstream's `C` marks an edge
+ * with a face on either side which the blade parts, so the walk below starts a new vertex group at
+ * every `C` and duplicates the vertex once per group — that is the separation.
+ *
+ * This project's `C` is not always that. `pipeline/route-seams.ts` marks a one-faced edge `C` when
+ * it is a **seam lip**: an edge the unfolding created to open the shape flat, whose partner lip is a
+ * different edge elsewhere in the sheet. It has one face because it IS the sheet's edge — the
+ * separation this function exists to create already happened during unfolding, and the export cuts
+ * along it as the outline rather than slitting anything. For a closed shape there is no `∂Q`
+ * boundary at all, so every silhouette edge is such a lip: house.fkld is `C`×18, `B`×0.
+ *
+ * Splitting those tore the sheet's own corners apart, and — because duplicating a vertex reassigns
+ * the faces around it into separate groups — it took the interior edges *touching* those corners
+ * with it, turning genuine fold lines into free boundaries with no crease spring to fold them:
+ * house lost 6 of its 15 fold lines, puffin 46 of 95, akde-hex 16 of 42. Half a model's creases
+ * hanging free is most of why folds came out wrong.
+ *
+ * So `processFold` reclassifies a `C` with fewer than two faces as the `B` it already is, BEFORE
+ * deciding whether the sheet has any cut to open — and a sheet with none never reaches this function,
+ * because its boundary branch tears silhouette corners apart on its own. This is not a departure
+ * from upstream: every `C` here becomes `B` by the end of this function anyway.
  */
 export function splitCuts(fold: WorkFold): void {
   edgesVerticesToVerticesVerticesUnsorted(fold);
@@ -469,6 +513,10 @@ export function processFold(
   const split = opts.splitCuts ?? true;
   make3D(fold);
   fold.originOf = fold.vertices_coords.map((_v, i) => i); // identity until splitCuts duplicates
+  // Decide what is actually a cut BEFORE asking whether there are any: a "C" that is really the
+  // sheet's own outline leaves nothing to open, and a sheet with no cut left in it must not be put
+  // through `splitCuts` at all — its boundary branch tears silhouette corners apart too.
+  if (split) demoteBoundaryCuts(fold);
   const hasCuts = split && fold.edges_assignment.some((a) => a === "C");
   if (hasCuts) {
     splitCuts(fold);

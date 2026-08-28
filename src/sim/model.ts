@@ -71,6 +71,17 @@ export interface SolverParams {
    * (`k_axial = EA/l₀`), because a glue line is not weaker than the sheet it joins.
    */
   kSeam?: number;
+  /**
+   * How near a seam pair must be before the join takes hold, in model units (the model is normalized
+   * to bounding-sphere radius 1). The grip fades linearly to nothing at this distance, so a tab
+   * cannot reach across the model and pull the fold into the wrong branch. Default `SEAM_CAPTURE`.
+   */
+  seamCapture?: number;
+  /**
+   * What a FREE EDGE of the sheet is worth in compression, as a fraction of its tensile stiffness —
+   * real sheet bows rather than strutting, so it goes slack. Default `FREE_EDGE_SLACK`; 1 disables.
+   */
+  freeEdgeSlack?: number;
 }
 
 export const DEFAULT_PARAMS: SolverParams = {
@@ -194,7 +205,22 @@ export interface BarHingeModel {
      * across the fabric gap (θ_max = 2·atan(g/t)). Undefined ⇒ vinyl (no thickness limit).
      */
     thetaMax?: Float32Array;
+    /**
+     * SEAM hinges only (see `seamCreases`): the node on the far lip that `n3`/`n4` is taped to, or
+     * −1 for a scored crease. `forces.ts` gauges how far the joint is from being made by how far
+     * apart these still are — a hinge cannot carry a moment before the tape is on it.
+     */
+    seamPeer3?: Int32Array;
+    seamPeer4?: Int32Array;
   };
+
+  /**
+   * How many of `creases` are SEAM hinges appended by `origami-import.ts › buildSeamCreases` —
+   * taped lip pairs, which are folds of the artifact even though they are cuts in the sheet. They
+   * sit at the end of the crease arrays, so `creases[i]` for `i < count − seamCreases` is a scored
+   * line and the rest are seams. Undefined ⇒ none were built (no declared folded form).
+   */
+  seamCreases?: number;
 
   faces: {
     count: number;

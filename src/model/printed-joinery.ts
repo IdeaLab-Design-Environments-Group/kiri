@@ -6,7 +6,8 @@
  * Each triangular face → a hexagonal tile `[A, mAB, B, mBC, C, mCA]`. The three CORNERS stay full —
  * neighbouring tiles meet there (the pinpoint pivots of the rotating-units kirigami). A midpoint is
  * pinched perpendicular-inward by `gap·inradius·2` — opening the empty diamond between two tiles —
- * ONLY where the edge is a genuine joint: a real fold hinge ("M"/"V" interior fold) or a "C" cut.
+ * ONLY where the edge is a genuine joint: an edge with a tile on BOTH sides (a real "M"/"V" fold
+ * hinge, or a "C" slit through the material). See `edgeRole` on why a "C" alone does not qualify.
  * A flat-facet ("F") edge is the triangulation diagonal interior to ONE logical polygon, so it does
  * NOT pinch: its coplanar triangles stay merged into a single rigid tile (else a flat polygon shatters
  * into triangles that fold along the facet lines instead of at the real 3D joints). Outer-boundary
@@ -24,12 +25,22 @@ const cross = (a: V3, b: V3): V3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[
 const dot = (a: V3, b: V3): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const len = (a: V3): number => Math.hypot(a[0], a[1], a[2]);
 
-/** Role of a face edge from its FOLD assignment and how many faces share it. */
+/**
+ * Role of a face edge from its FOLD assignment and how many faces share it.
+ *
+ * A gap is opened only where two tiles genuinely meet, which is a question of TOPOLOGY, not of the
+ * fabrication layer an edge is cut on. `"C"` in FKLD means "this line goes on the cutter's cut path
+ * rather than its score path" (`@dayangac/fkld` CUT_TYPE_INFO: every subtype's `fabricationLayer` is
+ * `"cut"`); it does NOT mean there is material on the far side. A closed shape unfolds by cutting
+ * itself open, so its whole silhouette is `"C"` — house.fkld is `C`×18, `B`×0 — and pinching those
+ * scalloped every outer tile of the printed house, shrinking the very outline the SVG export cuts
+ * straight. One incident face = a free rim, whatever layer cuts it.
+ */
 export function edgeRole(assignment: string | undefined, faceCount: number): EdgeRole {
-  if (assignment === "C") return "cut"; // a cut — pinched open (the kirigami opening)
   if (assignment === "F") return "boundary"; // flat-facet triangulation diagonal interior to ONE polygon —
   //   NOT a joint: stays full so coplanar triangles merge into a single rigid tile (matches the sim)
-  if (faceCount <= 1) return "boundary"; // outer rim (incl. "B") — stays straight, clean perimeter
+  if (faceCount <= 1) return "boundary"; // outer rim or cut-open silhouette — straight, clean perimeter
+  if (assignment === "C") return "cut"; // a slit with tiles on both sides — pinched open
   return "merge"; // real M/V interior fold — pinched open, the hinge the tiles fold about (corners meet)
 }
 

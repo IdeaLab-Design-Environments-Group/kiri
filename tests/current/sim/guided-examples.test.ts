@@ -49,7 +49,7 @@ function freeBarStrain(model: {
 
 describe("bundled AKDE guided examples cone cleanly (declared folded-form)", () => {
   for (const name of ["akde-decagon-pyramid", "akde-hex"]) {
-    it(`${name}: cuts split, guided, rises into a low-strain 3D cone`, { timeout: 60_000 }, () => {
+    it(`${name}: sheet left whole, guided, rises into a 3D cone`, { timeout: 60_000 }, () => {
       const fold = JSON.parse(readFileSync(`public/examples/${name}.fkld`, "utf8")) as FoldFile;
       const inV = fold.vertices_coords!.length;
       const built = buildScene(fold);
@@ -58,8 +58,20 @@ describe("bundled AKDE guided examples cone cleanly (declared folded-form)", () 
       expect(built!.sim).toBe("kirigami");
       const { model, solver } = built!.scene;
 
-      // Kirigami cuts were split, so the model has more nodes than the flat pattern.
-      expect(model.numNodes).toBeGreaterThan(inV);
+      // The sheet is not torn: the model has exactly the pattern's vertices. It used to have more,
+      // because `splitCuts` duplicated them around every "C" edge — but every "C" in these files is
+      // the sheet's own silhouette (one face), which the export simply cuts around. Splitting those
+      // tore the corners apart and took real fold lines with them; see fold-ops.ts `splitCuts`.
+      expect(model.numNodes).toBe(inV);
+      // And every score line the export would cut into the paper is a crease here — the simulator
+      // folds along exactly the lines the machine scores, no more and no fewer.
+      const scored = (fold.edges_assignment as string[]).filter((a) => a === "M" || a === "V").length;
+      let mv = 0;
+      for (let i = 0; i < model.creases.count; i++) {
+        const a = model.creases.assignment[i];
+        if (a === "M" || a === "V") mv++;
+      }
+      expect(mv).toBe(scored);
       expect(Array.from(model.driven).some((d) => d === 1)).toBe(true);
 
       // No faces lost in preprocessing: every (triangular) FKLD face survives splitCuts +

@@ -8,6 +8,16 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:architecture": "vitest run tests/current/architecture",
+    "test:bst": "vitest run tests/current/bst",
+    "test:controller": "vitest run tests/current/controller",
+    "test:core": "vitest run tests/current/core",
+    "test:fkld": "vitest run tests/current/fkld",
+    "test:model": "vitest run tests/current/model",
+    "test:pipeline": "vitest run tests/current/pipeline",
+    "test:services": "vitest run tests/current/services",
+    "test:sim": "vitest run tests/current/sim",
+    "test:view": "vitest run tests/current/view",
     "footprints": "sh ocaml/build.sh"
   },
   "devDependencies": {

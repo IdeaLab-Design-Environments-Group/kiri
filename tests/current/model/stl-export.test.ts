@@ -1,11 +1,16 @@
 /**
  * FKLD → STL export: the 3D-printed tiles (`printed-joinery.ts`), matched to the 3D-Sim render. Each
  * face is a hexagonal tile `[A, mAB, B, mBC, C, mCA]` extruded to a closed prism; corners stay full
- * (neighbours meet there), every non-boundary edge midpoint pinches inward (interior folds AND "C"
- * cuts open the diamond), and outer-boundary edges stay straight. What you see in the sim is what you cut.
+ * (neighbours meet there), an edge with a tile on BOTH sides pinches its midpoint inward to open the
+ * diamond, and every free rim stays straight. A "C" on a free rim is a rim: FKLD's "C" names the
+ * cutter layer, not material on the far side, and a closed shape is cut open along its whole
+ * silhouette to flatten it. What you see in the sim is what you cut.
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 import { buildStlExport } from "../../../src/model/stl-export.js";
+import { edgeRole } from "../../../src/model/printed-joinery.js";
 import type { FoldFile } from "../../../src/model/fold-file.js";
 
 type V3 = [number, number, number];
@@ -49,19 +54,31 @@ describe("buildStlExport — printed tiles (sim-matched pinched hexagons)", () =
     for (const [x, y] of [[0, 0], [10, 0], [5, 8], [5, 0], [7.5, 4], [2.5, 4]]) expect(hasXY(vs, x, y)).toBe(true);
   });
 
-  it("PINCHES a 'C' cut edge inward, leaving boundary edges straight (corners stay full)", () => {
+  it("PINCHES a 'C' slit that has a tile on both sides", () => {
+    const fold: FoldFile = {
+      vertices_coords: [[0, 0], [10, 0], [10, 10], [0, 10]],
+      faces_vertices: [[0, 1, 2], [0, 2, 3]],
+      edges_vertices: [[0, 1], [1, 2], [0, 2], [2, 3], [0, 3]],
+      edges_assignment: ["B", "B", "C", "B", "B"], // 0–2 is a real slit: material on both sides
+    };
+    const vs = verts(buildStlExport(fold, "t", 2)!.text);
+    expect(hasXY(vs, 5, 5)).toBe(false); // the slit midpoint pinched inward on both tiles
+    expect(hasXY(vs, 5, 0)).toBe(true); // rim midpoints stay straight
+    for (const [x, y] of [[0, 0], [10, 0], [10, 10]]) expect(hasXY(vs, x, y)).toBe(true); // corners full
+  });
+
+  it("leaves a 'C' on a FREE RIM straight — the cut-open silhouette is not a joint", () => {
+    // A closed shape unfolds by cutting itself open, so its whole outline is "C" (house.fkld: C×18,
+    // B×0). Those edges have no tile behind them; pinching them scallops the outline the SVG export
+    // cuts straight. Identical geometry to the all-boundary tile above.
     const fold: FoldFile = {
       vertices_coords: [[0, 0], [10, 0], [5, 8]],
       faces_vertices: [[0, 1, 2]],
       edges_vertices: [[0, 1], [1, 2], [2, 0]],
-      edges_assignment: ["C", "B", "B"], // base 0–1 is a cut → pinched; the others are boundary
+      edges_assignment: ["C", "C", "C"],
     };
-    const vs = verts(buildStlExport(fold, "t", 2)!.text);
-    expect(hasXY(vs, 5, 0)).toBe(false); // the cut midpoint left its true position (5,0), pinched inward (y>0)
-    expect(vs.some(([x, y]) => Math.abs(x - 5) < 1e-6 && y > 0.1 && y < 4)).toBe(true);
-    expect(hasXY(vs, 7.5, 4)).toBe(true); // boundary midpoints stay straight
-    expect(hasXY(vs, 2.5, 4)).toBe(true);
-    for (const [x, y] of [[0, 0], [10, 0], [5, 8]]) expect(hasXY(vs, x, y)).toBe(true); // corners full
+    const vs = verts(buildStlExport(fold, "t", 4)!.text);
+    for (const [x, y] of [[0, 0], [10, 0], [5, 8], [5, 0], [7.5, 4], [2.5, 4]]) expect(hasXY(vs, x, y)).toBe(true);
   });
 
   it("PINCHES interior fold edges too (matches the sim): a shared M/V/F edge opens", () => {
@@ -77,16 +94,38 @@ describe("buildStlExport — printed tiles (sim-matched pinched hexagons)", () =
     expect(hasXY(vs, 10, 10)).toBe(true);
   });
 
-  it("a wider Gap pinches the cut midpoint further inward", () => {
+  it("a wider Gap pinches the joint midpoint further inward", () => {
     const fold: FoldFile = {
-      vertices_coords: [[0, 0], [10, 0], [5, 8]],
-      faces_vertices: [[0, 1, 2]],
-      edges_vertices: [[0, 1], [1, 2], [2, 0]],
-      edges_assignment: ["C", "B", "B"],
+      vertices_coords: [[0, 0], [10, 0], [10, 10], [0, 10]],
+      faces_vertices: [[0, 1, 2], [0, 2, 3]],
+      edges_vertices: [[0, 1], [1, 2], [0, 2], [2, 3], [0, 3]],
+      edges_assignment: ["B", "B", "C", "B", "B"],
     };
-    // the pinched cut midpoint is the vertex at x=5 with 0 < y < centroid (8/3≈2.67); exclude the centroid
-    const midY = (gap: number): number => Math.max(...verts(buildStlExport(fold, "t", 1, null, gap)!.text).filter(([x, y]) => Math.abs(x - 5) < 1e-6 && y > 0.01 && y < 2.6).map(([, y]) => y));
-    expect(midY(0.3)).toBeGreaterThan(midY(0.05)); // bigger gap → deeper pinch
+    // the two pinched lips of the shared edge sit either side of its true midpoint (5,5)
+    const lipOffset = (gap: number): number =>
+      Math.min(...verts(buildStlExport(fold, "t", 1, null, gap)!.text).map(([x, y]) => Math.hypot(x - 5, y - 5)));
+    expect(lipOffset(0.3)).toBeGreaterThan(lipOffset(0.05)); // bigger gap → deeper pinch
+  });
+
+  it("house.fkld — a closed shape's whole outline is 'C', and none of it is a joint", () => {
+    // The real case the rim rule exists for: unfolding a closed solid cuts it open along its
+    // silhouette, so house.fkld carries C×18 / B×0 with every one of those edges on the outline.
+    // The SVG export cuts them as a clean outline; the printed tiles must not scallop it.
+    const url = new URL("../../../public/examples/house.fkld", import.meta.url);
+    const fold = JSON.parse(readFileSync(fileURLToPath(url), "utf8")) as FoldFile;
+    const key = (a: number, b: number): string => (a < b ? `${a}_${b}` : `${b}_${a}`);
+    const faceCount = new Map<string, number>();
+    for (const f of fold.faces_vertices!) {
+      for (let i = 0; i < f.length; i++) faceCount.set(key(f[i], f[(i + 1) % f.length]), (faceCount.get(key(f[i], f[(i + 1) % f.length])) ?? 0) + 1);
+    }
+    const cuts = fold.edges_vertices!.filter((_e, i) => fold.edges_assignment![i] === "C");
+    expect(cuts.length).toBe(18);
+    for (const [a, b] of cuts) {
+      const n = faceCount.get(key(a, b)) ?? 0;
+      expect(n).toBe(1); // one face behind it → the silhouette, not a slit
+      expect(edgeRole("C", n)).toBe("boundary");
+    }
+    expect(edgeRole("C", 2)).toBe("cut"); // a genuine slit still opens
   });
 
   it("uses a size-relative default height when none is given (≈ 2% of the bbox diagonal)", () => {

@@ -50,15 +50,16 @@ describe("sim/scene", () => {
     expect(built?.scene.model.driven.some((value) => value === 1)).toBe(true);
   });
 
-  it("AKDE preset with a declared folded-form is guided to a cone, cuts split open", { timeout: 20000 }, () => {
+  it("AKDE preset with a declared folded-form is guided to a cone, sheet left whole", { timeout: 20000 }, () => {
     const fold = loadExample("akde-hex.fkld");
     const inV = fold.vertices_coords!.length;
     const built = buildScene(fold);
     expect(built?.mode).toBe("guided"); // hex declares a foldedForm footprint → driven to it
     expect(built?.sim).toBe("kirigami");
     const { model, solver } = built!.scene;
-    // kirigami: cuts were split, so the model has MORE nodes than the flat pattern's vertices.
-    expect(model.numNodes).toBeGreaterThan(inV);
+    // The sheet is not torn: exactly the pattern's vertices. Every "C" in this file is the sheet's
+    // own silhouette, which the export cuts around rather than slitting — see fold-ops.ts.
+    expect(model.numNodes).toBe(inV);
     expect(Array.from(model.driven).some((d) => d === 1)).toBe(true);
     solver.solve(16000, 1);
     // It rises into a cone: real z extent, footprint roughly round (x extent ≈ y extent).

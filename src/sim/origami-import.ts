@@ -460,6 +460,7 @@ function applyDeclaredGoal(
       c.targetTheta[i] = clampFold(measureTheta(model, c.face1[i], c.face2[i], c.n3[i], c.n4[i]));
     }
   }
+  if (softGuide) buildSeamCreases(model); // measures its own targets in this same goal pose
   model.position.set(flat);
   return true;
 }
@@ -537,6 +538,153 @@ function buildSeams(model: BarHingeModel): void {
     rest: Float32Array.from(rest),
     k: model.params.kSeam ?? 0,
   };
+}
+
+/**
+ * **A taped seam is a hinge, not just a join.** `buildSeams` holds a cut's two lips at the same
+ * point; that is a pin, and a pin has no preferred angle. The two panels it joins were free to
+ * scissor about it, so the shape had to be found by the guide and then hoped to survive the release.
+ *
+ * A closed shape cannot avoid these joints. house.fkld's solid has 7 faces and 15 polygon edges, so
+ * a flat net keeps at most a spanning tree of 6 of them as folds — the file has exactly 6 `"M"`, the
+ * maximum — and the remaining 9 must be cut into 18 lips and taped back together. Two thirds of that
+ * house's real fold lines are seams. Modelling them as bare pins throws away two thirds of the
+ * structure that holds it up.
+ *
+ * So every lip pair the goal brings together also gets a torsional spring, with the dihedral the
+ * declared form puts between the two lips' faces as its target — identical in every respect to an
+ * `"M"` crease, because in the folded artifact that is what it is.
+ *
+ * Two details make the sign work out. The hinge line is lip A's own nodes, and lip B's face is
+ * torqued about it: legitimate only because the seam springs hold the lips coincident, which is why
+ * this exists alongside `buildSeams` rather than instead of it. And the target is measured with the
+ * SAME `measureTheta` the force uses, so whichever way the two lips wind relative to each other, the
+ * target carries the matching sign. In the flat sheet every face normal is +z, so θ starts at 0 and
+ * the ramp `targetTheta · foldPercent` opens the seam from flat exactly as it opens a crease.
+ */
+function buildSeamCreases(model: BarHingeModel): void {
+  const seams = model.seams;
+  if (!seams || seams.count === 0) return;
+
+  // node → the nodes the goal welds it to (a lip pair may also share an endpoint, e.g. a slit's
+  // hinge corner, so each node counts as its own partner too).
+  const partners = new Map<number, number[]>();
+  const addPartner = (a: number, b: number): void => {
+    const list = partners.get(a);
+    if (list) list.push(b);
+    else partners.set(a, [b]);
+  };
+  for (let i = 0; i < model.numNodes; i++) addPartner(i, i);
+  for (let i = 0; i < seams.count; i++) {
+    addPartner(seams.n0[i], seams.n1[i]);
+    addPartner(seams.n1[i], seams.n0[i]);
+  }
+
+  // edge → the faces on it, with the wing vertex opposite the edge in each.
+  const key = (a: number, b: number): string => (a < b ? `${a}_${b}` : `${b}_${a}`);
+  const onEdge = new Map<string, { face: number; wing: number }[]>();
+  const f = model.faces;
+  for (let i = 0; i < f.count; i++) {
+    const tri = [f.a[i], f.b[i], f.c[i]];
+    for (let k = 0; k < 3; k++) {
+      const a = tri[k], b = tri[(k + 1) % 3], wing = tri[(k + 2) % 3];
+      const kk = key(a, b);
+      const list = onEdge.get(kk);
+      if (list) list.push({ face: i, wing });
+      else onEdge.set(kk, [{ face: i, wing }]);
+    }
+  }
+
+  // Pair up free edges (one face) that the goal lays on top of one another.
+  const lip = (a: number, b: number): { face: number; wing: number } | null => {
+    const list = onEdge.get(key(a, b));
+    return list && list.length === 1 ? list[0] : null;
+  };
+  const paired = new Set<string>();
+  const n1: number[] = [], n2: number[] = [], n3: number[] = [], n4: number[] = [];
+  const face1: number[] = [], face2: number[] = [], kk: number[] = [];
+  const peer3: number[] = [], peer4: number[] = [];
+  for (const [ek, list] of onEdge) {
+    if (list.length !== 1) continue;
+    const [as, bs] = ek.split("_");
+    const a0 = Number(as), a1 = Number(bs);
+    if (paired.has(ek)) continue;
+    let found: { b0: number; b1: number; ek: string; lip: { face: number; wing: number } } | null = null;
+    for (const b0 of partners.get(a0) ?? []) {
+      for (const b1 of partners.get(a1) ?? []) {
+        if (b0 === b1) continue;
+        const bk = key(b0, b1);
+        if (bk === ek || paired.has(bk)) continue;
+        const other = lip(b0, b1);
+        if (other) found = { b0, b1, ek: bk, lip: other };
+        if (found) break;
+      }
+      if (found) break;
+    }
+    if (!found) continue;
+    paired.add(ek);
+    paired.add(found.ek);
+    n3.push(a0);
+    n4.push(a1);
+    face1.push(list[0].face);
+    n1.push(list[0].wing);
+    face2.push(found.lip.face);
+    n2.push(found.lip.wing);
+    kk.push(Math.max(nodeDist(model, a0, a1), 1e-9));
+    peer3.push(found.b0);
+    peer4.push(found.b1);
+  }
+  if (n3.length === 0) return;
+
+  // Grow the crease arrays. The solver is built after this, so it sizes itself to the new count.
+  const c = model.creases;
+  const n = c.count + n3.length;
+  const grow = <T extends Int32Array | Float32Array>(src: T, make: (len: number) => T): T => {
+    const out = make(n);
+    out.set(src.subarray(0, c.count));
+    return out;
+  };
+  const next = {
+    ...c,
+    count: n,
+    n1: grow(c.n1, (l) => new Int32Array(l)),
+    n2: grow(c.n2, (l) => new Int32Array(l)),
+    n3: grow(c.n3, (l) => new Int32Array(l)),
+    n4: grow(c.n4, (l) => new Int32Array(l)),
+    face1: grow(c.face1, (l) => new Int32Array(l)),
+    face2: grow(c.face2, (l) => new Int32Array(l)),
+    k: grow(c.k, (l) => new Float32Array(l)),
+    targetTheta: grow(c.targetTheta, (l) => new Float32Array(l)),
+    assignment: c.assignment.slice(),
+    seamPeer3: grow(c.seamPeer3 ?? new Int32Array(c.count).fill(-1), (l) => new Int32Array(l).fill(-1)),
+    seamPeer4: grow(c.seamPeer4 ?? new Int32Array(c.count).fill(-1), (l) => new Int32Array(l).fill(-1)),
+  };
+  for (let i = 0; i < n3.length; i++) {
+    const at = c.count + i;
+    next.n1[at] = n1[i];
+    next.n2[at] = n2[i];
+    next.n3[at] = n3[i];
+    next.n4[at] = n4[i];
+    next.face1[at] = face1[i];
+    next.face2[at] = face2[i];
+    next.k[at] = model.params.kFold * kk[i];
+    next.seamPeer3![at] = peer3[i];
+    next.seamPeer4![at] = peer4[i];
+    next.assignment[at] = "C"; // a seam: cut in the sheet, hinge in the artifact
+  }
+  model.creases = next;
+  // Measured last, so measureTheta sees the finished arrays. Position is the goal pose here.
+  for (let i = 0; i < n3.length; i++) {
+    const at = c.count + i;
+    next.targetTheta[at] = clampFold(measureTheta(model, next.face1[at], next.face2[at], next.n3[at], next.n4[at]));
+  }
+  model.seamCreases = n3.length;
+}
+
+/** Distance between two nodes in the model's current pose. */
+function nodeDist(model: BarHingeModel, a: number, b: number): number {
+  const p = model.position;
+  return Math.hypot(p[3 * a] - p[3 * b], p[3 * a + 1] - p[3 * b + 1], p[3 * a + 2] - p[3 * b + 2]);
 }
 
 /**

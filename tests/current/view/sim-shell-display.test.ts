@@ -11,17 +11,18 @@ function load(name: string): FoldFile {
 
 describe("sim mesh display contract", () => {
   // The faithful 1:1 port folds the file's OWN geometry. A preset that declares a folded-form
-  // footprint (akde-hex) takes the faithful path: a real triangulated mesh with the cuts split
-  // open — NOT a recomputed pyramid shell. So meta.N = 0 and sim-canvas renders the full mesh.
-  it("akde-hex (declared footprint): faithful full mesh, cuts split, not a recomputed shell", () => {
+  // footprint (akde-hex) takes the faithful path: a real triangulated mesh — NOT a recomputed
+  // pyramid shell. So meta.N = 0 and sim-canvas renders the full mesh.
+  it("akde-hex (declared footprint): faithful full mesh, sheet whole, not a recomputed shell", () => {
     const fold = load("akde-hex.fkld");
     const inV = fold.vertices_coords!.length;
     const { net, model } = buildScene(fold)!.scene;
     expect(net.meta.N).toBe(0); // not a recomputed pyramid net → sim-canvas draws the full mesh
     expect(net.tips.length).toBe(0);
-    expect(model.numNodes).toBeGreaterThan(inV); // cuts were split open
-    // Split cut lips (relabeled "B" for the solver) are re-tagged "C" in the net so sim-canvas
-    // draws them as black cut lines on the flat full sheet, not as gray boundary.
+    // Every "C" here is the sheet's own silhouette, cut open to flatten it — not a slit through
+    // material. Nothing is split, so the mesh keeps exactly the pattern's vertices (see fold-ops.ts).
+    expect(model.numNodes).toBe(inV);
+    // They are still drawn as cut lines, because that is what the cutter does with them.
     expect(net.edges.some((e) => e.assignment === "C")).toBe(true);
   });
 

@@ -46,18 +46,24 @@ const len = (a: V3): number => Math.hypot(a.x, a.y, a.z);
  * tension, near-nothing in compression. Interior edges are unaffected — they are braced by the
  * faces on both sides and do carry compression.
  *
- * Measured on the bundled presets: house.fkld folds 2 creases off-target by up to 36° and lands 7.5%
- * of a model span from its declared form with free edges strutting, versus every crease within 8°
- * and 3.0% of span with them slack, at a tenth the tensile strain.
+ * Measured on the bundled presets, strutting versus slack: church.fkld lands 9.9% of a model span
+ * from its declared form versus 2.6%, with 5 of its 13 creases off target versus none; puffin 13.0%
+ * versus 6.5%. Where a pattern's folded form asks nothing of its free edges — house, kirigami-flap,
+ * bistable-star — the rule makes no difference, which is what it should do.
  */
-const FREE_EDGE_SLACK = 0.05;
+export const FREE_EDGE_SLACK = 0.05;
 
 /**
  * How near a seam pair must be before the join takes hold, in model units — the model is normalized
  * to a bounding-sphere radius of 1, so this is about a third of the model's radius. The grip fades
  * linearly to nothing at this distance, so there is no jump in force where it engages.
  */
-const SEAM_CAPTURE = 0.35;
+export const SEAM_CAPTURE = 0.35;
+/**
+ * How closed a seam must be before its hinge carries any moment, as a fraction of the lip's own
+ * length. See the seam-hinge block in `accumulateForces` for why this is so tight.
+ */
+export const SEAM_HINGE_CLOSE = 0.01;
 
 /** Pass 1 — unit face normals from current positions: n = (b−a) × (c−a). */
 export function computeFaceNormals(m: BarHingeModel): void {
@@ -130,7 +136,7 @@ export function accumulateForces(m: BarHingeModel, lastTheta: Float32Array, fold
     const pb = get(pos, b);
     const d = sub(pb, pa);
     const l = len(d) || 1e-9;
-    if (l < l0 && m.beams.free?.[i]) k *= FREE_EDGE_SLACK;
+    if (l < l0 && m.beams.free?.[i]) k *= m.params.freeEdgeSlack ?? FREE_EDGE_SLACK;
     const f = (k * (l - l0)) / l; // force magnitude / length → multiply by d
     // axial: pull both ends toward rest length
     F[3 * a] += f * d.x;
@@ -163,6 +169,7 @@ export function accumulateForces(m: BarHingeModel, lastTheta: Float32Array, fold
   if (seams) {
     const fp2 = foldPercent * foldPercent;
     const kSeam = seams.k * fp2 * fp2;
+    const capture = m.params.seamCapture ?? SEAM_CAPTURE;
 
     for (let i = 0; i < seams.count; i++) {
       const a = seams.n0[i];
@@ -171,8 +178,8 @@ export function accumulateForces(m: BarHingeModel, lastTheta: Float32Array, fold
       const pb = get(pos, b);
       const d = sub(pb, pa);
       const l = len(d) || 1e-9;
-      if (l >= SEAM_CAPTURE) continue;
-      const grip = 1 - l / SEAM_CAPTURE; // a tab grips as it comes near its slot, not from across the room
+      if (l >= capture) continue;
+      const grip = 1 - l / capture; // a tab grips as it comes near its slot, not from across the room
       const f = (kSeam * grip * (l - seams.rest[i])) / l;
       F[3 * a] += f * d.x;
       F[3 * a + 1] += f * d.y;
@@ -211,20 +218,55 @@ export function accumulateForces(m: BarHingeModel, lastTheta: Float32Array, fold
     const el = len(e) || 1e-9;
     const ehat = { x: e.x / el, y: e.y / el, z: e.z / el };
 
-    // moment arms h1,h2 = perpendicular distance from each wing vertex to the crease line
+    // Face 2 turns about ITS OWN edge. For a scored crease that is the same edge — the two faces
+    // share it. For a SEAM hinge the far lip is a different pair of nodes lying on top of it, and
+    // face 2's couple has to close on those, or the equal-and-opposite reaction lands on nodes that
+    // are not on face 2's edge and the pair applies a net TORQUE to the whole model: linear momentum
+    // still conserved, angular momentum not, so the artifact slowly levers itself off its own goal.
+    const peer3 = m.creases.seamPeer3;
+    const m3i = peer3 && peer3[i] >= 0 ? peer3[i] : n3i;
+    const m4i = peer3 && peer3[i] >= 0 ? m.creases.seamPeer4![i] : n4i;
+    const p3b = m3i === n3i ? p3 : get(pos, m3i);
+    const p4b = m4i === n4i ? p4 : get(pos, m4i);
+    const eb = sub(p4b, p3b);
+    const elb = len(eb) || 1e-9;
+    const ehatb = { x: eb.x / elb, y: eb.y / elb, z: eb.z / elb };
+
+    // moment arms h1,h2 = perpendicular distance from each wing vertex to its own crease line
     const p1 = get(pos, n1i);
     const p2 = get(pos, n2i);
     const r1 = sub(p1, p3);
     const proj1 = dot(r1, ehat);
     const h1 = Math.max(Math.sqrt(Math.max(0, dot(r1, r1) - proj1 * proj1)), 1e-6);
     const coef1 = proj1 / el; // fraction along crease from n3 → n4
-    const r2 = sub(p2, p3);
-    const proj2 = dot(r2, ehat);
+    const r2 = sub(p2, p3b);
+    const proj2 = dot(r2, ehatb);
     const h2 = Math.max(Math.sqrt(Math.max(0, dot(r2, r2) - proj2 * proj2)), 1e-6);
-    const coef2 = proj2 / el;
+    const coef2 = proj2 / elb;
 
     const target = m.creases.targetTheta[i] * foldPercent;
     let angForce = m.creases.k[i] * (target - lastTheta[i]); // −k(θ − θ_target)
+
+    // A SEAM hinge (a taped lip pair — origami-import.ts › buildSeamCreases) carries a moment ONLY
+    // once its joint is made, and the reason is not stylistic. A torsion spring between two panels
+    // is a pair of equal and opposite couples, which cancel because the two faces sit on either side
+    // of one shared line. Two lips that have not met yet do not: face 2 is somewhere else entirely,
+    // its couple is about a line of its own, and the pair leaves a NET TORQUE on the artifact —
+    // measured on house at half fold, |Στ| = 8.9e-2 against 2.4e-7 with the seams off, falling to
+    // 2e-13 as the lips close. Left to act through the fold it spins the model off its own form:
+    // church 0.7% of a span off → 50%, puffin 16.7% → 34.9%.
+    //
+    // So the hinge fades in over the last 1% of a lip length, cubically — the tape going on. Wider
+    // gates leak the transient back in (church reaches 4.3% at 2%, 9.5% at 5%, 36% at 25%), and
+    // fading it in on the guide release instead does not help, because the kick is delivered
+    // whenever the hinge switches on, not whenever the hands come off.
+    if (peer3 && peer3[i] >= 0) {
+      const gap = Math.max(m3i === n3i ? 0 : len(sub(p3b, p3)), m4i === n4i ? 0 : len(sub(p4b, p4)));
+      const close = SEAM_HINGE_CLOSE * el;
+      if (gap >= close) continue; // the joint is not made yet — there is no hinge to turn about
+      const grip = 1 - gap / close;
+      angForce *= grip * grip * grip;
+    }
     // 3D-printed mode: ONE-SIDED barrier resisting closure past the thickness/gap limit θ_max only on
     // the tile side (the rigid tiles sit on the +normal face, TILE_COLLIDE_SIGN). Folding toward them
     // (s·θ > θ_max) is pushed back so the tiles stop short of colliding; the fabric-backing side folds
@@ -246,14 +288,20 @@ export function accumulateForces(m: BarHingeModel, lastTheta: Float32Array, fold
     // crease nodes (reactions) — conserve linear momentum
     const a3_1 = (-angForce * (1 - coef1)) / h1;
     const a3_2 = (-angForce * (1 - coef2)) / h2;
-    F[3 * n3i] += a3_1 * normal1.x + a3_2 * normal2.x;
-    F[3 * n3i + 1] += a3_1 * normal1.y + a3_2 * normal2.y;
-    F[3 * n3i + 2] += a3_1 * normal1.z + a3_2 * normal2.z;
+    F[3 * n3i] += a3_1 * normal1.x;
+    F[3 * n3i + 1] += a3_1 * normal1.y;
+    F[3 * n3i + 2] += a3_1 * normal1.z;
+    F[3 * m3i] += a3_2 * normal2.x;
+    F[3 * m3i + 1] += a3_2 * normal2.y;
+    F[3 * m3i + 2] += a3_2 * normal2.z;
     const a4_1 = (-angForce * coef1) / h1;
     const a4_2 = (-angForce * coef2) / h2;
-    F[3 * n4i] += a4_1 * normal1.x + a4_2 * normal2.x;
-    F[3 * n4i + 1] += a4_1 * normal1.y + a4_2 * normal2.y;
-    F[3 * n4i + 2] += a4_1 * normal1.z + a4_2 * normal2.z;
+    F[3 * n4i] += a4_1 * normal1.x;
+    F[3 * n4i + 1] += a4_1 * normal1.y;
+    F[3 * n4i + 2] += a4_1 * normal1.z;
+    F[3 * m4i] += a4_2 * normal2.x;
+    F[3 * m4i + 1] += a4_2 * normal2.y;
+    F[3 * m4i + 2] += a4_2 * normal2.z;
   }
 
   // --- Face interior-angle springs (per face, three nodes) — paper §2.4 ----------------

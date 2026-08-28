@@ -40,23 +40,29 @@ import type { FoldFile } from "../../../src/model/fold-file.js";
 const load = (name: string): FoldFile =>
   JSON.parse(readFileSync(fileURLToPath(new URL(`../../../public/examples/${name}`, import.meta.url)), "utf8"));
 
-/** Every bundled preset that declares a folded form, so they all take the soft-guided path. */
-const GUIDED = [
+/**
+ * Presets whose declared folded form their own flat net can actually be folded into — every bar
+ * keeps its length in the goal pose (see `declares an unreachable form` at the bottom, which
+ * measures it). These are held to the fold landing its declared shape.
+ */
+const REACHABLE = [
   "house.fkld",
   "church.fkld",
   "puffin.fkld",
-  "akde-hex.fkld",
-  "akde-decagon-pyramid.fkld",
   "bistable-star-tiling.fkld",
   "kirigami-flap.fkld",
 ];
 
 /**
- * Files whose declared folded form is not an isometry of their own flat net, so no fold can reach it
- * without stretching (see the test at the bottom, and goalTensileDemand). Their stretch budget is
- * their own, not the solver's.
+ * Presets whose declared folded form is NOT an isometry of their flat net: reaching it would mean
+ * stretching the sheet, in akde-decagon's case by 118% on its worst bar and beyond 5% on 130 of its
+ * 140 bars. No fold can get there, so these are held only to staying finite and to not stretching
+ * further than their own goal already asks — the failure is in the file, and the point of the test
+ * is that the simulator reports it rather than imposing the shape anyway.
  */
-const NON_ISOMETRIC = new Set(["akde-hex.fkld"]);
+const UNREACHABLE = ["akde-hex.fkld", "akde-decagon-pyramid.fkld"];
+
+const GUIDED = [...REACHABLE, ...UNREACHABLE];
 
 /**
  * Worst compressive strain on a MATERIAL interior bar — a real mountain or valley fold line, whose
@@ -87,6 +93,36 @@ function maxInteriorCompression(m: BarHingeModel, facet: Set<number>): number {
     if (e > worst) worst = e;
   }
   return worst;
+}
+
+/**
+ * Pairs of vertices the declared folded form puts at the same point, which no bar already joins —
+ * the joins the fabrication has to make. Computed independently of `buildSeams` so it checks the
+ * model against the file rather than against the code that read it.
+ */
+function goalCoincidentPairs(m: BarHingeModel): number {
+  const g = m.goal;
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (let i = 0; i < 3 * m.numNodes; i++) {
+    lo = Math.min(lo, g[i]);
+    hi = Math.max(hi, g[i]);
+  }
+  const tol = 1e-3 * (hi - lo); // SEAM_TOL_REL in origami-import.ts
+  const bonded = new Set<number>();
+  for (let i = 0; i < m.beams.count; i++) {
+    const a = m.beams.n0[i];
+    const b = m.beams.n1[i];
+    bonded.add(a < b ? a * m.numNodes + b : b * m.numNodes + a);
+  }
+  let n = 0;
+  for (let i = 0; i < m.numNodes; i++)
+    for (let j = i + 1; j < m.numNodes; j++) {
+      if (bonded.has(i * m.numNodes + j)) continue;
+      const d = Math.hypot(g[3*i] - g[3*j], g[3*i+1] - g[3*j+1], g[3*i+2] - g[3*j+2]);
+      if (d <= tol) n++;
+    }
+  return n;
 }
 
 /**
@@ -204,38 +240,36 @@ describe("a declared folded form is guided to, not blended into", () => {
       expect(Array.from(m.driven).some((d) => d === 1)).toBe(true);
       expect(m.softDriven).toBe(true);
       expect(m.guideWeight).toBe(1); // held at the start; the viewer takes it to 0 once folded
-      // Seams: the joins the artifact makes, read off the declared form. Without them a cut pattern
-      // folds perfectly and hangs open — see BarHingeModel.seams.
-      expect(m.seams?.count ?? 0).toBeGreaterThan(0);
+      // Seams: the joins the artifact makes, read off the declared form — one per pair of vertices
+      // it places at the same point that no bar already holds together. Asserted as that exact
+      // count rather than "more than none", because how many there are is a property of the file:
+      // kirigami-flap needs zero, its folded form gluing nothing, and it folds exactly. (While
+      // splitCuts was tearing the silhouette apart this number was inflated by the tear — house
+      // carried 38 seams against the 17 its form actually asks for.)
+      expect(m.seams?.count ?? 0).toBe(goalCoincidentPairs(m));
     });
   }
 });
 
 describe("the fold path is physical, not a blend between keyframes", () => {
-  for (const name of GUIDED) {
+  for (const name of REACHABLE) {
     it(`${name}: sheet neither stretches nor crushes along the way`, { timeout: 120_000 }, () => {
       const r = settled(name).ramp;
 
-      // Stretch. Most sit under 1%; akde-hex at ≈11%, because the hex's own declared
-      // form is not an isometry of its flat net — 83 of its 113 bars have to change length to reach
-      // it — so no fold can get there without stretching, and this reports honestly that it is
-      // stretching rather than hiding it behind imposed positions the way the pinned path did.
-      expect(r.pathStretch).toBeLessThan(NON_ISOMETRIC.has(name) ? 0.18 : 0.04);
+      // Stretch. These five sit at 0.00–0.44%: their folded forms are exact isometries of their
+      // flat nets, so a fold that keeps the material's length can reach them, and does.
+      expect(r.pathStretch).toBeLessThan(0.04);
 
-      // Crush of a material fold line. Measured 11% (house), 14% (church), 5% (hex); it was 100% on
-      // the straight-line blend this replaces.
+      // Crush of a material fold line. It was 100% on the straight-line blend this replaces.
       expect(r.pathCrush).toBeLessThan(0.25);
 
-      // And no single bar stretched far past the mean — measured against what this file's own
-      // declared form demands, since a fold cannot beat its target's own non-isometry (see
-      // goalTensileDemand, and the test below that reports it).
-      const demand = goalTensileDemand(settled(name).scene.model);
-      expect(r.pathStretchMax).toBeLessThan(Math.max(0.25, 3 * demand));
+      // And no single bar stretched far past the mean.
+      expect(r.pathStretchMax).toBeLessThan(0.25);
     });
 
     it(`${name}: still lands its declared form after the guide lets go`, { timeout: 120_000 }, () => {
       const r = settled(name).ramp;
-      // Measured 1.3–6.7% of a model span across the seven presets. The guide is zero by now, so
+      // Measured 0.0–6.5% of a model span across the five. The guide is zero by now, so
       // this is the pattern's own creases and seams holding the shape — a fold that sprang open, or
       // one ramped too fast to stay on its branch, lands far outside this (the free fold's ramp put
       // house at 14% and church at 27%).
@@ -245,15 +279,31 @@ describe("the fold path is physical, not a blend between keyframes", () => {
 });
 
 describe("a folded form the sheet could not reach is reported, not hidden", () => {
-  // Not a defect in the fold — a fact about these files that the pinned path made invisible by
-  // imposing the positions anyway. house and church declare forms their flat nets can actually be
-  // folded into; akde-hex does not (83 of its 113 bars have to change length to reach its cone),
-  // which is why its fold stretches where the other two do not.
-  it("house and church declare isometric forms; akde-hex does not", () => {
-    expect(goalTensileDemand(buildScene(load("house.fkld"))!.scene.model)).toBeLessThan(0.02);
-    expect(goalTensileDemand(buildScene(load("church.fkld"))!.scene.model)).toBeLessThan(0.02);
-    expect(goalTensileDemand(buildScene(load("akde-hex.fkld"))!.scene.model)).toBeGreaterThan(0.2);
+  // Not a defect in the fold — a fact about these files, which the pinned path made invisible by
+  // writing the positions in regardless. Whether a declared form is reachable is decided here, once,
+  // and it is what splits REACHABLE from UNREACHABLE above.
+  it("the five reachable presets declare exact isometries", () => {
+    for (const name of REACHABLE) {
+      expect(goalTensileDemand(buildScene(load(name))!.scene.model)).toBeLessThan(0.01);
+    }
   });
+
+  it("both AKDE presets declare a form their own flat net cannot make", () => {
+    // akde-hex asks 34% of its worst bar, akde-decagon 118%. Shrinking the timestep eightfold does
+    // not help, which is how we know it is the target and not the integrator.
+    for (const name of UNREACHABLE) {
+      expect(goalTensileDemand(buildScene(load(name))!.scene.model)).toBeGreaterThan(0.2);
+    }
+  });
+
+  for (const name of UNREACHABLE) {
+    it(`${name}: settles finite, and stretches no further than its own form asks`, { timeout: 120_000 }, () => {
+      const { scene, ramp: r } = settled(name);
+      expect([...scene.model.position].every(Number.isFinite)).toBe(true);
+      // The fold gives up somewhere short of the impossible target rather than tearing off after it.
+      expect(r.pathStretch).toBeLessThan(4 * goalTensileDemand(scene.model));
+    });
+  }
 });
 
 describe("folded layers do not end up on the wrong side of each other", () => {
@@ -315,12 +365,12 @@ describe("folded layers do not end up on the wrong side of each other", () => {
     return n;
   }
 
-  for (const name of GUIDED) {
+  for (const name of REACHABLE) {
     it(`${name}: layers rest against each other, not through`, { timeout: 120_000 }, () => {
-      // Six of the seven presets are exactly zero. puffin is the exception, and the flips are local
-      // to the same region where it also leaves creases off target (19 of 49) — it is the densest
-      // model here, and the contact is proximity-only: vertex-vs-triangle, no edge-edge, no
-      // continuous detection, so a face that sweeps past another between two steps is not caught.
+      // Four of the five are exactly zero. puffin is the exception, and its flips are local to the
+      // same region where it also leaves creases off target — it is the densest model here, and the
+      // contact is proximity-only: vertex-vs-triangle, no edge-edge, no continuous detection, so a
+      // face that sweeps past another between two steps is not caught.
       expect(wrongSidePairs(settled(name).scene.model)).toBeLessThanOrEqual(name === "puffin.fkld" ? 8 : 0);
     });
   }
