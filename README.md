@@ -1,4 +1,6 @@
-# Kirigamizer
+# Kiri
+
+*form and circuit together as one*
 
 A TypeScript + Vite app that turns a 3D model into a cuttable kirigami pattern, then lets you lay
 electronics on that pattern and route copper tape across it.
