@@ -82,6 +82,10 @@ import { placement } from "../model/parts.js";
 import { type Footprint, terminals } from "../model/footprint.js";
 import type { Component } from "../model/footprint.js";
 import { R_1206, SW_SPDT } from "../model/library.js";
+import {
+  defaultElectronicsDesign,
+  type ElectronicsDesignAdapter,
+} from "../model/electronics-design.js";
 import { footprintById } from "../model/library.js";
 import {
   BLOCKED,
@@ -382,7 +386,11 @@ export class ElectronicsModal {
 
   private editHandler: (circuit: Circuit) => void = () => {};
 
-  constructor() {
+  constructor(
+    /** The heavy model work this page asks for: route, measure tape, build cutter files.
+     *  Injected so a test can drive the page without planning a real route. */
+    private readonly design: ElectronicsDesignAdapter = defaultElectronicsDesign,
+  ) {
     this.trigger = document.createElement("button");
     this.trigger.type = "button";
     this.trigger.className = "sim-trigger";
@@ -1982,9 +1990,11 @@ export class ElectronicsModal {
       this.statusEl.textContent = "Nothing to export — place a battery and at least one LED, or draw a wire";
       return;
     }
-    const out = buildCopperSvgExport(
-      this.fold, traces, this.tapeW(), "kiri", this.routed.pads, this.mirror, this.sheetMm, this.routed.resistors, this.routed.switches, this.routedParts(),
-    );
+    const out = this.design.strips({
+      fold: this.fold, traces, tapeW: this.tapeW(), baseName: "kiri", pads: this.routed.pads,
+      mirror: this.mirror, sheetMm: this.sheetMm, resistors: this.routed.resistors,
+      switches: this.routed.switches, parts: this.routedParts(),
+    });
     this.download(out.filename, out.svg);
     const { pwr, gnd } = out.counts;
     const w = Math.round(out.widthMm * 100) / 100;
@@ -2369,7 +2379,9 @@ export class ElectronicsModal {
    *  Route button — goes through here rather than through {@link replan}. */
   private forceReplan(): void {
     this.routed = this.fold
-      ? planRoutes(this.faces, this.gaps, this.circuit, this.sheetMm, this.sheetSpec)
+      ? this.design.route({
+          faces: this.faces, gaps: this.gaps, circuit: this.circuit, sheetMm: this.sheetMm, sheet: this.sheetSpec,
+        })
       : EMPTY_ROUTE;
     this.stale = false;
   }
@@ -2764,13 +2776,14 @@ export class ElectronicsModal {
    *  needs no conversion. */
   private carrierParts(): string[] {
     if (!this.fold) return [];
-    const out = buildCopperCarrierExport(
+    const out = this.design.carrier({
       // The same traces the carrier FILE is built from, drawn wires and all. The preview drifting from the
       // file is the exact failure this function exists to prevent, and leaving the wires out of one but not
       // the other would put it straight back.
-      this.fold, this.allTraces(), this.tapeW(), "kiri", this.keepOff(), this.mirror, this.sheetMm,
-      this.routed.pads, this.routed.resistors, this.routed.switches, this.routedParts(),
-    );
+      fold: this.fold, traces: this.allTraces(), tapeW: this.tapeW(), baseName: "kiri",
+      keepOff: this.keepOff(), mirror: this.mirror, sheetMm: this.sheetMm, pads: this.routed.pads,
+      resistors: this.routed.resistors, switches: this.routed.switches, parts: this.routedParts(),
+    });
     const ring = (r: { x0: number; y0: number; x1: number; y1: number }): string => {
       const c = [
         { x: r.x0, y: r.y0 }, { x: r.x1, y: r.y0 }, { x: r.x1, y: r.y1 }, { x: r.x0, y: r.y1 },
@@ -2815,10 +2828,11 @@ export class ElectronicsModal {
     }
     // Every trace, drawn ones included — and unlike the strips file the carrier takes them whatever net
     // they are on, because it holds runs in a frame rather than sorting them onto two cut layers.
-    const out = buildCopperCarrierExport(
-      this.fold, traces, this.tapeW(), "kiri", this.keepOff(), this.mirror, this.sheetMm,
-      this.routed.pads, this.routed.resistors, this.routed.switches, this.routedParts(),
-    );
+    const out = this.design.carrier({
+      fold: this.fold, traces, tapeW: this.tapeW(), baseName: "kiri", keepOff: this.keepOff(),
+      mirror: this.mirror, sheetMm: this.sheetMm, pads: this.routed.pads,
+      resistors: this.routed.resistors, switches: this.routed.switches, parts: this.routedParts(),
+    });
     this.download(out.filename, out.svg);
     const w = Math.round(out.widthMm * 100) / 100;
     let msg =
@@ -2871,18 +2885,20 @@ export class ElectronicsModal {
     // The tape width MUST be the router's, not the default: the terminal spacing is derived from it, so a
     // different width here draws the two pads somewhere the copper never goes. On a pattern read as a 130mm
     // sheet the default 6.5 put them several pattern-widths off the tile — off-canvas entirely.
-    return batteryTerminals(c, this.diag(), poly, this.tapeW());
+    return this.design.batteryTerminals({ centre: c, diag: this.diag(), poly, tapeW: this.tapeW() });
   }
 
   /** Tape width. Shared with the router, so the strips drawn are the strips it planned clearances for. */
   private tapeW(): number {
-    return tapeWidthFor(this.faces, this.sheetMm, this.sheetSpec, this.circuit);
+    const { faces, sheetMm, sheetSpec: sheet, circuit } = this;
+    return this.design.tapeWidth({ faces, sheetMm, sheet, circuit });
   }
 
   /** The same tape in millimetres. `tapeW() / tapeMm()` is this pattern's scale, and any millimetre figure
    *  converted with `TAPE_MM` instead would be off by whatever roll the router actually chose. */
   private tapeMm(): number {
-    return tapeMmFor(this.faces, this.sheetMm, this.sheetSpec, this.circuit);
+    const { faces, sheetMm, sheetSpec: sheet, circuit } = this;
+    return this.design.tapeMm({ faces, sheetMm, sheet, circuit });
   }
 
   private diag(): number {

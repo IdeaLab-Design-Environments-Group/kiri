@@ -13,9 +13,7 @@ import {
   planRoutes,
   tapeMmFor,
   tapeWidthFor,
-  type PadPair,
   type PartPlacement,
-  type PartSpan,
   type RoutedCircuit,
   type Terminals,
   type Trace2D,
@@ -25,7 +23,9 @@ import {
   buildCopperSvgExport,
   type CopperCarrierExport,
   type CopperSvgExport,
+  type LedPads,
   type Mirror,
+  type PlacedPartMark,
 } from "./copper-svg-export.js";
 import type { SheetSpec } from "./fold-strain.js";
 
@@ -66,12 +66,15 @@ export interface CopperExportInput {
   traces: Trace2D[];
   tapeW: number;
   baseName?: string;
-  pads?: PadPair[];
+  /** Deliberately the export's own parameter types, not the router's result types. `routedParts()` in
+   *  the UI merges routed parts with FREE ones, which carry no net, so narrowing these to
+   *  {@link PartPlacement} would reject a call the underlying function accepts. */
+  pads?: LedPads[];
   mirror?: Mirror;
   sheetMm?: number;
-  resistors?: PartSpan[];
-  switches?: PartSpan[];
-  parts?: PartPlacement[];
+  resistors?: { a: Vec2; b: Vec2 }[];
+  switches?: { a: Vec2; b: Vec2; flip?: boolean }[];
+  parts?: PlacedPartMark[];
 }
 
 export interface CarrierExportInput extends CopperExportInput {
