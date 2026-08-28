@@ -134,3 +134,47 @@ export function footprintSize(fp: Footprint): Box {
   if (!Number.isFinite(minX)) return { w: 0, h: 0 };
   return { w: maxX - minX, h: maxY - minY };
 }
+
+/**
+ * How close this terminal's nearest neighbour is, in millimetres — the room copper has to land in.
+ *
+ * A run that lands on a pad may be no wider than the space between that pad and the metal beside it, or the
+ * two strips meet on the sheet and the part is shorted before it is soldered. On a 1206 chip that room is
+ * generous; on a 2.54mm pin header it is the binding constraint, and on a fine-pitch part there is none.
+ *
+ * `Infinity` when the part has only one terminal — nothing to clear, so nothing to narrow for.
+ *
+ * **Coincident terminals are not neighbours.** A footprint may name one physical connection twice — the
+ * through-hole pad and its surface-mount twin, which the parser mints as `1` and `1_1` at the *same point*.
+ * Measured on `SeeedStudio_XIAO_ESP32C3`: 37 terminals, of which 14 pairs are coincident. Counting those as
+ * neighbours reads the room as zero and collapses every landing to the floor, on exactly the parts this
+ * function exists to serve. They are one piece of metal at one place; a run landing on it lands on both.
+ *
+ * A property of the part and not of the placement — every terminal of one footprint turns rigidly with it,
+ * so no `rot`, `flip` or `free` can change a pitch. Hence the cache, keyed on the footprint object rather
+ * than on a part index, which keeps it clear of `Terminal.part` renumbering.
+ */
+const NEAREST_CACHE = new WeakMap<Footprint, Map<string, number>>();
+
+export function nearestTerminalMm(fp: Footprint, name: string): number {
+  let byName = NEAREST_CACHE.get(fp);
+  if (!byName) {
+    byName = new Map<string, number>();
+    const ts = terminals(fp).map(([n, p]) => [n, padAt(p)] as const);
+    for (const [n, at] of ts) {
+      let best = Infinity;
+      for (const [m, other] of ts) {
+        if (m === n) continue;
+        const sep = Math.hypot(at.x - other.x, at.y - other.y);
+        if (sep < COINCIDENT_MM) continue; // the same metal named twice — see above
+        best = Math.min(best, sep);
+      }
+      byName.set(n, best);
+    }
+    NEAREST_CACHE.set(fp, byName);
+  }
+  return byName.get(name) ?? Infinity;
+}
+
+/** Two terminals closer than this are the same piece of metal under two names, not neighbours. */
+const COINCIDENT_MM = 1e-6;

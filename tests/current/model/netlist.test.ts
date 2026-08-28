@@ -6,11 +6,13 @@
  * quietly loses a connection, and the circuit then looks routed while being wrong.
  */
 import { describe, expect, it } from "vitest";
-import { defaultTerminals, resolveNetlist, padPosition } from "../../../src/model/netlist.js";
-import type { Circuit } from "../../../src/model/electronics.js";
-import { TAPE_MM } from "../../../src/model/electronics-routing.js";
+import { resolveNetlist, padPosition } from "../../../src/model/netlist.js";
+import type { Circuit, Vec2 } from "../../../src/model/electronics.js";
+import { TAPE_MM, partFit } from "../../../src/model/electronics-routing.js";
 import { BatteryContact_Keystone_555, LED_1206, R_1206, SW_SPDT } from "../../../src/model/footprints.generated.js";
-import { padAt, terminals } from "../../../src/model/footprint.js";
+import { Module_XIAO_Generic_SocketSMD } from "../../../src/model/footprints.rest.generated.js";
+import { padAt, padNamed, padSize, terminals } from "../../../src/model/footprint.js";
+import { partShape } from "../../../src/model/copper-svg-export.js";
 
 /** A pattern whose tape is the full 3.25mm, so pattern units ARE millimetres and the arithmetic is legible. */
 const TAPE_W = TAPE_MM;
@@ -67,6 +69,10 @@ describe("model/netlist", () => {
     // And each point is where that pad actually is, not where the part's origin is.
     const first = nets[0]!.points[0]!;
     expect(first.at.x).toBeCloseTo(10 + padAt(R_1206["1"]!).x, 9);
+    // And carries the pad's own narrowest extent, for a leg to taper down onto — the smaller of its two
+    // footprint dimensions, converted through the same tape-width scale as its position.
+    const size = padSize(R_1206["1"]!);
+    expect(first.padWidth).toBeCloseTo(Math.min(size.w, size.h), 9);
   });
 
   it("keeps the author's order, for nets and for the points within one", () => {
@@ -153,6 +159,26 @@ describe("model/netlist", () => {
       expect(f.some((x) => x.kind === "single-terminal-net" && x.why.includes("no terminals"))).toBe(true);
     });
 
+    it("keeps a one-terminal net when the bus has already laid its rail", () => {
+      // Not a slip when there IS something to connect it to. A single pad on PWR is a part asking to be
+      // tapped onto the rail the bus already laid, and `planNets` can lay that tap — so reporting it a
+      // fault and dropping the net gave that pad no copper at all while the editor's sidebar counted it
+      // alongside the battery and the LEDs and showed the net as wired.
+      const c = circuit({ terminals: [{ part: 0, pad: "1", net: "n1" }] });
+      const { nets, faults } = resolveNetlist(c, TAPE_W, TAPE_MM, new Set(["n1"]));
+      expect(nets.map((n) => n.name)).toEqual(["PWR"]);
+      expect(nets[0]!.points).toHaveLength(1);
+      expect(faults).toEqual([]);
+    });
+
+    it("still reports an empty net when its rail exists, because there is nothing to tap", () => {
+      // The other half of the same rule, and the reason it is not simply "rail nets are exempt": a rail
+      // with no pad on it is not a connection waiting to be made, it is a net nobody has wired yet.
+      const c = circuit({ terminals: [] });
+      const f = resolveNetlist(c, TAPE_W, TAPE_MM, new Set(["n1"])).faults;
+      expect(f.some((x) => x.kind === "single-terminal-net" && x.why.includes("no terminals"))).toBe(true);
+    });
+
     it("keeps routing the good nets when another one is broken", () => {
       // A fault in one net must not cost the user the rest of the circuit.
       const c = circuit({
@@ -207,61 +233,66 @@ describe("model/netlist", () => {
     expect(padPosition({ component: "SW_SPDT", x: 0, y: 0 }, SW_SPDT, "2", TAPE_W, TAPE_MM)).not.toBeNull();
   });
 
+  describe("a free part on a two-row footprint", () => {
+    // The bug this guards: a 14-pad socket like the XIAO's, dropped free and turned, routed a declared
+    // net to the wrong physical pin -- the trace tapped the bus cleanly and still missed the pad, because
+    // `padPosition` placed every pad at its raw, unrotated footprint coordinate while the canvas drew the
+    // part turned by `rot` and anchored on `rowShape`'s own `common` pad, not the footprint's origin.
+    const fp = Module_XIAO_Generic_SocketSMD;
 
-  describe("defaults for a newly placed part", () => {
-    const RAILS = [{ id: "pwr" }, { id: "gnd" }];
+    /** Where the canvas actually draws a named pad's centre — same construction as `freeParts()`. */
+    function drawnCentre(cx: number, cy: number, rot: number, flip: boolean | undefined, padName: string): Vec2 {
+      const half = ((partFit(fp).gap * TAPE_W) / TAPE_MM) / 2;
+      const th = (rot * Math.PI) / 180;
+      const ux = Math.cos(th), uy = Math.sin(th);
+      const a = { x: cx - ux * half, y: cy - uy * half };
+      const b = { x: cx + ux * half, y: cy + uy * half };
+      const shape = partShape(fp, a, b, flip)!;
+      const lead = shape.leads.find((l) => l.name === padName)!;
+      return { x: (lead.a.x + lead.b.x) / 2, y: (lead.a.y + lead.b.y) / 2 };
+    }
 
-    it("puts a two-pad part across the supply, one pad on each rail", () => {
-      // The busywork this removes: an LED dropped on a tile used to arrive with no terminals at all and
-      // stay unwired until the author assigned both pads by hand -- for the one part where there is exactly
-      // one sensible answer.
-      const t = defaultTerminals(3, LED_1206, RAILS);
-      const names = terminals(LED_1206).map(([n]) => n);
-      expect(t).toEqual([
-        { part: 3, pad: names[0], net: "pwr" },
-        { part: 3, pad: names[1], net: "gnd" },
-      ]);
+    it.each([0, 90, 137, -40])("routes pad 1 to where it is drawn, turned %s°", (rot) => {
+      const part = { component: "Module_XIAO_Generic_SocketSMD", x: 5, y: -2, free: true, rot };
+      const routed = padPosition(part, fp, "1", TAPE_W, TAPE_MM)!;
+      const drawn = drawnCentre(5, -2, rot, undefined, "1");
+      expect(routed.x).toBeCloseTo(drawn.x, 6);
+      expect(routed.y).toBeCloseTo(drawn.y, 6);
     });
 
-    it("guesses nothing for a part with more than two pads", () => {
-      // A three-pad part's terminals are not a supply pair. Putting its first two on PWR and GND would be
-      // a short, stated as a default and never questioned because nobody typed it.
-      expect(defaultTerminals(0, SW_SPDT, RAILS)).toEqual([]);
-      expect(terminals(SW_SPDT).length).toBeGreaterThan(2);
+    it("does not confuse pad 1 with pad 7 once rotated", () => {
+      // Exactly the reported symptom: at some turn, the unrotated formula's pad "1" landed near where
+      // pad "7" is actually drawn.
+      const part = { component: "Module_XIAO_Generic_SocketSMD", x: 0, y: 0, free: true, rot: 55 };
+      const pad1 = padPosition(part, fp, "1", TAPE_W, TAPE_MM)!;
+      const drawn7 = drawnCentre(0, 0, 55, undefined, "7");
+      expect(Math.hypot(pad1.x - drawn7.x, pad1.y - drawn7.y)).toBeGreaterThan(1);
+      const drawn1 = drawnCentre(0, 0, 55, undefined, "1");
+      expect(pad1.x).toBeCloseTo(drawn1.x, 6);
+      expect(pad1.y).toBeCloseTo(drawn1.y, 6);
     });
 
-    it("guesses nothing when the rails are gone, rather than naming a net that does not exist", () => {
-      // The author may rename or delete the seeded rails. A default pointing at a missing net would have
-      // the app raise a `no-such-net` fault against the author for something they never wrote.
-      expect(defaultTerminals(0, R_1206, [{ id: "sda" }, { id: "scl" }])).toEqual([]);
-      expect(defaultTerminals(0, R_1206, [{ id: "pwr" }])).toEqual([]);
-      expect(defaultTerminals(0, R_1206, [])).toEqual([]);
-    });
+    it("turns a seated part by its stored angle, and leaves one saved without an angle exactly where it was", () => {
+      // **This rule changed on 2026-08-27, and the old one was the bug.** It used to read "`rot` is only
+      // meaningful with `free`; a seated part must not suddenly start rotating" — so a seated part routed to
+      // unrotated footprint coordinates while being DRAWN along the run it breaks. Measured on the bundled
+      // patterns, that put an R_1206's pads 2.59mm to 3.54mm from where they are drawn, which on a part
+      // whose pads are 3mm apart is a whole pitch: a net wired to pad 1 had its copper laid on pad 2.
+      //
+      // A seated part is now stored with the angle of the run it lands on, decided once by
+      // `electronics-modal.ts` when it is dropped, and placed like any other part thereafter.
+      const turned = padPosition({ component: "Module_XIAO_Generic_SocketSMD", x: 0, y: 0, rot: 90 }, fp, "1", TAPE_W, TAPE_MM)!;
+      const upright = padPosition({ component: "Module_XIAO_Generic_SocketSMD", x: 0, y: 0, rot: 0 }, fp, "1", TAPE_W, TAPE_MM)!;
+      expect(Math.hypot(turned.x - upright.x, turned.y - upright.y)).toBeGreaterThan(0);
 
-    it("names pads the footprint really has, so the assignment resolves", () => {
-      // The pair is read off the footprint, never assumed to be "1" and "2" -- a part whose datasheet
-      // numbers its pads "A" and "K" would otherwise get two terminals that resolve to nothing.
-      // A part whose pads are NOT called "1" and "2": this contact's two terminals are "1" and "1_1",
-      // the second being the name the parser mints for a repeat. Hardcoding the usual pair would give it
-      // two terminals naming a pad it does not have, and `resolveNetlist` would reject both.
-      const odd = defaultTerminals(0, BatteryContact_Keystone_555, RAILS);
-      expect(odd.map((x) => x.pad)).toEqual(["1", "1_1"]);
-
-      const t = defaultTerminals(0, LED_1206, RAILS);
-      const real = new Set(terminals(LED_1206).map(([n]) => n));
-      for (const x of t) expect(real.has(x.pad)).toBe(true);
-      const circuit: Circuit = {
-        leds: [], battery: null,
-        nets: [{ id: "pwr", name: "PWR" }, { id: "gnd", name: "GND" }],
-        parts: [{ component: "LED_1206", x: 0, y: 0, free: true }],
-        terminals: defaultTerminals(0, LED_1206, RAILS),
-      };
-      // Every pad and net named by the default resolves. The only faults left are `single-terminal-net`,
-      // and those are correct rather than tolerated: one LED alone on the rails puts a single point on each,
-      // and there genuinely is nothing to connect it to until a battery or a second part joins it. A default
-      // that avoided them would have to invent the rest of the circuit.
-      const faults = resolveNetlist(circuit, 1, TAPE_MM).faults;
-      expect(faults.map((f) => f.kind)).toEqual(["single-terminal-net", "single-terminal-net"]);
+      // But a circuit saved before seated parts had an angle keeps the placement it was cut to. Re-placing
+      // a part in a file the author has already cut copper for would be worse than leaving it wrong, and
+      // re-dropping the part is what fixes it.
+      const legacy = padPosition({ component: "Module_XIAO_Generic_SocketSMD", x: 0, y: 0 }, fp, "1", TAPE_W, TAPE_MM)!;
+      const local = padAt(padNamed(fp, "1"));
+      expect(legacy.x).toBeCloseTo((local.x * TAPE_W) / TAPE_MM, 9);
+      expect(legacy.y).toBeCloseTo((local.y * TAPE_W) / TAPE_MM, 9);
     });
   });
+
 });

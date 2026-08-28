@@ -16,10 +16,10 @@ import type { FoldFile } from "./fold-file.js";
 import type { Vec2 } from "./electronics.js";
 // `DEFAULT_LED` comes from the router rather than being written again here: the part an LED means
 // when its circuit does not say is one decision, and a second copy of it is a second thing to drift.
-import { DEFAULT_LED, type Trace2D, acrossRun, landingWidth } from "./electronics-routing.js";
+import { DEFAULT_LED, type Trace2D, acrossRun, landingWidth, narrowedTo } from "./electronics-routing.js";
 import { printScale } from "./print-scale.js";
 import { type Box, type Footprint, type Pad, holes, MM_PER_INCH, padAt, padSize, terminals } from "./footprint.js";
-import { type AcrossPart, acrossPart, inlineNamedTerminals, padAxis, padRunBox } from "./parts.js";
+import { type AcrossPart, acrossPart, inlineNamedTerminals, padAxis, padRunBox, seatSigns } from "./parts.js";
 import { R_1206, SW_SPDT } from "./footprints.generated.js";
 import { footprintById } from "./library.js";
 import { designators, partSvg } from "./part-render.js";
@@ -307,8 +307,9 @@ export function stripOutline(
   tapeW: number,
   pads: LedPads[] = [],
 ): Vec2[] {
-  // Land copper under a part's terminals carries its own width; ordinary tape has none and takes the tape's.
-  return outlineStrip(t.pts, widthsFor(t, t.width ?? tapeW, pads));
+  // A net leg that tapers onto a part's own pad carries its own width at every point; land copper under a
+  // switch or LED carries one flat narrow width; ordinary tape has neither and takes the tape's.
+  return outlineStrip(t.pts, t.widths ?? widthsFor(t, t.width ?? tapeW, pads));
 }
 
 /**
@@ -323,7 +324,7 @@ export function stripOutline(
  * is this strip here" is a second thing to drift, and this whole file has spent a night proving that.
  */
 export function narrowestWidth(t: Trace2D, tapeW: number, pads: LedPads[] = []): number {
-  const ws = widthsFor(t, t.width ?? tapeW, pads);
+  const ws = t.widths ?? widthsFor(t, t.width ?? tapeW, pads);
   return ws.length ? Math.min(...ws) : tapeW;
 }
 
@@ -350,26 +351,37 @@ function narrowestMmOf(
  * Full width along the way, narrowed only where it lands on an LED pad whose partner leg is close enough that a
  * full-width strip would reach across the chip. The two nets would otherwise meet under the part and short it,
  * and a vinyl cutter could not weed the gap between them.
+ *
+ * The narrowing rule itself is not here: it is `electronics-routing.ts › narrowedTo`, which
+ * `net-routing.ts › legWidths` asks the same question of. What differs between the two callers is only how
+ * the fields are built — an LED's mate is one named pad on the other net and the run *ends* there, while a
+ * pin's neighbours are every other pad on the part and the run *passes* them. One geometric question, one
+ * answer; two readings of it is the mistake `parts.ts › padRunBox` was written to undo.
  */
 function widthsFor(t: Trace2D, tapeW: number, pads: LedPads[]): number[] {
   const last = t.pts.length - 1;
+  // `reach: tapeW` is "is the run landing here at all": beyond a tape's width the pad has no say.
+  const fields = pads.map((pad) => {
+    const own = t.net === "pwr" ? pad.pwr : pad.gnd;
+    const mate = t.net === "pwr" ? pad.gnd : pad.pwr;
+    return { at: own, safe: landingWidth(own, mate, tapeW), reach: tapeW, mate };
+  });
   return t.pts.map((p, i) => {
-    let w = tapeW;
-    for (const pad of pads) {
-      const own = t.net === "pwr" ? pad.pwr : pad.gnd;
-      const mate = t.net === "pwr" ? pad.gnd : pad.pwr;
-      if (Math.hypot(p.x - own.x, p.y - own.y) > tapeW) continue; // not landing here
-      // A run that STOPS here, square to the line between the two legs, needs no narrowing: its end is
-      // capped across its own direction, so the two nets are held apart by the bare gap along the axis —
-      // the part's own `pitch - padW` — and full-width tape cannot reach over it.
-      //
-      // Narrowing regardless is what put a taper under every LED pad and pinched the strip to 1.14mm
-      // beneath a 1.70mm pad, which capped how much of the leg had copper under it at two thirds. It is
-      // needed only where a strip passes the part sideways, and that is what the angle test asks.
-      if ((i === 0 || i === last) && squareToAxis(t.pts, i, own, mate)) continue;
-      w = Math.min(w, landingWidth(own, mate, tapeW));
-    }
-    return w;
+    // A run that STOPS at a pad, square to the line between the two legs, needs no narrowing: its end is
+    // capped across its own direction, so the two nets are held apart by the bare gap along the axis —
+    // the part's own `pitch - padW` — and full-width tape cannot reach over it.
+    //
+    // Narrowing regardless is what put a taper under every LED pad and pinched the strip to 1.14mm
+    // beneath a 1.70mm pad, which capped how much of the leg had copper under it at two thirds. It is
+    // needed only where a strip passes the part sideways, and that is what the angle test asks.
+    //
+    // The exemption is per (point, pad) — it depends on this point being an end of the run — so it drops
+    // the exempt fields before asking, rather than being something `narrowedTo` could express.
+    const here =
+      i === 0 || i === last
+        ? fields.filter((f) => !squareToAxis(t.pts, i, f.at, f.mate))
+        : fields;
+    return narrowedTo(tapeW, p, here);
   });
 }
 
@@ -860,7 +872,24 @@ export interface ResistorShape {
  * wrong. Every dimension then comes from the part's own pads and holes, so it is drawn at the size its
  * datasheet says it is; a wider tape does not make it bigger.
  */
-export function partShape(fp: Footprint, a: Vec2, b: Vec2, flip?: boolean): ResistorShape | null {
+export function partShape(
+  fp: Footprint, a: Vec2, b: Vec2, flip?: boolean,
+  /**
+   * Whether the frame `a` and `b` are already in REVERSES ORIENTATION — see {@link frameMirrored}.
+   *
+   * Every sheet frame in this app does: `sheetFrame` and the editor's `tp()` both send flat `y` to
+   * `maxY − y`, because FOLD is y-up and SVG y-down. A part's pads are laid out along the run and ACROSS
+   * it, and a perpendicular computed after a reflection points the opposite way from one computed before
+   * it — so a part drawn here came out mirrored against the same part placed by
+   * `electronics-parts.ts › placementOf`, which works in flat units.
+   *
+   * Measured on `Module_XIAO_Generic_SocketSMD` in the editor: the net on pad 1 had its copper laid on
+   * drawn pad 5, 10.16mm away, with pads 2 and 4 swapped and pad 3 standing still — a reflection about the
+   * `common` pad. Defaults to `false` so a caller working in an unreflected frame (a plain scale, as the
+   * tests do) needs to say nothing.
+   */
+  frameFlipped?: boolean,
+): ResistorShape | null {
   const ts = inlineNamedTerminals(fp);
   if (ts.length < 2) return null;
   const dx = b.x - a.x, dy = b.y - a.y;
@@ -869,8 +898,20 @@ export function partShape(fp: Footprint, a: Vec2, b: Vec2, flip?: boolean): Resi
   const ux = dx / L, uy = dy / L;
   const across = acrossPart(fp);
   return across
-    ? rowShape(fp, across, a, ux, uy, flip)
-    : inlineShape(fp, ts, a, b, ux, uy, dx, dy);
+    ? rowShape(fp, across, a, ux, uy, flip, frameFlipped)
+    : inlineShape(fp, ts, a, b, ux, uy, dx, dy, frameFlipped);
+}
+
+/**
+ * Whether a flat → sheet transform reverses orientation.
+ *
+ * Sampled rather than declared: the transform is built from a scale, a Y-flip and the author's own mirror
+ * toggle, and asking it three times is exact for an affine map and cannot fall out of step with it the way
+ * a hand-maintained boolean would. See {@link partShape}'s `frameFlipped`.
+ */
+export function frameMirrored(T: (p: Vec2) => Vec2): boolean {
+  const o = T({ x: 0, y: 0 }), x = T({ x: 1, y: 0 }), y = T({ x: 0, y: 1 });
+  return (x.x - o.x) * (y.y - o.y) - (y.x - o.x) * (x.y - o.y) < 0;
 }
 
 /**
@@ -887,11 +928,14 @@ export function partShape(fp: Footprint, a: Vec2, b: Vec2, flip?: boolean): Resi
 function inlineShape(
   fp: Footprint, ts: [string, Pad][],
   a: Vec2, b: Vec2, ux: number, uy: number, dx: number, dy: number,
+  frameFlipped?: boolean,
 ): ResistorShape {
   const ax = padAxis(fp);
   const pad = padSize(ts[0]![1]);
   const L = Math.hypot(dx, dy);
-  const px = -uy, py = ux;               // across the run
+  // Across the run, in a frame that may reverse orientation — see `partShape`'s `frameFlipped`.
+  const fs = frameFlipped ? -1 : 1;
+  const px = -uy * fs, py = ux * fs;     // across the run
   const over = ax.alongIsY ? pad.h : pad.w;  // a contact's length along the run — the pad's own
   const bodyW = (ax.alongIsY ? pad.w : pad.h) * 0.85;  // the body, a little inside its contacts
   // The body spans the whole break and laps a little onto each contact. At four fifths of the gap it fell
@@ -993,6 +1037,8 @@ function rowLeads(
   names: { common: string; live: string; idle: string },
   a: Vec2, ux: number, uy: number, px: number, py: number,
   pad: (c: Vec2, size?: Box) => { a: Vec2; b: Vec2; width: number },
+  flip?: boolean,
+  frameFlipped?: boolean,
 ): { a: Vec2; b: Vec2; width: number; name: string }[] | null {
   const ax = padAxis(fp);
   const ts = terminals(fp);
@@ -1004,15 +1050,30 @@ function rowLeads(
   const dC = ax.across(live) - c0;
   if (Math.abs(dC) < 1e-9) return null; // one row: the separation is fabricated, not measured
 
-  // Signs only — the magnitudes are the footprint's own. `live` must land on the far row, on the side the
-  // router chose, which is what `rowShape` means by +`rowSep` and +`pitch`.
-  const sC = Math.sign(dC);
-  const sA = Math.sign(ax.along(live) - a0) || 1;
+  // Signs only — the magnitudes are the footprint's own. `live` must land on the far row, which is what
+  // `rowShape` means by +`rowSep`.
+  //
+  // From `parts.ts › seatSigns`, not computed here. These two lines used to be a second copy of the two in
+  // `electronics-parts.ts › placementOf`, and both had `sA` read off `live` — which made the seating a
+  // REFLECTION about the common pad for 60 of the library's 87 across-parts, drawn and routed alike, so the
+  // two agreed with each other and disagreed with the chip. A XIAO's pin 1 was drawn where pin 5 goes.
+  const seat = seatSigns(fp);
+  if (!seat) return null;
+  const { sC, sA } = seat;
+  // A rotation, so the across-run direction is the plain perpendicular rather than `acrossRun`'s
+  // flip-dependent one, and the flip is a half-turn negating both signs. `px`/`py` still place the body,
+  // the pegs and the three-terminal fallback, where the flip means which side the live throw takes.
+  const turn = flip ? -1 : 1;
+  // Turned the other way when `alongIsY` swaps the footprint's own two axes — the correction
+  // `electronics-parts.ts › placementOf` makes on the same line, and without which one of the two cases is
+  // orientation-reversing.
+  const fs = frameFlipped ? -1 : 1;
+  const qx = (ax.alongIsY ? -uy : uy) * fs, qy = (ax.alongIsY ? ux : -ux) * fs;
 
   return ts.map(([name, t]) => {
-    const along = (ax.across(t) - c0) * sC;   // the part's row axis runs along the rail
-    const across = (ax.along(t) - a0) * sA;   // and its pad axis runs across it
-    const c = { x: a.x + ux * along + px * across, y: a.y + uy * along + py * across };
+    const along = (ax.across(t) - c0) * sC * turn;   // the part's row axis runs along the rail
+    const across = (ax.along(t) - a0) * sA * turn;   // and its pad axis runs across it
+    const c = { x: a.x + ux * along + qx * across, y: a.y + uy * along + qy * across };
     // Normalised to the run, not raw: `pad()` reads `w` as the across-rail extent and `h` as the
     // along-rail one, and a turned part's footprint axes are the other way round. Raw `padSize` here drew
     // 43 of the library's 87 across-parts with their two extents swapped — see {@link padRunBox}.
@@ -1022,11 +1083,16 @@ function rowLeads(
 
 function rowShape(
   fp: Footprint, g: AcrossPart, a: Vec2, ux: number, uy: number, flip?: boolean,
+  frameFlipped?: boolean,
 ): ResistorShape {
   // Across the run, towards the live throw. The router chose the side when it placed the part; drawing
   // it the other way round would put the housing over the copper the idle throw is meant to avoid.
+  //
+  // The router chose it in FLAT units, so the direction has to be brought into this frame rather than
+  // recomputed in it: a perpendicular flips sign under a reflection. See `partShape`'s `frameFlipped`.
+  const fs = frameFlipped ? -1 : 1;
   const across = acrossRun({ x: ux, y: uy }, flip);
-  const px = across.x, py = across.y;
+  const px = across.x * fs, py = across.y * fs;
   // The rail runs straight through the part: the common is on the near edge of the break, the two throws on
   // the far edge, a pitch either side of the centreline. The outgoing tape runs down the middle and reaches
   // neither throw by itself — one gets a land, the other is left bare, and that is what opens the circuit.
@@ -1067,7 +1133,7 @@ function rowShape(
     };
   });
   return {
-    leads: rowLeads(fp, names, a, ux, uy, px, py, pad) ?? [
+    leads: rowLeads(fp, names, a, ux, uy, px, py, pad, flip, frameFlipped) ?? [
       { ...pad(idle), name: names.idle },
       { ...pad(common), name: names.common },
       { ...pad(live), name: names.live },
@@ -1081,13 +1147,13 @@ function rowShape(
 }
 
 /** The 1206 chip resistor, on the break its leads bridge. {@link partShape} with the part filled in. */
-export function resistorShape(a: Vec2, b: Vec2): ResistorShape | null {
-  return partShape(R_1206, a, b);
+export function resistorShape(a: Vec2, b: Vec2, frameFlipped?: boolean): ResistorShape | null {
+  return partShape(R_1206, a, b, undefined, frameFlipped);
 }
 
 /** The SPDT slide switch, on the break its middle pads bridge. {@link partShape}, part filled in. */
-export function switchShape(a: Vec2, b: Vec2, flip?: boolean): ResistorShape | null {
-  return partShape(SW_SPDT, a, b, flip);
+export function switchShape(a: Vec2, b: Vec2, flip?: boolean, frameFlipped?: boolean): ResistorShape | null {
+  return partShape(SW_SPDT, a, b, flip, frameFlipped);
 }
 
 /**
@@ -1118,7 +1184,8 @@ export interface PlacedPartMark {
 /** {@link partShape} for a placed part, or `null` if its component is not in the library. */
 function partShapeOf(r: PlacedPartMark, T: (p: Vec2) => Vec2): ResistorShape | null {
   const fp = footprintById(r.component);
-  return fp ? partShape(fp, T(r.a), T(r.b), r.flip) : null;
+  // `T` is the sheet frame, which flips Y — so the across-run direction has to be told, not re-derived.
+  return fp ? partShape(fp, T(r.a), T(r.b), r.flip, frameMirrored(T)) : null;
 }
 
 /** A part about to be drawn: which footprint, which component it is, and the break it bridges. */

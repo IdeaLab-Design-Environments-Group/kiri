@@ -788,8 +788,8 @@ body.is-electronics .app-legend {
 .el-body {
   display: flex;
   flex-direction: column;
-  gap: 0.8rem;
-  padding: 0.9rem 1.1rem 1rem;
+  gap: 0.6rem;
+  padding: 0.65rem 0.9rem 0.75rem;
   background: #fff;
   /* On a page the editor has the window's height to fill, so the canvas grows instead of sitting in a
      fixed card with dead space under it. */
@@ -803,12 +803,12 @@ body.is-electronics .app-legend {
 .el-toolbar {
   display: flex;
   flex-direction: column;
-  gap: 0.55rem;
+  gap: 0.4rem;
 }
 .el-toolbar-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem 0.35rem;
+  gap: 0.35rem 0.3rem;
   align-items: center;
 }
 .el-group {
@@ -826,8 +826,8 @@ body.is-electronics .app-legend {
   white-space: nowrap;
 }
 .el-group + .el-group {
-  margin-left: 0.5rem;
-  padding-left: 0.75rem;
+  margin-left: 0.35rem;
+  padding-left: 0.55rem;
   border-left: 1px solid var(--border, #e4e7ec);
 }
 /* Clear sits away from everything it would undo, at the far end of the row. */
@@ -860,12 +860,14 @@ body.is-electronics .app-legend {
 .el-view,
 .el-place,
 .el-mirror,
+.el-auto,
+.el-route,
 .el-zoom-in,
 .el-zoom-out,
 .el-fit {
   font: inherit;
-  font-size: 0.85rem;
-  padding: 0.3rem 0.7rem;
+  font-size: 0.82rem;
+  padding: 0.28rem 0.55rem;
   border: 1px solid var(--border, #e4e7ec);
   border-radius: var(--radius-sm, 8px);
   background: #fff;
@@ -886,28 +888,27 @@ body.is-electronics .app-legend {
 .el-view:hover,
 .el-place:hover,
 .el-mirror:hover,
+.el-auto:hover,
+.el-route:hover,
 .el-zoom-in:hover,
 .el-zoom-out:hover,
 .el-fit:hover { background: var(--surface-soft, #f3f5f9); border-color: #cdd3df; }
+/* Route sits beside the Auto/Manual segment and not inside it, because it is an action and they are a
+   mode. It goes amber the moment the copper on the canvas stops matching the parts on it — the one state
+   in which pressing it changes anything, and the one the author has to be able to see without reading the
+   status line. */
+.el-route { margin-left: 0.4rem; }
+.el-route.is-stale {
+  color: #8a5a00;
+  border-color: #e3c07a;
+  background: #fff8e8;
+  font-weight: 600;
+}
+.el-route.is-stale:hover { background: #fdf0d3; border-color: #d6ad5c; }
 /* Clear is the one control on the row that throws work away, so it says so quietly — after the shared
    hover rule above, which it has to override rather than be overridden by. */
 .el-clear { color: #a4404a; }
 .el-clear:hover { background: #fdf1f2; border-color: #e4b7bc; color: #8e2f39; }
-/* The LED picker, beside the LED button. Deliberately not a row in the library picker: that one lists the
-   parts a rail can pass THROUGH, and an LED bridges two nets across a hinge instead — offered there it
-   would be placeable on a rail, with both its pads on the same net. Sized to its own two names rather than
-   to the library's, so it reads as part of the LED tool and not as a second library. */
-.el-led-part {
-  font: inherit;
-  font-size: 0.85rem;
-  padding: 0.3rem 0.5rem;
-  border: 1px solid var(--border, #d7dbe4);
-  border-radius: 0.4rem;
-  background: var(--surface, #fff);
-  color: inherit;
-  max-width: 13rem;
-}
-.el-led-part:hover { background: var(--surface-soft, #f3f5f9); border-color: #cdd3df; }
 /* The library picker. One control for the whole library: parts are added to `footprints.generated.ts`
    all the time, and a button each would push the rest of the toolbar off the row by the tenth one. */
 .el-part-label {
@@ -942,8 +943,8 @@ body.is-electronics .app-legend {
   background: var(--surface, #fff);
   color: inherit;
   cursor: pointer;
-  min-width: 14rem;
-  max-width: 20rem;
+  min-width: 11rem;
+  max-width: 16rem;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -1054,19 +1055,20 @@ body.is-electronics .app-legend {
   border-radius: 0.4rem;
   background: var(--surface, #fff);
   color: inherit;
-  width: 9rem;
+  width: 10.5rem;
 }
 .el-part-search:focus {
   outline: none;
   border-color: var(--accent, #1f6feb);
 }
-/* The picker is a column: the two fields on one line, and the count under them. Beside them it was a
-   two-line paragraph wedged between the select and the next group, and it pushed the whole row wider than
-   the modal — under them it is a caption, which is what it is. */
+/* The picker is one line: the two fields and the count beside them. It was a column while the count was a
+   whole sentence — `128 parts — search by name or package` — which needed a line to itself and so made the
+   Place row taller than everything on it. The hint went into the search box's placeholder (see
+   `paletteCount`), and what is left is two words. */
 .el-part-picker {
   display: inline-flex;
-  flex-direction: column;
-  gap: 0.15rem;
+  align-items: center;
+  gap: 0.4rem;
 }
 .el-part-fields {
   display: inline-flex;
@@ -1077,14 +1079,12 @@ body.is-electronics .app-legend {
   font-size: 0.72rem;
   color: var(--muted, #98a2b3);
   line-height: 1.2;
-  /* Wide enough for the sentence on one line, capped so a long one wraps instead of stretching the row. */
-  max-width: 26rem;
+  white-space: nowrap;
 }
 .el-view.is-active,
 .el-place.is-active,
 .el-mirror.is-active,
 .el-part.is-active,
-.el-led-part.is-active,
 .el-tool.is-active {
   background: var(--accent-soft, #eef3ff);
   color: var(--accent-strong, #1741c4);
@@ -1441,21 +1441,25 @@ body.is-electronics .app-legend {
   opacity: 0.55;
 }
 /* Parts are drawn as their real footprints, straight from `part-render.ts`: every colour on them is the
-   PCB palette's and is carried inline on the elements, so there is deliberately no part colour here.
-   All this rule does is keep the palette's text readable — pale yellow pin names and cyan designators sit on
-   whatever the part happens to lie over, tape or cloth. `paint-order` draws the halo under the glyph, so the
-   fill stays exactly the colour the palette says it is; the stroke is non-scaling so it is a constant hairline
-   at any zoom rather than growing into a blot. */
+   PCB palette's and is carried inline on the elements, so there is deliberately no part colour here. */
 .el-part-marks text {
+  pointer-events: none;
+}
+/* The halo is the designator's alone. svg-pcb has none on either label, and a pin name does not need one:
+   it sits on its own gold pad, which is the ground `#ffff99` was chosen against. The designator does — it
+   sits beside the part on whatever the part happens to lie over, tape or cloth, and cyan on the light sheet
+   is unreadable without it. `paint-order` draws the halo under the glyph, so the fill stays exactly the
+   colour the palette says it is; the stroke is non-scaling so it is a constant hairline at any zoom rather
+   than growing into a blot. */
+.el-component-labels text {
   paint-order: stroke;
   stroke: rgba(0, 0, 0, 0.65);
   stroke-width: 2;
   stroke-linejoin: round;
   vector-effect: non-scaling-stroke;
-  pointer-events: none;
 }
 /* Each key is a swatch and a word. The colours are the canvas's own — the two part keys take theirs inline
-   from `PCB_COLOURS`, so the legend cannot drift from what is drawn — but they belong on the swatch, not on
+   from `SVGPCB_COLOURS`, so the legend cannot drift from what is drawn — but they belong on the swatch, not on
    the text: coloured, bolded and haloed to stay legible on white, the words read as a different typeface
    from the rest of the interface, which is exactly how the old footer looked. */
 .el-key {
@@ -1502,6 +1506,23 @@ body.is-electronics .app-legend {
 /* Copper the author drew by hand. Cut from the same tape as a planned run and drawn as the same outline,
    so it takes `.el-tape`'s shape rules; the colour is its own because the one thing the canvas has to say
    about it is that a person put it there and the router will not move it. */
+/* Where a net should be joined and is not: from a terminal the router could not reach to the copper it
+   belongs on. Blue rather than red — red is `.el-led-orphan` and `.el-wire-fault`, which say something is
+   wrong with what the AUTHOR drew; this says something is missing from what the ROUTER laid, which is not
+   the same complaint and should not look like it.
+
+   Dashed, because it is not copper and must never be mistaken for tape: it reaches no cut file. Non-scaling
+   so it stays a hairline however far the pattern is zoomed away from — the stroke width is set inline by
+   `pcb-scene.ts`'s wire writer, and `vector-effect` turns it into screen pixels. */
+.el-ratsnest {
+  fill: none;
+  stroke: #1f6feb;
+  stroke-opacity: 0.85;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
 .el-wire-copper { fill: #c07a00; }
 /* The wire tool's own overlay: the wire being drawn, its handles and its faults. Repainted on every
    pointer move while the rest of the canvas stands still, so nothing in here may cost a re-plan.

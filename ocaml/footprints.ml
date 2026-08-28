@@ -213,11 +213,17 @@ let emit_header () =
  * here to fall out of step with what is on disk.
  *
  * The FabLib is 159 footprints and about a megabyte of pad outlines, which is four times the rest of
- * the app. Most of it is parts a rail cannot pass through — a forty-pin connector has no meaning
- * spliced into a run of copper tape — so this module holds only the ones that can be placed, and
- * `footprints.rest.generated.ts` holds the others for the palette to pull in on demand. That split is
- * a bundling decision and nothing more: whether a part can be placed is `placement()` in `parts.ts`,
- * which is asked about parts from both halves.
+ * the app. Most of it is parts the router will not put in series today — `placement()` in `parts.ts`
+ * takes 2 or 3 terminals, which is what a rail can pass through — so this module holds those and
+ * `footprints.rest.generated.ts` holds the others for the palette to pull in on demand.
+ *
+ * The split was meant to be a bundling decision and nothing more. It is not, and the comment here used
+ * to claim otherwise: the router (`electronics-routing.ts`) and both cut files
+ * (`copper-svg-export.ts`) resolve a component id against THIS module alone, so a part in the other
+ * half cannot be routed or drawn even if something offered it. Only the palette merges the two. The
+ * arrangement is consistent today, because the palette offers only what `placement()` accepts and that
+ * is exactly this half — but it is a coincidence held in place by one policy constant, not a boundary,
+ * and moving that constant would have the palette offer parts the router silently skips.
  *
  * A footprint is its pads, keyed by the pad name the part's own datasheet uses. Each pad carries its
  * outline as an SVG path about its own origin, where that origin sits in the part, which layers it
@@ -277,8 +283,10 @@ let emit_rest_header () =
  * hunting for a USB socket to conclude the app is broken. Reach them with a dynamic `import()`; a
  * megabyte of pad outlines has no business in the main bundle.
  *
- * Membership of this file is a bundling decision, not a fact about a part. `placement()` in `parts.ts`
- * is the only thing that decides what can be placed, and it is asked about parts from both halves.
+ * Membership of this file is not a fact about a part: `placement()` in `parts.ts` decides what can be
+ * placed. But it is not free of consequence either — the router and the cut files look a component id
+ * up in the eager half only, so nothing here can be routed or drawn until that changes. See the note
+ * at the top of `footprints.generated.ts`.
  */
 import type { Component, Footprint } from "./footprints.generated.js";
 |}
@@ -340,7 +348,7 @@ let () =
       emit_rest_header ();
       List.iter emit_component rest;
       emit_catalogue "REST_COMPONENTS"
-        "The parts a rail cannot pass through, by id — offered, but not placeable." rest
+        "The parts the router will not place in series, by id — offered, but not placeable." rest
   | _ ->
       emit_header ();
       List.iter emit_component placeable;

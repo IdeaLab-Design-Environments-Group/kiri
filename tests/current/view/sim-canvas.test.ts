@@ -71,6 +71,11 @@ class MockBufferAttribute {
   setUsage(usage: any) {
     this.usage = usage;
   }
+  setXYZ(i: number, x: number, y: number, z: number) {
+    this.array[i * 3] = x;
+    this.array[i * 3 + 1] = y;
+    this.array[i * 3 + 2] = z;
+  }
 }
 
 class MockBufferGeometry {
@@ -82,6 +87,8 @@ class MockBufferGeometry {
   setIndex = vi.fn((value: any) => {
     this.index = value;
   });
+  getAttribute = (name: string) => this.attributes.get(name);
+  computeBoundingSphere = vi.fn();
   computeVertexNormals = vi.fn();
   dispose = vi.fn();
 }
@@ -119,6 +126,7 @@ vi.mock("three", () => ({
   BufferAttribute: MockBufferAttribute,
   BufferGeometry: MockBufferGeometry,
   MeshStandardMaterial: MockMaterial,
+  MeshBasicMaterial: MockMaterial,
   LineBasicMaterial: MockMaterial,
   Mesh: MockMesh,
   LineSegments: MockLineSegments,
@@ -253,5 +261,41 @@ describe("view/sim-canvas", () => {
 
     expect(scene.solver.step).toHaveBeenCalled();
     expect(removeRigidBodyMotion).toHaveBeenCalled();
+  });
+
+  it("colours the overlay from the layout's own palettes, not from copies of them", async () => {
+    const { SimCanvas } = await import("../../../src/view/sim-canvas.js");
+    const { SVGPCB_COLOURS } = await import("../../../src/model/part-render.js");
+    const { GND_COLOUR, PWR_COLOUR } = await import("../../../src/model/net-palette.js");
+    const container = {
+      clientWidth: 400,
+      clientHeight: 300,
+      appendChild: vi.fn(),
+    } as any;
+    const canvas = new SimCanvas(container);
+    gpuCreate.mockReturnValueOnce(null);
+    canvas.setScene(makeScene({ driven: false }));
+
+    const tri = [
+      { tri: [0, 1, 2], bary: [1, 0, 0] },
+      { tri: [0, 1, 2], bary: [0, 1, 0] },
+      { tri: [0, 1, 2], bary: [0, 0, 1] },
+    ];
+    const kinds = ["pwr", "gnd", "led-pwr", "led-gnd", "led-body", "batt-pwr", "batt-gnd", "mark", "n3"];
+    canvas.setOverlay(kinds.map((kind) => ({ kind, tris: tri })) as any);
+
+    const colours = ((canvas as any).overlayMeshes as any[]).map((m) => m.material.options.color);
+    const hex = (css: string) => Number.parseInt(css.slice(1), 16);
+    expect(colours).toEqual([
+      hex(PWR_COLOUR),
+      hex(GND_COLOUR),
+      hex(SVGPCB_COLOURS.mask), // a pad is the mask opening: in the svgpcb style it covers the copper whole
+      hex(SVGPCB_COLOURS.mask),
+      hex(SVGPCB_COLOURS.copper), // the body, which the layout does not draw — the metal under the pads
+      hex(SVGPCB_COLOURS.mask),
+      hex(SVGPCB_COLOURS.mask),
+      0xffffff, // the polarity marks: white on purpose, and no palette's to own
+      0x4a8fd8, // a declared net, which the table cannot enumerate — the NET_COLOUR fallback
+    ]);
   });
 });

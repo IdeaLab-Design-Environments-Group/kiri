@@ -12,9 +12,22 @@
  * pad positions that look plausible and are the wrong size, which has caught this codebase out before.
  */
 import type { Circuit, PlacedPart, Terminal, Vec2 } from "./electronics.js";
-import { isTerminal, padAt, terminals, type Footprint } from "./footprint.js";
+import {
+  isTerminal, nearestTerminalMm, padAt, terminals, type Footprint,
+} from "./footprint.js";
 import { componentById } from "./library.js";
-import { GND_NET_ID, PWR_NET_ID } from "./net-palette.js";
+import {
+  applyPlacement, padOf, placeComponent, placementOf, type PlacedComponent,
+} from "./electronics-parts.js";
+// A live circular import with electronics-routing.js — that file already imports `resolveNetlist` from
+// here. Safe because both `partFit` and `acrossRun` are plain function declarations, used only inside a
+// function body below, never at module-evaluation time — so which module finishes initialising first
+// does not matter. Pulled in rather than re-derived because `partFit(fp).gap` is the same arithmetic
+// `freeParts()` sizes a dropped part's housing from; a second copy of it here is exactly the kind of
+// drift `partFit`'s own header warns against.
+import {
+  landingWidthFor, MIN_LAND_FRAC, padRoomFor, type PadField,
+} from "./electronics-routing.js";
 
 /** One terminal, resolved: which pad of which part, where it is, and the net it is on. */
 export interface NetPoint {
@@ -24,6 +37,18 @@ export interface NetPoint {
   pad: string;
   /** Where the pad sits on the flat pattern, in pattern units. */
   at: Vec2;
+  /**
+   * The pad's own narrowest extent, in pattern units — what a run should shrink to as it lands here.
+   *
+   * The smaller of the pad's two footprint dimensions, so a trace that tapers down to it clears the pad
+   * on both axes whichever way the part is turned. `planNets` uses this to narrow a leg's last stretch
+   * rather than running full tape width onto a pad a fraction of that size.
+   *
+   * Optional so a hand-built point — every fixture in the test suite, and any future caller that has not
+   * been taught about it — still type-checks; absent, `planNets` lays that end at the ordinary tape width,
+   * exactly as it always has.
+   */
+  padWidth?: number;
 }
 
 /** One net, resolved: the points that have to end up on the same copper. */
@@ -47,7 +72,8 @@ export interface NetlistFault {
     | "no-such-net"
     | "unknown-component"
     | "duplicate-terminal"
-    | "single-terminal-net";
+    | "single-terminal-net"
+    | "pads-too-close";
   /** Human-readable, and specific enough to act on. */
   why: string;
   part?: number;
@@ -58,6 +84,16 @@ export interface NetlistFault {
 export interface Netlist {
   nets: ResolvedNet[];
   faults: NetlistFault[];
+  /**
+   * Every terminal of every part that has anything wired to it — the metal a run has to make room for.
+   *
+   * Includes the part's **unwired** pins, deliberately. A pin nobody assigned a net to is still solder-side
+   * metal, and full-width tape passing over it shorts the part just as surely as tape on a wired one. It is
+   * the geometry that matters here, not the netlist.
+   *
+   * Derived, rebuilt on every call, and never stored on `Circuit` — so `cloneCircuit` needs no new field.
+   */
+  fields: PadField[];
 }
 
 /** Millimetres on a footprint to this pattern's units — the router's `toFlat`, which is not exported. */
@@ -71,6 +107,21 @@ function toFlat(mm: number, tapeW: number, tapeMm: number): number {
  * `flip` turns the part through half a turn about its own origin, which is what it already means
  * everywhere else: it is the difference between a polarised part's two orientations, not a mirror. A
  * mirrored part would put its pads in the wrong order along the rail and read as a different component.
+ *
+ * A **free** part turns by `rot` as well — the author's own turn, since it has no run to take an angle
+ * from (see {@link PlacedPart.rot}) — and, when its footprint is a **two-row** one (`acrossPart(fp)` —
+ * everything from a pin socket to a 26-way USB connector), the pads are placed the way
+ * `rowShape`/`freeParts` in `electronics-routing.ts` actually draw them: anchored on the `common` pad,
+ * not on the footprint's own origin, with the footprint's across-reading mapped onto the rotated frame's
+ * along-axis and vice versa. Until this existed, a free two-row part's pads routed at their raw
+ * unrotated footprint coordinates — the right point only when `rot` was 0 and the footprint's origin
+ * happened to coincide with `rowShape`'s anchor, which for a multi-pad socket it does not. The visible
+ * symptom was a declared net that tapped the bus copper cleanly and still routed to the wrong physical
+ * pin, with nothing in the geometry saying so.
+ *
+ * Seated (non-free) parts are untouched: `rot` is meaningless there — a seated part's angle comes from
+ * the run it breaks, which this function has never had a way to see — so they keep exactly the placement
+ * this file always gave them rather than gaining a rotation there is no data for.
  */
 export function padPosition(
   part: PlacedPart,
@@ -87,12 +138,11 @@ export function padPosition(
   // well as at the netlist gate rather than trusting every caller to have checked first.
   const pad = fp[padName];
   if (!pad || !isTerminal(padName, pad)) return null;
-  const local = padAt(pad);
-  const s = part.flip ? -1 : 1;
-  return {
-    x: part.x + toFlat(local.x * s, tapeW, tapeMm),
-    y: part.y + toFlat(local.y * s, tapeW, tapeMm),
-  };
+  // The placement is the one derivation; this reads a pad through it. Every branch that used to live here —
+  // seated, free in-line, free two-row — is now `electronics-parts.ts › placementOf`, expressed once as an
+  // origin and a matrix instead of three times as coordinates. Proved equal for every pad of all 129 library
+  // parts at every turn and flip in `tests/current/model/placed-component.test.ts`.
+  return applyPlacement(placementOf(part, fp, tapeW, tapeMm), padAt(pad));
 }
 
 /**
@@ -103,14 +153,48 @@ export function padPosition(
  * report success. That is a real authoring mistake — a pad assigned to a net nothing else is on — and the
  * user can only fix it if they are told.
  *
+ * **Unless the bus already laid a rail for that net**, which is what `railNets` names. A single pad on PWR
+ * is not an authoring mistake when there is a PWR rail on the sheet: it is a part asking to be tapped onto
+ * it, and the router can do that (see `planNets`, which routes the tap leg). Reported as a fault and
+ * dropped, that pad got no copper at all while the sidebar showed it on a net with three members — the
+ * drawing said wired and the circuit was not.
+ *
+ * A net with NO terminals is still a fault and still dropped, rail or no rail. There is nothing to tap.
+ *
  * Order is the author's: nets in declaration order, points in the order the terminals were written. The
  * router's own ordering decisions are the router's, and doing any of them here would hide them.
  */
-export function resolveNetlist(circuit: Circuit, tapeW: number, tapeMm: number): Netlist {
+export function resolveNetlist(
+  circuit: Circuit,
+  tapeW: number,
+  tapeMm: number,
+  /** Nets the bus has already laid copper for — see above. Their ids are `Trace2D.net`. */
+  railNets: ReadonlySet<string> = new Set(),
+): Netlist {
   const faults: NetlistFault[] = [];
   const parts = circuit.parts ?? [];
   const byId = new Map((circuit.nets ?? []).map((n) => [n.id, n]));
   const points = new Map<string, NetPoint[]>();
+  /** Parts with at least one terminal on a net — the ones whose metal a run has to clear. */
+  const wiredParts = new Set<number>();
+  /**
+   * Each part placed once, and read many times.
+   *
+   * The placement is the single derivation every pad position now comes from — see
+   * `electronics-parts.ts`. Baked per part rather than per pad because a part with fourteen terminals was
+   * otherwise transformed fourteen times over for the net points and fourteen more for the fields.
+   */
+  const placed = new Map<number, PlacedComponent>();
+  const placeOnce = (i: number): PlacedComponent | undefined => {
+    const got = placed.get(i);
+    if (got) return got;
+    const part = parts[i];
+    const comp = part ? componentById(part.component) : undefined;
+    if (!part || !comp) return undefined;
+    const made = placeComponent(part, comp.footprint, tapeW, tapeMm, i);
+    placed.set(i, made);
+    return made;
+  };
   for (const n of circuit.nets ?? []) points.set(n.id, []);
 
   const seen = new Set<string>();
@@ -157,15 +241,47 @@ export function resolveNetlist(circuit: Circuit, tapeW: number, tapeMm: number):
       continue;
     }
     seen.add(key);
-    const at = padPosition(part, comp.footprint, t.pad, tapeW, tapeMm);
-    if (!at) continue; // unreachable: `terminals()` above has already accepted this pad name
-    points.get(t.net)!.push({ part: t.part, pad: t.pad, at });
+    wiredParts.add(t.part);
+    const here = placeOnce(t.part);
+    const placedPad = here ? padOf(here, t.pad) : undefined;
+    if (!placedPad) continue; // unreachable: `terminals()` above has already accepted this pad name
+    const at = placedPad.at;
+    // The narrower of two bounds, so this can only ever narrow: the pad's own size, as it always was, and
+    // the room between this pad and the metal beside it. On a 1206 the second is the looser and nothing
+    // changes; on a 2.54mm pin header it binds, and it is the difference between copper that lands on one
+    // pin and copper that blankets its neighbours. See `footprint.ts › nearestTerminalMm`.
+    const sepMm = nearestTerminalMm(comp.footprint, t.pad);
+    // `PlacedPad.size` is already in flat units and already run-normalised; the min of the two extents is
+    // the same number either way round, so no conversion and no transpose is needed here.
+    const padWidth = Math.min(
+      Math.min(placedPad.size.w, placedPad.size.h),
+      landingWidthFor(toFlat(sepMm, tapeW, tapeMm), tapeW),
+    );
+    // Where even the floor cannot be weeded, say so. The terminal is still routed, at the floor width —
+    // dropping it would be the silent stranding this reporting exists to end. The fault and `stranded`
+    // together distinguish "physically impossible on this tape" from "another net got there first".
+    if (padRoomFor(toFlat(sepMm, tapeW, tapeMm), tapeW) < tapeW * MIN_LAND_FRAC) {
+      const needMm = ((tapeW * MIN_LAND_FRAC * 2) * tapeMm) / tapeW;
+      faults.push({
+        kind: "pads-too-close",
+        why:
+          `${part.component} pad "${t.pad}" is ${sepMm.toFixed(2)}mm from its nearest neighbour. ` +
+          `${tapeMm.toFixed(2)}mm tape needs about ${needMm.toFixed(2)}mm between pad centres to land on ` +
+          `one and still leave a strip that can be weeded, and cannot be cut narrower than ` +
+          `${(tapeMm * MIN_LAND_FRAC).toFixed(2)}mm. This part cannot be broken out pad by pad on this ` +
+          `tape: use a larger pattern, a narrower tape, or bridge these pads by hand.`,
+        part: t.part,
+        pad: t.pad,
+        net: t.net,
+      });
+    }
+    points.get(t.net)!.push({ part: t.part, pad: t.pad, at, padWidth });
   }
 
   const nets: ResolvedNet[] = [];
   for (const n of circuit.nets ?? []) {
     const pts = points.get(n.id)!;
-    if (pts.length < 2) {
+    if (pts.length < 2 && !(pts.length === 1 && railNets.has(n.id))) {
       faults.push({
         kind: "single-terminal-net",
         why:
@@ -178,46 +294,30 @@ export function resolveNetlist(circuit: Circuit, tapeW: number, tapeMm: number):
     }
     nets.push({ id: n.id, name: n.name, points: pts });
   }
-  return { nets, faults };
+
+  // The pad fields, once every terminal has been resolved. Built from the PARTS that have a wired terminal
+  // rather than from the terminals themselves, so a part's unwired pins are in the field too — see
+  // {@link Netlist.fields}.
+  const fields: PadField[] = [];
+  for (const idx of wiredParts) {
+    const here = placeOnce(idx);
+    if (!here) continue;
+    for (const pad of here.pads) {
+      const sep = toFlat(nearestTerminalMm(here.footprint, pad.name), tapeW, tapeMm);
+      // `reach` is the part's own pitch: a point nearer to this pad than its neighbour is stands over the
+      // part's metal, and a point further away has cleared it and may widen back to the tape.
+      fields.push({ at: pad.at, safe: landingWidthFor(sep, tapeW), reach: Number.isFinite(sep) ? sep : 0 });
+    }
+  }
+  return { nets, faults, fields };
 }
 
 /**
- * The nets a newly-placed part's pads should default onto, if any.
+ * There is no default netlist for a newly placed part, and `defaultTerminals` is gone (2026-08-28).
  *
- * Placing a two-terminal part and then having to wire both its pads by hand is busywork with exactly one
- * sensible answer: a two-pad part bridges the supply, one pad on each rail. That is what the bus router
- * does for an LED on a hinge without being asked, and a part standing on a tile had no equivalent — it
- * arrived with no terminals at all and stayed unwired until the author did it themselves.
- *
- * Only for a part with exactly TWO terminals, and deliberately so. Three or more and there is no answer
- * to guess: a transistor's pads are not a supply pair, and putting its first two on PWR and GND would be
- * a short stated as a default. Better to leave those to the author than to invent a circuit for them.
- *
- * Returns the assignments rather than applying them, so the caller decides whether an existing terminal on
- * that pad should be kept — re-wiring a pad the author has already assigned would be the same busywork in
- * the other direction.
- *
- * **Which pad gets PWR is the footprint's own order and carries no polarity claim.** `terminals()` yields
- * pads in the order the file lists them, so an LED_1206 defaults anode-to-PWR because its anode happens to
- * be listed first — right for that part, arbitrary for a resistor, and harmless either way because the
- * author can swap it. Nothing here reads polarity out of a pad name, and nothing should start: pad "1" is
- * not a promise about which end is positive, and a part whose datasheet numbers its pads "A" and "K" would
- * make that reading wrong immediately.
+ * It wired a two-pad part's terminals onto PWR and GND as it was dropped. Only LEDs ever reached it — the
+ * editor gated it on the component being an LED — on the reasoning that an anode and a cathode have one
+ * pair they can light on. The trouble was that the guess was *stored*: the sidebar showed it as the
+ * author's own assignment, and an LED meant for a signal net had to be un-wired before it could be wired.
+ * Placing a part and wiring it are two decisions and this made one of them silently.
  */
-export function defaultTerminals(
-  partIndex: number,
-  fp: Footprint,
-  nets: { id: string }[],
-): Terminal[] {
-  const ts = terminals(fp);
-  if (ts.length !== 2) return [];
-  // Against the seeded rails BY ID, and only if both are still there. The author may have deleted or
-  // renamed them, and a default that pointed at a net which no longer exists would be a `no-such-net`
-  // fault raised by the app on the author's behalf — worse than leaving the pads unwired.
-  const has = (id: string): boolean => nets.some((n) => n.id === id);
-  if (!has(PWR_NET_ID) || !has(GND_NET_ID)) return [];
-  return [
-    { part: partIndex, pad: ts[0]![0], net: PWR_NET_ID },
-    { part: partIndex, pad: ts[1]![0], net: GND_NET_ID },
-  ];
-}

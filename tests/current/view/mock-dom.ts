@@ -157,6 +157,12 @@ export class MockElement {
       if (stepMatch) (child as any).step = stepMatch[1];
       const valueMatch = /value="([^"]+)"/.exec(attrs);
       if (valueMatch) child.value = valueMatch[1];
+      // And every attribute verbatim, so `getAttribute` answers for one written in the markup and not
+      // only for one a view has since set. Without this an attribute declared in the template read back
+      // as `null`, which is the one answer the real DOM never gives.
+      const attrRe = /([a-zA-Z-]+)="([^"]*)"/g;
+      let attrMatch: RegExpExecArray | null;
+      while ((attrMatch = attrRe.exec(attrs))) child.attributes[attrMatch[1]!] = attrMatch[2]!;
       if (text.trim()) child.textContent = text.trim();
       child.parent = this;
       this.children.push(child);

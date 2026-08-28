@@ -3,8 +3,14 @@
  * laying out LEDs and the battery, with their copper tape auto-routed live.
  *
  * The user clicks a gap to drop an LED bridging two tiles (or a tile to place the battery), and the modal
- * emits the authored {@link Circuit} via `onEdit`. Copper is re-planned on every edit — there is no
- * "route" button to press — so the tape follows the components as they are placed.
+ * emits the authored {@link Circuit} via `onEdit`. Copper is re-planned on every edit by default, so the
+ * tape follows the components as they are placed.
+ *
+ * **Routing can be put on request** — the Route group's Auto/Manual segment, and the Route button beside
+ * it. A full plan is most of a second, and an author placing a dozen parts pays it a dozen times for
+ * plans that every following placement supersedes. With Manual set, an edit repaints the parts, leaves the
+ * copper as it was, and says so: the Route button goes amber and the status line reads *copper is out of
+ * date*. See {@link autoRoute} and {@link replan}.
  *
  * Polarity is the router's to decide, not the author's: it reports which pad it landed PWR on, and the
  * preview draws that, so the pad colours say which way round to fit each component.
@@ -35,6 +41,7 @@ import {
   type Mirror,
   buildCopperCarrierExport,
   buildCopperSvgExport,
+  frameMirrored,
   type ResistorShape,
   mirrorPoint,
   partShape,
@@ -42,7 +49,9 @@ import {
   stripOutline,
   switchShape,
 } from "../model/copper-svg-export.js";
-import { PCB_COLOURS, designators, partSvg } from "../model/part-render.js";
+import {
+  SVGPCB_COLOURS, designators, partLayers, partSvg, type PartLayers,
+} from "../model/part-render.js";
 import {
   GND_NET_ID,
   PWR_NET_ID,
@@ -50,7 +59,6 @@ import {
   nextNetColour,
   withDefaultNets,
 } from "../model/net-palette.js";
-import { defaultTerminals } from "../model/netlist.js";
 import { printScale } from "../model/print-scale.js";
 import { DEFAULT_SHEET, type SheetSpec } from "../model/fold-strain.js";
 import { netPlacement, placement } from "../model/parts.js";
@@ -66,12 +74,15 @@ import {
   tapeWidthFor,
   batteryTerminals,
   partFit,
+  freeSpan,
   planRoutes,
 } from "../model/electronics-routing.js";
 import { TILE_INSET_FRAC } from "../model/tile-subdiv.js";
 import { type ManualWire, type WireContext, manualTraces } from "../model/manual-wire.js";
 import { ERRORS } from "../model/wire-rules.js";
 import { WireTool, type WireHost } from "./wire-tool.js";
+// The scene emitter, for the ratsnest overlay — see the note at its use in `draw()`.
+import { sceneSvg, type SceneItem } from "./pcb-scene.js";
 import type { FoldFile } from "../model/fold-file.js";
 import { HOME, currentRoute, goToRoute, onRouteChange } from "./route.js";
 
@@ -167,13 +178,15 @@ const PART_PICK_FLOOR_MM = 2;
 const SELECT_RING_FLOOR_MM = 1.7;
 
 /**
- * The library parts the LED tool can place, in the order the picker offers them. The first is what an
- * LED with no `component` of its own means, so a circuit authored before there was a choice still loads
- * as the 1206 it was drawn as.
+ * The LED packages a saved circuit may name. The first is what an LED with no `component` of its own
+ * means, so a circuit authored before there was a choice still loads as the 1206 it was drawn as.
  *
- * Named rather than matched on `/^LED/`, because the list is a claim about what the LED tool can seat on
- * a hinge — two pads at a pitch a tile gap can be opened out to — and not everything the library calls
- * an LED would qualify.
+ * Named rather than matched on `/^LED/`, because the list is a claim about what can be seated on a hinge
+ * — two pads at a pitch a tile gap can be opened out to — and not everything the library calls an LED
+ * would qualify.
+ *
+ * Nothing chooses between them any more; the picker that did is gone (see {@link ElectronicsModal.newLed}).
+ * The list stays because the ids it holds are still written in saved files and still have to be read.
  */
 const LED_IDS = ["LED_1206", "LED_0603"] as const;
 
@@ -202,13 +215,21 @@ function ledPitch(fp: Footprint): number {
   }
 }
 
-/** The parts the two fixed tools already place, so the palette does not offer them a second time.
+/**
+ * The parts a fixed tool already places, so the palette does not offer them a second time.
  *
- *  Every LED footprint is here, not just the default one. An LED straddles a hinge with PWR on one pad
- *  and GND on the other, so neither placement rule excludes it — `netPlacement` asks only for a terminal
- *  to wire, and `placement()` before it said yes to any two-pad part. Offered in the palette, an LED
- *  would be placed along a rail with both its pads on one net. The LED tool is the only way to place one. */
-const FIXED_PLACEMENT = new Set<Footprint>([...LED_PARTS.map((c) => c.footprint), BAT_COIN_20]);
+ * **LEDs came out of this set on 2026-08-28.** They were here so that the LED tool was "the only way to
+ * place one", on the reasoning that an LED offered in the palette "would be placed along a rail with both
+ * its pads on one net". That is a guess about what the author wants, enforced by hiding the part: neither
+ * placement rule excludes an LED — `netPlacement` asks only for a terminal to wire — and both its pads are
+ * assignable from the pads panel like any other part's.
+ *
+ * So an LED is now an ordinary component. Pick it from the palette, drop it, and wire its two pads to
+ * whichever nets you meant; nothing assigns them for you. The LED tool still exists for the hinge case,
+ * where an LED straddles a fold and the bus router lays the two rails to it — that is a different part of
+ * the app and is untouched here.
+ */
+const FIXED_PLACEMENT = new Set<Footprint>([BAT_COIN_20]);
 
 /**
  * How the palette shelves the parts it offers, first match winning.
@@ -336,11 +357,16 @@ function partLabel(c: Component): string {
  * part with two or three terminals, so two thirds of the FabLib sat unplaceable and a picker that simply
  * omitted them would read as a library missing its parts. With nets, a part is a set of pads to wire
  * rather than something a rail passes through, so everything with a terminal is placeable and the line
- * has only the good news left to give: how many there are, and that typing finds them.
+ * has only the good news left to give: how many there are.
+ *
+ * **Shortened 2026-08-28.** It used to read `128 parts — search by name or package`, which was a sentence
+ * wide enough to need a line of its own under the picker and so cost the toolbar a whole row's height.
+ * The hint half of it is now the search box's own placeholder — where a hint about what to type belongs —
+ * and what is left is short enough to sit beside the field it describes.
  */
 function paletteCount(searching: boolean, shown: number, blocked: number): string {
   if (!searching) {
-    const all = `${OFFERED.length} parts — search by name or package`;
+    const all = `${OFFERED.length} parts`;
     return blocked === 0 ? all : `${all} · ${BLOCKED.length} with no terminal to wire`;
   }
   const found = `${shown} match`;
@@ -395,24 +421,24 @@ export class ElectronicsModal {
    *  whenever it is not, which is what lets the guards at the head of the pointer handlers be one line. */
   private readonly wire: WireTool;
   private readonly viewButtons = new Map<ViewMode, HTMLButtonElement>();
+  /** The two halves of the Route segment, keyed by what they set {@link autoRoute} to. */
+  private readonly autoButtons = new Map<boolean, HTMLButtonElement>();
+  private routeBtn!: HTMLButtonElement;
+  /**
+   * Whether copper re-plans itself on every edit.
+   *
+   * On, as it always was. Off, an edit repaints the parts and leaves the copper alone: a full plan is
+   * ~0.75s, and paying it for each of a dozen placements — every one of which is going to be superseded by
+   * the next — is most of the time spent laying out a board. It is view state and deliberately not part of
+   * the {@link Circuit}: it says when this editor does its arithmetic, not anything about the board.
+   */
+  private autoRoute = true;
+  /** True when the circuit has been edited since the copper on screen was planned. */
+  private stale = false;
   private readonly placeButtons = new Map<PlaceMode, HTMLButtonElement>();
   private readonly mirrorButtons = new Map<keyof Mirror, HTMLButtonElement>();
   /** The library picker — one control for the whole library, so a part added to it costs no toolbar room. */
   private readonly partSelect: HTMLSelectElement;
-  /**
-   * Which LED the LED tool places — its own picker, beside the LED button.
-   *
-   * Deliberately not a row in the library picker next to it. That picker is filtered by
-   * {@link placement}, which answers "can a rail pass through this part"; an LED's answer is yes and its
-   * meaning is no, because it bridges PWR to GND across a hinge rather than sitting in a break in one
-   * rail. Putting it there would make it placeable on a rail, where both its pads would land on the same
-   * net. Nor a button per footprint: a second LED package costs a row here and no toolbar room, which is
-   * the same reason the library has one picker rather than a button per footprint.
-   *
-   * Changing it arms the LED tool, so choosing a package and clicking a hinge is one gesture — the rule
-   * the library picker already follows.
-   */
-  private readonly ledSelect: HTMLSelectElement;
   /** Narrows the picker. At this many footprints the list is longer than the screen and the names are things
    *  like `Switch_Slide_RightAngle_CnK_AYZ0102AGRLC_7.2x3mm`; typing is the only way in. */
   private readonly partSearch: HTMLInputElement;
@@ -484,6 +510,11 @@ export class ElectronicsModal {
   private tileGap = TILE_INSET_FRAC;
   /** What the cursor's last tap picked up — an LED or a part on a rail — or null. */
   private selected: Selection | null = null;
+  /** Whether that selection was PICKED — the author tapped something already on the sheet — rather than
+   *  MADE by placing it. A picked selection swallows the next tap on bare sheet, so tapping a part to look
+   *  at its pads and then tapping away puts it down instead of dropping a second one; a made selection does
+   *  not, because tapping out a row of parts one after another is how the palette is meant to be used. */
+  private selectedByPick = false;
   private fold: FoldFile | null = null;
   private faces: FlatFace[] = [];
   private tiles: TilePoly[] = [];
@@ -532,17 +563,15 @@ export class ElectronicsModal {
               <span class="el-group">
                 <span class="el-group-label">Place</span>
                 <span class="el-seg">
-                  <button type="button" class="el-tool" data-tool="led" title="Add an LED — click a gap between two tiles">LED</button>
                   <button type="button" class="el-tool" data-tool="battery" title="Place the battery — click a tile">Battery</button>
                   <button type="button" class="el-tool" data-tool="wire" title="Draw copper by hand — tap to lay a vertex, tap the last one (or Enter) to finish, Backspace to take one back, X+tap to drop one, Delete to remove the selected wire">Wire</button>
                 </span>
-                <select class="el-led-part" aria-label="Which LED footprint to place" title="Which LED to place. It straddles a hinge with PWR on one pad and GND on the other, so it is not placed from the library picker beside it — that one is for parts in series on a rail"></select>
               </span>
               <span class="el-group el-parts">
                 <label class="el-group-label el-part-label" for="el-part">Part</label>
                 <span class="el-part-picker">
                   <span class="el-part-fields">
-                    <input type="search" id="el-part-search" class="el-part-search" placeholder="Search the library" aria-label="Search the component library" autocomplete="off">
+                    <input type="search" id="el-part-search" class="el-part-search" placeholder="Search by name or package" aria-label="Search the component library" autocomplete="off">
                     <span class="el-part-menu-wrap">
                       <button type="button" class="el-part-trigger" aria-haspopup="listbox" aria-expanded="false" title="Pick a library part, then click either rail to place it. The copper is broken there, so the tape does not short the part out"></button>
                       <div class="el-part-menu" role="listbox" aria-label="Component library" hidden></div>
@@ -567,6 +596,14 @@ export class ElectronicsModal {
                   <button type="button" class="el-view" data-view="traces" title="Show the copper as separate strips">Strips</button>
                   <button type="button" class="el-view" data-view="carrier" title="Show the copper as one carrier frame holding every trace in place">Carrier</button>
                 </span>
+              </span>
+              <span class="el-group el-route-modes">
+                <span class="el-group-label">Route</span>
+                <span class="el-seg">
+                  <button type="button" class="el-auto" data-auto="on" title="Re-plan the copper on every edit, as it has always been">Auto</button>
+                  <button type="button" class="el-auto" data-auto="off" title="Leave the copper alone while you place and move things. The canvas keeps showing the last plan until you press Route">Manual</button>
+                </span>
+                <button type="button" class="el-route" title="Re-plan the copper now">Route</button>
               </span>
               <span class="el-group el-mirror-modes">
                 <span class="el-group-label">Mirror</span>
@@ -629,8 +666,8 @@ export class ElectronicsModal {
               <span class="el-key"><i class="el-swatch el-key-pwr"></i>PWR tape</span>
               <span class="el-key"><i class="el-swatch el-key-gnd"></i>GND tape</span>
               <span class="el-key"><i class="el-swatch el-key-batt"></i>Battery</span>
-              <span class="el-key"><i class="el-swatch" style="background:${PCB_COLOURS.mask}"></i>Part pad — drawn, not cut</span>
-              <span class="el-key"><i class="el-swatch" style="background:${PCB_COLOURS.componentLabel}"></i>Part label (R1)</span>
+              <span class="el-key"><i class="el-swatch" style="background:${SVGPCB_COLOURS.mask}"></i>Part pad — drawn, not cut</span>
+              <span class="el-key"><i class="el-swatch" style="background:${SVGPCB_COLOURS.componentLabel}"></i>Part label (R1)</span>
               <span class="el-key"><i class="el-swatch el-swatch-ring el-key-led"></i>LED the copper never reached</span>
             </p>
             <span class="sim-status el-status"></span>
@@ -684,13 +721,6 @@ export class ElectronicsModal {
       if (this.menuClickGuard) this.menuClickGuard = false;
       else if (this.menuOpen) this.setMenuOpen(false);
     });
-    this.ledSelect = this.overlay.querySelector(".el-led-part")!;
-    this.fillLedPicker();
-    // Picking an LED package IS choosing the LED tool, exactly as picking a library part arms that part —
-    // otherwise choosing a 0603 and clicking a hinge would place whatever was armed before.
-    for (const ev of ["change", "click"]) {
-      this.ledSelect.addEventListener(ev, () => this.selectTool("led"));
-    }
     this.fillPalette();
     // The browser would default a select to its first option; say so explicitly, so `value` names a real
     // part before anyone has touched it and the two agree from the start.
@@ -724,6 +754,13 @@ export class ElectronicsModal {
       btn.addEventListener("click", () => this.selectView(mode));
       this.viewButtons.set(mode, btn);
     }
+    for (const btn of this.overlay.querySelectorAll<HTMLButtonElement>(".el-auto")) {
+      const on = btn.dataset.auto !== "off";
+      btn.addEventListener("click", () => this.setAutoRoute(on));
+      this.autoButtons.set(on, btn);
+    }
+    this.routeBtn = this.overlay.querySelector<HTMLButtonElement>(".el-route")!;
+    this.routeBtn.addEventListener("click", () => this.routeNow());
     for (const btn of this.overlay.querySelectorAll<HTMLButtonElement>(".el-place")) {
       const mode = btn.dataset.place === "free" ? "free" : "gap";
       btn.addEventListener("click", () => this.selectPlaceMode(mode));
@@ -842,8 +879,12 @@ export class ElectronicsModal {
     // single pad on anything. Deleting one is still theirs to do — `withDefaultNets` only ever seeds a
     // circuit that has never declared a net, so a deletion is not undone on the next pattern.
     this.circuit = withDefaultNets({ leds: [], battery: null });
+    // The old pattern's copper is not this pattern's copper, whatever the routing mode says. Cleared here
+    // rather than re-planned, because the circuit it would plan for is empty.
+    this.routed = EMPTY_ROUTE;
+    this.stale = false;
     this.openNets.clear();
-    this.selected = null;
+    this.select(null);
     this.computeBounds();
     this.fitView();
     this.syncButtons();
@@ -946,6 +987,10 @@ export class ElectronicsModal {
     // Arming anything is the end of browsing the library, whichever control did it.
     if (this.menuOpen) this.setMenuOpen(false);
     this.tool = tool;
+    // Arming is also an intent to PLACE, so the part picked up on the sheet stops swallowing the next tap.
+    // It stays selected — R and Delete still reach it — but reaching for the palette and then tapping the
+    // sheet can only mean one thing, and making that tap do nothing would read as a dead palette.
+    this.selectedByPick = false;
     // The wire tool owns the canvas while it is armed, and hands it straight back: disarming abandons a
     // part-drawn wire rather than committing copper the author walked away from.
     this.wire.setActive(tool === "wire");
@@ -1145,36 +1190,20 @@ export class ElectronicsModal {
   }
 
   /**
-   * Fill the LED picker from {@link LED_PARTS}, and select the default.
+   * A newly placed hinge LED.
    *
-   * Short enough to need no search and no shelves: it is the LED packages, not the library.
-   */
-  private fillLedPicker(): void {
-    this.ledSelect.innerHTML = "";
-    for (const c of LED_PARTS) {
-      const opt = document.createElement("option");
-      opt.value = c.id;
-      opt.textContent = partLabel(c);
-      this.ledSelect.appendChild(opt);
-    }
-    this.ledSelect.value = DEFAULT_LED.id;
-  }
-
-  /** Which LED the next tap on a hinge places. */
-  private armedLed(): Component {
-    return LED_BY_ID.get(this.ledSelect.value) ?? DEFAULT_LED;
-  }
-
-  /**
-   * A newly placed LED, carrying its package.
-   *
-   * The default is written as an ABSENCE, not as `component: "LED_1206"`. An LED with no component means
-   * the 1206, so saying it out loud would only make circuits authored before the choice existed serialise
+   * The package is written as an ABSENCE, not as `component: "LED_1206"`. An LED with no component means
+   * the 1206, so saying it out loud would only make circuits authored before there was a choice serialise
    * differently from identical ones authored after it.
+   *
+   * **Changed 2026-08-28.** There used to be a picker beside the LED button offering the 1206 and the
+   * 0603, and a hinge LED carried whichever was showing. It went when LEDs joined the library palette:
+   * a second control for two of the library's parts, in the one place the library picker could not
+   * reach, is a rule about LEDs held in the toolbar. A circuit already carrying an `LED_0603` still
+   * loads, draws and routes as one — see {@link ledPart}.
    */
   private newLed(a: number, b: number): Led {
-    const id = this.armedLed().id;
-    return id === DEFAULT_LED.id ? { a, b } : { a, b, component: id };
+    return { a, b };
   }
 
   /** One shelf in the picker, appended and returned so its parts can be hung on it. */
@@ -1194,9 +1223,12 @@ export class ElectronicsModal {
     // The declared nets survive: they are names the author chose, they cost nothing to keep, and the
     // parts they were wired to are what Clear is for. Their terminals cannot survive — the parts are gone.
     this.circuit = { leds: [], battery: null, nets: this.nets(), terminals: [] };
-    this.selected = null;
+    this.select(null);
     this.syncButtons();
-    this.emit();
+    // Clear means clear, in every mode. Left to `replan` with Auto off, the copper for the circuit that
+    // was just thrown away would stay on the canvas with nothing under it to explain it — and the plan has
+    // to be forced from INSIDE `emit`, which is where an edit under Manual is marked stale.
+    this.emit(true);
   }
 
   /** Reflect active state on the toggle-ish toolbar buttons. */
@@ -1207,9 +1239,11 @@ export class ElectronicsModal {
     this.partSelect.classList.toggle("is-active", part !== null);
     this.partTrigger.classList.toggle("is-active", part !== null);
     if (part) this.partSelect.value = part.id;
-    // And the LED picker is the LED tool's active control, for the same reason.
-    this.ledSelect.classList.toggle("is-active", this.tool === "led");
     for (const [m, btn] of this.viewButtons) btn.classList.toggle("is-active", m === this.viewMode);
+    for (const [on, btn] of this.autoButtons) {
+      btn.classList.toggle("is-active", on === this.autoRoute);
+      btn.setAttribute("aria-pressed", on === this.autoRoute ? "true" : "false");
+    }
     for (const [m, btn] of this.placeButtons) {
       btn.classList.toggle("is-active", m === this.placeMode);
       btn.setAttribute("aria-pressed", m === this.placeMode ? "true" : "false");
@@ -1218,6 +1252,14 @@ export class ElectronicsModal {
       btn.classList.toggle("is-active", this.mirror[axis]);
       btn.setAttribute("aria-pressed", this.mirror[axis] ? "true" : "false");
     }
+  }
+
+  /** Set the selection, and record how it was made. Every write to `selected` goes through here so the
+   *  "picked" flag cannot be left standing from an earlier gesture — a placement that reset only the
+   *  selection would make the tap after it deselect rather than place. */
+  private select(sel: Selection | null, how: "picked" | "placed" = "placed"): void {
+    this.selected = sel;
+    this.selectedByPick = how === "picked" && sel !== null;
   }
 
   private onCanvasClick(e: MouseEvent): void {
@@ -1229,8 +1271,19 @@ export class ElectronicsModal {
     // occupies is its own; the rest of the rail is still free to drop another one on.
     const onPart = this.partAt(flat);
     if (onPart) {
-      this.selected = onPart;
+      this.select(onPart, "picked");
       // The pad panel follows the selection: it is the selected part's pads it is offering.
+      this.renderSide();
+      this.render();
+      return;
+    }
+    // A part picked up on the sheet is put down by tapping away from it, and that tap does nothing else.
+    // Placing is armed all the time — there is no neutral tool — so without this the only way to stop
+    // looking at a part's pads was to drop another copy of whatever the palette holds. The tap after this
+    // one places as usual: a selection the author MADE by placing does not swallow anything, or laying out
+    // a row of parts would cost two taps each.
+    if (this.selectedByPick) {
+      this.select(null);
       this.renderSide();
       this.render();
       return;
@@ -1263,7 +1316,7 @@ export class ElectronicsModal {
           ...this.circuit,
           parts: [...placed, { component: part.id, x: mid.x, y: mid.y, free: true, rot }],
         };
-        this.selected = { kind: "part", index: placed.length };
+        this.select({ kind: "part", index: placed.length });
         this.emit();
         return;
       }
@@ -1278,11 +1331,17 @@ export class ElectronicsModal {
       // On the sheet at all, though: a click in the margin is still a miss, and silently dropping a part in
       // empty space would put copper where there is nothing to stick it to.
       if (!onRail && pointInFace(this.faces, flat) < 0) return;
+      // A seated part is stored at the angle of the run it lands on, the way a free one is stored at the
+      // angle the author turned it to. It used to be stored with none, and `padPosition` then routed to
+      // unrotated footprint coordinates while the part was drawn along its run — measured at 2.59mm to
+      // 3.54mm on the bundled patterns, which on an R_1206 is a whole pad pitch and puts pad 1's copper on
+      // pad 2. The angle is decided once, here, and never re-derived; that is what
+      // `electronics-parts.ts › placementOf` means by a seated part now being placed like any other.
       const seat: PlacedPart = onRail
-        ? { component: part.id, x: near!.point.x, y: near!.point.y }
+        ? { component: part.id, x: near!.point.x, y: near!.point.y, rot: near!.rot }
         : { component: part.id, x: flat.x, y: flat.y, free: true };
       this.circuit = { ...this.circuit, parts: [...placed, seat] };
-      this.selected = { kind: "part", index: placed.length };
+      this.select({ kind: "part", index: placed.length });
       this.emit();
       return;
     }
@@ -1294,7 +1353,7 @@ export class ElectronicsModal {
       const key = this.tool === "switch" ? "switches" : "resistors";
       const existing = (this.tool === "switch" ? this.circuit.switches : this.circuit.resistors) ?? [];
       this.circuit = { ...this.circuit, [key]: [...existing, { x: near.point.x, y: near.point.y }] };
-      this.selected = { kind: this.tool === "switch" ? "switch" : "resistor", index: existing.length };
+      this.select({ kind: this.tool === "switch" ? "switch" : "resistor", index: existing.length });
       this.emit();
       return;
     }
@@ -1315,9 +1374,9 @@ export class ElectronicsModal {
       // round, and the author changes either from the pads panel — a default, not a decision taken from
       // them. Landing unwired meant every LED placed on a tile needed two manual assignments before it
       // could light, which is a chore rather than a choice.
-      const id = this.armedLed().id;
+      const id = DEFAULT_LED.id;
       if (pointInFace(this.faces, flat) < 0) {
-        this.selected = null;
+        this.select(null);
         this.renderSide();
         this.render();
         return;
@@ -1326,14 +1385,16 @@ export class ElectronicsModal {
       this.circuit = {
         ...this.circuit,
         parts: [...placed, { component: id, x: flat.x, y: flat.y, free: true }],
-        terminals: [...this.netTerminals(), ...this.defaultLedTerminals(placed.length, id)],
+        // No terminals. A newly placed part arrives unwired, LED or not — see the note where
+        // `defaultLedTerminals` used to be.
+        terminals: this.netTerminals(),
       };
-      this.selected = { kind: "part", index: placed.length };
+      this.select({ kind: "part", index: placed.length });
     } else {
       // LEDs straddle a gap: snap the click to the nearest hinge between two tiles.
       const hit = nearestGap(this.gaps, flat);
       if (!hit || hit.dist > this.pickRadius()) {
-        this.selected = null; // a tap on bare cloth clears the selection
+        this.select(null); // a tap on bare cloth clears the selection
         this.renderSide();
         this.render();
         return;
@@ -1344,13 +1405,13 @@ export class ElectronicsModal {
       if (at >= 0) {
         // An LED already here: select it, so it can be rotated or removed. Tapping it no longer deletes it —
         // deleting on the same gesture that selects would make rotating one impossible.
-        this.selected = { kind: "led", index: at };
+        this.select({ kind: "led", index: at }, "picked");
         this.renderSide();
         this.render();
         return;
       }
       this.circuit = { ...this.circuit, leds: [...this.circuit.leds, led] };
-      this.selected = { kind: "led", index: this.circuit.leds.length - 1 };
+      this.select({ kind: "led", index: this.circuit.leds.length - 1 });
     }
     this.emit();
   }
@@ -1375,19 +1436,17 @@ export class ElectronicsModal {
    * exported in the netlist — and invisible on the canvas, which is the worst of all the options.
    */
   private freeParts(): { component: string; a: Vec2; b: Vec2; flip?: boolean; source?: number }[] {
-    const toFlat = (mm: number): number => (mm * this.tapeW()) / this.tapeMm();
     const out: { component: string; a: Vec2; b: Vec2; flip?: boolean; source?: number }[] = [];
     (this.circuit.parts ?? []).forEach((p, source) => {
       if (!p.free) return;
       const fp = footprintById(p.component);
       if (!fp) return; // a part the library no longer has, left undrawn rather than guessed at
-      const half = toFlat(partFit(fp).gap) / 2;
-      const th = ((p.rot ?? 0) * Math.PI) / 180;
-      const ux = Math.cos(th), uy = Math.sin(th);
+      // The span comes from the router's own `freeSpan`, not from a copy of the arithmetic kept here. It
+      // carries the in-line flip rule with it — see its docblock for what a local copy cost.
+      const { a, b } = freeSpan(p, fp, this.tapeW(), this.tapeMm());
       out.push({
         component: p.component,
-        a: { x: p.x - ux * half, y: p.y - uy * half },
-        b: { x: p.x + ux * half, y: p.y + uy * half },
+        a, b,
         ...(p.flip === undefined ? {} : { flip: p.flip }),
         source,
       });
@@ -1404,8 +1463,8 @@ export class ElectronicsModal {
 
   /** The nearest point on any run to `p` — where a resistor would break the copper. Either rail: a
    *  resistor in series limits the current the same on the way out as on the way back. */
-  private nearestOnRail(p: Vec2): { point: Vec2; dist: number } | null {
-    let best: { point: Vec2; dist: number } | null = null;
+  private nearestOnRail(p: Vec2): { point: Vec2; dist: number; rot: number } | null {
+    let best: { point: Vec2; dist: number; rot: number } | null = null;
     for (const t of this.routed.traces) {
       for (let i = 1; i < t.pts.length; i++) {
         const a = t.pts[i - 1]!, b = t.pts[i]!;
@@ -1414,7 +1473,11 @@ export class ElectronicsModal {
         const u = Math.max(0, Math.min(1, ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / l2));
         const q = { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u };
         const d = Math.hypot(p.x - q.x, p.y - q.y);
-        if (!best || d < best.dist) best = { point: q, dist: d };
+        // The run's own direction at the point, so a part dropped here can be STORED at the angle it will
+        // be seated at rather than leaving that to be re-derived. See the note at the seat below.
+        if (!best || d < best.dist) {
+          best = { point: q, dist: d, rot: (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI };
+        }
       }
     }
     return best;
@@ -1803,7 +1866,7 @@ export class ElectronicsModal {
   /** Select a placed part from the list, exactly as clicking it on the canvas does. */
   private selectPart(index: number): void {
     if (!(this.circuit.parts ?? [])[index]) return;
-    this.selected = { kind: "part", index };
+    this.select({ kind: "part", index }, "picked");
     this.renderSide();
     this.render();
   }
@@ -1857,9 +1920,10 @@ export class ElectronicsModal {
   /**
    * The colour to fill a run of copper with, or null to leave it to the stylesheet.
    *
-   * Null for the bus's own two rails even though nets called PWR and GND are seeded under those very
-   * ids: the bus's copper is not the declared net's copper — `routeDeclaredNets` keeps them apart — and
-   * recolouring the rails from the sidebar would say they were the same piece of tape.
+   * Null for the bus's own two rails even though nets called PWR and GND are seeded under those very ids.
+   * The declared net now taps the rail rather than avoiding it, so they ARE one piece of tape — and that
+   * is the reason, not the exception: the rails are drawn in the stylesheet's own red and black, and a
+   * colour taken from the sidebar would paint half of one net in one colour and half in another.
    */
   private netFill(netId: string): string | null {
     if (netId === "pwr" || netId === "gnd") return null;
@@ -1980,23 +2044,21 @@ export class ElectronicsModal {
   }
 
   /**
-   * The nets a newly placed LED's pads should start on.
+   * A newly placed part starts with no nets on its pads. Removed 2026-08-28.
    *
-   * Two decisions, kept in the two places they belong. **Which parts get a default at all** is a placement
-   * question and lives here: only an LED, because its pads are an anode and a cathode and PWR/GND is the
-   * only pair it can light on. A free resistor's two pads carry no polarity, and a twenty-six-way socket
-   * would be a circuit the author never drew.
+   * An LED used to be the one exception: dropping one wired its two pads straight onto PWR and GND, on the
+   * reasoning that an anode and a cathode have only one pair they can light on. No other part had a
+   * default — a free resistor's two pads carry no polarity, and a twenty-six-way socket would have been a
+   * circuit the author never drew — so this was LED-only, and taking it away takes the whole behaviour with
+   * it rather than leaving a rule that fires for one part in the library.
    *
-   * **What the default IS** is a netlist question and lives in `netlist.ts › defaultTerminals`, which
-   * refuses anything but a two-terminal part and refuses to point at rails the author has deleted. Calling
-   * it rather than restating it keeps one rule in one place — the same reason `acrossPart` is read by both
-   * the router and the drawing instead of each having its own version.
+   * It guessed at the author's circuit and then looked like their own work: the assignment was stored, so
+   * the sidebar showed it as theirs, and an LED that was meant to sit on a signal net had to be un-wired
+   * before it could be wired. Placing a part and wiring it are two decisions, and this made one of them
+   * silently on the author's behalf.
+   *
+   * `netlist.ts › defaultTerminals` went with it — nothing else called it.
    */
-  private defaultLedTerminals(part: number, component: string): Terminal[] {
-    const fp = footprintById(component);
-    if (!fp || !LED_BY_ID.has(component)) return [];
-    return defaultTerminals(part, fp, this.nets());
-  }
 
   /**
    * The battery's and the hinge-LEDs' membership of PWR and GND, as rows to show and never to store.
@@ -2285,18 +2347,26 @@ export class ElectronicsModal {
       // the wrong pads. Its own terminals go with it; the ones above it come down one.
       if (part.kind === "part") this.reindexTerminals(sel.index);
     }
-    this.selected = null;
+    this.select(null);
     this.emit();
   }
 
   /** Draw the edit, then notify the controller so it stores the circuit.
    *  The redraw must happen here: the controller does not push anything back, so an edit that only
    *  emitted would update `this.circuit` and never appear on screen. */
-  private emit(): void {
+  private emit(replanned = false): void {
     // The canvas first, because `render()` re-plans and the nets panel reads the plan: the battery's and
     // each hinge-LED's rows are derived from `this.routed` (see {@link derivedRows}). Painted first, the
     // panel showed the plan from BEFORE this edit — one behind, so a freshly placed LED contributed
     // nothing to its rails' counts until the next unrelated edit repainted them.
+    // With Auto off `render()` will not re-plan, so the edit is recorded as staleness instead. Set before
+    // rendering, because the status line the render paints is where the author is told about it.
+    //
+    // `replanned` is for the edits that must not be deferred whatever the mode — Clear all, so far. They
+    // plan here rather than before the call, because marking the edit stale is this function's job and a
+    // plan made outside it would be marked stale a line later.
+    if (replanned) this.forceReplan();
+    else if (!this.autoRoute) this.stale = true;
     this.render();
     this.renderNets();
     this.editHandler(cloneCircuit(this.circuit));
@@ -2356,6 +2426,18 @@ export class ElectronicsModal {
    *  same mirror the export will. The canvas has to show the mirrored layout, not merely export one: this is
    *  where the LEDs get placed, and placing them against an unmirrored picture of a mirrored cut is how you
    *  end up with a board that is right in the editor and reversed on the mat. */
+  /**
+   * Whether {@link tp} reverses orientation — it does, and the author's mirror toggle can reverse it back.
+   *
+   * `partShape` lays a part's pads along the run and across it, and a perpendicular flips sign under a
+   * reflection, so a shape drawn from points already in this frame came out MIRRORED against the same part
+   * placed by `electronics-parts.ts › placementOf`, which works in flat units. Measured on
+   * `Module_XIAO_Generic_SocketSMD`: the net on pad 1 had its copper laid on drawn pad 5.
+   */
+  private frameFlipped(): boolean {
+    return frameMirrored((q) => this.tp(q));
+  }
+
   private tp(p: Vec2): Vec2 {
     const { w, h } = this.sheet();
     const k = this.scale();
@@ -2458,7 +2540,7 @@ export class ElectronicsModal {
     const hit = flat ? this.partAt(flat) : null;
     if (flat && hit && hit.kind === "part" && (this.circuit.parts ?? [])[hit.index]?.free) {
       this.partDrag = { index: hit.index, from: flat, at: flat };
-      this.selected = hit;
+      this.select(hit, "picked");
       // The sidebar follows the press, not just the click. Selecting here and repainting only the canvas
       // left the parts list and the pads panel showing the PREVIOUS part for the whole gesture — and for
       // a press that never moves, for good, since a drag that goes nowhere commits nothing.
@@ -2526,11 +2608,54 @@ export class ElectronicsModal {
 
   // ---- rendering -----------------------------------------------------------
 
-  /** Re-plan copper for the current circuit. Cheap enough to do on every edit. */
+  /**
+   * Re-plan copper for the current circuit — unless the author has asked to be the one who says when.
+   *
+   * With Auto off this returns without touching `this.routed`, so the canvas keeps painting the last plan
+   * under the parts as they move. That is the honest thing to draw: the copper really is what it was, and
+   * {@link stale} is what says it no longer matches the parts sitting on it.
+   */
   private replan(): void {
+    if (!this.autoRoute) return;
+    this.forceReplan();
+  }
+
+  /** Plan, whatever the mode. Every path that must not show old copper — a new pattern, Clear all, the
+   *  Route button — goes through here rather than through {@link replan}. */
+  private forceReplan(): void {
     this.routed = this.fold
       ? planRoutes(this.faces, this.gaps, this.circuit, this.sheetMm, this.sheetSpec)
       : EMPTY_ROUTE;
+    this.stale = false;
+  }
+
+  /**
+   * Switch between planning on every edit and planning on request.
+   *
+   * Turning Auto back on re-plans immediately. The alternative — waiting for the next edit — leaves the
+   * mode saying the copper is live while what is on screen is not, which is the one thing this control
+   * exists to make unambiguous.
+   */
+  private setAutoRoute(on: boolean): void {
+    if (on === this.autoRoute) return;
+    this.autoRoute = on;
+    this.syncButtons();
+    if (on) this.routeNow();
+    else this.renderStatus();
+  }
+
+  /**
+   * Plan now, on request.
+   *
+   * Not an edit: the circuit is unchanged, so `editHandler` is not called and nothing is written to the
+   * store. The nets panel is repainted with the canvas because its battery and hinge-LED rows are derived
+   * from the plan (see {@link derivedRows}) — left alone they would describe the plan before this one.
+   */
+  private routeNow(): void {
+    this.forceReplan();
+    this.draw();
+    this.renderNets();
+    this.renderStatus();
   }
 
   private render(): void {
@@ -2565,7 +2690,8 @@ export class ElectronicsModal {
     // wired to the rail in both positions and switches nothing. The canvas has to cut them too — showing
     // unbroken tape there is showing a circuit that does not exist.
     const windows = [
-      ...this.routed.switches.map((w) => switchShape(this.tp(w.a), this.tp(w.b), w.flip)?.notch),
+      ...this.routed.switches.map((w) =>
+        switchShape(this.tp(w.a), this.tp(w.b), w.flip, this.frameFlipped())?.notch),
       ...this.routedParts().map((p) => this.partShapeOf(p)?.notch),
     ].filter((n): n is Vec2[] => !!n && n.length >= 3);
 
@@ -2591,7 +2717,11 @@ export class ElectronicsModal {
       // Any window falling inside this strip rides on its path, so `evenodd` reads it as a hole rather than
       // as more copper. A separate path would simply lie on top and hide nothing.
       const mine = windows.filter((n) => inRing(centreOf(n), outer));
-      const paint = fill ? ` fill="${fill}"` : "";
+      // `style`, not a `fill` attribute. A presentation attribute sits BELOW every CSS rule in the cascade,
+      // so `.el-tape-gnd { fill: #222222 }` beat it and every declared net was painted GND black however the
+      // author had coloured it — the sidebar swatch and the copper under it disagreed, which is precisely
+      // what `net-palette.ts` says colour lives on the model to prevent. An inline style outranks the class.
+      const paint = fill ? ` style="fill:${fill}"` : "";
       parts.push(
         `<path d="${[sub(outer), ...mine.map(sub)].join(" ")}" class="${cls}"${paint} fill-rule="evenodd" />`,
       );
@@ -2605,21 +2735,35 @@ export class ElectronicsModal {
       const d = "M " + ring.map((p, k) => (k === 0 ? "" : "L ") + ptStr(this.tp(p))).join(" ") + " Z";
       parts.push(`<path d="${d}" class="el-tape el-wire-copper" />`);
     }
-    // Every part, drawn from its own footprint by the same `partSvg` the cut files use: each terminal as the
-    // pad that will actually be cut, in copper and mask, with the part's designator beside it. Drawn as the
-    // real thing rather than a cartoon body, so the canvas and the cut files cannot say different things.
+    // Every part, drawn from its own footprint by the same code the cut files use: each terminal as the pad
+    // that will actually be cut, in copper and mask, with the part's designator beside it. Drawn as the real
+    // thing rather than a cartoon body, so the canvas and the cut files cannot say different things.
+    //
+    // Grouped by LAYER across the whole board, not by part — svg-pcb's order, and the reason a board reads
+    // as a board: every pad's copper, then every pad's mask, then every drill punched over all of it, then
+    // the writing on top (`js/views/svgViewer.js`). Grouped per part instead, one part's mask lands on its
+    // neighbour's pad name wherever two parts sit close enough to overlap.
     const drawn = this.drawnParts();
     if (drawn.length) {
       const tags = designators(drawn);
-      // One group so the text can be given a halo in CSS without touching any of the palette's own colours.
-      parts.push(`<g class="el-part-marks">`);
-      drawn.forEach((d, i) => {
-        parts.push(...partSvg(d.footprint, d.shape, tags[i]!, {
-          labels: this.padLabelsFit(d.shape),
-          scale: this.renderScale(),
-        }));
-      });
-      parts.push(`</g>`);
+      const board = drawn.map((d, i) => partLayers(d.footprint, d.shape, tags[i]!, {
+        labels: this.padLabelsFit(d.shape),
+        scale: this.renderScale(),
+        style: "svgpcb",
+      }));
+      const layer = (id: string, cls: string, pick: (l: PartLayers) => string[]): void => {
+        const body = board.flatMap(pick);
+        if (!body.length) return;
+        parts.push(`<g id="${id}"${cls ? ` class="${cls}"` : ""}>`, ...body, `</g>`);
+      };
+      layer("F.Cu", "", (l) => l.copper);
+      layer("F.Mask", "", (l) => l.mask);
+      layer("drills", "", (l) => l.drills);
+      layer("origins", "", (l) => l.origin);
+      // Both label groups are `el-part-marks`, which is only what keeps them off the hit-test. The halo is
+      // the designator's alone — see the note on the rule in `styles.css`.
+      layer("padLabels", "el-part-marks", (l) => l.padLabels);
+      layer("componentLabels", "el-part-marks el-component-labels", (l) => l.componentLabels);
     }
     // The selected part, ringed on the copper the router actually broke for it — the same mark an LED gets.
     const selPart = this.partSelection();
@@ -2646,6 +2790,30 @@ export class ElectronicsModal {
         parts.push(this.selectionRing(a, b, "el-led-selected"));
       }
     });
+    // The ratsnest: one line per connection the netlist asked for and the router could not lay. A net that
+    // lost a pad otherwise looks on the canvas exactly like one that did not — the only sign was a count in
+    // the sidebar and a sentence in the status line, neither of which says WHERE.
+    //
+    // Drawn as `kind: "wire"`, which `pcb-scene.ts` reserves for previews and forbids for committed copper.
+    // That is right here and the distinction matters: this is a connection that does not exist, it reaches
+    // no cut file, and it must never read as tape. Hence dashed, and hence a stroked centreline rather than
+    // the `stripOutline` every real run is drawn with.
+    const rats: SceneItem[] = [];
+    for (const n of this.routed.nets ?? []) {
+      for (const [a, b] of n.ratsnest ?? []) {
+        const p = this.tp(a), q = this.tp(b);
+        rats.push({
+          kind: "wire",
+          d: `M ${ptStr(p)} L ${ptStr(q)}`,
+          cls: "el-ratsnest",
+          // One screen pixel, left to `vector-effect` in the stylesheet — a ratsnest is an annotation and
+          // should not thin out as the pattern is zoomed away from.
+          width: 1,
+        });
+      }
+    }
+    if (rats.length) parts.push(sceneSvg(rats));
+
     // Battery: two terminal squares — PWR (+) red and GND (−) dark — so each net leaves its own pad.
     if (this.circuit.battery) {
       const f = this.faces[this.circuit.battery.face];
@@ -2753,17 +2921,18 @@ export class ElectronicsModal {
       this.tp({ x: c.x - ux * half, y: c.y - uy * half }),
       this.tp({ x: c.x + ux * half, y: c.y + uy * half }),
       part.flip,
+      this.frameFlipped(),
     );
     if (!shape) return;
     // No designator on a ghost: the label belongs to the part where it is, and a second copy of `U1`
     // floating at the cursor reads as a second part rather than as the same one on its way somewhere.
     this.liveLayer().innerHTML =
-      `<g class="el-part-ghost">${partSvg(fp, shape, "", { labels: false }).join("")}</g>`;
+      `<g class="el-part-ghost">${partSvg(fp, shape, "", { labels: false, style: "svgpcb" }).join("")}</g>`;
   }
 
   private partShapeOf(p: { component: string; a: Vec2; b: Vec2; flip?: boolean }): ResistorShape | null {
     const fp = PART_BY_ID.get(p.component)?.footprint;
-    return fp ? partShape(fp, this.tp(p.a), this.tp(p.b), p.flip) : null;
+    return fp ? partShape(fp, this.tp(p.a), this.tp(p.b), p.flip, this.frameFlipped()) : null;
   }
 
   /**
@@ -2781,10 +2950,10 @@ export class ElectronicsModal {
     };
     for (const r of this.routed.resistors) {
       // The same shape the cut files draw, so the canvas cannot drift from them.
-      add("R_1206", R_1206, resistorShape(this.tp(r.a), this.tp(r.b)));
+      add("R_1206", R_1206, resistorShape(this.tp(r.a), this.tp(r.b), this.frameFlipped()));
     }
     for (const w of this.routed.switches) {
-      add("SW_SPDT", SW_SPDT, switchShape(this.tp(w.a), this.tp(w.b), w.flip));
+      add("SW_SPDT", SW_SPDT, switchShape(this.tp(w.a), this.tp(w.b), w.flip, this.frameFlipped()));
     }
     // And every other library part, drawn from its own footprint by the one generic shape — so a part the
     // library gains appears here with nothing added to this file.
@@ -2803,7 +2972,8 @@ export class ElectronicsModal {
       const pads = this.ledPads(led, i);
       if (!pads) return;
       const c = ledPart(led);
-      add(c.id, c.footprint, partShape(c.footprint, this.tp(pads.pwr), this.tp(pads.gnd)));
+      add(c.id, c.footprint,
+        partShape(c.footprint, this.tp(pads.pwr), this.tp(pads.gnd), undefined, this.frameFlipped()));
     });
     return out;
   }
@@ -3023,6 +3193,11 @@ export class ElectronicsModal {
             : " · tap the pattern to start a wire";
     }
     msg += this.netlistTrouble();
+    // Ahead of the selection hint, because it is about the whole drawing rather than about one part: what
+    // is on the canvas is copper for an earlier circuit, and every count above it was read off that plan.
+    this.routeBtn?.classList.toggle("is-stale", this.stale);
+    if (this.stale) msg += " · copper is out of date — press Route";
+    else if (!this.autoRoute) msg += " · routing on request";
     const sel = this.selected;
     const selPart = this.partSelection();
     const picked = sel

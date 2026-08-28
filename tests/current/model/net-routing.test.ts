@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { flatFaces, gapGraph, ledOf, type Circuit, type Vec2 } from "../../../src/model/electronics.js";
 import { DEFAULT_SHEET, minWebMm } from "../../../src/model/fold-strain.js";
 import { planNets } from "../../../src/model/net-routing.js";
-import { TAPE_MM, planRoutes, tapeWidthFor } from "../../../src/model/electronics-routing.js";
+import { TAPE_MM, planRoutes, tapeWidthFor, type Trace2D } from "../../../src/model/electronics-routing.js";
 import type { ResolvedNet } from "../../../src/model/netlist.js";
 
 const EXAMPLES = new URL("../../../public/examples/", import.meta.url).pathname;
@@ -46,8 +46,19 @@ function nearestBetweenNets(traces: { net: string; pts: Vec2[] }[]): number {
     const t = L ? Math.max(0, Math.min(1, ((c.x - a.x) * dx + (c.y - a.y) * dy) / L)) : 0;
     return Math.hypot(c.x - (a.x + t * dx), c.y - (a.y + t * dy));
   };
+  // A crossing is distance ZERO, and the four-projection minimum cannot see one: for two segments that
+  // cross at right angles it returns the distance from their endpoints to the other line, which for
+  // `(-10,0)-(10,0)` against `(0,-10)-(0,10)` is 10. This helper was that minimum alone, so every
+  // "no two nets come closer than a tape width" assertion in this file was blind to the one failure it
+  // exists to catch — and the router's own `segSegDist` had the same hole. See `net-routing.ts ›
+  // nearestOn`, which replaced it.
+  const crosses = (a: Vec2, b: Vec2, c: Vec2, d: Vec2): boolean => {
+    const o = (p: Vec2, q: Vec2, r: Vec2): number =>
+      (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+    return ((o(a, b, c) > 0) !== (o(a, b, d) > 0)) && ((o(c, d, a) > 0) !== (o(c, d, b) > 0));
+  };
   const segSeg = (p: Vec2, q: Vec2, r: Vec2, s: Vec2): number =>
-    Math.min(ptSeg(p, q, r), ptSeg(p, q, s), ptSeg(r, s, p), ptSeg(r, s, q));
+    crosses(p, q, r, s) ? 0 : Math.min(ptSeg(p, q, r), ptSeg(p, q, s), ptSeg(r, s, p), ptSeg(r, s, q));
   let min = Infinity;
   for (let i = 0; i < traces.length; i++) {
     for (let j = i + 1; j < traces.length; j++) {
@@ -107,6 +118,47 @@ describe("model/net-routing", () => {
       }
       expect(len).toBeGreaterThan(0);
     }
+  });
+
+  it("narrows a leg onto a pad's own width, but not onto one that never said its size", () => {
+    // MODULE1's pad is a fraction of the tape's width; a leg run at full tape onto it overhangs on every
+    // side. `padWidth` on a `NetPoint` is how the netlist says how big a pad actually is, and this is the
+    // only test that a leg's END points narrow to it while its middle, and any end that never gave a
+    // width, stay at the ordinary tape width.
+    const { faces, gaps, tapeW } = load("house.fkld");
+    const narrow = tapeW * 0.2;
+    const withWidth: ResolvedNet = {
+      id: "n1", name: "PWR",
+      points: [
+        { part: 0, pad: "1", at: faces[0]!.centroid, padWidth: narrow },
+        { part: 1, pad: "1", at: faces[4]!.centroid }, // no padWidth: an ordinary pad
+      ],
+    };
+    const r = planNets([withWidth], faces, gaps, tapeW);
+    expect(r.nets[0]!.stranded).toEqual([]);
+    expect(r.traces).toHaveLength(1);
+    const t = r.traces[0]!;
+    // Whichever end landed on face 0 narrows; the far end, which never gave a width, stays full tape.
+    const nearFace0 = (p: Vec2): boolean =>
+      Math.hypot(p.x - faces[0]!.centroid.x, p.y - faces[0]!.centroid.y) < 1e-6;
+    const widths = t.widths;
+    expect(widths).toBeDefined();
+    expect(widths![0]).toBeCloseTo(nearFace0(t.pts[0]!) ? narrow : tapeW, 9);
+    expect(widths![widths!.length - 1]!).toBeCloseTo(
+      nearFace0(t.pts[t.pts.length - 1]!) ? narrow : tapeW, 9,
+    );
+    // Only the two ends move; nothing in between silently narrowed too.
+    for (let i = 1; i < widths!.length - 1; i++) expect(widths![i]).toBeCloseTo(tapeW, 9);
+  });
+
+  it("leaves a leg between two ordinary pads with no widths array at all", () => {
+    // No `padWidth` on either point means nothing to taper — and no new field cluttering a run that was
+    // never asked to narrow, so every existing reader of `Trace2D` that has never heard of `widths` keeps
+    // seeing exactly what it always saw.
+    const { faces, gaps, tapeW } = load("house.fkld");
+    const r = planNets([netOn("n1", "PWR", faces, [0, 4])], faces, gaps, tapeW);
+    expect(r.traces).toHaveLength(1);
+    expect(r.traces[0]!.widths).toBeUndefined();
   });
 
   describe("the no-overlap condition", () => {
@@ -192,9 +244,16 @@ describe("model/net-routing", () => {
     // specific piece of the router: `akde-hex` for the order search (6 rather than 7 with only the first
     // ordering tried), `church` for the node exclusion (6 rather than 7 when a net may reuse another's
     // corridor nodes).
+    // `church` was recorded at 7 until 2026-08-27 and is now 5. **The 7 was not real.** The clearance gate
+    // measured segment distance with a `min` over four point-to-segment projections, which reports a large
+    // positive number for two segments that actually cross — so two of `church`'s nine terminals were being
+    // "reached" by copper laid straight through another net. Measured with a proper orientation test: the
+    // old router laid 2 genuine net-to-net crossings on this pattern, and the new one lays 0 on all three.
+    // Five terminals honestly reached is worth more than seven with two shorts among them, and this number
+    // must not be raised back without checking crossings first.
     for (const [name, want] of [
       ["house.fkld", 7],
-      ["church.fkld", 7],
+      ["church.fkld", 5],
       ["akde-hex.fkld", 7],
     ] as [string, number][]) {
       const { faces, gaps, tapeW } = load(name);
@@ -210,7 +269,10 @@ describe("model/net-routing", () => {
       const r = planNets(nets, faces, gaps, tapeW);
       const reached = 9 - r.nets.reduce((a, x) => a + x.stranded.length, 0);
       expect(reached, `${name} terminals reached`).toBeGreaterThanOrEqual(want);
+      // Zero, not merely "far apart": `nearestBetweenNets` now returns 0 for a crossing, so this is the
+      // first version of this assertion that can actually fail when two nets are shorted together.
       expect(nearestBetweenNets(r.traces), `${name} clearance`).toBeGreaterThanOrEqual(tapeW);
+      expect(nearestBetweenNets(r.traces), `${name} has a net-to-net crossing`).toBeGreaterThan(0);
     }
   });
 
@@ -334,6 +396,103 @@ describe("model/net-routing", () => {
     expect(nearestAcross(netRuns, others), "netlist against bus").toBeGreaterThanOrEqual(tapeW);
   });
 
+  describe("tapping the bus rail", () => {
+    /** house, with a battery, one hinge-LED, and a part on face `on` with pad 1 on the declared net `id`. */
+    function tapped(id: string, on = 9): { plain: ReturnType<typeof planRoutes>; r: ReturnType<typeof planRoutes>; bus: Trace2D[]; tapeW: number } {
+      const fold = JSON.parse(readFileSync(`${EXAMPLES}house.fkld`, "utf8"));
+      const faces = flatFaces(fold);
+      const gaps = gapGraph(fold, faces).gaps;
+      const led = ledOf(gaps[0]!.faceA, gaps[0]!.faceB);
+      const bus: Circuit = { leds: [led], battery: { face: 0 } };
+      const r = planRoutes(faces, gaps, {
+        ...bus,
+        parts: [{ component: "R_1206", x: faces[on]!.centroid.x, y: faces[on]!.centroid.y }],
+        nets: [{ id: "pwr", name: "PWR" }, { id: "gnd", name: "GND" }],
+        terminals: [{ part: 0, pad: "1", net: id }],
+      });
+      // The bus AS THIS PLAN LAID IT, not as the bare circuit lays it: seating the part can break a run,
+      // and measuring the tap against the other plan's rails compares copper that was never on the same
+      // sheet. The netlist's own runs are the ones the router reported under `nets`.
+      const netted = new Set(r.nets.flatMap((n) => n.traces));
+      return { plain: planRoutes(faces, gaps, bus), r, bus: r.traces.filter((t) => !netted.has(t)), tapeW: tapeWidthFor(faces) };
+    }
+
+    it("wires a lone pad on PWR to the rail instead of calling it a fault", () => {
+      // The failure this exists to fix, and it was invisible: a part with one pad on PWR was reported a
+      // `single-terminal-net` — "nothing to connect it to" — while the sidebar listed PWR with three
+      // members, because the battery's and the LED's rows are derived from the bus and counted alongside
+      // the stored one. So the panel said wired, the canvas drew a complete circuit, and no copper went
+      // anywhere near the part.
+      const { r } = tapped("pwr");
+      expect(r.netFaults.map((f) => f.net)).not.toContain("pwr");
+      const pwr = r.nets.find((n) => n.id === "pwr")!;
+      expect(pwr.railTap).toBe("laid");
+      expect(pwr.stranded).toEqual([]);
+      expect(pwr.traces.length).toBe(1); // one pad, so the tap leg is the whole of this net's copper
+    });
+
+    it("lands the tap ON the rail, not near it", () => {
+      // The join is the point. A leg that stops a tape width short of the rail is the same picture and an
+      // open circuit, and the clearance gate every other leg is held to would produce exactly that if the
+      // net's own rail were not excluded from it.
+      const { r, bus, tapeW } = tapped("pwr");
+      const rail = bus.filter((t) => t.net === "pwr");
+      const tap = r.nets.find((n) => n.id === "pwr")!.traces;
+      expect(nearestAcross(tap, rail)).toBeLessThan(tapeW * 1e-6);
+    });
+
+    it("keeps a tap clear of the other rail", () => {
+      // The other half of the same claim: PWR may touch PWR and must not touch GND. Without the split the
+      // easy implementation — exclude every rail from the gate — would lay a tap straight across the return
+      // rail and short the battery.
+      const { r, bus, tapeW } = tapped("pwr");
+      const gnd = bus.filter((t) => t.net === "gnd");
+      const tap = r.nets.find((n) => n.id === "pwr")!.traces;
+      expect(tap.length).toBeGreaterThan(0);
+      expect(nearestAcross(tap, gnd), "PWR tap against the GND rail").toBeGreaterThanOrEqual(tapeW);
+    });
+
+    it("reports a tap it cannot lay clear rather than laying it across the other rail", () => {
+      // Face 5 on house is out of reach: every anchor on the PWR rail that the corridor can get to from
+      // there runs the leg alongside GND, and the two rails are already pinched to 0.61 of a tape width
+      // where the bus meets its LED — so there is no room for a third strip and saying so is the answer.
+      // The failure mode this replaces is the one that matters: copper laid anyway, and a short found
+      // after the tape is down.
+      const { r, bus, tapeW } = tapped("pwr", 5);
+      const pwr = r.nets.find((n) => n.id === "pwr")!;
+      expect(pwr.railTap).toBe("failed");
+      expect(pwr.traces).toEqual([]);
+      expect(pwr.why, "and says what to do about it").toMatch(/rail/);
+      expect(nearestAcross(pwr.traces, bus.filter((t) => t.net === "gnd")))
+        .toBeGreaterThanOrEqual(tapeW); // vacuously, and that is the point: nothing was laid
+    });
+
+    it("leaves a net with no rail of its own exactly as it was", () => {
+      // The tap is for the two ids the bus lays copper under. A net the author named themselves has no rail
+      // to tap, so a single pad on it is still the authoring mistake it always was.
+      const fold = JSON.parse(readFileSync(`${EXAMPLES}house.fkld`, "utf8"));
+      const faces = flatFaces(fold);
+      const gaps = gapGraph(fold, faces).gaps;
+      const led = ledOf(gaps[0]!.faceA, gaps[0]!.faceB);
+      const r = planRoutes(faces, gaps, {
+        leds: [led],
+        battery: { face: 0 },
+        parts: [{ component: "R_1206", x: faces[5]!.centroid.x, y: faces[5]!.centroid.y }],
+        nets: [{ id: "s", name: "SIG" }],
+        terminals: [{ part: 0, pad: "1", net: "s" }],
+      });
+      expect(r.netFaults.map((f) => f.kind)).toContain("single-terminal-net");
+      expect(r.nets.map((n) => n.id)).not.toContain("s");
+    });
+
+    it("does not tap a rail that is not there", () => {
+      // No bus, no rail: `planNets` on its own is unchanged, and says so rather than inventing a tap.
+      const { faces, gaps, tapeW } = load("house.fkld");
+      const r = planNets([netOn("pwr", "PWR", faces, [0, 4])], faces, gaps, tapeW);
+      expect(r.nets[0]!.railTap).toBe("none");
+    });
+  });
+
   it("reports a malformed netlist through planRoutes rather than dropping it", () => {
     // The faults have to reach the app, or a pad wired to nothing looks identical to a pad wired correctly.
     const fold = JSON.parse(readFileSync(`${EXAMPLES}house.fkld`, "utf8"));
@@ -371,10 +530,17 @@ describe("model/net-routing", () => {
       // tear strength goes with its thickness. On 0.4mm the tape is the wider of the two and nothing
       // changes; on a 0.05mm film the web wants 2.8 tape widths and takes over.
       //
-      // Four nets on `house`, because that is a case where the ordinary rule really does bring two runs
+      // Four nets on `akde-hex`, because that is a case where the ordinary rule really does bring two runs
       // closer than the film would allow -- asserted below, so this cannot quietly become a test of a
       // constraint that was never up against anything.
-      const { faces, gaps, tapeW } = load("house.fkld");
+      //
+      // It was `house` until 2026-08-27, and `house` stopped discriminating for a reason worth keeping:
+      // the runs that used to come closest there were ones the old clearance gate laid ACROSS another net
+      // without noticing, because its distance function could not see a crossing (see `nearestOn`). With
+      // those refused, nothing on `house` comes nearer than 3.45 tape widths and the film's 2.8 floor has
+      // nothing to bite on. Measured across the bundled patterns, `akde-hex` holds at 2.10 and `puffin` at
+      // 1.95; `akde-hex` is the steadier of the two across net counts.
+      const { faces, gaps, tapeW } = load("akde-hex.fkld");
       const nets = [0, 1, 2, 3].map((n) => ({
         id: `n${n}`,
         name: `N${n}`,

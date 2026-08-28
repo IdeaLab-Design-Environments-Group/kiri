@@ -14,11 +14,15 @@
  * of the declared PWR net lands on the PWR layer instead of being dropped from the file — which is what
  * `unlayeredWires()` in the editor exists to warn about.
  *
- * It does **not** make a declared PWR net the same copper as the bus's PWR rail. `routeDeclaredNets`
- * strikes every corridor node the bus used out of the graph before routing a declared net, so the two
- * are kept apart even when they share a name. That is the conservative reading — it can never short —
- * but it means a part wired to declared PWR is not thereby joined to the battery. Joining them is a
- * router change and is deliberately not made here.
+ * And since 2026-08-26 sharing the id means sharing the copper: `routeDeclaredNets` hands the bus over
+ * tagged by net, and a declared net whose id matches a rail **taps** that rail — one leg from a pad onto
+ * it — so a part wired to declared PWR is joined to the battery's positive terminal rather than only to
+ * the other pads that happen to be on PWR. Every other rail is still an obstacle to it, so a PWR tap can
+ * never be laid across GND; where it cannot be laid clear the net reports `railTap: "failed"` and no
+ * copper goes down. See `net-routing.ts › tapCandidates`.
+ *
+ * That is the whole of the coupling, and it is why these ids are not free to change: rename `PWR_NET_ID`
+ * and the declared net stops matching the rail, silently, with everything still drawing.
  */
 import type { Circuit, Net } from "./electronics.js";
 

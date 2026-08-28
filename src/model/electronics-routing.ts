@@ -83,6 +83,15 @@ export interface Trace2D {
    * unset — which is every routed run — the tape's own width is used.
    */
   width?: number;
+  /**
+   * Width at each point of `pts`, where it is not one flat number — index-aligned, same length as `pts`.
+   *
+   * `planNets` sets this on a leg that lands on a real part's pad rather than on a bus rail, tapering the
+   * last stretch down to the pad's own width instead of running full tape onto a pad a fraction of that
+   * size. Takes precedence over `width` wherever present, the same way `outlineStrip`'s own per-point
+   * width array already works for the bus.
+   */
+  widths?: number[];
 }
 
 /**
@@ -505,9 +514,73 @@ export const LED_GAP_FRAC = 0.35;
  * rather than a sliver that tears on weeding.
  */
 export function landingWidth(pad: Vec2, mate: Vec2, tapeW: number): number {
-  const sep = Math.hypot(pad.x - mate.x, pad.y - mate.y);
-  const room = sep - tapeW * LED_GAP_FRAC;
-  return Math.max(tapeW * 0.35, Math.min(tapeW, room));
+  return landingWidthFor(Math.hypot(pad.x - mate.x, pad.y - mate.y), tapeW);
+}
+
+/**
+ * The narrowest copper worth cutting, as a fraction of the tape width.
+ *
+ * Named rather than written as a bare `0.35` in two places. It is the same number as {@link LED_GAP_FRAC}
+ * by coincidence of calibration, not by derivation — one is the bare gap to leave, the other the floor a
+ * strip may be cut to — so they are separate constants and must stay separate.
+ */
+export const MIN_LAND_FRAC = 0.35;
+
+/**
+ * {@link landingWidth}, given the separation directly rather than two points.
+ *
+ * The one definition of the formula. Terminals of a multi-pin part are neighbours in exactly the way an
+ * LED's two legs are, and the width copper may land at is the same question with the same answer; what
+ * differs is only how the separation was found. See `footprint.ts › nearestTerminalMm`.
+ */
+export function landingWidthFor(sep: number, tapeW: number): number {
+  return Math.max(tapeW * MIN_LAND_FRAC, Math.min(tapeW, padRoomFor(sep, tapeW)));
+}
+
+/**
+ * A piece of a part's metal, and how wide copper may be near it.
+ *
+ * The general form of what an LED's two legs have always been to each other: a place on the sheet with
+ * something soldered to it, which copper passing close by has to make room for.
+ */
+export interface PadField {
+  /** Where the metal is, in pattern units. */
+  at: Vec2;
+  /** The widest copper may be at that point — {@link landingWidthFor} of the room around it. */
+  safe: number;
+  /** How near counts as near, in pattern units. Beyond this the field has no say. */
+  reach: number;
+}
+
+/**
+ * How wide copper may be at `p`: the tape's width, narrowed by every field it is standing in.
+ *
+ * **The one definition of "how wide may copper be here, given the metal near it".** `copper-svg-export.ts
+ * › widthsFor` asks it of an LED's two legs and `net-routing.ts › legWidths` asks it of a multi-pin part's
+ * pads; those two build their fields differently — an LED's mate is one named pad on the other net and the
+ * run *ends* there, while a pin's neighbours are every other pad on the part and the run *passes* them —
+ * but the narrowing itself is one rule and lives here. Two readings of one geometric question is the
+ * mistake `parts.ts › padRunBox` was written to undo.
+ */
+export function narrowedTo(base: number, p: Vec2, fields: PadField[]): number {
+  let w = base;
+  for (const f of fields) {
+    if (Math.hypot(p.x - f.at.x, p.y - f.at.y) > f.reach) continue;
+    w = Math.min(w, f.safe);
+  }
+  return w;
+}
+
+/**
+ * The room a landing has before clamping — how wide copper *could* be, which may be zero or negative.
+ *
+ * {@link landingWidthFor} floors this, and a floored number cannot say that it ran out of room: at a pitch
+ * of 2.1mm and a 1.14mm floor the answer is 1.14mm whether the room was 0.96mm or 1.14mm, and only one of
+ * those can actually be weeded. Anything that has to *report* impossibility rather than merely cut as close
+ * as it can reads this instead.
+ */
+export function padRoomFor(sep: number, tapeW: number): number {
+  return sep - tapeW * LED_GAP_FRAC;
 }
 
 /**
@@ -702,6 +775,16 @@ export function planRoutes(
   /** The sheet the copper is stuck to. Sets the crease price through the strain it puts in the copper,
    *  and bounds the tape width and the net clearance — see {@link creaseFraction} and `fold-strain.ts`. */
   sheet: SheetSpec = DEFAULT_SHEET,
+  /**
+   * The crease price, as a fraction of the pattern's bounding-box diagonal — {@link FOLD_PENALTY_FRAC} by
+   * default, which is what every shipped call gets.
+   *
+   * Here so the router can be run **length-only**: at `0` a crease costs nothing and the search minimises
+   * copper alone, which is the baseline the strain-aware price has to be compared against. It is a
+   * parameter rather than a test-local fork of `planRoutes` because a baseline routed by different code
+   * from the thing it is a baseline for measures the fork as much as the price.
+   */
+  creasePenaltyFrac: number = FOLD_PENALTY_FRAC,
 ): RoutedCircuit {
   // **New parameters APPEND. Never insert one.** Every optional parameter here has a default, so an
   // inserted one leaves every existing call compiling while it silently receives the wrong argument —
@@ -775,7 +858,7 @@ export function planRoutes(
   // used to happen, and is what put copper outside the body. Better to report them honestly.
   // The crossing penalty is the pattern's bounding-box diagonal, as in the paper: larger than any single step
   // in the graph, so a crease is crossed only when nothing else reaches the tile.
-  const corridor = buildCorridor(faces, gaps, patternDiag(faces) * FOLD_PENALTY_FRAC, tapeW, sheet, tapeMm);
+  const corridor = buildCorridor(faces, gaps, patternDiag(faces) * creasePenaltyFrac, tapeW, sheet, tapeMm);
   const reach = reachableFaces(corridor, battery.face);
   for (let i = targets.length - 1; i >= 0; i--) {
     const t = targets[i]!;
@@ -1636,6 +1719,12 @@ export function tapeOnBody(faces: FlatFace[], tapeW: number, a: Vec2, b: Vec2): 
  * The bus copper is handed over as a set of already-laid polylines, which {@link planNets} treats exactly
  * as it treats an earlier net's copper: nothing may come within a tape width of it. That is what keeps the
  * no-overlap guarantee true of the whole sheet rather than only of the netlist.
+ *
+ * It is also handed over **tagged with the net each run is a rail for**, which is a different claim and the
+ * one that joins a netlist to a battery. A declared net sharing an id with a rail — `pwr`, `gnd` — taps
+ * that rail rather than avoiding it, so a pad wired to PWR is wired to the battery's positive terminal and
+ * not merely to the other pads that happen to be on PWR. Every other rail stays an obstacle to it. Until
+ * this existed a lone pad on PWR was reported a `single-terminal-net` fault and got no copper at all.
  */
 function routeDeclaredNets(
   circuit: Circuit,
@@ -1647,9 +1736,20 @@ function routeDeclaredNets(
   tapeMm: number = TAPE_MM,
 ): { traces: Trace2D[]; nets: RoutedNet[]; faults: NetlistFault[] } {
   if (!circuit.nets?.length) return { traces: [], nets: [], faults: [] };
-  const { nets, faults } = resolveNetlist(circuit, tapeW, tapeMm);
+  // Widths carried over, not dropped. A rail pinches to about a third of the tape where it passes an LED,
+  // and handing the clearance gate a bare polyline made every net keep a full tape width from copper that
+  // narrow — room given away for nothing.
+  const rails = bus.map((t) => ({
+    net: t.net,
+    pts: t.pts,
+    ...(t.widths ? { widths: t.widths } : t.width !== undefined ? { widths: t.pts.map(() => t.width!) } : {}),
+  }));
+  const { nets, faults, fields } = resolveNetlist(circuit, tapeW, tapeMm, new Set(rails.map((r) => r.net)));
   if (!nets.length) return { traces: [], nets: [], faults };
-  const routed = planNets(nets, faces, gaps, tapeW, bus.map((t) => t.pts), sheet, tapeMm);
+  // The bus goes over as `rails` and NOT also as `obstacles`. Passed twice it arrives twice — once tagged
+  // with the net it is a rail for and once anonymously — and the anonymous copy is not excluded from a
+  // net's own clearance test, so every tap is refused by the very rail it is trying to reach.
+  const routed = planNets(nets, faces, gaps, tapeW, [], sheet, tapeMm, rails, fields);
   return { traces: routed.traces, nets: routed.nets, faults };
 }
 
@@ -1779,6 +1879,33 @@ function byComponent(parts: PlacedPart[]): [string, { part: PlacedPart; at: numb
     else by.set(part.component, [{ part, at }]);
   });
   return [...by];
+}
+
+/**
+ * The span a FREE part is drawn on: its own `partFit.gap` long, centred on the drop point, along `rot`.
+ *
+ * Lives here rather than in the editor because it has to obey the same in-line flip rule the seated path
+ * obeys three lines below — `!across && flip ? turnRound(span) : span`. An in-line part expresses a flip as
+ * its span running the other way; a two-row part expresses it through `acrossRun`, and swapping its ends
+ * would move `rowShape`'s anchor instead. Getting that split wrong is what left every flipped in-line part
+ * ROUTED flipped and DRAWN unflipped — on a symmetric two-terminal part that exchanges pads 1 and 2, so a
+ * net wired to pad 1 had its copper laid where pad 2 was drawn. Measured on 24 of the library's 129 parts,
+ * including `R_1206`, `C_1206`, `LED_1206` and `SW_PUSH`.
+ *
+ * Flat pattern units in and out.
+ */
+export function freeSpan(
+  part: { x: number; y: number; rot?: number; flip?: boolean },
+  fp: Footprint,
+  tapeW: number,
+  tapeMm: number,
+): { a: Vec2; b: Vec2 } {
+  const half = ((partFit(fp).gap * tapeW) / tapeMm) / 2;
+  const th = ((part.rot ?? 0) * Math.PI) / 180;
+  const ux = Math.cos(th), uy = Math.sin(th);
+  const a = { x: part.x - ux * half, y: part.y - uy * half };
+  const b = { x: part.x + ux * half, y: part.y + uy * half };
+  return !acrossPart(fp) && part.flip ? { a: b, b: a } : { a, b };
 }
 
 /** The same part, end for end: its two terminals swap which cut end of the break they land on. */

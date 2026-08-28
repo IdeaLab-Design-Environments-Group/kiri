@@ -96,7 +96,29 @@ const ROW_TOL_MM = 0.05;
  * row of its own, which made a two-pin header read as a two-row part like the switch, and lost the
  * middle pin of a three-pin header, since only three terminals are ever given a role.
  */
+const AXIS_CACHE = new WeakMap<Footprint, PadAxis>();
+const ACROSS_CACHE = new WeakMap<Footprint, { v: AcrossPart | null }>();
+
 export function padAxis(fp: Footprint): PadAxis {
+  const hit = AXIS_CACHE.get(fp);
+  if (hit) return hit;
+  const made = readPadAxis(fp);
+  AXIS_CACHE.set(fp, made);
+  return made;
+}
+
+/**
+ * Both readings are cached on the footprint, the way `footprint.ts › nearestTerminalMm` is and for the same
+ * reason: they are properties of the PART, not of any placement — no `rot`, `flip` or `free` can change
+ * which axis a footprint's pads line up along or how many rows it has. Keyed on the footprint object, which
+ * is a module-level singleton `cloneCircuit` never touches, so unlike a cache on a `PlacedPart` this one
+ * actually hits.
+ *
+ * It became worth doing when `electronics-parts.ts › placementOf` started calling both per pad: a fourteen-pin
+ * part re-read its own row structure fourteen times for one placement, and the wire tool does that for every
+ * part on every pointer move.
+ */
+function readPadAxis(fp: Footprint): PadAxis {
   const at = terminals(fp).map(([, p]) => padAt(p));
   // Which axis the pads line up along is what having FEW rows means, so count the rows each reading
   // gives and take the tidier one. The obvious rule — whichever axis the pads are spread furthest along
@@ -169,6 +191,16 @@ export interface AcrossPart {
  * drawing is the worst failure this code has, because it looks right until the copper is on the sheet.
  */
 export function acrossPart(fp: Footprint): AcrossPart | null {
+  const hit = ACROSS_CACHE.get(fp);
+  if (hit) return hit.v;
+  const made = readAcrossPart(fp);
+  // Boxed, so a `null` answer is cached as an answer rather than re-read every call — and most of the
+  // library is `null` here.
+  ACROSS_CACHE.set(fp, { v: made });
+  return made;
+}
+
+function readAcrossPart(fp: Footprint): AcrossPart | null {
   const ax = padAxis(fp);
   const rows = terminalRows(fp, ax);
   if (rows.length === 1) {
@@ -253,6 +285,63 @@ export function inlineTerminals(fp: Footprint): Pad[] {
 export function inlineNamedTerminals(fp: Footprint): [string, Pad][] {
   const ax = padAxis(fp);
   return terminals(fp).sort((a, b) => ax.along(a[1]) - ax.along(b[1]));
+}
+
+/**
+ * Which way round a two-row part is seated on the run — the two signs, defined once.
+ *
+ * The placement sends the footprint's ACROSS-coordinate along the rail (scaled by `sC`) and its
+ * ALONG-coordinate across it (scaled by `sA`). `sC` is read off the footprint: `live`'s row has to be the
+ * downstream one, or the rail arrives at the wrong side of the break.
+ *
+ * ## `sA` is not free, and reading it off `live` was the bug
+ *
+ * It used to be `sign(along(live) − along(common))`, computed identically in
+ * `electronics-parts.ts › placementOf` and `copper-svg-export.ts › rowLeads`. With
+ * `p = ±perp(u)` the determinant of the placement is `sC · sA · (u × p)`, so an `sA` that disagreed with
+ * `sC` made the placement **orientation-reversing** — a reflection. Since both `origin` expressions anchor
+ * on the `common` pad, that is a mirror about `common`, and it reversed the part's pin order.
+ *
+ * Measured on `Module_XIAO_Generic_SocketSMD`: `common` = pad 3, `live` = pad 8, `sC` = +1, `sA` = −1, and
+ * the pins came out 1↔5, 2↔4, 3 fixed, 6 and 7 past the end of the part. **60 of the library's 87
+ * across-parts placed as a reflection.** A surface-mount part has one side; a placement is never allowed to
+ * be a mirror.
+ *
+ * Three things wanted to be true at once — `live`'s row downstream, `live` on the `+p` side, and the
+ * placement a rotation — and only two of them can be. The middle one is what {@link acrossPart}'s reading
+ * was written for: the **SPDT switch**, where the router picks which throw the copper leaves by. For a
+ * fourteen-pin socket `live` is an arbitrary pad and that sign is an arbitrary reflection, so it goes:
+ * `sA = sC`, and `PlacedPart.flip` carries the half-turn it is documented to mean.
+ *
+ * ## `fabricated`
+ *
+ * True where {@link acrossPart} INVENTED the second row by reflecting the common through the peg line (its
+ * `rows.length === 1` branch). There every terminal shares one across-coordinate, so `sC` is a sign of
+ * zero and the row has no order along the run to get wrong; those parts keep the old reading, since that is
+ * the three-terminal case `idleSide` and `acrossRun` exist for and `rowLeads` refuses them anyway.
+ */
+export interface SeatSigns {
+  /** The footprint's across-axis, onto the run. */
+  sC: number;
+  /** Its along-axis, onto the across-run direction. Equal to `sC` unless the second row is fabricated. */
+  sA: number;
+  /** Whether {@link acrossPart} invented the second row — see above. */
+  fabricated: boolean;
+}
+
+/** The signs for this footprint, or `null` if the rail does not step across it. */
+export function seatSigns(fp: Footprint, g: AcrossPart | null = acrossPart(fp)): SeatSigns | null {
+  if (!g) return null;
+  const ax = padAxis(fp);
+  const common = padNamed(fp, g.names.common);
+  const live = padNamed(fp, g.names.live);
+  const dC = ax.across(live) - ax.across(common);
+  // The same test `rowLeads` already used to refuse a fabricated row, and for the same reason.
+  if (Math.abs(dC) < 1e-9) {
+    return { sC: 1, sA: Math.sign(ax.along(live) - ax.along(common)) || 1, fabricated: true };
+  }
+  const sC = Math.sign(dC);
+  return { sC, sA: sC, fabricated: false };
 }
 
 /**
