@@ -24,6 +24,13 @@ export interface SimView {
   /** The copper, pinned to the mesh — see `trace-anchor`. */
   setOverlay(meshes: AnchoredMesh[]): void;
   setOverlayVisible(visible: boolean): void;
+  /**
+   * Report how the fold is doing, whenever it changes: `stretch` is the mean tensile bar strain
+   * (0.01 = 1%), `held` says the guide is still holding the shape and has not been let go of yet.
+   * Origami Simulator keeps the same number on screen at all times, and that is what makes a fold
+   * that is really a shape-blend visible instead of plausible.
+   */
+  setStatusListener(fn: (s: { stretch: number; held: boolean }) => void): void;
   warmToTarget(): void;
   start(): void;
   stop(): void;

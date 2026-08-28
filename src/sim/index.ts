@@ -23,6 +23,12 @@ export {
 
 export { FoldSolver, measureTheta } from "./solver.js";
 
+// How a fold is driven over time — the cadence the viewer runs, so tests can run the same one.
+export { FoldRunner, FOLD_REACHED_EPS } from "./fold-run.js";
+
+// Bar strain — is what's on screen a fold, or a shape-blend? (Origami Simulator's globalError.)
+export { meanTensileStrain, maxTensileStrain } from "./strain.js";
+
 export { buildFoldScene, setupGuidedFold, singleHingeModel } from "./build.js";
 export type { FoldScene, SimMaterial } from "./build.js";
 

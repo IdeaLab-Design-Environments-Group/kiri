@@ -33,6 +33,32 @@ const cross = (a: V3, b: V3): V3 => ({
 const dot = (a: V3, b: V3): number => a.x * b.x + a.y * b.y + a.z * b.z;
 const len = (a: V3): number => Math.hypot(a.x, a.y, a.z);
 
+/**
+ * What a FREE EDGE of the sheet — the outer boundary, or a cut lip — is worth in compression, as a
+ * fraction of its tensile stiffness (see `BarHingeModel.beams.free`).
+ *
+ * A bar resists compression as hard as tension. Real sheet does not: an edge with no neighbouring
+ * material to brace it bows out of plane at a load far below its axial capacity, which is why paper
+ * ruffles along a cut instead of shortening it. A single mesh segment cannot represent that bow, so
+ * without this it stands as a strut and fights any pattern whose folded form brings the ends of a
+ * free edge closer together — which every cut-and-glue pattern here does, that being what closing a
+ * cut means. This is the tension-field (Wagner) approximation for a membrane: full stiffness in
+ * tension, near-nothing in compression. Interior edges are unaffected — they are braced by the
+ * faces on both sides and do carry compression.
+ *
+ * Measured on the bundled presets: house.fkld folds 2 creases off-target by up to 36° and lands 7.5%
+ * of a model span from its declared form with free edges strutting, versus every crease within 8°
+ * and 3.0% of span with them slack, at a tenth the tensile strain.
+ */
+const FREE_EDGE_SLACK = 0.05;
+
+/**
+ * How near a seam pair must be before the join takes hold, in model units — the model is normalized
+ * to a bounding-sphere radius of 1, so this is about a third of the model's radius. The grip fades
+ * linearly to nothing at this distance, so there is no jump in force where it engages.
+ */
+const SEAM_CAPTURE = 0.35;
+
 /** Pass 1 — unit face normals from current positions: n = (b−a) × (c−a). */
 export function computeFaceNormals(m: BarHingeModel): void {
   const pos = m.position;
@@ -98,12 +124,13 @@ export function accumulateForces(m: BarHingeModel, lastTheta: Float32Array, fold
   for (let i = 0; i < m.beams.count; i++) {
     const a = m.beams.n0[i];
     const b = m.beams.n1[i];
-    const k = m.beams.k[i];
+    let k = m.beams.k[i];
     const l0 = m.beams.rest[i];
     const pa = get(pos, a);
     const pb = get(pos, b);
     const d = sub(pb, pa);
     const l = len(d) || 1e-9;
+    if (l < l0 && m.beams.free?.[i]) k *= FREE_EDGE_SLACK;
     const f = (k * (l - l0)) / l; // force magnitude / length → multiply by d
     // axial: pull both ends toward rest length
     F[3 * a] += f * d.x;
@@ -122,6 +149,48 @@ export function accumulateForces(m: BarHingeModel, lastTheta: Float32Array, fold
     F[3 * b] += c * (va.x - vb.x);
     F[3 * b + 1] += c * (va.y - vb.y);
     F[3 * b + 2] += c * (va.z - vb.z);
+  }
+
+  // --- Seams: the glued tab / taped edge that joins two cut lips ----------------------
+  // A tab does nothing until the fold has brought it near its slot, and then it grips. Both halves
+  // of that matter: the pull is ramped in with foldPercent⁴, so a flat sheet is never dragged
+  // together by a join that has not been made yet, AND it falls off to nothing beyond
+  // `SEAM_CAPTURE`, so a pair still a third of the model apart cannot reach across and yank the
+  // sheet into the wrong branch. Without the reach limit the house lands ~30% of a model span from
+  // its declared form about as often as it lands on it (measured), because the seams win the branch
+  // before the creases have folded enough to decide it.
+  const seams = m.seams;
+  if (seams) {
+    const fp2 = foldPercent * foldPercent;
+    const kSeam = seams.k * fp2 * fp2;
+
+    for (let i = 0; i < seams.count; i++) {
+      const a = seams.n0[i];
+      const b = seams.n1[i];
+      const pa = get(pos, a);
+      const pb = get(pos, b);
+      const d = sub(pb, pa);
+      const l = len(d) || 1e-9;
+      if (l >= SEAM_CAPTURE) continue;
+      const grip = 1 - l / SEAM_CAPTURE; // a tab grips as it comes near its slot, not from across the room
+      const f = (kSeam * grip * (l - seams.rest[i])) / l;
+      F[3 * a] += f * d.x;
+      F[3 * a + 1] += f * d.y;
+      F[3 * a + 2] += f * d.z;
+      F[3 * b] -= f * d.x;
+      F[3 * b + 1] -= f * d.y;
+      F[3 * b + 2] -= f * d.z;
+      // same critical-damping form as a bar, so a closing seam settles instead of ringing
+      const c = 2 * zeta * m.params.beamDampingScale * Math.sqrt(kSeam * grip * Math.min(m.mass[a], m.mass[b]));
+      const va = get(vel, a);
+      const vb = get(vel, b);
+      F[3 * a] += c * (vb.x - va.x);
+      F[3 * a + 1] += c * (vb.y - va.y);
+      F[3 * a + 2] += c * (vb.z - va.z);
+      F[3 * b] += c * (va.x - vb.x);
+      F[3 * b + 1] += c * (va.y - vb.y);
+      F[3 * b + 2] += c * (va.z - vb.z);
+    }
   }
 
   // --- Crease torsional springs (per crease, distributed to 4 nodes) ------------------
@@ -227,11 +296,17 @@ export function accumulateForces(m: BarHingeModel, lastTheta: Float32Array, fold
     addScaled(F, ic, ncBC, -d1 + d2);
   }
 
-  // --- 3D-printed soft-driven goal spring -------------------------------------------
-  // In printed mode driven boundary nodes are NOT hard-pinned (so hinge barriers can open an
-  // over-closed goal); a stiff spring pulls each toward its kinematic target rest→goal·foldPercent.
+  // --- soft-driven goal spring -------------------------------------------------------
+  // Driven nodes are NOT hard-pinned; a spring pulls each toward its kinematic target
+  // rest→goal·foldPercent. Because the spring is weak against the axial bars (kGoal ≪ EA/l₀) the
+  // pose stays a force equilibrium — the guide biases the fold, it does not place vertices, so the
+  // bars keep their rest lengths instead of following the non-isometric straight-line chord.
+  //
+  // `guideWeight` is how hard the hands are holding: 1 while the fold is being driven to the slider
+  // target, then taken to 0 to LET GO, after which the pose is held by the pattern's own creases and
+  // seams or not at all. Undefined ⇒ 1 (printed mode's build-time `relaxPrintedGoal` never lets go).
   if (m.softDriven) {
-    const kGoal = m.params.kGoal ?? 0;
+    const kGoal = (m.params.kGoal ?? 0) * (m.guideWeight ?? 1);
     for (let i = 0; i < m.numNodes; i++) {
       if (!m.driven[i]) continue;
       for (let d = 0; d < 3; d++) {
@@ -290,6 +365,14 @@ export function computeDt(m: BarHingeModel): number {
     for (let i = 0; i < m.numNodes; i++) if (m.mass[i] < mMin) mMin = m.mass[i];
     const w = Math.sqrt(m.collide.params.k / (mMin || 1));
     if (w > maxFreq) maxFreq = w;
+  }
+  // Seam springs are another spring on their two nodes, at full strength once foldPercent = 1.
+  if (m.seams) {
+    for (let i = 0; i < m.seams.count; i++) {
+      const mMin = Math.min(m.mass[m.seams.n0[i]], m.mass[m.seams.n1[i]]);
+      const w = Math.sqrt(m.seams.k / mMin);
+      if (w > maxFreq) maxFreq = w;
+    }
   }
   if (maxFreq <= 0) return 1e-3;
   return (1 / (2 * Math.PI * maxFreq)) * 0.9;

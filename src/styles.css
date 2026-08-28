@@ -21,6 +21,10 @@
   --radius-sm: 8px;
   --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.05);
   --shadow-md: 0 6px 20px rgba(16, 24, 40, 0.1);
+  /* Tree guides and their ticks. Darker than --border on purpose: a box edge is short and encloses
+     something, a guide line is a long thin run over the panel's own grey, and at --border it read as a
+     smudge rather than as the thing holding the rows together. */
+  --tree-line: #c2c9d6;
 }
 
 html,
@@ -424,6 +428,22 @@ body {
   min-width: 0;
   font-size: 0.8rem;
   color: #555;
+}
+
+/* Live stretch readout. Sits with the sliders rather than on the status line, because it changes
+ * every frame and belongs next to the control that changes it. Tabular figures so a number ticking
+ * between 0.9 and 10.0 does not shuffle the controls beside it. */
+.sim-strain {
+  font-size: 0.8rem;
+  color: #555;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Past ~5% stretch the sheet is being asked to do something paper cannot. */
+.sim-strain.is-hot {
+  color: #c0392b;
+  font-weight: 600;
 }
 
 .export-stl-height-label {
@@ -1130,11 +1150,11 @@ body.is-electronics .app-legend {
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--muted, #6b7280);
+  color: #344054;
 }
 .el-side-tally {
   font-size: 0.66rem;
-  color: var(--muted, #98a2b3);
+  color: #475467;
   background: #fff;
   border: 1px solid var(--border, #e4e7ec);
   border-radius: 999px;
@@ -1169,10 +1189,10 @@ body.is-electronics .app-legend {
   padding: 0.15rem 0;
   border: 0;
   background: none;
-  color: var(--muted, #6b7280);
+  color: #475467;
   cursor: pointer;
 }
-.el-net-twist:disabled { color: #cdd3df; cursor: default; }
+.el-net-twist:disabled { color: #aeb6c4; cursor: default; }
 /* The colour swatch. A native colour input, stripped of its chrome so it reads as a swatch and not as a
    form control -- the picker it opens is still the browser's own. */
 .el-net-colour {
@@ -1210,7 +1230,7 @@ body.is-electronics .app-legend {
   flex-direction: column;
   margin-left: 1.35rem;
   padding-left: 0.45rem;
-  border-left: 1px solid var(--border, #e4e7ec);
+  border-left: 1px solid var(--tree-line, #c2c9d6);
 }
 .el-net-kid {
   display: flex;
@@ -1229,7 +1249,7 @@ body.is-electronics .app-legend {
 .el-net-kid-name {
   flex: 1 1 auto;
   font-size: 0.72rem;
-  color: #475467;
+  color: var(--ink, #1f2328);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1282,7 +1302,7 @@ body.is-electronics .app-legend {
 .el-net-name:focus { outline: none; border-color: var(--accent, #1f6feb); background: #fff; }
 .el-net-count {
   font-size: 0.68rem;
-  color: var(--muted, #6b7280);
+  color: #475467;
   background: #fff;
   border-radius: 999px;
   padding: 0 0.32rem;
@@ -1374,36 +1394,92 @@ body.is-electronics .app-legend {
   padding: 0 0.32rem;
 }
 .el-placed-wired.is-unassigned { border-style: dashed; border-color: #d9b26a; color: #a5762a; }
+/* The pads of the selected part, as a tree: rows hung off one guide line, the way the nets above them are.
+   The guide is drawn on the list and not on each row, so it is one unbroken line rather than fourteen
+   stacked segments that show their seams at any zoom. */
 .el-pad-list {
   display: flex;
   flex-direction: column;
-  gap: 0.2rem;
+  gap: 0.05rem;
+  margin-left: 0.35rem;
+  padding-left: 0.5rem;
+  border-left: 1px solid var(--tree-line, #c2c9d6);
 }
+/* One row per pad. No border and no background: a pad is a row in a tree, and the bordered pill this used
+   to be put a box inside a box around every net name in a column narrow enough already. What separates
+   the rows is alignment, not outlines. */
 .el-pad {
-  display: inline-flex;
+  position: relative;
+  display: flex;
   align-items: center;
-  gap: 0.25rem;
-  padding: 0.1rem 0.3rem;
-  border: 1px solid var(--border, #e4e7ec);
-  border-radius: 0.4rem;
-  background: #fff;
+  gap: 0.3rem;
+  padding: 0.08rem 0.15rem 0.08rem 0.5rem;
+  border-radius: 0.25rem;
 }
+/* The tick that joins the row to the guide line — the `├` of a file tree, drawn rather than typed so it
+   cannot fall out of line with the border it meets. */
+.el-pad::before {
+  content: "";
+  position: absolute;
+  left: -0.5rem;
+  top: 50%;
+  width: 0.4rem;
+  border-top: 1px solid var(--tree-line, #c2c9d6);
+}
+/* The last row closes the branch: it masks the guide below its own tick, so the line stops at the last
+   pad instead of running past it into nothing. */
+.el-pad.is-last::after {
+  content: "";
+  position: absolute;
+  left: calc(-0.5rem - 1px);
+  top: calc(50% + 1px);
+  bottom: -0.2rem;
+  border-left: 1px solid var(--card, #fff);
+}
+.el-pad:hover { background: #fff; }
+.el-pad:focus-within { background: #fff; }
+/* Fixed width so every net name starts at the same x however wide the pad is named — a column that
+   shuffles left and right down its own length is the thing that stops a list reading as a tree. */
 .el-pad-name {
+  flex: 0 0 auto;
+  min-width: 1.6rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.72rem;
   font-weight: 600;
-  color: var(--muted, #6b7280);
+  color: #344054;
 }
+/* The net's colour, so the column groups at a glance. Kept at its full size when the pad is on nothing,
+   just transparent, so clearing a pad does not shift every name beside it. */
+.el-pad-dot {
+  flex: 0 0 auto;
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 999px;
+}
+.el-pad-dot.is-empty { background: none; box-shadow: inset 0 0 0 1px #a9b1c1; }
+/* The net name, typed. Chromeless until you reach for it: a column of fourteen outlined inputs is the
+   noise this panel was redrawn to lose, and the row it sits in already says it is editable by lighting up
+   under the pointer. */
 .el-pad-net {
+  flex: 1 1 auto;
+  min-width: 0;
   font: inherit;
-  font-size: 0.78rem;
-  padding: 0.1rem 0.2rem;
-  border: 1px solid var(--border, #d7dbe4);
-  border-radius: 0.3rem;
-  background: #fff;
-  color: inherit;
+  font-size: 0.72rem;
+  padding: 0.05rem 0.2rem;
+  border: 1px solid transparent;
+  border-radius: 0.25rem;
+  background: none;
+  color: var(--ink, #1f2328);
 }
-/* A pad on no net is the likeliest authoring mistake, so it is marked rather than merely blank. */
-.el-pad.is-unassigned { border-style: dashed; border-color: #d9b26a; }
+.el-pad:hover .el-pad-net { border-color: var(--border, #e4e7ec); background: #fff; }
+.el-pad-net:focus {
+  outline: none;
+  border-color: var(--accent, #1f6feb);
+  background: #fff;
+}
+/* A pad on no net reads as empty, not as an error. It is the state every pad starts in, and dressing the
+   normal case in warning colours — which the dashed amber box did — trains the eye to ignore it. */
+.el-pad-net::placeholder { color: #8a92a3; }
 .el-canvas-wrap {
   display: flex;
   flex: 1 1 auto;

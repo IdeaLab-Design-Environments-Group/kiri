@@ -69,7 +69,12 @@ describe("sim/fold-adapter", () => {
     });
 
     expect(Array.from(model.driven)).toEqual([1, 0, 0, 1]);
-    expect(Array.from(model.fixed)).toEqual([1, 0, 0, 1]);
+    // Guided by a FORCE, not pinned: nothing is fixed, so the bars, creases and self-collision all
+    // still act on the declared vertices and the pose is solved for rather than written in. (The
+    // pipeline's transport audit asks for the pin explicitly — `pinDeclaredGoal`, checked below.)
+    expect(Array.from(model.fixed)).toEqual([0, 0, 0, 0]);
+    expect(model.softDriven).toBe(true);
+    expect(model.guideWeight).toBe(1);
     // Policy-independent contract (what pipeline/verify.ts relies on): the
     // goal frame is mapped by ONE uniform affine transform sim = mm·s + t —
     // whatever alignment policy the adapter currently uses. Recover (s, t)
@@ -88,6 +93,22 @@ describe("sim/fold-adapter", () => {
       }
     }
     for (let i = 0; i < model.goal.length; i++) expect(Number.isFinite(model.goal[i])).toBe(true);
+  });
+
+  it("pins the declared form only when asked to, for the pipeline's transport audit", () => {
+    const fold = {
+      ...foldable,
+      file_frames: [
+        {
+          frame_classes: ["foldedForm"],
+          vertices_coords: [[0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]],
+        },
+      ],
+      "fkld:vertices_driven": [1, 0, 0, 1],
+    };
+    const { model } = buildSceneFromFold(fold, undefined, { pinDeclaredGoal: true });
+    expect(Array.from(model.fixed)).toEqual([1, 0, 0, 1]);
+    expect(model.softDriven).toBeUndefined();
   });
 
   it("throws on non-foldable input", () => {

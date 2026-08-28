@@ -1,18 +1,32 @@
 /**
  * Adaptive guided fold (see origami-import.ts `applyDeclaredGoal`): an FKLD that declares a
- * folded-form footprint (a `foldedForm` frame + `fkld:vertices_driven`) is driven to it by the
+ * folded-form footprint (a `foldedForm` frame + `fkld:vertices_driven`) is guided to it by the
  * SAME 1:1 Origami-Simulator engine, so a floppy kirigami pyramid cones instead of splaying.
- * These bundled AKDE presets exercise that path: cuts are split open, the boundary is driven,
- * and the structure rises into a low-strain 3D cone.
+ * These bundled AKDE presets exercise that path: cuts are split open, the declared form is used
+ * both to measure the crease targets and as a soft guide, and the structure rises into a 3D cone.
+ *
+ * See `fold-realism.test.ts` for what the guide may and may not do — it is a force, not a
+ * placement, and it is let go of at the end.
  */
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { buildScene } from "../../../src/sim/scene.js";
 import type { FoldFile } from "../../../src/model/fold-file.js";
 
-/** Mean |l/l₀ − 1| over bars NOT between two driven nodes (driven base pairs collapse by design). */
+/**
+ * Mean tensile strain over the bars that must keep their length.
+ *
+ * Two exclusions, both because shortening is legitimate: a free edge of the sheet, which is allowed
+ * to go slack rather than strut (`FREE_EDGE_SLACK` in forces.ts), and compression generally — an
+ * AKDE cut rim closes by design, which is the whole point of the pattern. Stretch is what the
+ * material cannot do, so stretch is what is measured.
+ *
+ * (This used to skip every bar with two driven endpoints, from when driven nodes were pinned and
+ * their bars collapsed by fiat. These files declare EVERY vertex driven, so that skipped every bar
+ * in the model and the assertion below was measuring nothing at all.)
+ */
 function freeBarStrain(model: {
-  beams: { count: number; n0: Int32Array; n1: Int32Array; rest: Float32Array };
+  beams: { count: number; n0: Int32Array; n1: Int32Array; rest: Float32Array; free?: Uint8Array };
   position: Float32Array;
   driven: Uint8Array;
 }): number {
@@ -21,13 +35,13 @@ function freeBarStrain(model: {
   for (let i = 0; i < model.beams.count; i++) {
     const a = model.beams.n0[i];
     const b = model.beams.n1[i];
-    if (model.driven[a] && model.driven[b]) continue;
+    if (model.beams.free?.[i]) continue;
     const l = Math.hypot(
       model.position[3 * a] - model.position[3 * b],
       model.position[3 * a + 1] - model.position[3 * b + 1],
       model.position[3 * a + 2] - model.position[3 * b + 2],
     );
-    s += Math.abs(l / model.beams.rest[i] - 1);
+    s += Math.max(0, l / model.beams.rest[i] - 1);
     n++;
   }
   return s / Math.max(1, n);

@@ -139,8 +139,11 @@ vi.mock("three/examples/jsm/controls/OrbitControls.js", () => ({
   OrbitControls: MockOrbitControls,
 }));
 
-vi.mock("../../../src/sim/index.js", async () => {
-  const actual = await vi.importActual<any>("../../../src/sim/index.js");
+// The settle helpers are called by `sim/fold-run.ts › FoldRunner`, which owns the cadence; this
+// file only checks that the canvas drives it. `fold-run.test.ts` is where the cadence itself is
+// asserted — see the note there on why a test must not re-implement the loop.
+vi.mock("../../../src/sim/stabilize.js", async () => {
+  const actual = await vi.importActual<any>("../../../src/sim/stabilize.js");
   return {
     ...actual,
     kineticDamp,
@@ -154,7 +157,9 @@ vi.mock("../../../src/sim/gpu/index.js", () => ({
   },
 }));
 
-function makeScene({ driven = false }: { driven?: boolean } = {}) {
+/** `pinned` = nodes the solver may not move (the legacy hard-driven path); a softly guided scene has
+ *  driven nodes but no pins, and must be stepped like a free mesh. */
+function makeScene({ pinned = false }: { pinned?: boolean } = {}) {
   const position = new Float32Array([
     0, 0, 0,
     1, 0, 0,
@@ -163,7 +168,9 @@ function makeScene({ driven = false }: { driven?: boolean } = {}) {
   const model = {
     position,
     velocity: new Float32Array(position.length),
-    driven: new Uint8Array(driven ? [1, 0, 0] : [0, 0, 0]),
+    driven: new Uint8Array(pinned ? [1, 0, 0] : [0, 0, 0]),
+    fixed: new Uint8Array(pinned ? [1, 0, 0] : [0, 0, 0]),
+    beams: { count: 0, n0: new Int32Array(0), n1: new Int32Array(0), rest: new Float32Array(0), k: new Float32Array(0) },
   } as any;
   const solver = { foldPercent: 0, step: vi.fn(), enableCollision: vi.fn() } as any;
   return {
@@ -206,10 +213,10 @@ describe("view/sim-canvas", () => {
     } as any;
     const canvas = new SimCanvas(container);
 
-    canvas.setScene(makeScene({ driven: true }));
+    canvas.setScene(makeScene({ pinned: true }));
     expect(canvas.backend()).toBe("cpu");
 
-    canvas.setScene(makeScene({ driven: false }));
+    canvas.setScene(makeScene({ pinned: false }));
     expect(canvas.backend()).toBe("cpu");
   });
 
@@ -221,7 +228,7 @@ describe("view/sim-canvas", () => {
       appendChild: vi.fn(),
     } as any;
     const canvas = new SimCanvas(container);
-    const scene = makeScene({ driven: false });
+    const scene = makeScene({ pinned: false });
     gpuCreate.mockReturnValueOnce(null);
     canvas.setScene(scene);
 
@@ -241,7 +248,7 @@ describe("view/sim-canvas", () => {
     expect(renderer.domElement.remove).toHaveBeenCalled();
   });
 
-  it("advances CPU folds and calls settle helpers during animation frames", async () => {
+  it("drives the fold runner on each animation frame", async () => {
     const { SimCanvas } = await import("../../../src/view/sim-canvas.js");
     const container = {
       clientWidth: 400,
@@ -249,7 +256,7 @@ describe("view/sim-canvas", () => {
       appendChild: vi.fn(),
     } as any;
     const canvas = new SimCanvas(container);
-    const scene = makeScene({ driven: false });
+    const scene = makeScene({ pinned: false });
     gpuCreate.mockReturnValueOnce(null);
     canvas.setScene(scene);
     canvas.setFoldPercent(1);
@@ -274,7 +281,7 @@ describe("view/sim-canvas", () => {
     } as any;
     const canvas = new SimCanvas(container);
     gpuCreate.mockReturnValueOnce(null);
-    canvas.setScene(makeScene({ driven: false }));
+    canvas.setScene(makeScene({ pinned: false }));
 
     const tri = [
       { tri: [0, 1, 2], bary: [1, 0, 0] },

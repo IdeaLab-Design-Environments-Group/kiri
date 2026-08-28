@@ -50,6 +50,11 @@
  * `VentHole`, computed by kirigamize.ts from the unfold's VentRecords) are
  * skipped. Patterns without vents keep the plain symmetric metric.
  *
+ * `pinDeclaredGoal`: both scenes are built with the declared folded form PINNED, which is the
+ * transport this protocol is written around. The interactive sim guides softly toward that form and
+ * then lets go (see origami-import.ts `applyDeclaredGoal`), because a viewer must show a fold and
+ * not a blend; phase A here wants the blend on purpose, and audits it.
+ *
  * Frames & scaling: verification always runs at ~unit span — both scenes are
  * rescaled (see rescaleScene) because the explicit solver's Δt bound covers
  * only the axial mode and assumes k_axial = EA/l₀ ≫ k_crease ∝ l₀, which the
@@ -466,7 +471,7 @@ export function verifyFold(
   // --- shared frame: build the rescaled flat scene FIRST and derive the
   // mm → sim map + targetSim from it (both scenes are rescaled identically,
   // so the frame is shared) ---------------------------------------------------
-  const flatScene = buildSceneFromFold(fkld, undefined, { splitCuts: false });
+  const flatScene = buildSceneFromFold(fkld, undefined, { splitCuts: false, pinDeclaredGoal: true });
   rescaleScene(flatScene);
   const scale = flatScene.net.meta.scale;
   const frames = fkld.file_frames as
@@ -574,7 +579,7 @@ export function verifyFold(
   flat.metrics.pathStrain = pathStrain;
 
   // --- 2. equilibrium (secondary) ---------------------------------------------
-  const eqScene = buildSceneFromFold(fkld, undefined, { splitCuts: false });
+  const eqScene = buildSceneFromFold(fkld, undefined, { splitCuts: false, pinDeclaredGoal: true });
   rescaleScene(eqScene);
   eqScene.model.position.set(eqScene.model.goal);
   eqScene.model.velocity.fill(0);

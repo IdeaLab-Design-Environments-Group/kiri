@@ -41,6 +41,15 @@ export const ORIGAMI_PARAMS: SolverParams = {
   kFace: 0.2,
   zeta: 0.85,
   beamDampingScale: 0.5,
+  // Soft guide toward a declared folded form (see applyDeclaredGoal). Below the axial bars
+  // (k_axial = EA/l₀ ≈ 40–100 at this scale) so the bars and creases still decide the shape, but
+  // firm enough to pick WHICH branch the fold takes — below ~4 the house lands in a wrong branch
+  // (creases over 100° out) as often as not, and far above it the guide starts pulling bars toward
+  // the straight-line chord it aims at and crushing them. It is released entirely once the fold lands.
+  kGoal: 4,
+  // Seam springs (glued tab / taped edge) — same order as the axial bars, k_axial = EA/l₀ ≈ 40–100
+  // at this scale: a glue line is not weaker than the sheet it joins.
+  kSeam: 20,
 };
 
 /**
@@ -218,7 +227,14 @@ function assembleModel(work: WorkFold, creaseParams: CreaseParams[], params: Sol
     n1: new Int32Array(nBeams),
     rest: new Float32Array(nBeams),
     k: new Float32Array(nBeams),
+    // 1 = the bar lies on a FREE EDGE of the sheet (boundary or cut lip), which cannot carry
+    // compression — see the slack rule in forces.ts.
+    free: new Uint8Array(nBeams),
   };
+  for (let i = 0; i < ev.length; i++) {
+    const a = work.edges_assignment[i];
+    beams.free[i] = a === "B" || a === "C" || a === undefined ? 1 : 0;
+  }
   for (let i = 0; i < ev.length; i++) {
     beams.n0[i] = ev[i][0];
     beams.n1[i] = ev[i][1];
@@ -340,10 +356,22 @@ function beamStrainAt(model: BarHingeModel): number {
  *
  *  - If the FKLD declares a folded-form footprint — a `foldedForm` frame + `fkld:vertices_driven`
  *    (the generator's statement of "this is the 3D shape I lift into and these boundary nodes hold
- *    it") — we **drive that minimal boundary** to its designed positions so the forward fold lands
- *    the intended shape. This is how a floppy kirigami (e.g. the AKDE pyramid, whose cone is not a
- *    free equilibrium) cones instead of splaying. It is **not** pyramid-specific: any kirigami that
- *    declares a footprint is guided to it.
+ *    it") — the declared form is used **twice over**: its dihedral angles become the design crease
+ *    targets (below), and its vertex positions become a **weak, fading guide spring** (`softGuide`)
+ *    on the declared nodes. This is how a floppy kirigami (e.g. the AKDE pyramid, whose cone is not
+ *    a free equilibrium) cones instead of splaying. It is **not** pyramid-specific: any kirigami
+ *    that declares a footprint is guided to it.
+ *
+ *    The guide is a FORCE, never a placement. Hard-pinning the declared nodes (what this used to do)
+ *    is fatal when a file declares every vertex driven — the fold degenerates into a straight-line
+ *    blend rest→goal, which is not an isometry: bars stretch or collapse by up to 100% mid-fold,
+ *    layers pass through each other, and the self-collision pass skips every node because it skips
+ *    `fixed` ones. Guiding softly keeps every frame a force equilibrium of the bar-and-hinge model,
+ *    the way Origami Simulator's crease-target fold is; and because the guide is RELEASED once the
+ *    fold reaches its target (`guideWeight` → 0), the final pose must hold under the pattern's own
+ *    creases and seams rather than be held there by an external field.
+ *    (Printed mode keeps the hard pin: its rigid tiles are relaxed against the thickness barriers at
+ *    build time by `relaxPrintedGoal`, and the runtime drives to that relaxed pose.)
  *  - Otherwise the model is left **free** (no driven nodes) and folds by crease targets alone —
  *    exactly the paper's uniform method (origami, honeycomb kirigami, anything self-supporting).
  *
@@ -355,7 +383,12 @@ function beamStrainAt(model: BarHingeModel): number {
  *
  * Returns true iff the model was guided.
  */
-function applyDeclaredGoal(fold: FoldFile, work: WorkFold, model: BarHingeModel): boolean {
+function applyDeclaredGoal(
+  fold: FoldFile,
+  work: WorkFold,
+  model: BarHingeModel,
+  softGuide: boolean,
+): boolean {
   const f = fold as {
     file_frames?: Array<{ frame_classes?: string[]; vertices_coords?: number[][] }>;
     "fkld:vertices_driven"?: number[];
@@ -396,8 +429,20 @@ function applyDeclaredGoal(fold: FoldFile, work: WorkFold, model: BarHingeModel)
     model.goal[3 * n + 2] = gs[2] + t[2];
     if (drivenDecl[origin[n]]) {
       model.driven[n] = 1;
-      model.fixed[n] = 1; // force passes never move a driven node; the solver drives it kinematically
+      // VINYL: soft-guided (below) — no pin, so the bars, creases and self-collision all still act
+      // on this node. PRINTED: hard-pinned, and the solver places it kinematically.
+      if (!softGuide) model.fixed[n] = 1;
     }
+  }
+  // Vinyl: guide with a weak, fading spring instead of prescribing positions. A file may declare
+  // EVERY vertex driven (house.fkld: 18 of 18), and hard-pinning them all reduces the "simulation"
+  // to a per-vertex straight-line blend rest→goal — not an isometry, so mid-fold bars stretched or
+  // collapsed by up to 100%, faces swept through each other, and `collision.ts` (which skips fixed
+  // nodes) never ran. Positions must be an output of the force passes, never an input to them.
+  if (softGuide) {
+    model.softDriven = true;
+    model.guideWeight = 1; // the viewer takes this to 0 at the end of the fold — see BarHingeModel
+    buildSeams(model);
   }
 
   // Measure design crease targets from the goal where it is trustworthy.
@@ -417,6 +462,81 @@ function applyDeclaredGoal(fold: FoldFile, work: WorkFold, model: BarHingeModel)
   }
   model.position.set(flat);
   return true;
+}
+
+/** Two nodes are the same joint when the declared goal puts them this close, relative to its span. */
+const SEAM_TOL_REL = 1e-3;
+
+/**
+ * Read the artifact's seams off the declared folded form: every pair of distinct nodes the goal
+ * places at the same point is a join the fabrication makes — a cut's two lips brought together, a
+ * tab glued to its edge, the tips that converge at a cone's apex. See `BarHingeModel.seams` for why
+ * nothing else in the model expresses this and what goes wrong without it.
+ *
+ * Pairs already tied by a bar are skipped (a bar of length ≈ 0 would be a stiffness singularity —
+ * `k_axial = EA/l₀` — and the bar already holds them). Candidates are found through a grid hash at
+ * the tolerance, so this stays linear in node count rather than quadratic.
+ */
+function buildSeams(model: BarHingeModel): void {
+  const g = model.goal;
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (let i = 0; i < 3 * model.numNodes; i++) {
+    if (g[i] < lo) lo = g[i];
+    if (g[i] > hi) hi = g[i];
+  }
+  const span = hi - lo;
+  if (!(span > 0)) return;
+  const tol = SEAM_TOL_REL * span;
+
+  const bonded = new Set<number>();
+  for (let i = 0; i < model.beams.count; i++) {
+    const a = model.beams.n0[i];
+    const b = model.beams.n1[i];
+    bonded.add(a < b ? a * model.numNodes + b : b * model.numNodes + a);
+  }
+
+  const cell = new Map<string, number[]>();
+  const key = (x: number, y: number, z: number): string =>
+    `${Math.floor(x / tol)},${Math.floor(y / tol)},${Math.floor(z / tol)}`;
+  for (let i = 0; i < model.numNodes; i++) {
+    const k = key(g[3 * i], g[3 * i + 1], g[3 * i + 2]);
+    const bucket = cell.get(k);
+    if (bucket) bucket.push(i);
+    else cell.set(k, [i]);
+  }
+
+  const n0: number[] = [];
+  const n1: number[] = [];
+  const rest: number[] = [];
+  for (let i = 0; i < model.numNodes; i++) {
+    const gx = g[3 * i], gy = g[3 * i + 1], gz = g[3 * i + 2];
+    const cx = Math.floor(gx / tol), cy = Math.floor(gy / tol), cz = Math.floor(gz / tol);
+    // the point may sit anywhere in its cell, so neighbours within tol can be one cell over
+    for (let dx = -1; dx <= 1; dx++)
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dz = -1; dz <= 1; dz++) {
+          const bucket = cell.get(`${cx + dx},${cy + dy},${cz + dz}`);
+          if (!bucket) continue;
+          for (const j of bucket) {
+            if (j <= i) continue; // each pair once
+            if (bonded.has(i * model.numNodes + j)) continue;
+            const d = Math.hypot(gx - g[3 * j], gy - g[3 * j + 1], gz - g[3 * j + 2]);
+            if (d > tol) continue;
+            n0.push(i);
+            n1.push(j);
+            rest.push(d);
+          }
+        }
+  }
+  if (n0.length === 0) return;
+  model.seams = {
+    count: n0.length,
+    n0: Int32Array.from(n0),
+    n1: Int32Array.from(n1),
+    rest: Float32Array.from(rest),
+    k: model.params.kSeam ?? 0,
+  };
 }
 
 /**
@@ -476,6 +596,15 @@ export interface BuildSceneOptions {
   splitCuts?: boolean;
   /** 3D-printed mode: rigid tiles + thickness-limited closure. Default false (vinyl). */
   printed?: boolean;
+  /**
+   * PIN the vertices a declared folded form names, instead of guiding them softly toward it — the
+   * kinematic transport described in `pipeline/verify.ts`, which drives every vertex along
+   * rest→goal on purpose and audits the tensile strain of that path as a statement about the
+   * pattern. Nothing that is meant to look like a fold should ask for this: it writes positions
+   * into the model rather than solving for them (see `applyDeclaredGoal`). Printed mode sets it
+   * implicitly, its goal pose having been relaxed against the tile thickness at build time.
+   */
+  pinDeclaredGoal?: boolean;
   /** Printed thickness/gap (mm); defaults to the file's meta or DEFAULT_PRINTED. */
   printedParams?: PrintedParams;
 }
@@ -511,7 +640,7 @@ export function buildSceneFromFold(
   const { fold: processed, creaseParams } = processFold(work, { splitCuts: opts.splitCuts ?? true });
   const model = assembleModel(processed, creaseParams, params);
   // Adaptive: drive a declared folded-form footprint if the file states one; else free fold.
-  const driven = applyDeclaredGoal(fold, processed, model);
+  const driven = applyDeclaredGoal(fold, processed, model, !opts.printed && !opts.pinDeclaredGoal);
 
   // 3D-printed: rigid tiles can't close past the thickness limit. Set per-crease θ_max + clamp
   // the design targets (handles free-fold patterns); for driven files additionally relax the goal

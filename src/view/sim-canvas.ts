@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { FoldNet, FoldScene, FoldSolver, SimMaterial } from "../sim/index.js";
-import { kineticDamp, removeRigidBodyMotion } from "../sim/index.js";
+import { FoldRunner, FOLD_REACHED_EPS, meanTensileStrain } from "../sim/index.js";
 import { DEFAULT_MAX_SUBDIV, MAX_TILE_GAP, MIN_TILE_GAP, TILE_INSET_FRAC } from "../model/tile-subdiv.js";
 import type { AnchoredMesh } from "../model/trace-anchor.js";
 import { GND_COLOUR, PWR_COLOUR } from "../model/net-palette.js";
@@ -20,7 +20,15 @@ import type { SimView } from "./sim-view.js";
  * read-back + a uReset zeroing pass — the GPU twin of the same algorithm, since JS-side damping is a
  * no-op there, velocity living on-device). When the per-frame max node motion stays below a
  * scale-relative threshold the view **freezes** (stops stepping); a hard frame cap freezes regardless.
- * (Rigid-body-motion removal is applied only to FREE folds — it fights a driven/pinned mesh.)
+ * **The cadence is not here.** How fast the fold ramps, which stabilization runs, and when the soft
+ * guide lets go all live in `sim/fold-run.ts › FoldRunner`, which this drives one `frame()` at a
+ * time. They moved because ramp rate is part of the physics for an explicit integrator — too fast
+ * and creases overshoot into the wrong branch — and a test that re-implements the loop cannot
+ * attest to what the viewer does. This file owns pixels: geometry, camera, materials, freezing.
+ *
+ * The mean tensile bar strain goes out through `setStatusListener` every frame, which is how a fold
+ * that is secretly a shape-blend gives itself away (Origami Simulator keeps the same number on
+ * screen at all times).
  *
  * Anti-overlap (uniform-pyramid presets): the mesh is split into a lateral-shell layer and a
  * molecule layer sharing one position buffer. Molecules carry a deeper polygonOffset, so when
@@ -44,14 +52,6 @@ const COLOR_HINGE = 0xb08d57;
 const TILE_THICK_FRAC = 0.018;
 // `TILE_INSET_FRAC` (tile shrink toward centroid) is shared with the STL export via `tile-subdiv.ts`.
 
-const STEPS_PER_FRAME = 40;
-const GUIDED_STEPS_PER_FRAME = 80;
-/** Guided mode: per-frame easing of the applied fold toward the slider target. */
-const FOLD_EASE = 0.05;
-/** Free mode: gentler per-step easing toward the target. */
-const FREE_PER_STEP_EASE = 0.014;
-/** |targetFold − foldPercent| below this counts as "at the target fold". */
-const FOLD_REACHED_EPS = 1e-3;
 /** Freeze after this many consecutive frames whose max node motion is below the settle threshold. */
 const SETTLE_FRAMES = 10;
 /** Settle threshold = SETTLE_REL · camera reach (scale-relative so it works at any model size). */
@@ -160,13 +160,14 @@ export class SimCanvas implements SimView {
   // "C" cut → its midpoint pinches inward to open the gap; the export bridges the fold gaps with thin
   // living hinges. Tile CORNERS always stay full = the pinpoint pivots.
   private tileEdgePinch: boolean[][] | null = null;
-  private foldPercent = 0;
   // Open at the flat full sheet (0): the kirigamized body is first shown as the complete
   // paper with every cut line visible, then the user drives the fold slider up to the target.
   private targetFold = 0;
   private running = false;
-  /** True when the scene drives boundary nodes to a goal mesh (AKDE pyramid). */
-  private guided = false;
+  /** Drives the solver over time — owns foldPercent and the cadence. See `sim/fold-run.ts`. */
+  private runner: FoldRunner | null = null;
+  private onStatus: ((s: { stretch: number; held: boolean }) => void) | null = null;
+  private lastReported = -1;
   /** Freeze stepping once folded + settled so the pose is dead still (no twitch). */
   private frozen = false;
   /** Previous frame's node positions, for the position-delta settle test. */
@@ -175,8 +176,6 @@ export class SimCanvas implements SimView {
   private framesAtTarget = 0;
   /** Max per-frame node motion (model units) below which the fold counts as still. */
   private settleEps = 1e-3;
-  /** Global-quench (Otter) kinetic-energy tracker for the CPU paths (the GPU keeps its own). */
-  private prevKE = Infinity;
 
   constructor(container: HTMLElement) {
     const w = container.clientWidth || 480;
@@ -217,12 +216,11 @@ export class SimCanvas implements SimView {
     this.thickMesh = null; // disposeGeo()/group.clear() dropped the old tile mesh
     this.material = scene.material ?? "vinyl";
 
-    this.guided = anyDriven(model.driven);
-    this.foldPercent = 0;
+    this.runner = new FoldRunner(model, scene.solver);
+    this.lastReported = -1;
     this.frozen = false;
     this.settledFrames = 0;
     this.framesAtTarget = 0;
-    this.prevKE = Infinity;
     this.prevPos = model.position.slice();
 
     this.posAttr = new THREE.BufferAttribute(model.position, 3);
@@ -346,6 +344,12 @@ export class SimCanvas implements SimView {
     this.controls.update();
   }
 
+  /** Subscribe to fold-quality updates (mean tensile strain + whether the guide is still held). */
+  setStatusListener(fn: (s: { stretch: number; held: boolean }) => void): void {
+    this.onStatus = fn;
+    this.lastReported = -1;
+  }
+
   /** Active solver backend, for status display. */
   backend(): "gpu" | "cpu" | "none" {
     return this.cpu ? "cpu" : "none";
@@ -357,9 +361,8 @@ export class SimCanvas implements SimView {
    * fold slider to a non-zero target — without the burst the mesh would ease in over many frames.
    */
   warmToTarget(): void {
-    if (!this.fold || !this.guided || !this.cpu || this.targetFold < FOLD_REACHED_EPS) return;
-    this.cpu.solve(16000, this.targetFold);
-    this.foldPercent = this.targetFold;
+    if (!this.fold || !this.runner) return;
+    this.runner.warmToTarget();
     this.syncShellDisplay();
     this.flushGeometry();
     this.prevPos = this.fold.model.position.slice();
@@ -367,15 +370,20 @@ export class SimCanvas implements SimView {
 
   setFoldPercent(p: number): void {
     this.targetFold = Math.min(1, Math.max(0, p));
+    this.runner?.setTarget(this.targetFold);
     this.frozen = false; // scrubbing wakes a frozen fold
     this.settledFrames = 0;
     this.framesAtTarget = 0;
-    this.prevKE = Infinity;
     this.prevPos = this.fold?.model.position.slice() ?? null; // restart the settle test from here
   }
 
   getFoldPercent(): number {
     return this.targetFold;
+  }
+
+  /** The fold actually applied right now, which lags the slider while it eases. */
+  private get foldPercent(): number {
+    return this.runner?.foldPercent ?? 0;
   }
 
   start(): void {
@@ -403,41 +411,20 @@ export class SimCanvas implements SimView {
   }
 
   private advance(): void {
-    if (!this.fold || this.frozen) return; // frozen: hold the pose, orbit only
-    const m = this.fold.model;
-
-    // The quench only runs ONCE THE SHAPE IS REACHED. During the ramp the driven boundary keeps
-    // injecting energy, so quenching then would repeatedly halt the lagging interior and leave a
-    // worse pose; under bare ζ the ramp stays smooth, and the quench settles it afterward.
-    if (this.guided) {
-      this.foldPercent += (this.targetFold - this.foldPercent) * FOLD_EASE;
-      if (Math.abs(this.targetFold - this.foldPercent) < FOLD_REACHED_EPS) this.foldPercent = this.targetFold;
-      const atTarget = this.foldPercent === this.targetFold;
-      if (this.cpu) {
-        this.cpu.foldPercent = this.foldPercent;
-        for (let i = 0; i < GUIDED_STEPS_PER_FRAME; i++) {
-          this.cpu.step();
-          if (atTarget) this.prevKE = kineticDamp(m, this.prevKE);
-        }
-      }
-    } else if (this.cpu) {
-      // Free fold (self-supporting origami/kirigami, e.g. the Miyamoto RES tower): drive crease
-      // targets and let the OS-faithful under-damped dynamics settle — exactly as Origami Simulator
-      // does. NO kinetic quench here: zeroing velocity at the first equilibrium traps an
-      // underconstrained sheet flat before it can buckle UP into shape (the RES tower stalled at
-      // h/w≈0.2 with the quench vs ≈0.57 erected without it). Rigid-removal kills the un-pinned
-      // mesh's global drift; the per-frame motion-freeze settles it once it stops moving.
-      for (let i = 0; i < STEPS_PER_FRAME; i++) {
-        this.foldPercent += (this.targetFold - this.foldPercent) * FREE_PER_STEP_EASE;
-        this.cpu.foldPercent = this.foldPercent;
-        this.cpu.step();
-        removeRigidBodyMotion(m);
-      }
-      if (Math.abs(this.targetFold - this.foldPercent) < FOLD_REACHED_EPS) this.foldPercent = this.targetFold;
-    }
-
+    if (!this.fold || this.frozen || !this.runner) return; // frozen: hold the pose, orbit only
+    this.runner.frame();
     this.flushGeometry();
+    this.reportStatus();
     this.maybeFreeze();
+  }
+
+  private reportStatus(): void {
+    if (!this.onStatus || !this.fold) return;
+    const stretch = meanTensileStrain(this.fold.model);
+    // Only on a visible change, so the DOM is not written 60 times a second for nothing.
+    if (Math.abs(stretch - this.lastReported) < 1e-4 && this.lastReported >= 0) return;
+    this.lastReported = stretch;
+    this.onStatus({ stretch, held: !(this.runner?.guideReleased() ?? true) });
   }
 
   /**
@@ -460,7 +447,7 @@ export class SimCanvas implements SimView {
       this.prevPos = pos.slice();
     }
 
-    const atTarget = Math.abs(this.targetFold - this.foldPercent) < FOLD_REACHED_EPS;
+    const atTarget = this.runner?.settled() ?? false;
     if (!atTarget) {
       this.framesAtTarget = 0;
       this.settledFrames = 0;
@@ -828,9 +815,4 @@ function snapTipsToMean(pos: Float32Array, tips: number[]): void {
     pos[3 * i + 1] = y;
     pos[3 * i + 2] = z;
   }
-}
-
-function anyDriven(driven: Uint8Array): boolean {
-  for (let i = 0; i < driven.length; i++) if (driven[i]) return true;
-  return false;
 }

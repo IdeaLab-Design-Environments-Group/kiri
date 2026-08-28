@@ -65,6 +65,12 @@ export interface SolverParams {
    * raising `kFacet`). Unused in vinyl mode.
    */
   rigidFacets?: boolean;
+  /**
+   * Seam spring constant — the glued tab / taped edge that joins two cut lips stated as coincident
+   * by a declared folded form (see `BarHingeModel.seams`). Of the same order as the axial bars
+   * (`k_axial = EA/l₀`), because a glue line is not weaker than the sheet it joins.
+   */
+  kSeam?: number;
 }
 
 export const DEFAULT_PARAMS: SolverParams = {
@@ -113,6 +119,40 @@ export interface BarHingeModel {
    * so the thick-hinge barriers can relax an over-closed goal pose. Undefined ⇒ vinyl (hard pin).
    */
   softDriven?: boolean;
+  /**
+   * How hard the guide is holding, 0…1, scaling `params.kGoal` (see `softDriven`). Someone folding
+   * a box holds it to shape and then lets go, and only what survives letting go is the folded
+   * object; so the viewer drives this to 1 while easing to the slider's fold target and then takes
+   * it to 0. After the release the pose is held by the pattern's own creases and seams or not at
+   * all — a fold that springs open here would spring open in paper, and the strain readout and the
+   * shape on screen say so instead of an external field hiding it. Undefined ⇒ 1 (never let go),
+   * which is what printed mode's build-time `relaxPrintedGoal` wants.
+   */
+  guideWeight?: number;
+
+  /**
+   * **Seams** — the joins the fabricated artifact makes and the flat sheet does not: a glued tab, a
+   * taped edge, two cut lips brought together. A declared folded form states them directly, as two
+   * distinct vertices sitting at the SAME point in the goal, and nothing else in the model expresses
+   * them: creases hold panels at angles, bars hold panel edges at length, and neither says the two
+   * lips of a cut must meet. Without seams a cut pattern folds perfectly — every crease exactly on
+   * target, zero bar strain — and then simply hangs open, because the assembled box is not an
+   * equilibrium of an unjoined sheet (house.fkld: 38 seam pairs, ending ~1 model-span apart).
+   *
+   * Each seam is a spring pulling its pair to `rest` (the goal separation, ≈ 0), ramped in with
+   * foldPercent² so the tab closes at the end of the fold instead of crushing the flat sheet. This
+   * is what lets the guide be released (`guideWeight` → 0) and still leave the shape standing:
+   * it is then held by the pattern's own creases and its own seams, not by an external field.
+   */
+  seams?: {
+    count: number;
+    n0: Int32Array;
+    n1: Int32Array;
+    /** Separation in the declared goal (≈ 0 for a closed seam). */
+    rest: Float32Array;
+    /** Spring constant, shared (see `SolverParams.kSeam`). */
+    k: number;
+  };
 
   /**
    * Self-collision state (penalty layer-vs-layer repulsion so folds don't pass through each
@@ -127,6 +167,15 @@ export interface BarHingeModel {
     n1: Int32Array;
     rest: Float32Array; // l0
     k: Float32Array; // EA/l0
+    /**
+     * 1 = the bar lies on a FREE EDGE of the sheet — the outer boundary, or a cut lip. A free edge
+     * has no neighbouring material to brace it, so under end-to-end compression a thin sheet's edge
+     * bows out of plane at a load far below its axial capacity; a straight bar has no way to
+     * represent that and resists at full stiffness instead. `forces.ts` therefore lets a free edge
+     * go SLACK in compression (tension-field / Wagner approximation for a membrane). Optional so a
+     * model assembled elsewhere keeps the plain bar behaviour.
+     */
+    free?: Uint8Array;
   };
 
   creases: {

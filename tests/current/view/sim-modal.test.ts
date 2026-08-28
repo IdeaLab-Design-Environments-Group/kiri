@@ -17,6 +17,7 @@ class MockCanvas implements SimView {
   readonly setTileGap = vi.fn();
   readonly setOverlay = vi.fn();
   readonly setOverlayVisible = vi.fn();
+  readonly setStatusListener = vi.fn();
   readonly warmToTarget = vi.fn();
 
   constructor(mount: MockElement) {

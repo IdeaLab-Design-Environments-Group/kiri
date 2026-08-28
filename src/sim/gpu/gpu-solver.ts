@@ -14,6 +14,13 @@ import { POSITION_SHADER, VELOCITY_SHADER } from "./shaders.js";
  * Browser-only (needs a WebGL2 context with float render targets); the CPU `FoldSolver` is the
  * unit-tested reference twin. `create()` returns null if the GPU path is unavailable so callers
  * can fall back.
+ *
+ * **Not at parity, and not currently on any live path** (`sim-canvas` runs the CPU solver for every
+ * mode). Three pieces of the vinyl fold live only on the CPU side, and this would need all three
+ * before it could be switched back on for a file that declares a folded form: the soft, released
+ * guide (`BarHingeModel.guideWeight` — the shader still hard-places any node flagged driven, which
+ * is the straight-line blend this replaced), the seam springs (`BarHingeModel.seams`), and the
+ * free-edge slack rule (`beams.free`). Self-collision is CPU-only too.
  */
 export class GpuFoldSolver {
   readonly dt: number;

@@ -18,6 +18,8 @@ export class SimModal {
   private readonly trigger: HTMLButtonElement;
   private readonly mount: HTMLElement;
   private readonly statusEl: HTMLElement;
+  /** Live mean tensile bar strain — see `SimView.setStatusListener`. */
+  private readonly strainEl: HTMLElement;
   private readonly foldSlider: HTMLInputElement;
   private readonly foldValue: HTMLElement;
   private readonly detailControl: HTMLElement;
@@ -76,6 +78,7 @@ export class SimModal {
         </div>
         <footer class="sim-modal-footer">
           <span class="sim-status"></span>
+          <span class="sim-strain" title="Mean stretch of the sheet. Paper bends, it does not stretch, so a real fold stays near 0% — a large figure means what you are looking at is not a fold the material could make."></span>
           <label class="sim-fold-control sim-detail-control" title="More tile subdivision on harder-folding faces. Level 0 = 1 subdivision; 4 = 5. Matches the STL export.">
             Detail <span class="sim-detail-value">0</span>
             <input type="range" class="sim-detail-slider" min="0" max="4" step="1" value="0" />
@@ -105,6 +108,7 @@ export class SimModal {
       this.canvas?.setOverlayVisible(this.showElectronics);
     });
     this.statusEl = this.overlay.querySelector(".sim-status")!;
+    this.strainEl = this.overlay.querySelector(".sim-strain")!;
     this.foldSlider = this.overlay.querySelector(".sim-fold-slider")!;
     this.foldValue = this.overlay.querySelector(".sim-fold-value")!;
     this.detailControl = this.overlay.querySelector(".sim-detail-control")!;
@@ -249,6 +253,15 @@ export class SimModal {
       // against the previous scene would point at vertices that no longer exist.
       this.canvas.setOverlay(this.traces);
       this.canvas.setOverlayVisible(this.showElectronics);
+      this.canvas.setStatusListener(({ stretch, held }) => {
+        const pct = stretch * 100;
+        // Origami Simulator paints strain red past 5%; the same threshold reads here as "this is no
+        // longer a fold the sheet could make".
+        this.strainEl.classList.toggle("is-hot", pct > 5);
+        this.strainEl.textContent = held
+          ? `stretch ${pct.toFixed(1)}% (held)`
+          : `stretch ${pct.toFixed(1)}%`;
+      });
       this.syncDetailVisibility();
       this.applyFold();
       this.canvas.warmToTarget();
