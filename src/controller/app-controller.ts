@@ -22,11 +22,9 @@ import { resolveSimScene } from "../services/sim-scene-service.js";
 import { resolveSvgExport } from "../services/svg-export-service.js";
 import { resolveStlExport } from "../services/stl-export-service.js";
 import { DEFAULT_PRINT_SIZE } from "../model/stl-export.js";
-import { EMPTY_CIRCUIT, type Circuit, flatFaces, gapGraph } from "../model/electronics.js";
-import { batteryTerminals, patternDiag, planRoutes, tapeWidthFor } from "../model/electronics-routing.js";
-import { DEFAULT_SHEET } from "../model/fold-strain.js";
-import { manualTraces } from "../model/manual-wire.js";
-import { type AnchoredMesh, anchorOverlay } from "../model/trace-anchor.js";
+import { type Circuit } from "../model/electronics.js";
+import { resolveElectronicsTarget, type ElectronicsPlanningAdapter, defaultElectronicsPlanning } from "../services/electronics-service.js";
+import type { AnchoredMesh } from "../model/trace-anchor.js";
 import type { ConvertPanel } from "../view/convert-panel.js";
 import type { ViewerFrame } from "../view/viewer-frame.js";
 import type { HeaderActions } from "../view/header-actions.js";
@@ -49,6 +47,7 @@ export class AppController {
     private readonly exporter: ExportModal,
     private readonly patternEditor: PatternEditorModal,
     private readonly electronics: ElectronicsModal,
+    private readonly electronicsPlanning: ElectronicsPlanningAdapter = defaultElectronicsPlanning,
   ) {
     // 3D Sim folds exactly what the VIEWER is showing (fall back to the loaded model). This keeps
     // "what you see is what gets simulated" true even when the viewer and the convert panel differ.
@@ -118,7 +117,7 @@ export class AppController {
     // model first, else the loaded fold model. (Previously the viewer-driven
     // enablement was silently overridden by the next render — now it derives
     // consistently from state.)
-    const simObject = state.viewerShown?.object ?? (m?.kind === "fold" ? m.object : null);
+    const simObject = resolveElectronicsTarget(m, state.viewerShown)?.object ?? null;
     this.sim.setEnabled(!!simObject && canSimulate(simObject));
     // Export is available for any displayed FKLD/FOLD pattern (even non-simulable ones).
     this.exporter.setEnabled(!!simObject);
@@ -143,39 +142,12 @@ export class AppController {
    *  the copper belongs on the model either way. */
   private tracesForSim(fold: FoldFile | null): AnchoredMesh[] {
     const { circuit: stored, simTileGap } = this.store.getState();
-    const circuit = stored ?? EMPTY_CIRCUIT;
-    // A sheet carrying only hand-drawn wires has real copper on it. Asking for an LED or a battery first
-    // would leave the author looking at a folded model with nothing on it, having just drawn a run.
-    if (!fold || (!circuit.leds.length && !circuit.battery && !circuit.wires?.length)) return [];
-    try {
-      const faces = flatFaces(fold);
-      // Same gap as the Electronics tool and the printed tiles — the legs have to land where the pads are.
-      const gaps = gapGraph(fold, faces, simTileGap).gaps;
-      const sheetMm = this.exporter.printSizeMm();
-      // One spec, read by the plan and by the width below. Under `tapeChoice: "area"` the width depends on
-      // the sheet, so handing the router a spec the width reader did not see would draw the overlay at a
-      // width no copper was routed for. Nothing constructs a `SheetSpec` yet, so this is the default and
-      // the plan is unchanged; it is one place to change rather than two when one arrives.
-      const sheet = DEFAULT_SHEET;
-      const routed = planRoutes(faces, gaps, circuit, sheetMm, sheet);
-      // The circuit, not just the sheet: the width depends on how many runs have to fit, so a tape width
-      // computed without it would differ from the one `planRoutes` just planned to, and the overlay would
-      // be drawn at a width no copper was ever routed for.
-      const tapeW = tapeWidthFor(faces, sheetMm, sheet, circuit);
-      const face = circuit.battery ? faces[circuit.battery.face] : null;
-      const term = face
-        ? batteryTerminals(face.centroid, patternDiag(faces), face.poly, tapeW)
-        : null;
-      // The wires the author drew, ahead of the routed copper and on the same footing: they resolve to
-      // ordinary `Trace2D`s, so the overlay needs no branch for them. Drawn here rather than read back from
-      // the Electronics page for the reason the whole method exists — the page may never have been opened,
-      // and copper the author committed belongs on the model either way.
-      const drawn = manualTraces({ faces, gaps, circuit, tapeW });
-      return anchorOverlay([...drawn, ...routed.traces], routed.pads, term, tapeW, faces);
-    } catch {
-      // A pattern the router cannot read is not a reason to break the simulation.
-      return [];
-    }
+    return this.electronicsPlanning.foldedOverlay({
+      fold,
+      circuit: stored,
+      tileGap: simTileGap,
+      sheetMm: this.exporter.printSizeMm(),
+    });
   }
 
   // ---- intents (each: a service call + a store update) ---------------------
