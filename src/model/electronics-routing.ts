@@ -61,6 +61,41 @@ import { CALIBRATED_DEMAND, tapeMmForDemand, traceDemand } from "./tape-demand.j
 import { resolveNetlist, type NetlistFault } from "./netlist.js";
 import { planNets, type RoutedNet } from "./net-routing.js";
 import { type Box, type Footprint, type Pad, padAt, padSize } from "./footprint.js";
+import {
+  add,
+  cross,
+  crossesAny,
+  dedupe,
+  distToSeg,
+  intersection,
+  isOrigin,
+  leftOf,
+  len,
+  mid,
+  near,
+  nearPolyline,
+  patternDiag,
+  polyCrosses,
+  ptKey,
+  scale,
+  segNearSeg,
+  segPointDist,
+  segsCross,
+  sharesEnd,
+  sideOf,
+  sub,
+  trimEnd,
+  unit,
+} from "./trace-geometry.js";
+
+/**
+ * Re-exported so this module stays the one public face of copper routing.
+ *
+ * The segment math moved to `trace-geometry.ts` to break the import cycles it sat in the middle of, but
+ * callers that already import {@link segsCross} or {@link patternDiag} from here keep reading unchanged —
+ * and the split stays free to move again without touching them.
+ */
+export { crossesAny, patternDiag, ptKey, segsCross } from "./trace-geometry.js";
 
 /** One continuous strip of copper tape: a centreline polyline plus which net it carries. */
 export interface Trace2D {
@@ -448,59 +483,15 @@ const LANE_TOLL = 3;
  *  no detour is too long to avoid it -- but finite, so a terminal boxed in by geometry stays reachable. */
 const TERMINAL_TOLL = 400;
 
-/** Positional key, for marking a hinge as occupied. Rounded well below any real feature size. */
-export const ptKey = (p: Vec2): string => `${Math.round(p.x * 1e6)}_${Math.round(p.y * 1e6)}`;
 
 // ---- small vector helpers ---------------------------------------------------
 
-const sub = (a: Vec2, b: Vec2): Vec2 => ({ x: a.x - b.x, y: a.y - b.y });
-const add = (a: Vec2, b: Vec2): Vec2 => ({ x: a.x + b.x, y: a.y + b.y });
-const scale = (a: Vec2, k: number): Vec2 => ({ x: a.x * k, y: a.y * k });
-const cross = (a: Vec2, b: Vec2): number => a.x * b.y - a.y * b.x;
-const len = (a: Vec2): number => Math.hypot(a.x, a.y);
 
-function unit(a: Vec2): Vec2 {
-  const l = len(a);
-  return l < 1e-12 ? { x: 1, y: 0 } : { x: a.x / l, y: a.y / l };
-}
 
-/** Left normal of a direction (90 degrees CCW). */
-const leftOf = (d: Vec2): Vec2 => ({ x: -d.y, y: d.x });
 
-/** Which side of the ray `origin + t·dir` the point `p` lies on: +1 left, -1 right. */
-function sideOf(origin: Vec2, dir: Vec2, p: Vec2): number {
-  const c = cross(dir, sub(p, origin));
-  return c >= 0 ? 1 : -1;
-}
 
-/** Whether segment ab properly crosses any of the given polylines. */
-export function crossesAny(a: Vec2, b: Vec2, lines: Vec2[][]): boolean {
-  for (const line of lines) {
-    for (let i = 1; i < line.length; i++) {
-      if (segsCross(a, b, line[i - 1]!, line[i]!)) return true;
-    }
-  }
-  return false;
-}
 
-/** True when segments ab and cd properly cross (interiors meet; shared endpoints and collinear touching
- *  do not count — same-net tape is allowed to touch). */
-export function segsCross(a: Vec2, b: Vec2, c: Vec2, d: Vec2): boolean {
-  const d1 = cross(sub(b, a), sub(c, a));
-  const d2 = cross(sub(b, a), sub(d, a));
-  const d3 = cross(sub(d, c), sub(a, c));
-  const d4 = cross(sub(d, c), sub(b, c));
-  if (d1 === 0 || d2 === 0 || d3 === 0 || d4 === 0) return false;
-  return (d1 > 0) !== (d2 > 0) && (d3 > 0) !== (d4 > 0);
-}
 
-/** True when the polyline `pts` properly crosses segment cd anywhere. */
-function polyCrosses(pts: Vec2[], c: Vec2, d: Vec2): boolean {
-  for (let i = 1; i < pts.length; i++) {
-    if (segsCross(pts[i - 1]!, pts[i]!, c, d)) return true;
-  }
-  return false;
-}
 
 // ---- battery ----------------------------------------------------------------
 
@@ -752,20 +743,6 @@ export function batteryTerminals(centre: Vec2, diag: number, poly?: Vec2[], tape
   return { pwr: { x: centre.x + h, y: centre.y }, gnd: { x: centre.x - h, y: centre.y }, half };
 }
 
-/** Pattern diagonal — the scale every relative length here is expressed in. */
-export function patternDiag(faces: FlatFace[]): number {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const f of faces) {
-    for (const p of f.poly) {
-      if (p.x < minX) minX = p.x;
-      if (p.y < minY) minY = p.y;
-      if (p.x > maxX) maxX = p.x;
-      if (p.y > maxY) maxY = p.y;
-    }
-  }
-  if (!Number.isFinite(minX)) return 1;
-  return Math.hypot(maxX - minX, maxY - minY) || 1;
-}
 
 // ---- the router -------------------------------------------------------------
 
@@ -1896,8 +1873,6 @@ function seatLedLegs(laid: Trace2D[], targets: Target[], pads: PadPair[]): Trace
   return runs;
 }
 
-/** Two points the same to well inside any feature — the tolerance {@link ptKey} rounds at. */
-const near = (a: Vec2, b: Vec2): boolean => Math.hypot(a.x - b.x, a.y - b.y) < 1e-6;
 
 /**
  * The placed parts by component id, each group in the order the parts were dropped.
@@ -2275,14 +2250,6 @@ function clearOfOtherNet(
   return true;
 }
 
-/** Distance from a point to a segment — the projection clamped to the segment's own ends. */
-function distToSeg(r: Vec2, a: Vec2, b: Vec2): number {
-  const dx = b.x - a.x, dy = b.y - a.y;
-  const l2 = dx * dx + dy * dy;
-  if (l2 < 1e-18) return len(sub(r, a));
-  const t = Math.max(0, Math.min(1, ((r.x - a.x) * dx + (r.y - a.y) * dy) / l2));
-  return Math.hypot(r.x - (a.x + t * dx), r.y - (a.y + t * dy));
-}
 
 /**
  * The two pieces of pad-sized copper an across-the-rail part lands on: the common, and the live throw.
@@ -2398,23 +2365,6 @@ function splitRun(
   return { traces: [...traces.slice(0, ri), ...kept, ...traces.slice(ri + 1)], span };
 }
 
-/** Drop `back` of length from the end of a polyline. */
-function trimEnd(pts: Vec2[], back: number): Vec2[] {
-  let left = back;
-  const out = [...pts];
-  while (out.length >= 2) {
-    const a = out[out.length - 2]!, b = out[out.length - 1]!;
-    const l = len(sub(b, a));
-    if (l > left) {
-      const f = (l - left) / l;
-      out[out.length - 1] = { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
-      return out;
-    }
-    left -= l;
-    out.pop();
-  }
-  return out;
-}
 
 /**
  * Turn a net's walk into the tape you would actually lay for it.
@@ -3172,17 +3122,6 @@ function twoOpt(order: number[], centre: Vec2, targets: Target[]): number[] {
   return order;
 }
 
-/** Drop consecutive duplicate points, so a pad that coincides with the previous one cannot create a
- *  zero-length segment. */
-function dedupe(pts: Vec2[]): Vec2[] {
-  const out: Vec2[] = [];
-  for (const p of pts) {
-    const last = out[out.length - 1];
-    if (last && dist2(last, p) < 1e-18) continue;
-    out.push(p);
-  }
-  return out;
-}
 
 /**
  * How good a plan is, as a tuple ranked worst-fault-first — the router's objective.
@@ -3315,24 +3254,8 @@ export function countUnderLed(
   return n;
 }
 
-const isOrigin = (p: Vec2): boolean => p.x === 0 && p.y === 0;
 
-/** Closest approach between segments ab and cd (0 when they intersect). */
-function segNearSeg(a: Vec2, b: Vec2, c: Vec2, d: Vec2): number {
-  if (segsCross(a, b, c, d)) return 0;
-  return Math.min(
-    segPointDist(a, b, c), segPointDist(a, b, d),
-    segPointDist(c, d, a), segPointDist(c, d, b),
-  );
-}
 
-/** Distance from point `p` to segment ab. */
-function segPointDist(a: Vec2, b: Vec2, p: Vec2): number {
-  const ab = sub(b, a);
-  const L2 = ab.x * ab.x + ab.y * ab.y;
-  const t = L2 < 1e-18 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * ab.x + (p.y - a.y) * ab.y) / L2));
-  return len(sub(p, { x: a.x + ab.x * t, y: a.y + ab.y * t }));
-}
 
 /**
  * Runs passing under the *other* net's battery terminal.
@@ -3417,19 +3340,6 @@ export function overlapLength(traces: Trace2D[], tol: number): number {
   return shared;
 }
 
-/** Distance from `p` to the nearest point of polyline `pts`. */
-function nearPolyline(pts: Vec2[], p: Vec2): number {
-  let best = Infinity;
-  for (let i = 1; i < pts.length; i++) {
-    const a = pts[i - 1]!, b = pts[i]!;
-    const ab = sub(b, a);
-    const L2 = ab.x * ab.x + ab.y * ab.y;
-    const t = L2 < 1e-18 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * ab.x + (p.y - a.y) * ab.y) / L2));
-    const d = len(sub(p, { x: a.x + ab.x * t, y: a.y + ab.y * t }));
-    if (d < best) best = d;
-  }
-  return best;
-}
 
 /**
  * Length a net lays within `tol` of a non-adjacent part of *itself* — tape laid twice over.
@@ -3478,10 +3388,6 @@ export function selfOverlapLength(traces: Trace2D[], tol: number): number {
   return sum;
 }
 
-function sharesEnd(a: Vec2, b: Vec2, c: Vec2, d: Vec2): boolean {
-  const same = (p: Vec2, q: Vec2): boolean => Math.abs(p.x - q.x) < 1e-9 && Math.abs(p.y - q.y) < 1e-9;
-  return same(a, c) || same(a, d) || same(b, c) || same(b, d);
-}
 
 /**
  * Joins where two runs of one net leave the same point at a sharp angle.
@@ -3583,15 +3489,7 @@ export function trimAtOwnJoins(traces: Trace2D[], required: Vec2[]): Trace2D[] {
   return out.filter((t) => t.pts.length >= 2);
 }
 
-const mid = (a: Vec2, b: Vec2): Vec2 => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
 
-/** Whether `p` lies on `pts` within `tol`. */
-function onRun(p: Vec2, pts: Vec2[], tol: number): boolean {
-  for (let i = 1; i < pts.length; i++) {
-    if (segPointDist(pts[i - 1]!, pts[i]!, p) <= tol) return true;
-  }
-  return false;
-}
 
 /** The crossing nearest the chosen end of `pts`, as the index of the segment before it and the point itself. */
 function firstJoin(
@@ -3616,14 +3514,6 @@ function firstJoin(
   return null;
 }
 
-/** Where two crossing segments meet. */
-function intersection(a: Vec2, b: Vec2, c: Vec2, d: Vec2): Vec2 | null {
-  const r = sub(b, a), sVec = sub(d, c);
-  const den = cross(r, sVec);
-  if (Math.abs(den) < 1e-12) return null;
-  const t = cross(sub(c, a), sVec) / den;
-  return { x: a.x + r.x * t, y: a.y + r.y * t };
-}
 
 /** Total copper length. */
 export function totalLength(traces: Trace2D[]): number {
