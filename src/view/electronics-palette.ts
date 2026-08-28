@@ -7,7 +7,8 @@
  */
 import { netPlacement } from "../model/parts.js";
 import { padAt, padNamed, type Footprint } from "../model/footprint.js";
-import { type Component, BAT_COIN_20 } from "../model/footprints.generated.js";
+import type { Component } from "../model/footprint.js";
+import { BAT_COIN_20 } from "../model/library.js";
 import { LIBRARY } from "../model/library.js";
 import type { Led } from "../model/electronics.js";
 

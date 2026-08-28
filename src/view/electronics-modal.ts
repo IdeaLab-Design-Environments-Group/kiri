@@ -80,7 +80,8 @@ import { printScale } from "../model/print-scale.js";
 import { DEFAULT_SHEET, type SheetSpec } from "../model/fold-strain.js";
 import { placement } from "../model/parts.js";
 import { type Footprint, terminals } from "../model/footprint.js";
-import { type Component, R_1206, SW_SPDT } from "../model/footprints.generated.js";
+import type { Component } from "../model/footprint.js";
+import { R_1206, SW_SPDT } from "../model/library.js";
 import { footprintById } from "../model/library.js";
 import {
   BLOCKED,

@@ -21,6 +21,16 @@ import { COMPONENTS, type Component } from "./footprints.generated.js";
 import { REST_COMPONENTS } from "./footprints.rest.generated.js";
 import type { Footprint } from "./footprint.js";
 
+/**
+ * The handful of parts the UI names outright — a default battery, resistor and switch for the toolbar.
+ *
+ * Re-exported here rather than imported from the generated module directly, so that "everything that
+ * resolves a part goes through this file" is true of constants as well as of lookups. A view reaching
+ * past this facade into `footprints.generated.js` also silently depends on which *half* of the generated
+ * split a part landed in, which is the generator's business and has changed before.
+ */
+export { BAT_COIN_20, R_1206, SW_SPDT } from "./footprints.generated.js";
+
 /** Every part in the library, both halves of the generated split. */
 export const LIBRARY: Component[] = [...COMPONENTS, ...REST_COMPONENTS];
 
