@@ -95,59 +95,68 @@ import {
  * callers that already import {@link segsCross} or {@link patternDiag} from here keep reading unchanged —
  * and the split stays free to move again without touching them.
  */
-export { crossesAny, patternDiag, ptKey, segsCross } from "./trace-geometry.js";
-
-/** One continuous strip of copper tape: a centreline polyline plus which net it carries. */
-export interface Trace2D {
-  pts: Vec2[];
-  /**
-   * Which net this run carries.
-   *
-   * `"pwr"` and `"gnd"` for the two-rail bus, and a {@link Net.id} for a run laid by {@link planNets}. Kept
-   * as a plain string rather than a union so both routers emit the same kind of trace and everything
-   * downstream — the strips file, the carrier, the canvas, the folded model — handles a run without
-   * knowing which router laid it or how many nets there are.
-   *
-   * Anything that needs to *paint* a net has to map ids to colours rather than switching on two names.
-   */
-  net: string;
-  /**
-   * Width in pattern units, where this run is not ordinary tape.
-   *
-   * Land copper under a part's terminals: a switch's pads are `.047in` across and its pitch `.098in`, so a
-   * stub reaching one at full tape width would touch the neighbouring terminal's and short the part. Left
-   * unset — which is every routed run — the tape's own width is used.
-   */
-  width?: number;
-  /**
-   * Width at each point of `pts`, where it is not one flat number — index-aligned, same length as `pts`.
-   *
-   * `planNets` sets this on a leg that lands on a real part's pad rather than on a bus rail, tapering the
-   * last stretch down to the pad's own width instead of running full tape onto a pad a fraction of that
-   * size. Takes precedence over `width` wherever present, the same way `outlineStrip`'s own per-point
-   * width array already works for the bus.
-   */
-  widths?: number[];
-}
+import type {
+  Corridor,
+  ResistorSpan,
+  LedSeat,
+  PadField,
+  PadPair,
+  PartFit,
+  PartPlacement,
+  PartSpan,
+  Terminals,
+  Trace2D,
+} from "./trace-types.js";
 
 /**
- * Where an LED's two pads ended up, per net. Index-aligned with `circuit.leds`.
- *
- * These are the copper **ends**: the two points the tape stops at, {@link LedSeat.gap} apart along the
- * chip's axis. The part's own legs then sit outboard of them, at its `pitch`, each leg overlapping half
- * its own length of copper — the same relationship a resistor's cut ends have to its terminals, so an
- * LED and a resistor can be drawn by one code path.
+ * Likewise the plan vocabulary, which moved to `trace-types.ts` so that naming a {@link Trace2D} no longer
+ * means importing the router. Re-exported for the same reason as the geometry above.
  */
-export interface PadPair {
-  pwr: Vec2;
-  gnd: Vec2;
-  /**
-   * The `Component.id` seated here, so whatever draws the part can look its footprint up without
-   * re-deriving which LED this was. Absent on a zeroed (unseatable) entry.
-   */
-  component?: string;
-}
+export type {
+  Corridor,
+  LedSeat,
+  PadField,
+  PadPair,
+  PartFit,
+  PartPlacement,
+  PartSpan,
+  ResistorSpan,
+  Terminals,
+  Trace2D,
+} from "./trace-types.js";
 
+export { crossesAny, patternDiag, ptKey, segsCross } from "./trace-geometry.js";
+import {
+  countAcuteJoins,
+  countNetCrossings,
+  countOverLed,
+  countUnderLed,
+  countUnderTerminal,
+  flawless,
+  lexLess,
+  overlapLength,
+  selfOverlapLength,
+  totalLength,
+  trimAtOwnJoins,
+  type PlanKey,
+} from "./route-metrics.js";
+
+/** Likewise the plan scoring, which moved to `route-metrics.ts`. */
+export {
+  countAcuteJoins,
+  countNetCrossings,
+  countOverLed,
+  countUnderLed,
+  countUnderTerminal,
+  lexLess,
+  overlapLength,
+  selfOverlapLength,
+  totalLength,
+  trimAtOwnJoins,
+  type PlanKey,
+} from "./route-metrics.js";
+
+/** One continuous strip of copper tape: a centreline polyline plus which net it carries. */
 export interface RoutedCircuit {
   traces: Trace2D[];
   /** Index-aligned with `circuit.leds` (including unroutable ones, which get zeroed pads). */
@@ -191,42 +200,6 @@ export interface RoutedCircuit {
 }
 
 /** Where a placed library part ended up. */
-export interface PartPlacement extends PartSpan {
-  /** The `Component.id` it was placed from. */
-  component: string;
-  /**
-   * Index into `circuit.parts` — the part the author placed, not its position within its component group.
-   * The groups are broken one at a time, so the index a span comes back with is the group's; it is
-   * translated here, because outside this file the only list anyone has is `circuit.parts`.
-   */
-  source: number;
-}
-
-/** The gap a part bridges — `a` and `b` are the cut ends of the run, where its contacts land. */
-export interface PartSpan {
-  a: Vec2;
-  b: Vec2;
-  /** Which net it was placed on, so land copper joins the right one — see {@link Trace2D.net}. */
-  net: string;
-  /**
-   * Which way round a three-terminal part sits: which side of the rail the live throw takes, and so
-   * which side the idle one is stranded on. Chosen when the part is placed — see {@link idleSide} —
-   * and honoured by everything that draws or wires the part, so the two cannot disagree.
-   */
-  flip?: boolean;
-  /**
-   * Which drop this span came from: the index of the placed part in the list handed to {@link breakRuns}.
-   *
-   * The spans are NOT index-aligned with that list — a part whose run is too short to break is dropped —
-   * so this is the only way back from a routed span to the component the author placed. The canvas needs
-   * it to draw the selection round the right part, and the router itself to read that part's own `flip`.
-   */
-  source: number;
-}
-
-/** @deprecated the same thing; kept so existing callers read naturally. */
-export type ResistorSpan = PartSpan;
-
 export const EMPTY_ROUTE: RoutedCircuit = {
   traces: [], pads: [], unreachable: [], unseated: [], resistors: [], switches: [], parts: [], nets: [], netFaults: [],
 };
@@ -484,15 +457,6 @@ const LANE_TOLL = 3;
 const TERMINAL_TOLL = 400;
 
 
-// ---- small vector helpers ---------------------------------------------------
-
-
-
-
-
-
-
-
 // ---- battery ----------------------------------------------------------------
 
 /** The battery's two terminals: side by side either side of its face centroid.
@@ -500,13 +464,6 @@ const TERMINAL_TOLL = 400;
  *  The preview and the router must agree on these to the last decimal or the copper lands off the pad, so
  *  this is the one definition and both import it. */
 /** The battery's two terminals: where they sit, and how big each pad is. */
-export interface Terminals {
-  pwr: Vec2;
-  gnd: Vec2;
-  /** Half-width of each pad, after clamping to what the tile can hold. */
-  half: number;
-}
-
 /**
  * Bare gap wanted between the two nets' copper under an LED, as a fraction of the tape width.
  *
@@ -563,21 +520,6 @@ export function landingWidthFor(sep: number, tapeW: number, weed?: number): numb
 }
 
 /**
- * A piece of a part's metal, and how wide copper may be near it.
- *
- * The general form of what an LED's two legs have always been to each other: a place on the sheet with
- * something soldered to it, which copper passing close by has to make room for.
- */
-export interface PadField {
-  /** Where the metal is, in pattern units. */
-  at: Vec2;
-  /** The widest copper may be at that point — {@link landingWidthFor} of the room around it. */
-  safe: number;
-  /** How near counts as near, in pattern units. Beyond this the field has no say. */
-  reach: number;
-}
-
-/**
  * How wide copper may be at `p`: the tape's width, narrowed by every field it is standing in.
  *
  * **The one definition of "how wide may copper be here, given the metal near it".** `copper-svg-export.ts
@@ -631,19 +573,6 @@ export const MIN_WEED_MM = minWebMm();
 export const DEFAULT_LED = "LED_1206";
 
 /** What an LED's own footprint asks of the copper, in millimetres. */
-export interface LedSeat {
-  /** The `Component.id` this came from. */
-  component: string;
-  footprint: Footprint;
-  /** Centre to centre between the two legs. */
-  pitch: number;
-  /** How much of that line one leg covers. */
-  padW: number;
-  /** The bare pattern between the legs: the copper the chip's own body bridges, and the strip the cutter
-   *  has to weed. This, not `pitch`, is how far apart the two nets' copper ends go. */
-  gap: number;
-}
-
 /**
  * Read an LED's seating off its own footprint, or null when the library has no such part.
  *
@@ -1084,7 +1013,6 @@ export function planRoutes(
     }
     return { ...t, pts };
   };
-
 
 
   // Tours are memoised on the pads they order. The descent flips one LED at a time and revisits the same
@@ -2001,26 +1929,6 @@ export const SWITCH_NECK_MM = neckFor({ pitch: SWITCH_PITCH_MM, pad: SPDT.pad })
 
 export const SWITCH_GAP_MM = SWITCH_ROW_MM + SWITCH_NECK_MM;
 
-/**
- * How a part meets the rail, read off its own footprint — the generic form of `RESISTOR` and `SPDT`.
- *
- * One row of terminals and the rail runs ALONG them: the part replaces the bare span between the
- * outermost two, straddles it evenly, and needs no more copper than that either side. Two rows and the
- * rail steps ACROSS: the break is the row separation plus a neck, and the terminals run on past it, so
- * the part wants a pad's width of rail beyond its own half-gap at each end.
- *
- * This is what makes a new part need no new branch: `partFit(R_1206).gap` is `RESISTOR.gap` and
- * `partFit(SW_SPDT)` is the switch's two rows and {@link SWITCH_GAP_MM}, both out of the same reading.
- */
-export interface PartFit {
-  rows: 1 | 2;
-  /** Copper it removes, in MILLIMETRES. */
-  gap: number;
-  /** Copper it needs either side of the break's centre to seat on, in MILLIMETRES. */
-  before: number;
-  after: number;
-}
-
 export function partFit(fp: Footprint): PartFit {
   const across = acrossPart(fp);
   if (!across) {
@@ -2716,35 +2624,6 @@ function dodgeChips(pts: Vec2[], targets: Target[], onBody: (a: Vec2, b: Vec2) =
   return out;
 }
 
-/**
- * The pattern's own travel network: every face centre, joined to the midpoint of each hinge it owns. Both
- * kinds of node lie inside the body and every edge runs from a face centre to a point on that same face's
- * boundary, so a path over this graph never leaves the silhouette -- which is what keeps copper on the
- * material, and what makes it follow the tiling instead of cutting across it.
- */
-export interface Corridor {
-  /** Per face: the midpoints of its own edges — the ways in and out of that tile. */
-  mids: Map<number, Vec2[]>;
-  /** Faces owning each midpoint, by key. A midpoint on a shared edge belongs to both tiles, which is what
-   *  makes it a crossing between them. */
-  faceOf: Map<string, number[]>;
-  point: Map<string, Vec2>;
-  /** Per face: which midpoint pairs may be joined directly, i.e. whose chord stays on the tile. */
-  chords: Map<number, Set<string>>;
-  /** Extra cost for crossing at this node — a mountain fold, a steep valley or a cut. */
-  cost: Map<string, number>;
-  /**
-   * Nodes copper may not use at all, because the crease there strains it past
-   * {@link SheetSpec.strainLimit}.
-   *
-   * Empty unless a limit is set. Separate from {@link cost} because it is a different kind of statement: a
-   * cost says "go round if you can", and this says "there is no route through here" — which is why a tile
-   * behind one comes back from {@link reachableFaces} as unreachable rather than expensively reachable.
-   */
-  refused: Set<string>;
-}
-
-/** Unordered key for the edge between two vertex ids. */
 const edgeKeyOf = (a: number, b: number): string => (a < b ? `${a}_${b}` : `${b}_${a}`);
 
 /**
@@ -3122,404 +3001,3 @@ function twoOpt(order: number[], centre: Vec2, targets: Target[]): number[] {
   return order;
 }
 
-
-/**
- * How good a plan is, as a tuple ranked worst-fault-first — the router's objective.
- *
- * `[ chips, terminals, crossings, defects, length ]`, every entry a count or a length and all of them
- * "lower is better". Compared by {@link lexLess}: the first entry that differs decides, and nothing below
- * it is consulted. Tape under a chip destroys the part, tape over a battery terminal shorts the supply, a
- * PWR×GND crossing shorts the layout, a defect makes the sheet hard to weed, and length is only a
- * tie-breaker — so no amount of one may ever buy a unit of the one above it.
- *
- * **This used to be a weighted sum**, `chips·1e12 + terms·1e9 + crossings·1e6 + defects + length·1e-6`,
- * whose comments claimed exactly the ranking above. It behaved that way only because the constants were far
- * apart: nothing clamped a tier, so a large enough lower tier would have outranked a higher one and the
- * guarantee held by arithmetic accident rather than by construction. Measured before the change, the worst
- * defect tier on the bundled patterns was 214.5 against the 1e6 crossing weight — a margin of about 4,700×,
- * so the separation was in no danger here. That is why the change is output-identical, and it is also why
- * it was worth making: a property that is true by construction does not have to be re-measured whenever a
- * pattern gets bigger.
- *
- * **Index 3 is deliberately a sum, and it is the one place two measures are traded.** See {@link planRoutes}.
- */
-export type PlanKey = readonly [
-  chips: number,
-  terminals: number,
-  crossings: number,
-  defects: number,
-  length: number,
-];
-
-/**
- * Whether `a` is a strictly better plan than `b` — lexicographic, short-circuiting at the first difference.
- *
- * `upto` limits the comparison to the leading entries, which is how a caller asks "better on everything
- * except length": pass 4. That replaces subtracting the length term back out of a weighted sum, which was
- * itself a trick that depended on the scale separation holding.
- *
- * Equal keys give `false`, so this is a strict order and `!lexLess(b, a)` is "a is no worse than b".
- */
-export function lexLess(a: PlanKey, b: PlanKey, upto: number = a.length): boolean {
-  for (let i = 0; i < upto; i++) {
-    if (a[i] !== b[i]) return a[i]! < b[i]!;
-  }
-  return false;
-}
-
-/** A plan with no fault of any kind left to fix — every entry zero, so the search can stop. */
-function flawless(k: PlanKey): boolean {
-  return k.every((v) => v === 0);
-}
-
-/** Count PWR×GND proper crossings in `traces` — the property this router exists to keep at zero. */
-export function countNetCrossings(traces: Trace2D[]): number {
-  let n = 0;
-  for (let i = 0; i < traces.length; i++) {
-    for (let j = i + 1; j < traces.length; j++) {
-      const A = traces[i]!, B = traces[j]!;
-      if (A.net === B.net) continue; // same net may overlap freely: single-sided tape, one potential
-      for (let a = 1; a < A.pts.length; a++) {
-        for (let b = 1; b < B.pts.length; b++) {
-          if (segsCross(A.pts[a - 1]!, A.pts[a]!, B.pts[b - 1]!, B.pts[b]!)) n++;
-        }
-      }
-    }
-  }
-  return n;
-}
-
-/** Count traces running over an LED chip body — the other thing that must stay at zero. */
-export function countOverLed(traces: Trace2D[], pads: PadPair[]): number {
-  let n = 0;
-  for (const t of traces) {
-    for (const p of pads) {
-      if (p.pwr.x === 0 && p.pwr.y === 0 && p.gnd.x === 0 && p.gnd.y === 0) continue;
-      // A rail legitimately *lands* on its own pad, so an endpoint touch is not a violation.
-      if (polyCrosses(t.pts, p.pwr, p.gnd)) n++;
-    }
-  }
-  return n;
-}
-
-/**
- * Chips with copper physically under them.
- *
- * {@link countOverLed} tests zero-width centrelines for a *proper crossing*, which real tape does not
- * honour: a strip whose centreline merely passes close to a chip still sits under it, because the tape is
- * wide. This measures what actually matters -- centreline within `clear` of the chip body -- while allowing
- * the one contact that must exist, the tape landing on its own pad.
- *
- * **This is currently violated: 6-12 chips per model.** `countOverLed` reads zero throughout, which is why
- * it went unnoticed; the zero was an artefact of ignoring tape width. Routing around it is unsolved. One
- * attempt is recorded: approach each pad from beyond it along the chip's own axis, with a width-aware
- * dodge. That measured *worse* (akde-square 0 -> 15 zero-width crossings) because the stand-off point falls
- * outside the tile and its approach segment clips the body. The fix wants the spine to run *along* each
- * hinge so both pads flank the direction of travel -- the same missing property that blocks zero crossings
- * and the lane-sharing that would cut overlap.
- */
-export function countUnderLed(
-  traces: Trace2D[],
-  pads: PadPair[],
-  clear: number,
-  padR: number,
-): number {
-  let n = 0;
-  for (const pad of pads) {
-    if (isOrigin(pad.pwr) && isOrigin(pad.gnd)) continue;
-    let bad = false;
-    for (const t of traces) {
-      // The pad this run is allowed to land on — a rail's own. A declared net has none: it has no business
-      // on either of the chip's legs, so nothing is exempt and any copper over the body counts.
-      //
-      // `t.net === "pwr" ? pad.pwr : pad.gnd` gave every non-rail net GND's pad as its own, which both
-      // excused it from real copper over the chip and scored it against the wrong leg.
-      const own: Vec2 | null =
-        t.net === "pwr" ? pad.pwr : t.net === "gnd" ? pad.gnd : null;
-      for (let i = 1; i < t.pts.length && !bad; i++) {
-        const a = t.pts[i - 1]!, b = t.pts[i]!;
-        const L = len(sub(b, a));
-        const steps = Math.max(2, Math.ceil(L / (clear * 0.5)));
-        for (let k = 0; k <= steps; k++) {
-          const u = k / steps;
-          const m = { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u };
-          if (own && len(sub(m, own)) <= padR) continue; // landing on its own pad is the point
-          if (segPointDist(pad.pwr, pad.gnd, m) < clear) { bad = true; break; }
-        }
-      }
-      if (bad) break;
-    }
-    if (bad) n++;
-  }
-  return n;
-}
-
-
-
-
-/**
- * Runs passing under the *other* net's battery terminal.
- *
- * The two terminals sit a couple of millimetres apart, so a run leaving one can sweep straight across the
- * other -- shorting the battery, which is the one short that cannot be fixed with a bit of tape afterwards.
- * A net touching its own terminal is the point; touching the other one is a fault.
- */
-export function countUnderTerminal(
-  traces: Trace2D[],
-  term: PadPair,
-  clear: number,
-): number {
-  let n = 0;
-  for (const t of traces) {
-    // A rail must clear the OTHER rail's terminal; its own is where it starts. Anything else — a declared
-    // net — has no terminal of its own here and must clear both.
-    //
-    // `t.net === "pwr" ? term.gnd : term.pwr` read every non-PWR net as GND, so a net called `sig` was
-    // forbidden from the PWR terminal and free to sweep the GND one. Wrong in both directions at once.
-    const forbidden =
-      t.net === "pwr" ? [term.gnd] : t.net === "gnd" ? [term.pwr] : [term.pwr, term.gnd];
-    for (let i = 1; i < t.pts.length; i++) {
-      const a = t.pts[i - 1]!, b = t.pts[i]!;
-      if (forbidden.some((f) => segPointDist(a, b, f) < clear)) {
-        n++;
-        break; // one fault per run is enough to report
-      }
-    }
-  }
-  return n;
-}
-
-/** Length over which PWR and GND run on top of each other. Same-net overlap is free -- one potential, and
- *  single-sided tape may touch itself -- but the two nets shadowing each other is unbuildable: you cannot
- *  lay the second strip where the first already is. Sampled, so partial overlap counts too.
- *
- *  Currently 11-41% of copper length. It is NOT solved: both nets have to traverse the same spine of the
- *  pattern, and there is no second way through -- tolling a waypoint the other net already used diverts
- *  almost nothing even at 400x. Shifting each net sideways into its own half of the lane cuts overlap
- *  (akde-hex 17% -> 4%) but needs a *shared* centreline to offset from; offsetting each net's own path
- *  instead lets the two lanes swap sides, which measured 5 -> 44 crossings on puffin and put copper back
- *  over chips, so it is not shipped. */
-export function overlapLength(traces: Trace2D[], tol: number): number {
-  // Each unordered PAIR of distinct nets, once, rather than PWR against GND by name. With declared nets a
-  // circuit has more than two, and naming the rails left every other pair unscored — two signal nets could
-  // lie on each other for free.
-  //
-  // Pairs and not "each run against all the others", which is the same idea and is wrong: it charges a
-  // PWR/GND overlap twice, once from each side, which is a different number from the one this function has
-  // always returned. That number feeds the bus router's own scoring, so doubling it silently re-planned
-  // every bundled circuit and cost two tests that had nothing to do with nets. The rails keep their exact
-  // reading; the new pairs are additive.
-  const nets = [...new Set(traces.map((t) => t.net))];
-  const pairs: [string, string][] = [];
-  for (let i = 0; i < nets.length; i++) {
-    for (let j = i + 1; j < nets.length; j++) {
-      // PWR first when this is the rail pair, so the sampled side is the one it has always been.
-      const [a, b] = [nets[i]!, nets[j]!];
-      pairs.push(b === "pwr" ? [b, a] : [a, b]);
-    }
-  }
-  let shared = 0;
-  for (const [from, to] of pairs) {
-  const gnd = traces.filter((t) => t.net === to);
-  for (const a of traces.filter((t) => t.net === from)) {
-    for (let i = 1; i < a.pts.length; i++) {
-      const p = a.pts[i - 1]!, q = a.pts[i]!;
-      const L = len(sub(q, p));
-      if (L < 1e-12) continue;
-      const steps = Math.max(2, Math.ceil(L / tol));
-      let hits = 0;
-      for (let k = 0; k < steps; k++) {
-        const u = (k + 0.5) / steps;
-        const m = { x: p.x + (q.x - p.x) * u, y: p.y + (q.y - p.y) * u };
-        if (gnd.some((b) => nearPolyline(b.pts, m) <= tol)) hits++;
-      }
-      shared += (L * hits) / steps;
-    }
-  }
-  }
-  return shared;
-}
-
-
-/**
- * Length a net lays within `tol` of a non-adjacent part of *itself* — tape laid twice over.
- *
- * Electrically free, since it is one net at one potential, but it is wasted copper and it reads as a mistake:
- * the strip runs out and comes back alongside where it has already been. Segments that share an endpoint are
- * skipped, or every corner would count as its own overlap.
- */
-export function selfOverlapLength(traces: Trace2D[], tol: number): number {
-  let sum = 0;
-  // Every net present, not the two rails by name. A circuit may now carry any number of declared nets, and
-  // naming the rails made a routed declared net free to lie on top of itself and cost nothing.
-  for (const net of new Set(traces.map((t) => t.net))) {
-    const mine = traces.filter((t) => t.net === net);
-    for (let ti = 0; ti < mine.length; ti++) {
-      const a = mine[ti]!;
-      for (let i = 1; i < a.pts.length; i++) {
-        const p = a.pts[i - 1]!, q = a.pts[i]!;
-        const L = len(sub(q, p));
-        if (L < 1e-12) continue;
-        const steps = Math.max(2, Math.ceil(L / tol));
-        let hits = 0;
-        for (let k = 0; k < steps; k++) {
-          const u = (k + 0.5) / steps;
-          const m = { x: p.x + (q.x - p.x) * u, y: p.y + (q.y - p.y) * u };
-          let near = false;
-          for (let tj = 0; tj < mine.length && !near; tj++) {
-            const b = mine[tj]!;
-            for (let j = 1; j < b.pts.length && !near; j++) {
-              if (tj === ti && Math.abs(j - i) <= 1) continue;
-              const c = b.pts[j - 1]!, d = b.pts[j]!;
-              // Cheap rejection first: most segment pairs are nowhere near each other, and the distance test
-              // is what made scoring every candidate cost seconds.
-              if (m.x < Math.min(c.x, d.x) - tol || m.x > Math.max(c.x, d.x) + tol) continue;
-              if (m.y < Math.min(c.y, d.y) - tol || m.y > Math.max(c.y, d.y) + tol) continue;
-              if (sharesEnd(p, q, c, d)) continue;
-              if (segPointDist(c, d, m) <= tol) near = true;
-            }
-          }
-          if (near) hits++;
-        }
-        sum += (L * hits) / steps;
-      }
-    }
-  }
-  return sum;
-}
-
-
-/**
- * Joins where two runs of one net leave the same point at a sharp angle.
- *
- * A cutter has to weed the substrate between them, and a narrow wedge tears or lifts instead of coming away —
- * so two strips doubling back alongside each other are a cutting defect, not just an untidy one.
- */
-export function countAcuteJoins(traces: Trace2D[], minAngle = Math.PI / 6): number {
-  let n = 0;
-  // Every net present, not the two rails by name: a declared net's runs meet at sharp angles and tear the
-  // substrate exactly as a rail's do. For a bus circuit the set is precisely {pwr, gnd}, so this reads the
-  // same number it always has.
-  for (const net of new Set(traces.map((t) => t.net))) {
-    const mine = traces.filter((t) => t.net === net);
-    const at = new Map<string, Vec2[]>();
-    for (const t of mine) {
-      for (let i = 0; i < t.pts.length; i++) {
-        const here = t.pts[i]!;
-        const away = t.pts[i === 0 ? 1 : i - 1];
-        if (!away) continue;
-        const k = ptKey(here);
-        at.set(k, [...(at.get(k) ?? []), { x: away.x - here.x, y: away.y - here.y }]);
-      }
-    }
-    for (const dirs of at.values()) {
-      for (let i = 0; i < dirs.length; i++) {
-        for (let j = i + 1; j < dirs.length; j++) {
-          const a = Math.atan2(dirs[i]!.y, dirs[i]!.x);
-          const b = Math.atan2(dirs[j]!.y, dirs[j]!.x);
-          let d = Math.abs(a - b);
-          if (d > Math.PI) d = 2 * Math.PI - d;
-          if (d < minAngle) n++;
-        }
-      }
-    }
-  }
-  return n;
-}
-
-/**
- * Where two runs of one net meet, stop the redundant one at the meeting point.
- *
- * The connection is made where they touch — everything past that is copper laid for nothing, and on a cut sheet
- * it is a second strip to weed and stick down alongside the first. So the run is truncated at the crossing,
- * keeping its shape and simply ending earlier.
- *
- * Only a tail that reaches nothing is removed: if the part beyond the crossing carries a pad or a terminal, it
- * is the reason that run exists and it stays.
- *
- * This handles runs that *cross*. Runs that merely lie alongside each other were tried too -- dropping a tail
- * already covered by another run of its own net -- and were not worth it: repeated tape stayed at the same 26%
- * across the bundled patterns, because what is left is mid-run parallelism rather than redundant ends, and it
- * split church's copper from four strips into eight. Mid-run doubling cannot be trimmed without cutting the
- * connection; it has to not be routed that way in the first place.
- */
-export function trimAtOwnJoins(traces: Trace2D[], required: Vec2[]): Trace2D[] {
-  const needed = new Set(required.map(ptKey));
-  const out = traces.map((t) => ({ ...t, pts: t.pts.slice() }));
-
-  // Junctions count as required too. A tail past a crossing may be where another run of this net attaches, and
-  // cutting it strands that run and everything beyond it -- an open circuit, not a saving. Pads and terminals
-  // alone were not enough: this orphaned a pad on puffin.
-  const seen = new Map<string, number>();
-  for (const t of out) {
-    for (const k of new Set(t.pts.map(ptKey))) seen.set(k, (seen.get(k) ?? 0) + 1);
-  }
-  for (const [k, n] of seen) if (n > 1) needed.add(k);
-
-  // Longest redundant tail first, and re-checked each round: which run gives way should be the one with more
-  // copper to save, not whichever happens to come first in the list.
-  for (;;) {
-    let best: { i: number; fromEnd: boolean; cut: { index: number; at: Vec2 }; saved: number } | null = null;
-    for (let i = 0; i < out.length; i++) {
-      const t = out[i]!;
-      const others = out.filter((o, k) => k !== i && o.net === t.net);
-      if (!others.length) continue;
-      for (const fromEnd of [true, false]) {
-        const cut = firstJoin(t.pts, others, fromEnd);
-        if (!cut) continue;
-        const tail = fromEnd ? t.pts.slice(cut.index + 1) : t.pts.slice(0, cut.index + 1);
-        if (!tail.length || tail.some((p) => needed.has(ptKey(p)))) continue;
-        const from = fromEnd ? cut.at : cut.at;
-        let saved = len(sub(tail[fromEnd ? 0 : tail.length - 1]!, from));
-        for (let k = 1; k < tail.length; k++) saved += len(sub(tail[k]!, tail[k - 1]!));
-        if (!best || saved > best.saved) best = { i, fromEnd, cut, saved };
-      }
-    }
-    if (!best) break;
-    const t = out[best.i]!;
-    t.pts = best.fromEnd
-      ? [...t.pts.slice(0, best.cut.index + 1), best.cut.at]
-      : [best.cut.at, ...t.pts.slice(best.cut.index + 1)];
-    // Junctions can appear or vanish as runs shorten, so the protected set is rebuilt before the next round.
-    const again = new Map<string, number>();
-    for (const o of out) for (const k of new Set(o.pts.map(ptKey))) again.set(k, (again.get(k) ?? 0) + 1);
-    for (const [k, n] of again) if (n > 1) needed.add(k);
-  }
-
-  return out.filter((t) => t.pts.length >= 2);
-}
-
-
-
-/** The crossing nearest the chosen end of `pts`, as the index of the segment before it and the point itself. */
-function firstJoin(
-  pts: Vec2[],
-  others: Trace2D[],
-  fromEnd: boolean,
-): { index: number; at: Vec2 } | null {
-  const order = fromEnd
-    ? [...Array(pts.length - 1).keys()].reverse()
-    : [...Array(pts.length - 1).keys()];
-  for (const i of order) {
-    const a = pts[i]!, b = pts[i + 1]!;
-    for (const o of others) {
-      for (let j = 1; j < o.pts.length; j++) {
-        const c = o.pts[j - 1]!, d = o.pts[j]!;
-        if (!segsCross(a, b, c, d)) continue;
-        const at = intersection(a, b, c, d);
-        if (at) return { index: i, at };
-      }
-    }
-  }
-  return null;
-}
-
-
-/** Total copper length. */
-export function totalLength(traces: Trace2D[]): number {
-  let s = 0;
-  for (const t of traces) {
-    for (let i = 1; i < t.pts.length; i++) s += len(sub(t.pts[i]!, t.pts[i - 1]!));
-  }
-  return s;
-}
