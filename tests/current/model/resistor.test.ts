@@ -60,7 +60,19 @@ describe("model/resistor", () => {
     // Both a resistor's ends are on +. Tape running underneath therefore shorts it out and the LEDs see the
     // full battery — so unlike an LED, which straddles the two nets and only needs the strip pinched, this
     // has to be a real gap in the copper.
-    const { faces, gaps, base, plain, mid, k } = fixture();
+    const { faces, gaps, base, plain, k } = fixture();
+    // Dropped in the middle of the longest STRAIGHT segment of the rail, so that the two cut ends are
+    // collinear and the straight-line distance between them IS the gap along the run. `fixture`'s own `mid`
+    // is the midpoint of a polyline, and when `TAPE_MM` fell to 1.5 on 2026-08-28 the replan put a bend
+    // there: the break was still a body's length along the copper but measured 1.254mm as a chord. That is
+    // correct behaviour — `reports where the leads land` asserts `span <= RESISTOR_MM` for exactly this
+    // reason — but it makes a chord the wrong instrument for the claim below, which is about how much
+    // copper the break removes.
+    const seg = plain.traces
+      .filter((t) => t.net === "pwr")
+      .flatMap((t) => t.pts.slice(1).map((q, i) => [t.pts[i]!, q] as const))
+      .sort((a, b) => Math.hypot(b[1].x - b[0].x, b[1].y - b[0].y) - Math.hypot(a[1].x - a[0].x, a[1].y - a[0].y))[0]!;
+    const mid = { x: (seg[0].x + seg[1].x) / 2, y: (seg[0].y + seg[1].y) / 2 };
     const withRes = planRoutes(faces, gaps, { ...base, resistors: [mid] });
 
     const pwrBefore = plain.traces.filter((t) => t.net === "pwr").length;
@@ -74,14 +86,23 @@ describe("model/resistor", () => {
     // tile gap: breaking one run into two changes which run hosts a leg, so the seating adds length back
     // and the subtraction reports 0.796mm for a gap that is exactly 1.8mm wide. The proxy was measuring
     // the LED, not the resistor. The gap is what the comment above is about, so measure the gap.
+    // The pair of cut ends nearest to WHERE THE PART WAS DROPPED, not the closest pair anywhere on the net.
+    // A global minimum stopped identifying the resistor's own break when `TAPE_MM` fell to 1.5 on
+    // 2026-08-28: more direct routes put two unrelated run ends 1.254mm apart, nearer each other than the
+    // 1.8mm the resistor leaves, so the test measured a gap the resistor had nothing to do with. `mid` is
+    // where the part was asked for, and is independent of how wide the gap turns out to be.
     const ends = withRes.traces
       .filter((t) => t.net === "pwr")
       .map((t) => [t.pts[0]!, t.pts[t.pts.length - 1]!] as const);
+    const toMid = (p: { x: number; y: number }): number => Math.hypot(p.x - mid.x, p.y - mid.y);
     let gap = Infinity;
+    let best = Infinity;
     for (let i = 0; i < ends.length; i++)
       for (let j = i + 1; j < ends.length; j++)
-        for (const p of ends[i]!) for (const q of ends[j]!)
-          gap = Math.min(gap, Math.hypot(p.x - q.x, p.y - q.y) * k);
+        for (const p of ends[i]!) for (const q of ends[j]!) {
+          const d = toMid(p) + toMid(q);
+          if (d < best) { best = d; gap = Math.hypot(p.x - q.x, p.y - q.y) * k; }
+        }
     expect(gap).toBeCloseTo(RESISTOR_MM, 6); // exactly the body's length of bare pattern
   });
 
@@ -486,12 +507,24 @@ describe("model/switch", () => {
         expect(common.some((i) => live.includes(i))).toBe(false);
       }
     }
-    // And it is not a blanket refusal: the PWR ends still seat, so the veto has not simply banned the part
+    // And it is not a blanket refusal: some run ends still seat, so the veto has not simply banned the part
     // from run ends altogether.
-    for (const which of [0, -1]) {
-      const { r } = withSwitch("pwr", (p) => (which === 0 ? p[0]! : p[p.length - 1]!));
-      expect(r.switches, `pwr at end ${which}`).toHaveLength(1);
+    //
+    // Counted rather than named. This used to assert that both PWR ends seat; on 2026-08-28 `TAPE_MM` fell
+    // to 1.5 and the seating ends became PWR's first and GND's last, with the other two refused for the
+    // reason above. Narrower tape lets `gapNeeded` run the two rails closer together, so more run ends have
+    // the other net within a switch's reach — the same veto firing in more places, not a new rule. WHICH end
+    // is which is a property of a plan that moves with the tape; that the part is not banned outright is the
+    // claim worth pinning.
+    let seated = 0;
+    for (const net of ["pwr", "gnd"] as const) {
+      for (const which of [0, -1]) {
+        const { r } = withSwitch(net, (p) => (which === 0 ? p[0]! : p[p.length - 1]!));
+        seated += r.switches.length;
+      }
     }
+    expect(seated, "the veto has banned the switch from every run end").toBeGreaterThan(0);
+    expect(seated, "two of the four run ends seat").toBe(2);
   });
 
   it("refuses a run too short to seat the part", () => {
@@ -505,8 +538,20 @@ describe("model/switch", () => {
 
   it("takes a switch and a resistor on the same circuit", () => {
     const { faces, gaps, base, plain, mid } = fixture(3);
-    const pwr = plain.traces.filter((t) => t.net === "pwr");
-    const other = pwr[pwr.length - 1]!;
+    // The ROOMIEST pwr run that is not the one the resistor breaks. It used to take the last run in the
+    // list, which is an arbitrary choice that happened to have room at 3.25mm tape and had none at 1.5mm —
+    // the switch was then refused and the test read as "a switch and a resistor cannot share a circuit",
+    // which is not what it is about. A switch needs `SWITCH_GAP_MM` of run to sit in, so the fixture asks
+    // for the longest one; whether a SHORT run can hold one is `refuses a run too short to seat the part`.
+    const runLen = (t: { pts: { x: number; y: number }[] }): number => {
+      let s = 0;
+      for (let i = 1; i < t.pts.length; i++) s += Math.hypot(t.pts[i]!.x - t.pts[i - 1]!.x, t.pts[i]!.y - t.pts[i - 1]!.y);
+      return s;
+    };
+    const first = plain.traces.find((t) => t.net === "pwr")!;
+    const other = plain.traces
+      .filter((t) => t.net === "pwr" && t !== first)
+      .sort((a, b) => runLen(b) - runLen(a))[0]!;
     const at = other.pts[Math.floor(other.pts.length / 2)]!;
     const r = planRoutes(faces, gaps, { ...base, resistors: [mid], switches: [at] });
     expect(r.resistors).toHaveLength(1);

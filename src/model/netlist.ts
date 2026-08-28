@@ -26,7 +26,7 @@ import {
 // `freeParts()` sizes a dropped part's housing from; a second copy of it here is exactly the kind of
 // drift `partFit`'s own header warns against.
 import {
-  landingWidthFor, MIN_LAND_FRAC, padRoomFor, type PadField,
+  landingWidthFor, MIN_LAND_FRAC, padRoomFor, weedGapFor, type PadField,
 } from "./electronics-routing.js";
 
 /** One terminal, resolved: which pad of which part, where it is, and the net it is on. */
@@ -94,6 +94,46 @@ export interface Netlist {
    * Derived, rebuilt on every call, and never stored on `Circuit` — so `cloneCircuit` needs no new field.
    */
   fields: PadField[];
+  /**
+   * Every pad of every placed part as a polygon copper must stay off, with the net it belongs to.
+   *
+   * `fields` says how WIDE copper may be near a pad; this says where it may not go at all. The two are
+   * different questions and only the first was ever asked: a leg narrowed to a hair still shorted a part
+   * if it ran straight across an unwired pin, because the clearance gate measures against other nets'
+   * RUNS and a pad is not a run. See `net-routing.ts › padHitBy`.
+   *
+   * Every part, not only the wired ones. A part nobody has assigned a net to is still solder-side metal,
+   * and tape laid over it is a short whether or not the netlist mentions it. `net` is `null` for a pin
+   * nobody wired, and a net is only ever let through its OWN pads — the ones its legs have to land on.
+   */
+  pads: PadObstacle[];
+}
+
+/**
+ * The pin a pad belongs to: its name with the parser's repeat suffix taken off.
+ *
+ * `kicad.ml` emits every pad sharing one KiCad pad NUMBER as `1`, `1_1`, `1_2` — a through-hole pad and its
+ * surface-mount twin, a castellated hole and the land beside it. They are one pin of the part and therefore
+ * one net, always, by construction: KiCad has no way to wire them apart.
+ *
+ * It matters because a pad is now an obstacle. Read as separate pads, `1_1` is foreign metal beside pad `1`
+ * and a net wired to pad 1 is refused for coming too near — blocked from its own pin by another instance
+ * of it. Measured on `SeeedStudio_XIAO_ESP32C3`, where the two sit 0.628mm apart.
+ */
+export function padPin(name: string): string {
+  return name.replace(/_\d+$/, "");
+}
+
+/** One pad, as an obstacle: where it is, what shape it is, and whose it is. Pattern units. */
+export interface PadObstacle {
+  at: Vec2;
+  /** Its true outline, placed — the datasheet's own polygon, not a bounding box. */
+  outline: Vec2[];
+  /** The net wired to it, or `null` for a pin nobody assigned. */
+  net: string | null;
+  /** Index into `circuit.parts`, and the pad's own name — for reporting, never for geometry. */
+  part: number;
+  pad: string;
 }
 
 /** Millimetres on a footprint to this pattern's units — the router's `toFlat`, which is not exported. */
@@ -255,12 +295,12 @@ export function resolveNetlist(
     // the same number either way round, so no conversion and no transpose is needed here.
     const padWidth = Math.min(
       Math.min(placedPad.size.w, placedPad.size.h),
-      landingWidthFor(toFlat(sepMm, tapeW, tapeMm), tapeW),
+      landingWidthFor(toFlat(sepMm, tapeW, tapeMm), tapeW, weedGapFor(tapeW, tapeMm)),
     );
     // Where even the floor cannot be weeded, say so. The terminal is still routed, at the floor width —
     // dropping it would be the silent stranding this reporting exists to end. The fault and `stranded`
     // together distinguish "physically impossible on this tape" from "another net got there first".
-    if (padRoomFor(toFlat(sepMm, tapeW, tapeMm), tapeW) < tapeW * MIN_LAND_FRAC) {
+    if (padRoomFor(toFlat(sepMm, tapeW, tapeMm), tapeW, weedGapFor(tapeW, tapeMm)) < tapeW * MIN_LAND_FRAC) {
       const needMm = ((tapeW * MIN_LAND_FRAC * 2) * tapeMm) / tapeW;
       faults.push({
         kind: "pads-too-close",
@@ -306,10 +346,37 @@ export function resolveNetlist(
       const sep = toFlat(nearestTerminalMm(here.footprint, pad.name), tapeW, tapeMm);
       // `reach` is the part's own pitch: a point nearer to this pad than its neighbour is stands over the
       // part's metal, and a point further away has cleared it and may widen back to the tape.
-      fields.push({ at: pad.at, safe: landingWidthFor(sep, tapeW), reach: Number.isFinite(sep) ? sep : 0 });
+      fields.push({
+        at: pad.at,
+        safe: landingWidthFor(sep, tapeW, weedGapFor(tapeW, tapeMm)),
+        reach: Number.isFinite(sep) ? sep : 0,
+      });
     }
   }
-  return { nets, faults, fields };
+  // And the same pads again as obstacles. Built from EVERY placed part rather than only the wired ones:
+  // `fields` narrows copper near a part the netlist is already talking about, but a part with nothing
+  // wired to it is still metal on the sheet that another net's tape must not cross.
+  const wiredTo = new Map<string, string>();
+  for (const t of circuit.terminals ?? []) wiredTo.set(`${t.part}\u0000${padPin(t.pad)}`, t.net);
+  const padObstacles: PadObstacle[] = [];
+  parts.forEach((_, idx) => {
+    const here = placeOnce(idx);
+    if (!here) return;
+    for (const pad of here.pads) {
+      // A mechanical hole carries no copper, so nothing can be shorted through it.
+      if (!pad.onCopper) continue;
+      padObstacles.push({
+        at: pad.at,
+        outline: pad.outline,
+        // By the PIN, so wiring pad `1` wires `1_1` with it — they are one pin. See {@link padPin}.
+        net: wiredTo.get(`${idx}\u0000${padPin(pad.name)}`) ?? null,
+        part: idx,
+        pad: pad.name,
+      });
+    }
+  });
+
+  return { nets, faults, fields, pads: padObstacles };
 }
 
 /**

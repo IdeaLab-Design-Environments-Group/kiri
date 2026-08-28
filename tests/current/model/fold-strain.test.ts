@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { flatFaces, gapGraph, ledOf } from "../../../src/model/electronics.js";
 import type { FoldFile } from "../../../src/model/fold-file.js";
-import { buildCorridor, planRoutes, tapeWidthFor } from "../../../src/model/electronics-routing.js";
+import { buildCorridor, planRoutes, tapeWidthFor,
+  TAPE_MM,
+} from "../../../src/model/electronics-routing.js";
 import {
   CLOSED_DEG,
   CLOSING_DEG,
@@ -191,7 +193,7 @@ describe("model/fold-strain", () => {
       // change that, which is exactly why the check exists.
       expect(maxTraceWidthMm(10)).toBeGreaterThan(100);
       const foil: SheetSpec = { ...DEFAULT_SHEET, substrateMm: 0.05 };
-      expect(maxTraceWidthMm(10, foil)).toBeLessThan(3.25);
+      expect(maxTraceWidthMm(10, foil)).toBeLessThan(TAPE_MM);
     });
 
     it("widens the weeding web as the sheet thins, and matches the old fixed figure at the default", () => {
@@ -266,11 +268,21 @@ describe("model/fold-strain", () => {
       // splints the hinge it crosses; on 0.4mm of substrate the bound is two orders of magnitude above
       // the roll, so the roll governs. Take the substrate down to a film and the sheet governs instead --
       // and every clearance in the router is a multiple of this number, so they all follow it down.
+      //
+      // The film is 0.02mm, and it was 0.05mm until 2026-08-28. The bound goes as the cube of the substrate,
+      // so it is a steep function of that number, and when `TAPE_MM` fell from 3.25 to 1.5 the roll dropped
+      // below what 0.05mm of film can carry — the sheet stopped governing and the demonstration stopped
+      // demonstrating. Swept on this hinge: 0.05mm now yields the roll exactly, 0.03mm gives 0.377 and
+      // 0.02mm gives 0.112 against the roll's 0.923. Thinner tape means the sheet has to be thinner still
+      // before it is the binding constraint, which is the coupling working, not failing.
       const fold = twoTiles("M", 90);
       const faces = flatFaces(fold);
       const roll = tapeWidthFor(faces);
-      const film = tapeWidthFor(faces, undefined, { ...DEFAULT_SHEET, substrateMm: 0.05 });
+      const film = tapeWidthFor(faces, undefined, { ...DEFAULT_SHEET, substrateMm: 0.02 });
       expect(film).toBeLessThan(roll);
+      // And the roll really is what governs on a sheet anyone would print on, which is the first sentence
+      // of this comment stated as an assertion rather than as a claim.
+      expect(tapeWidthFor(faces, undefined, { ...DEFAULT_SHEET, substrateMm: 0.05 })).toBe(roll);
       expect(tapeWidthFor(faces, undefined, DEFAULT_SHEET)).toBe(roll);
     });
 

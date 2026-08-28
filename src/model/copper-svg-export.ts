@@ -16,7 +16,15 @@ import type { FoldFile } from "./fold-file.js";
 import type { Vec2 } from "./electronics.js";
 // `DEFAULT_LED` comes from the router rather than being written again here: the part an LED means
 // when its circuit does not say is one decision, and a second copy of it is a second thing to drift.
-import { DEFAULT_LED, type Trace2D, acrossRun, landingWidth, narrowedTo } from "./electronics-routing.js";
+import {
+  DEFAULT_LED,
+  TAPE_MM,
+  type Trace2D,
+  acrossRun,
+  landingWidth,
+  narrowedTo,
+  weedGapFor,
+} from "./electronics-routing.js";
 import { printScale } from "./print-scale.js";
 import { type Box, type Footprint, type Pad, holes, MM_PER_INCH, padAt, padSize, terminals } from "./footprint.js";
 import { type AcrossPart, acrossPart, inlineNamedTerminals, padAxis, padRunBox, seatSigns } from "./parts.js";
@@ -83,10 +91,14 @@ export function mirrorPoint(p: Vec2, w: number, h: number, m: Mirror): Vec2 {
   return { x: m.x ? w - p.x : p.x, y: m.y ? h - p.y : p.y };
 }
 
-/** Below this the strips are not worth cutting: a blade will not track it and copper tape is not sold that
- *  narrow. Reported rather than silently widened, since widening would break registration with the preview
- *  and could make separate strips touch. */
-const MIN_CUTTABLE_MM = 3;
+/** Below this the strips are not worth cutting: a blade will not track it. Reported rather than silently
+ *  widened, since widening would break registration with the preview and could make separate strips touch.
+ *
+ *  **1mm since 2026-08-28**, down from 3. It was set when `TAPE_MM` was 3.25 and read "copper tape is not
+ *  sold that narrow", which was the binding half of it and is no longer true at the 1.5mm the router now
+ *  plans for. What is left is the blade: it has to track the cut, and a millimetre is about where that
+ *  stops being reliable. Left above zero deliberately — a warning nobody can ever trip is not a warning. */
+const MIN_CUTTABLE_MM = 1;
 
 /** Cut colours. Distinct so a cutter treats each net as its own layer. */
 /** The carrier is one piece of copper, so it gets one colour — copper, with the nets drawn on top of it. */
@@ -263,7 +275,7 @@ export function buildCopperSvgExport(
     const runs = traces.filter((t) => t.net === net && t.pts.length >= 2);
     const paths: string[] = [];
     for (const t of runs) {
-      const ring = stripOutline(t, tapeW, pads).map(T);
+      const ring = stripOutline(t, tapeW, pads, tapeMm).map(T);
       if (ring.length < 3) continue;
       const mine = windows.filter((n) => pointInRing(centreOf(n), ring));
       paths.push(`<path d="${[ringPath(ring), ...mine.map(ringPath)].join(" ")}" />`);
@@ -306,10 +318,11 @@ export function stripOutline(
   t: Trace2D,
   tapeW: number,
   pads: LedPads[] = [],
+  tapeMm = TAPE_MM,
 ): Vec2[] {
   // A net leg that tapers onto a part's own pad carries its own width at every point; land copper under a
   // switch or LED carries one flat narrow width; ordinary tape has neither and takes the tape's.
-  return outlineStrip(t.pts, t.widths ?? widthsFor(t, t.width ?? tapeW, pads));
+  return outlineStrip(t.pts, t.widths ?? widthsFor(t, t.width ?? tapeW, pads, tapeMm));
 }
 
 /**
@@ -323,8 +336,8 @@ export function stripOutline(
  * Reads through the same `widthsFor` the outline is built from, deliberately: a second reading of "how wide
  * is this strip here" is a second thing to drift, and this whole file has spent a night proving that.
  */
-export function narrowestWidth(t: Trace2D, tapeW: number, pads: LedPads[] = []): number {
-  const ws = t.widths ?? widthsFor(t, t.width ?? tapeW, pads);
+export function narrowestWidth(t: Trace2D, tapeW: number, pads: LedPads[] = [], tapeMm = TAPE_MM): number {
+  const ws = t.widths ?? widthsFor(t, t.width ?? tapeW, pads, tapeMm);
   return ws.length ? Math.min(...ws) : tapeW;
 }
 
@@ -339,7 +352,7 @@ function narrowestMmOf(
   let min = Infinity;
   for (const t of traces) {
     if (t.pts.length < 2) continue;
-    min = Math.min(min, narrowestWidth(t, tapeW, pads));
+    min = Math.min(min, narrowestWidth(t, tapeW, pads, tapeW * scale));
   }
   // No copper at all is not "infinitely narrow": with nothing to cut, the nominal width is the honest answer.
   return Number.isFinite(min) ? min * scale : nominalMm;
@@ -358,13 +371,17 @@ function narrowestMmOf(
  * pin's neighbours are every other pad on the part and the run *passes* them. One geometric question, one
  * answer; two readings of it is the mistake `parts.ts › padRunBox` was written to undo.
  */
-function widthsFor(t: Trace2D, tapeW: number, pads: LedPads[]): number[] {
+function widthsFor(t: Trace2D, tapeW: number, pads: LedPads[], tapeMm = TAPE_MM): number[] {
   const last = t.pts.length - 1;
+  // `tapeMm` only to convert the weeding floor: the gap the cutter has to lift between the two nets is a
+  // strip of substrate, so it is the same millimetre figure whatever width the roll is. See
+  // `electronics-routing.ts › weedGapFor`.
+  const weed = weedGapFor(tapeW, tapeMm);
   // `reach: tapeW` is "is the run landing here at all": beyond a tape's width the pad has no say.
   const fields = pads.map((pad) => {
     const own = t.net === "pwr" ? pad.pwr : pad.gnd;
     const mate = t.net === "pwr" ? pad.gnd : pad.pwr;
-    return { at: own, safe: landingWidth(own, mate, tapeW), reach: tapeW, mate };
+    return { at: own, safe: landingWidth(own, mate, tapeW, weed), reach: tapeW, mate };
   });
   return t.pts.map((p, i) => {
     // A run that STOPS at a pad, square to the line between the two legs, needs no narrowing: its end is
@@ -1376,7 +1393,11 @@ export function buildCopperCarrierExport(
   // tape and a crowded window, corners alone leave most runs with no clear line out to a wall.
   const rings = runs.map((t) => ({
     net: t.net,
-    ring: densify(stripOutline(t, tapeW, pads).map(T), tape),
+    // `tape` is this file's own tapeMm, and it MUST be passed: the weeding gap a landing leaves is a fixed
+    // strip of substrate, so `stripOutline` needs the roll's width in millimetres to convert it. Left out,
+    // the carrier narrows by a different rule than the strips file and meets itself under a chip — which is
+    // `the gap under an LED > cuts the carrier to the same shape as the strips` catching exactly that.
+    ring: densify(stripOutline(t, tapeW, pads, tape).map(T), tape),
   }));
   // A tab must grip the trace, not the component. Anchoring on a pad puts the tab exactly where the LED sits
   // and means snipping it cuts at the pad; the same goes for a battery terminal. Those spots are excluded, so a

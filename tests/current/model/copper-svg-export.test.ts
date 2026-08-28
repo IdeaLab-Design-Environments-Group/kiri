@@ -19,6 +19,8 @@ import {
   patternDiag,
   planRoutes,
   tapeWidthFor,
+  MIN_WEED_MM,
+  TAPE_MM,
 } from "../../../src/model/electronics-routing.js";
 
 const EXAMPLES = new URL("../../../public/examples/", import.meta.url).pathname;
@@ -190,7 +192,7 @@ describe("model/copper-svg-export", () => {
     // uncuttable, and it was: the sheet was declared 19mm wide, with a 5mm carrier border round it.
     const small = planned("church.fkld");
     const out = buildCopperSvgExport(small.fold, small.traces, small.tapeW);
-    expect(out.widthMm).toBeCloseTo(3.25, 2);
+    expect(out.widthMm).toBeCloseTo(TAPE_MM, 2);
     expect(out.tooNarrow).toBe(false);
 
     // Copper that really is too narrow is still refused rather than handed over.
@@ -421,7 +423,7 @@ describe("model/copper-svg-export", () => {
       const out = buildCopperCarrierExport(fold, traces, tapeW, "puffin");
       expect(out.filename).toBe("puffin-copper-carrier.svg");
       // church is scale-less, so it is cut at the print sheet and its tape is a real 3.25mm.
-      expect(out.widthMm).toBeCloseTo(3.25, 2);
+      expect(out.widthMm).toBeCloseTo(TAPE_MM, 2);
       expect(out.tooNarrow).toBe(false);
       // Genuinely uncuttable copper is still reported as such.
       expect(buildCopperCarrierExport(fold, traces, tapeW / 4).tooNarrow).toBe(true);
@@ -580,7 +582,7 @@ describe("model/copper-svg-export", () => {
       // The border is a border, not the bulk of the file.
       expect(winW / outerW).toBeGreaterThan(0.8);
       // And the copper is copper tape you can buy.
-      expect(out.widthMm).toBeCloseTo(3.25, 2);
+      expect(out.widthMm).toBeCloseTo(TAPE_MM, 2);
       expect(out.tooNarrow).toBe(false);
     });
 
@@ -606,7 +608,7 @@ describe("model/copper-svg-export", () => {
   });
 
   describe("print size", () => {
-    it("cuts at the size asked for, keeping the tape a real 3.25mm", () => {
+    it("cuts at the size asked for, keeping the tape its real width in millimetres", () => {
       // The tape width and the sheet scale are derived from the same number and cancel: 3.25mm of copper is
       // 3.25mm of copper whatever size the paper is. They only cancel if both are told the same size, which
       // is the mistake this pins -- scaling the sheet but not the router leaves the tape wrong by the ratio.
@@ -615,7 +617,7 @@ describe("model/copper-svg-export", () => {
       const r = planRoutes(faces, gaps, circuit, 260);
       const out = buildCopperSvgExport(fold, r.traces, tapeW, "k", r.pads, undefined, 260);
 
-      expect(out.widthMm).toBeCloseTo(3.25, 2);
+      expect(out.widthMm).toBeCloseTo(TAPE_MM, 2);
       const f = sheetFrame(fold, undefined, 260);
       expect(f.window.x1 - f.window.x0).toBeCloseTo(260, 0);
       expect(out.svg).toContain(`width="${Math.round(f.w * 1000) / 1000}mm"`);
@@ -629,7 +631,7 @@ describe("model/copper-svg-export", () => {
       const main = buildFkldSvgExport(fold, "k", 260)!;
       const box = (svg: string): string => svg.match(/viewBox="([^"]+)"/)![1]!;
       expect(box(carrier.svg)).toBe(box(main.combined.svg));
-      expect(carrier.widthMm).toBeCloseTo(3.25, 2);
+      expect(carrier.widthMm).toBeCloseTo(TAPE_MM, 2);
     });
 
     it("defaults to the print sheet when no size is given", () => {
@@ -708,7 +710,16 @@ describe("model/copper-svg-export", () => {
 
       const before = near(rings([], "pwr"), rings([], "gnd"));
       const after = near(rings(pads, "pwr"), rings(pads, "gnd"));
-      expect(before).toBeCloseTo(0, 6);
+      // **The fault changed character on 2026-08-28, when `TAPE_MM` fell to 1.5.** At 3.25mm the two nets
+      // TOUCHED at full width — `before` was 0.000000, an outright short. At 1.5mm they no longer touch:
+      // `before` is 0.114mm. That is not a fix, it is a smaller version of the same problem, because
+      // 0.114mm of substrate is a tenth of the 1.1375mm web the tweezers can lift — so a carrier cut this
+      // way still cannot be weeded between the two nets, and the narrowing still has to happen.
+      //
+      // Asserted as a band rather than as zero: what matters is that full width is unweedable and that
+      // supplying the pads opens it, which is the claim the file is about. `after` measures 0.326mm.
+      expect(before).toBeGreaterThan(0);
+      expect(before).toBeLessThan(MIN_WEED_MM); // unweedable, whether or not it is a dead short
       expect(after).toBeGreaterThan(before);
 
       // And the carrier really does use them — the file changes when they are supplied.

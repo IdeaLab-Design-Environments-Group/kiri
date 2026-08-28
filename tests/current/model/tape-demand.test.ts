@@ -296,7 +296,11 @@ describe("model/tape-demand — the floor, against the one the cutter actually e
     // They live apart on purpose -- planning and emitting are different jobs -- and this is what keeps them
     // from crossing without anyone noticing.
     const threshold = exportThresholdMm();
-    expect(threshold).toBeCloseTo(3, 6); // the export's own figure, read back rather than assumed
+    // The export's own figure, read back by bisection rather than assumed. **1mm since 2026-08-28**, down
+    // from 3: it was set when `TAPE_MM` was 3.25 and justified as "copper tape is not sold that narrow",
+    // and a 3mm floor would refuse the 1.5mm roll the router now plans for. The ordering below is the claim
+    // this test exists for, and it holds with more headroom than before, not less.
+    expect(threshold).toBeCloseTo(1, 6);
     expect(TAPE_FLOOR_MM).toBeGreaterThanOrEqual(threshold);
   });
 
@@ -315,6 +319,11 @@ describe("model/tape-demand — the floor, against the one the cutter actually e
     // Named here because the next reader who finds three narrowness constants will otherwise assume one of
     // them is stale, and pick the wrong one to delete.
     expect(MIN_WEED_MM).toBeLessThan(TAPE_FLOOR_MM);
-    expect(MIN_WEED_MM).toBeCloseTo(TAPE_MM * 0.35, 9);
+    // 1.14mm exactly, as it has always been. It used to be spelled `TAPE_MM * 0.35` and stopped being that
+    // when the tape narrowed to 1.5mm: a web the tweezers lift is substrate, and its floor cannot follow the
+    // width of the roll. It comes from the sheet's thickness now, which reproduces this number at the
+    // default sheet — see `electronics-routing.ts › MIN_WEED_MM`.
+    expect(MIN_WEED_MM).toBeCloseTo(1.1375, 9);
+    expect(MIN_WEED_MM).toBeGreaterThan(TAPE_MM * 0.35);
   });
 });

@@ -333,23 +333,36 @@ describe("model/part-routing", () => {
     //    A real 1206's legs are 3.40mm apart and its hinges are too short to seat that. The router now
     //    refuses it rather than drawing copper the part cannot reach, which is the honest outcome, but it
     //    is a pattern that used to light and now does not.
+    // Re-recorded a second time on 2026-08-28, when `TAPE_MM` fell from 3.25 to 1.5. Every keep-out in the
+    // router is derived from the tape, so a narrower strip has more room and takes more direct routes.
+    // What moved, stated plainly rather than hidden in the numbers:
+    //
+    //  - Copper is DOWN on nine of the twelve rows that route at all, which is the expected direction:
+    //    church at three LEDs 9.86 -> 6.80mm (-31%), puffin at one 17.61 -> 13.00 (-26%), house at one
+    //    1.07 -> 0.80 (-25%), akde-decagon at one 118.65 -> 75.47 (-36%). Three rows are up, all barely:
+    //    akde-hex at one +0.4%, kirigami-flap +0.3%, puffin at three +1.9%.
+    //  - Two patterns gained a run: akde-hex at three LEDs 5 -> 6 and puffin at three 5 -> 6. A sixth strip
+    //    is one more piece to peel and lay, and it comes with puffin's 1.9% more copper.
+    //  - No pattern gained or lost an LED. `akde-square-pyramid` still refuses its LED at one and seats two
+    //    of three, and `bistable-star-tiling` still routes nothing — narrower tape does not rescue either,
+    //    because what defeats them is hinge length against the 1206's 3.40mm legs, not strip width.
     const before: [string, number, number, number][] = [
-      ["akde-decagon-pyramid", 1, 2, 118.65060300341332],
-      ["akde-decagon-pyramid", 3, 6, 423.09782939693173],
-      ["akde-hex", 1, 2, 104.77435715972814],
-      ["akde-hex", 3, 5, 378.9178899950901],
+      ["akde-decagon-pyramid", 1, 2, 75.47206013267432],
+      ["akde-decagon-pyramid", 3, 6, 403.19751558200016],
+      ["akde-hex", 1, 2, 105.15717799886949],
+      ["akde-hex", 3, 6, 351.5438685461294],
       ["akde-square-pyramid", 1, 0, 0],
-      ["akde-square-pyramid", 3, 2, 53.11895205965313],
+      ["akde-square-pyramid", 3, 2, 49.15677510965487],
       ["bistable-star-tiling", 1, 0, 0],
       ["bistable-star-tiling", 3, 0, 0],
-      ["church", 1, 2, 0.8272180434935242],
-      ["church", 3, 6, 9.859213200678369],
-      ["house", 1, 2, 1.071943083675749],
-      ["house", 3, 6, 5.391382774563586],
-      ["kirigami-flap", 1, 2, 68.30122499128879],
-      ["kirigami-flap", 3, 2, 68.30122499128879],
-      ["puffin", 1, 2, 17.60583155015367],
-      ["puffin", 3, 5, 99.68414715034869],
+      ["church", 1, 2, 0.5390219396942254],
+      ["church", 3, 6, 6.804114837907989],
+      ["house", 1, 2, 0.8038265682751792],
+      ["house", 3, 6, 4.387003709496385],
+      ["kirigami-flap", 1, 2, 68.50569501309963],
+      ["kirigami-flap", 3, 2, 68.50569501309963],
+      ["puffin", 1, 2, 12.996160368450141],
+      ["puffin", 3, 6, 101.55074579073953],
     ];
     for (const [name, leds, runs, copper] of before) {
       const fold = JSON.parse(readFileSync(`${EXAMPLES}${name}.fkld`, "utf8"));

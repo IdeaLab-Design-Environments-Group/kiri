@@ -53,6 +53,7 @@ import {
   DEFAULT_SHEET,
   creaseCostFraction,
   maxTraceWidthMm,
+  minWebMm,
   overStrainLimit,
   type SheetSpec,
 } from "./fold-strain.js";
@@ -219,7 +220,13 @@ const EDGE_CROSSINGS = [1 / 4, 3 / 4];
  * Swept: at the full diagonal, akde-decagon's mountain crossings fall 39 -> 23 but puffin gains a chip
  * violation, and a chip violation is destructive where a mountain crossing is only fragile. At half, nothing
  * regresses and most of the gain remains: akde-decagon 39 -> 25 with a third less copper, akde-hex's valley
- * crossings 13 -> 11. At 0.15 the penalty stops changing any route.
+ * crossings 13 -> 11.
+ *
+ * The penalty saturates: above some fraction every route is identical to the full-diagonal plan, so this
+ * value only has to sit at or above that knee. **The knee was 0.15 and is 0.5 as of 2026-08-28**, when
+ * `TAPE_MM` fell to 1.5 — narrower tape opens routes that a larger price is still needed to reject, so the
+ * knee follows the tape down and now coincides exactly with this constant. There is no margin left: narrow
+ * the tape again and this value may need raising. `crease-price.test.ts` pins the knee for that reason.
  */
 export const FOLD_PENALTY_FRAC = 0.5;
 
@@ -244,12 +251,22 @@ const SHARED_TOLL = 2;
  * a pattern must be at a real physical scale for routing to mean anything — on a flat pattern only a few mm
  * across the tape is wider than the model and the keep-outs swallow it. Scale the pattern before routing.
  *
- * 3.25mm, half the 6.5mm this was set to. 6.5 was taken as the narrowest roll made, which is not so — 3mm and
- * 5mm copper tape are both stocked — and at 6.5 the strips crowd these patterns, taking up most of a tile and
- * leaving the router little room to work in. Narrower tape is also less of the surface stiffened, which matters
- * on a sheet meant to fold.
+ * **1.5mm since 2026-08-28**, down from 3.25 (which was itself half the 6.5mm this started at). Two reasons,
+ * and the second is why it moved again. 3.25mm strips still crowd these patterns — they take most of a tile
+ * and leave the router little room — and against SMD parts they are simply the wrong size: an LED_1206's pad
+ * is 1.40mm across and a XIAO's pins sit on a 2.54mm pitch, so full-width tape arriving at a pin is wider
+ * than the pin and its neighbour's gap together. Narrower tape is also less of the surface stiffened, which
+ * matters on a sheet meant to fold.
+ *
+ * 1.5mm is a stocked width, which is the constraint that matters: this is a roll of copper tape, not a line
+ * width, and the cut file has to be cuttable from something you can buy.
+ *
+ * Not to be confused with `fold-strain.ts › STOCK_TAPE_MM`, whose floor is 3.25. That ladder is consulted
+ * only under the opt-in `tapeChoice === "area"`, where a width is chosen per tile from crowding; its floor is
+ * a calibration of that rule and not a claim about what rolls exist. The default path returns this constant
+ * and never looks at the ladder.
  */
-export const TAPE_MM = 3.25;
+export const TAPE_MM = 1.5;
 
 /**
  * The sheet a scale-less pattern is assumed to be cut at. Shared with the STL export's
@@ -357,7 +374,10 @@ function unitsPerMm(faces: FlatFace[], sheetMm: number): number {
  * given width splints hardest. This does not bind on the sheets this system prints: 0.4mm of substrate
  * against 0.035mm of foil leaves it two orders of magnitude above any roll. It is computed anyway,
  * because "the roll governs" is only worth saying if something checked, and because a thin-film substrate
- * brings it down under 3.25mm and this same code then routes differently with nobody editing it.
+ * brings it down under the roll and this same code then routes differently with nobody editing it. The
+ * bound goes as the cube of the substrate, so how thin that film has to be depends on the roll: at 3.25mm
+ * tape 0.05mm of substrate was enough, and at 1.5mm it takes about 0.03mm. See `fold-strain.test.ts ›
+ * narrows the tape itself when the sheet is too thin to carry it`.
  */
 function widthMmFor(
   faces: FlatFace[],
@@ -513,8 +533,22 @@ export const LED_GAP_FRAC = 0.35;
  * that the strip is too thin to cut, and the honest answer is that the pattern is too small for this tape
  * rather than a sliver that tears on weeding.
  */
-export function landingWidth(pad: Vec2, mate: Vec2, tapeW: number): number {
-  return landingWidthFor(Math.hypot(pad.x - mate.x, pad.y - mate.y), tapeW);
+export function landingWidth(pad: Vec2, mate: Vec2, tapeW: number, weed?: number): number {
+  return landingWidthFor(Math.hypot(pad.x - mate.x, pad.y - mate.y), tapeW, weed);
+}
+
+/**
+ * The weeding gap in a pattern's own units — {@link MIN_WEED_MM} converted by the tape's two widths.
+ *
+ * The one conversion, so that the floor a landing leaves and the floor a part is refused for are the same
+ * physical strip of substrate. They were not: {@link MIN_WEED_MM} moved to the sheet on 2026-08-28 while
+ * {@link padRoomFor} went on subtracting `tapeW * LED_GAP_FRAC`, and at 1.5mm tape that is 0.53mm against a
+ * floor of 1.14mm — so a footprint could be refused as unweedable and, had it been accepted, given a landing
+ * that left less than half the gap the refusal demanded.
+ */
+export function weedGapFor(tapeW: number, tapeMm: number, sheet: SheetSpec = DEFAULT_SHEET): number {
+  if (!(tapeMm > 0) || !(tapeW > 0)) return tapeW * LED_GAP_FRAC;
+  return (minWebMm(sheet) * tapeW) / tapeMm;
 }
 
 /**
@@ -533,8 +567,8 @@ export const MIN_LAND_FRAC = 0.35;
  * LED's two legs are, and the width copper may land at is the same question with the same answer; what
  * differs is only how the separation was found. See `footprint.ts › nearestTerminalMm`.
  */
-export function landingWidthFor(sep: number, tapeW: number): number {
-  return Math.max(tapeW * MIN_LAND_FRAC, Math.min(tapeW, padRoomFor(sep, tapeW)));
+export function landingWidthFor(sep: number, tapeW: number, weed?: number): number {
+  return Math.max(tapeW * MIN_LAND_FRAC, Math.min(tapeW, padRoomFor(sep, tapeW, weed)));
 }
 
 /**
@@ -579,20 +613,28 @@ export function narrowedTo(base: number, p: Vec2, fields: PadField[]): number {
  * those can actually be weeded. Anything that has to *report* impossibility rather than merely cut as close
  * as it can reads this instead.
  */
-export function padRoomFor(sep: number, tapeW: number): number {
-  return sep - tapeW * LED_GAP_FRAC;
+export function padRoomFor(sep: number, tapeW: number, weed = tapeW * LED_GAP_FRAC): number {
+  return sep - weed;
 }
 
 /**
  * The narrowest strip of bare substrate this process can produce, in millimetres.
  *
- * The same number {@link LED_GAP_FRAC} has always meant — `TAPE_MM * LED_GAP_FRAC` ≈ 1.14mm — said in
- * millimetres rather than in tape widths, because a footprint is in millimetres and the comparison has to
- * happen in one unit or the other. It is not tape-relative in truth: a vinyl cutter's blade does not know
- * how wide the roll is, and `tapeWidthFor` only ever rescales the *pattern*, never the physical tape, so
- * `tapeW / TAPE_MM` cancels out of every such comparison anyway.
+ * The same 1.14mm this codebase has always cut to, said in millimetres rather than in tape widths, because a
+ * footprint is in millimetres and the comparison has to happen in one unit or the other.
+ *
+ * **From the SHEET since 2026-08-28, not from the tape.** It used to read `TAPE_MM * LED_GAP_FRAC`, while
+ * this docblock argued in the same breath that it "is not tape-relative in truth: a vinyl cutter's blade
+ * does not know how wide the roll is". Both cannot be true, and the narrowing of `TAPE_MM` to 1.5mm is what
+ * made the disagreement bite: the weeding floor followed the roll down to 0.53mm, which is a claim that a
+ * thinner tape makes the substrate easier to weed.
+ *
+ * `fold-strain.ts › minWebMm` is the honest source — a web is a beam of substrate and what it can take goes
+ * with its thickness — and it is anchored on `WEB_REF_MM = 1.1375`, recorded there as "= TAPE_MM *
+ * LED_GAP_FRAC, the fixed figure this replaces". So the number is unchanged at the default sheet; only what
+ * it depends on is.
  */
-export const MIN_WEED_MM = TAPE_MM * LED_GAP_FRAC;
+export const MIN_WEED_MM = minWebMm();
 
 /** The part an LED is when its circuit does not say — every LED saved before they had a choice. */
 export const DEFAULT_LED = "LED_1206";
@@ -1744,12 +1786,12 @@ function routeDeclaredNets(
     pts: t.pts,
     ...(t.widths ? { widths: t.widths } : t.width !== undefined ? { widths: t.pts.map(() => t.width!) } : {}),
   }));
-  const { nets, faults, fields } = resolveNetlist(circuit, tapeW, tapeMm, new Set(rails.map((r) => r.net)));
+  const { nets, faults, fields, pads } = resolveNetlist(circuit, tapeW, tapeMm, new Set(rails.map((r) => r.net)));
   if (!nets.length) return { traces: [], nets: [], faults };
   // The bus goes over as `rails` and NOT also as `obstacles`. Passed twice it arrives twice — once tagged
   // with the net it is a rail for and once anonymously — and the anonymous copy is not excluded from a
   // net's own clearance test, so every tap is refused by the very rail it is trying to reach.
-  const routed = planNets(nets, faces, gaps, tapeW, [], sheet, tapeMm, rails, fields);
+  const routed = planNets(nets, faces, gaps, tapeW, [], sheet, tapeMm, rails, fields, pads);
   return { traces: routed.traces, nets: routed.nets, faults };
 }
 

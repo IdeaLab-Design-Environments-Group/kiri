@@ -10,9 +10,9 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { flatFaces, gapGraph, type Circuit, type Vec2 } from "../../../src/model/electronics.js";
 import {
-  landingWidthFor, narrowedTo, partFit, planRoutes, tapeMmFor, tapeWidthFor, type PadField,
+  landingWidthFor, narrowedTo, partFit, planRoutes, tapeMmFor, tapeWidthFor, weedGapFor, type PadField,
 } from "../../../src/model/electronics-routing.js";
-import { padPosition, resolveNetlist } from "../../../src/model/netlist.js";
+import { padPin, padPosition, resolveNetlist } from "../../../src/model/netlist.js";
 import { partShape, stripOutline } from "../../../src/model/copper-svg-export.js";
 import { footprintById } from "../../../src/model/library.js";
 import { nearestTerminalMm, terminals } from "../../../src/model/footprint.js";
@@ -40,18 +40,38 @@ function xiaoOnTwoNets(at: Vec2): Circuit {
   return {
     leds: [],
     battery: null,
-    parts: [{ component: XIAO, x: at.x, y: at.y, free: true, rot: 0 }],
+    parts: [
+      { component: XIAO, x: at.x, y: at.y, free: true, rot: 0 },
+      { component: "C_1206", ...outboard(at, "1"), free: true, rot: 0 },
+      { component: "C_1206", ...outboard(at, "2"), free: true, rot: 0 },
+    ],
     nets: [
       { id: "n1", name: "N1", color: "#1f6feb" },
       { id: "n2", name: "N2", color: "#16a34a" },
     ],
     terminals: [
       { part: 0, pad: "1", net: "n1" },
-      { part: 0, pad: "14", net: "n1" },
+      { part: 1, pad: "2", net: "n1" },
       { part: 0, pad: "2", net: "n2" },
-      { part: 0, pad: "13", net: "n2" },
+      { part: 2, pad: "2", net: "n2" },
     ],
   };
+}
+
+/** The nearest distance from a segment to a closed polygon, written here rather than imported: the router's
+ *  own copy is what is under test, and a test that calls it proves only that it agrees with itself. */
+function minDistToPoly(a: Vec2, b: Vec2, poly: Vec2[]): number {
+  const on = (u: Vec2, v: Vec2, w: Vec2): number => {
+    const dx = v.x - u.x, dy = v.y - u.y, l2 = dx * dx + dy * dy;
+    const t = l2 < 1e-18 ? 0 : Math.max(0, Math.min(1, ((w.x - u.x) * dx + (w.y - u.y) * dy) / l2));
+    return Math.hypot(w.x - (u.x + dx * t), w.y - (u.y + dy * t));
+  };
+  let d = Infinity;
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i]!, q = poly[(i + 1) % poly.length]!;
+    d = Math.min(d, on(a, b, p), on(a, b, q), on(p, q, a), on(p, q, b));
+  }
+  return d;
 }
 
 /** Edge-to-edge distance between two sets of closed rings, in the rings' own units; 0 if any pair meets. */
@@ -89,6 +109,24 @@ function minRingDist(A: Vec2[][], B: Vec2[][]): number {
   return m;
 }
 
+/**
+ * A point 4mm outboard of one of the XIAO's pins — clear of the module, on its own side.
+ *
+ * In MILLIMETRES, because "clear of the part" is a fact about the two footprints and not about the roll.
+ * It used to be `tapeW * 1.5`, and when `TAPE_MM` fell to 1.5 on 2026-08-28 that offset halved and sat the
+ * chip on the module's own pins — the fixture then asserted a short, and the net it was meant to route
+ * stranded. The XIAO's pads span x = -7.61..7.62 and a 1206 is 3mm end to end, so 4mm from a pin centre
+ * leaves 2.5mm between the chip's near end and that pin, on any roll.
+ */
+const OUTBOARD_MM = 4;
+
+function outboard(at: Vec2, pad: string): { x: number; y: number } {
+  const { tapeW, tapeMm } = load("house.fkld");
+  const fp = footprintById(XIAO)!;
+  const q = padPosition({ component: XIAO, x: at.x, y: at.y, free: true, rot: 0 }, fp, pad, tapeW, tapeMm)!;
+  return { x: q.x - (OUTBOARD_MM * tapeW) / tapeMm, y: q.y };
+}
+
 describe("model/fine-pitch parts", () => {
   it("routes two nets to adjacent pins of a 2.54mm part, which a whole-tape-width clearance made impossible", () => {
     // The reported bug, as the smallest circuit that shows it. Before the clearance gate could read a
@@ -113,7 +151,9 @@ describe("model/fine-pitch parts", () => {
       (r.nets ?? []).filter((n) => n.id === id).flatMap((n) =>
         n.traces.map((t) => stripOutline(t, tapeW, r.pads)).filter((g) => g.length >= 3));
     const webMm = minRingDist(rings("n1"), rings("n2")) * (tapeMm / tapeW);
-    expect(webMm).toBeGreaterThanOrEqual(minWebMm(DEFAULT_SHEET));
+    // To the floor, with a float's worth of slack: the two legs land at exactly `landingWidthFor`'s width,
+    // so the web comes out AT the floor rather than above it and the comparison is on the last bit.
+    expect(webMm).toBeGreaterThanOrEqual(minWebMm(DEFAULT_SHEET) - 1e-9);
   });
 
   it("holds two full-width runs exactly as far apart as it always did, so this is a generalisation and not a re-plan", () => {
@@ -141,13 +181,80 @@ describe("model/fine-pitch parts", () => {
     // weeded. `landingWidthFor` gives 1.4025mm, which leaves exactly the floor.
     const { faces, tapeW, tapeMm } = load("house.fkld");
     const { nets } = resolveNetlist(xiaoOnTwoNets(faces[0]!.centroid), tapeW, tapeMm, new Set());
-    const widthsMm = nets.flatMap((n) => n.points.map((p) => (p.padWidth ?? tapeW) * (tapeMm / tapeW)));
-    expect(widthsMm.length).toBe(4);
+    // The XIAO's own pins only. The fixture also holds a chip per net — see `xiaoOnTwoNets` — and a 1206's
+    // pads are a different pitch, so averaging the two would test neither.
+    const widthsMm = nets
+      .flatMap((n) => n.points)
+      .filter((p) => p.part === 0)
+      .map((p) => (p.padWidth ?? tapeW) * (tapeMm / tapeW));
+    expect(widthsMm.length, "the XIAO's own two pins are not both in the netlist").toBe(2);
     for (const w of widthsMm) {
-      expect(w).toBeCloseTo(landingWidthFor(2.54, 3.25), 3);
+      // The weeding gap is passed explicitly, as the router itself passes it: the floor is a strip of
+      // substrate and does not scale with the roll, so the default `tapeW * LED_GAP_FRAC` reading would
+      // leave only 0.525mm here and answer a full-width 1.5mm. See `electronics-routing.ts › weedGapFor`.
+      expect(w).toBeCloseTo(landingWidthFor(2.54, tapeMm, weedGapFor(tapeMm, tapeMm)), 3);
       expect(w).toBeLessThan(1.6); // the pad's own size, which is what it used to be
       expect(2.54 - w).toBeGreaterThanOrEqual(minWebMm(DEFAULT_SHEET) - 1e-9);
     }
+  });
+
+  it("refuses a leg that would cross the part's own pins rather than laying it", () => {
+    // KiCad's clearance, which this router had no equivalent of: the gate measured a leg against other
+    // nets' RUNS, and a pad is not a run. So a leg could be laid straight across a pin — another net's,
+    // which shorts two nets together, or one nobody wired at all, which shorts into a part the netlist has
+    // never mentioned. `net-routing.ts › padHitBy`.
+    //
+    // Wired ACROSS the module, pin 1 on one row to pin 14 on the other. Measured, the straight line between
+    // them passes 0.021mm from an unwired pin, and no width above `MIN_LAND_FRAC` fits in that — so
+    // `padCapAt` cannot narrow its way through either, and there is genuinely no copper that makes this
+    // connection. Refusing and saying so is the honest answer; the ratsnest shows the author what is
+    // missing. Without the gate the leg is simply laid, over every pin it crosses.
+    const { faces, gaps, tapeW, tapeMm } = load("house.fkld");
+    const at = faces[0]!.centroid;
+    const circuit: Circuit = {
+      leds: [], battery: null,
+      parts: [{ component: XIAO, x: at.x, y: at.y, free: true, rot: 0 }],
+      nets: [{ id: "n1", name: "N1", color: "#1f6feb" }],
+      terminals: [{ part: 0, pad: "1", net: "n1" }, { part: 0, pad: "14", net: "n1" }],
+    };
+    const routed = planRoutes(faces, gaps, circuit);
+    expect((routed.nets ?? []).flatMap((n) => n.stranded), "the leg across the module was laid")
+      .not.toHaveLength(0);
+    expect(routed.traces, "copper went down for a connection that cannot be made").toHaveLength(0);
+    const { pads } = resolveNetlist(circuit, tapeW, tapeMm, new Set());
+    // And the metal it would have crossed is mostly UNWIRED — the case that had nothing refusing it, since
+    // an unwired pin appears in no net and so in no clearance test.
+    expect(pads.filter((p) => p.net === null).length, "no unwired pad, so that case is untested")
+      .toBeGreaterThan(20);
+  });
+
+  it("keeps every leg it does lay clear of every pad that is not its own", () => {
+    // The standing invariant, on the circuit that routes: whatever copper goes down clears every foreign
+    // pad by its own half-width. Measured on the laid copper against the placed outlines, both out of the
+    // same plan — not on the router's intentions.
+    const { faces, gaps, tapeW, tapeMm } = load("house.fkld");
+    const k = tapeMm / tapeW;
+    const circuit = xiaoOnTwoNets(faces[0]!.centroid);
+    const routed = planRoutes(faces, gaps, circuit);
+    const { pads } = resolveNetlist(circuit, tapeW, tapeMm, new Set());
+    expect(routed.traces.length, "nothing was laid, so what follows is vacuous").toBeGreaterThan(0);
+
+    let checked = 0;
+    for (const t of routed.traces) {
+      for (let i = 1; i < t.pts.length; i++) {
+        for (const pad of pads) {
+          if (pad.net === t.net) continue;   // its own pads are what its legs land on
+          // A pad sitting on one of this net's own is the same pin under another name — see `padPin`.
+          if (circuit.terminals!.some(
+            (q) => q.net === t.net && q.part === pad.part && padPin(q.pad) === padPin(pad.pad))) continue;
+          const d = minDistToPoly(t.pts[i - 1]!, t.pts[i]!, pad.outline) * k;
+          const half = (Math.max(t.widths?.[i - 1] ?? tapeW, t.widths?.[i] ?? tapeW) / 2) * k;
+          expect(d, `net ${t.net} runs over ${pad.part}\u00b7${pad.pad}`).toBeGreaterThanOrEqual(half - 1e-9);
+          checked++;
+        }
+      }
+    }
+    expect(checked, "no segment was measured against any pad").toBeGreaterThan(50);
   });
 
   it("does not count a pad's own duplicate as its neighbour, since the two are one piece of metal", () => {
@@ -189,7 +296,10 @@ describe("model/fine-pitch parts", () => {
       nets: [{ id: "s", name: "S", color: "#1f6feb" }],
       parts: [
         { component: XIAO, x: at.x, y: at.y, free: true, rot: 0 },
-        { component: "R_1206", x: at.x + 0.35, y: at.y, free: true, rot: 0 },
+        // Clear of the module, outboard of the pin it wires to. It used to sit at `at.x + 0.35` — a third
+        // of a pattern unit, which is INSIDE the module's own outline, so the resistor overlapped the part
+        // it was wired to. Nothing refused that until pads became obstacles; now it is correctly a short.
+        { component: "R_1206", ...outboard(at, "7"), free: true, rot: 0 },
       ],
       terminals: [{ part: 1, pad: "1", net: "s" }, { part: 0, pad: "7", net: "s" }],
     };

@@ -22,6 +22,9 @@ import {
   planRoutes,
   tapeMmFor,
   tapeWidthFor,
+  ledSeat,
+  MIN_WEED_MM,
+  TAPE_MM,
 } from "../../../src/model/electronics-routing.js";
 import { flatFaces, gapGraph, ledOf, type Circuit, type Led } from "../../../src/model/electronics.js";
 import type { FoldFile } from "../../../src/model/fold-file.js";
@@ -55,11 +58,17 @@ describe("model/emitted-width", () => {
   it("reports the narrowest copper in the file, not just the nominal tape", { timeout: 30_000 }, () => {
     const { fold, routed, tapeW } = fixture();
     const x = buildCopperSvgExport(fold, routed.traces, tapeW, "t", routed.pads);
-    expect(x.widthMm).toBeCloseTo(3.25, 6);
+    expect(x.widthMm).toBeCloseTo(TAPE_MM, 6);
     // A plain three-LED circuit with a battery: no switch, no library part, nothing exotic. The copper
-    // still comes out at about a third of the nominal tape where it lands between an LED's legs.
+    // still comes out at well under the nominal tape where it lands between an LED's legs.
     expect(x.narrowestMm).toBeLessThan(x.widthMm);
-    expect(x.narrowestMm).toBeCloseTo(1.1375, 3);
+    // Derived, not recorded: a 1206's two copper ends are its own 2.00mm gap apart, and the landing gives
+    // the weeding floor back to the substrate, so what is left as copper is the difference. Was 1.1375 when
+    // the tape was 3.25mm — there the MIN_LAND_FRAC floor was the binding term and the arithmetic below was
+    // hidden behind it; at 1.5mm the floor is 0.525mm and the real geometry shows through.
+    const pinch = ledSeat("LED_1206")!.gap - MIN_WEED_MM;
+    expect(pinch).toBeCloseTo(0.8625, 4); // the 1206's gap is 1.999996 off the inch grid, not a round 2
+    expect(x.narrowestMm).toBeCloseTo(pinch, 3);
   });
 
   it("hands over copper under the blade limit while `tooNarrow` stays false", { timeout: 30_000 }, () => {
@@ -77,7 +86,14 @@ describe("model/emitted-width", () => {
   });
 
   it("narrows further for a part with its own land, and says so", { timeout: 30_000 }, () => {
-    // Each of these cuts copper at its pad's own size, which is smaller again than the LED pinch.
+    // The land cuts copper at the part's own pad size. **That is no longer the narrowest thing in the file**
+    // — at 1.5mm tape the LED pinch fell to 0.8625mm (see above) and now binds first, where at 3.25mm the
+    // pinch sat at its 1.1375mm floor and the switch's land came in under it.
+    //
+    // So the direction pinned here is the one that still means something: adding a part never WIDENS the
+    // narrowest copper in the file, and the file still ships copper far under the limit its flag names. The
+    // equality is asserted rather than a `<=`, because it is the interesting claim — a change that put the
+    // switch's land back below the pinch should be noticed and this comment rewritten, not silently passed.
     const base = fixture();
     const run = base.routed.traces.find((t) => t.net === "pwr" && t.pts.length > 2)!;
     const mid = run.pts[Math.floor(run.pts.length / 2)]!;
@@ -88,7 +104,8 @@ describe("model/emitted-width", () => {
     };
     const plain = narrowest({});
     const withSwitch = narrowest({ switches: [{ x: mid.x, y: mid.y }] });
-    expect(withSwitch).toBeLessThan(plain);
+    expect(withSwitch).toBeLessThanOrEqual(plain);
+    expect(withSwitch).toBeCloseTo(plain, 9); // the LED pinch binds, not the land
     expect(withSwitch).toBeLessThan(CUT_LIMIT_MM / 2);
   });
 

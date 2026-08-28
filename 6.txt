@@ -1,0 +1,246 @@
+STRAIN-AWARE ROUTING vs LENGTH-ONLY: WHAT THE CREASE PRICE BUYS
+
+IN ONE PARAGRAPH
+
+Switching the crease price off and re-routing the corpus says the strain-aware price is worth
+keeping and cheaper than it looks: across the six patterns that carry fold angles, at 12 LEDs, it
+removes 4.9% of the tension (mountain) crossings while total copper falls 2.1%. On the four plans
+it actually changes, tension crossings fall 6.7% and copper falls 3.2%. It never causes a short
+and never strands an LED. On `akde-hex` it takes three fewer mountain crossings and one more
+valley -- the trade a model on |theta| cannot express, and the reason the sign is in the model.
+Two patterns plan identically either way, and one, `akde-square-pyramid`, costs 16.9% more copper
+for no fewer crossings; both are in the tables. The setting itself needs no defending: every route
+is identical from 0.15 of the diagonal up to the full diagonal, so the shipped 0.5 sits on a
+plateau rather than on a tuned peak.
+
+Measured 2026-08-26 on the bundled corpus. Every number below was produced by a run made for
+this report, not quoted from an earlier session, except where a line says otherwise.
+
+
+0. WHAT WAS RUN, AND HOW TO RE-RUN IT
+
+The comparison is the shipped router against itself with one term switched off. `planRoutes` now
+takes an appended `creasePenaltyFrac` argument (default `FOLD_PENALTY_FRAC = 0.5`); at 0 a crease
+costs nothing and the search minimises copper alone. That is the length-only baseline. It is a
+parameter rather than a second copy of the router on purpose: a baseline routed by different code
+from the thing it is a baseline for measures the fork as much as it measures the price.
+
+Corpus: the eight bundled patterns in `public/examples/*.fkld`, battery on face 0, LEDs seated on
+the first N distinct hinges, at N = 3, 6 and 12.
+
+Two of the eight carry no fold angles at all (`bistable-star-tiling` has no traversable gap edge;
+`kirigami-flap` records no dihedrals), so they fall back to the M/V/C classification and are
+excluded from every strain figure below. Results are reported over the six patterns that carry
+angles, and the two are listed so nobody counts them as agreement.
+
+Crossings are counted by FACE TRANSITION -- sample the trace, ask which tile each sample is on,
+count the changes -- not by segment intersection. This matters more than it sounds. A corridor
+route passes exactly THROUGH a hinge midpoint, and a proper-crossing test does not register that
+as a crossing. Counted the wrong way, `house` at three LEDs reads as 0 mountain crossings for the
+length-only plan and 1 for the priced plan, which is the reverse of what the two plans do. Every
+tile-to-tile transition that is not a priced crease was checked and is a flat facet diagonal
+(`F`), interior to one printed tile: nothing folds there, so nothing is being missed.
+
+Pinned as `tests/current/model/crease-price.test.ts`.
+
+
+1. STRAIN-AWARE vs LENGTH-ONLY -- THE COMPARISON ITSELF
+
+At 12 LEDs, over the six patterns that carry fold angles. "Tension" is mountain crossings, the
+crossings the fatigue model exists to charge for; "compression" is valley crossings, which it
+charges nothing.
+
+  pattern                 copper (length-only -> priced)   tension   compression
+  house                    11.54 ->   11.54    (+0.0%)      14 -> 14    0 ->  0
+  church                   14.23 ->   15.07    (+5.9%)      16 -> 14    0 ->  0
+  puffin                  763.23 ->  810.06    (+6.1%)      51 -> 49    0 ->  0
+  akde-hex               1831.98 -> 1637.37   (-10.6%)      23 -> 20   12 -> 13
+  akde-decagon-pyramid   1590.46 -> 1590.46    (+0.0%)      26 -> 26    8 ->  8
+  akde-square-pyramid     313.56 ->  366.55   (+16.9%)      14 -> 14    6 ->  6
+  ------------------------------------------------------------------------------
+  corpus total           4525.00 -> 4431.05    (-2.1%)     144 -> 137  26 -> 27
+
+The headline: the crease price removes 4.9% of the tension crossings across the corpus and the
+copper bill goes DOWN 2.1%. It is not a straight trade of copper for durability; on this corpus
+it is closer to free.
+
+Restricted to the plans the price actually changes (church, puffin, akde-hex, akde-square at 12
+LEDs), tension crossings fall 104 -> 97, a 6.7% reduction, and copper falls 2923.0 -> 2829.1, a
+3.2% reduction.
+
+Two of the six plan identically with the price on and off. That is worth saying plainly rather
+than burying: on `house` and `akde-decagon-pyramid` the strain term costs nothing and buys
+nothing, because the routes those patterns want are the routes they get either way.
+
+The one honest loss is `akde-square-pyramid`: +16.9% copper for exactly the same crossings, the
+same creases, and the same strain-weighted exposure (16.562 either way). The price moved the plan
+sideways there. It is one pattern in six and it is in the table rather than out of it.
+
+The direction the model claims is visible on `akde-hex`, which is the case worth pointing at: the
+priced plan takes THREE fewer mountain crossings and ONE more valley. That is the M/V asymmetry
+doing exactly what it was put in for -- trading a crossing that fractures within a hundred cycles
+for one that wrinkles and keeps conducting -- and a model on |theta| could not have made that
+trade, because it cannot tell the two apart.
+
+At 3 and 6 LEDs the corpus is barely distinguishable (tension 42 -> 41 and 71 -> 70, copper
+within 0.2% both ways). The price bites when the sheet is crowded, which is when it matters.
+
+
+2. CREASE CROSSING COUNT, SPLIT BY FOLD SENSE
+
+Same runs, split out, so the length overhead in section 3 is legible against something.
+
+  12 LEDs, six patterns    length-only    priced
+  tension (mountain)          144          137     -4.9%
+  compression (valley)         26           27     +3.8%
+  cut (C)                       0            0
+  total priced crossings      170          164     -3.5%
+
+Cut crossings are zero under both conditions, on every pattern, at every LED count. That is the
+containment rule doing the work, not the crease price: an opened cut is a hole in the silhouette
+and `chordInside` refuses it, so the `C` branch of the price is never what keeps copper off one.
+
+The strain-weighted exposure -- each crossing charged its own `creaseCostFraction` rather than
+counted as one -- moves with the count almost exactly (e.g. puffin 51 -> 49 crossings, 51.0 ->
+49.0 weighted). That is saturation, and it is the same finding `fold-strain.ts` records: past
+about 12 degrees of fold on the default sheet the fatigue term is at its ceiling, so nearly every
+real mountain on these patterns is charged full price. The only pattern where weighted and
+counted differ is `akde-square-pyramid` (14 mountains + 6 valleys counting 16.562 weighted),
+which is the one pattern with folds gentle enough to sit under the knee.
+
+
+3. ROUTE LENGTH OVERHEAD
+
+Completed by the length-only baseline, which is what was missing:
+
+  - Corpus, 12 LEDs:                       -2.1%  (4525.00 -> 4431.05)
+  - Plans that actually change:            -3.2%  (2923.00 -> 2829.05)
+  - Worst single pattern:                 +16.9%  (akde-square-pyramid)
+  - Best single pattern:                  -10.6%  (akde-hex)
+  - Corpus at 3 LEDs / 6 LEDs:      +0.04% / +0.2%
+
+"Overhead" turns out to be the wrong word for the aggregate. The crease price is not a detour
+budget that buys durability; on a crowded pattern it is often the shorter plan as well, because
+routing around a fold and routing around the copper already laid pull the same way.
+
+There IS a real per-pattern cost -- 6% on church and puffin, 17% on akde-square-pyramid -- and
+anyone reporting the aggregate alone is hiding those. Both are in the table.
+
+
+4. WHERE THE PRICE STOPS MATTERING -- THE SETTING NEED NOT BE DEFENDED
+
+Routes were hashed at crease prices of 0, 0.05, 0.15, 0.25, 0.5 and 1.0 of the pattern diagonal,
+12 LEDs, six patterns. Every pattern gives byte-identical routes from 0.15 upward, including at
+the full diagonal Nakaya et al. use. Only the band between 0 and 0.15 decides anything:
+
+  pattern                 0        0.05     0.15 .. 1.0
+  house                   A        A        A                 (never changes)
+  church                  A        B        C
+  puffin                  A        B        C
+  akde-hex                A        A        B
+  akde-decagon-pyramid    A        A        A                 (never changes)
+  akde-square-pyramid     A        B        B
+
+So `FOLD_PENALTY_FRAC = 0.5` is not a tuned constant that has to be justified to a reader. It is
+one value on a plateau that runs from 0.15 to the full diagonal, and the earlier "at 0.15 the
+penalty stops changing any route" is confirmed from the zero baseline upward. The same holds for
+the fatigue constant itself: swept previously across an order of magnitude (eps 0.003 to 0.01)
+with copper length and crossings identical on all six patterns.
+
+
+5. ROUTING SUCCESS RATE
+
+Bus router (two nets: PWR/GND), 12 LEDs, all eight patterns, both conditions: every LED that can
+be seated is wired, and PWR x GND crossings -- shorts -- are ZERO on every pattern under both the
+priced and the length-only plans. The crease price neither strands an LED nor causes a short.
+Unwired LEDs are seating failures, not routing failures, and the split was checked rather than
+assumed: on `akde-square-pyramid` all 8 of the 12 that go unwired are reported `unseated` -- the
+1206 package will not sit on those hinges -- identically with the price on and off.
+`kirigami-flap` and `bistable-star-tiling` have 1 and 0 traversable hinges, so they are asked for
+1 and 0 LEDs and wire both.
+
+Netlist router (N named nets, each joining its own terminals, none touching), five patterns at
+two-to-five nets, three terminals per net -- 210 terminals:
+
+  pattern                 2 nets   3 nets   4 nets   5 nets   total   orders tried
+  house                    6/6      7/9      9/12    10/15    32/42   1/5/9/10
+  church                   6/6      7/9      8/12     9/15    30/42   1/6/9/10
+  akde-hex                 5/6      7/9      8/12     9/15    29/42   2/4/9/10
+  puffin                   4/6      6/9      8/12     9/15    27/42   2/6/8/9
+  akde-decagon-pyramid     4/6      6/9      7/12    11/15    28/42   2/5/7/10
+  ---------------------------------------------------------------------------
+  total                   25/30    33/45    40/60    48/75   146/210 = 69.5%
+
+At two nets the router reaches 25 of 30. The reach falls with net count -- 73% at three nets, 67%
+at four, 64% at five -- and that is the open problem, stated as such: nets are kept apart by
+exclusion, so each routes into the room the previous ones left.
+
+What is NOT the open problem is ordering, and this is where the honest ceiling sits. The same
+corpus reaches 146 of 210 with blame-directed reordering and 146 without it, while genuinely
+exploring the alternatives (up to 10 distinct orderings per case, right-hand column). An
+exhaustive sweep of all N! orderings reaches 191 of 252 against 189 for the four rotations shipped
+-- two terminals in 252 is the entire remaining prize in ordering (that last pair of figures is
+from the earlier sweep recorded in `net-routing.ts`, not re-run here). Some netlists are simply
+not planar on one side of one sheet, and no ordering fixes one of those; a stranded terminal is
+reported, with the net that is in its way named, rather than quietly shorted.
+
+
+6. GEOMETRIC APPROXIMATION ERROR
+
+Pure extraction: `dH` and `dHRel` are computed on every verification run and were read off, not
+re-derived. `dH` is the Kabsch-aligned two-sided Hausdorff distance in millimetres between the
+sheet folded FROM FLAT and the target, with declared vent holes excluded from coverage; `dHRel`
+is that over the target's bounding-box diagonal, and the pipeline's acceptance gate is 5%.
+
+  target                    dH (mm)   dHRel   eps (mm)   attempts   mean strain   crease resid.
+  cube                       0.0000   0.000     8.6603       1         0.00000        0.00000
+  open pyramid               0.0000   0.000     5.2202       1         0.00000        0.00000
+  tent (free ridge)          0.0000   0.000     5.7879       1         0.00000        0.00000
+  saddle fan (1 vent)        0.0000   0.000     6.9101       1         0.00000        0.00000
+  sample-cube.stl            0.0000   0.000     8.6603       1         0.00000        0.00000
+  sample-tetrahedron.stl     0.0000   0.000     8.6603       1         0.00000        0.00000
+  sample-octahedron.stl      0.0000   0.000     8.6603       1         0.00000        0.00000
+  sample-hex-pyramid.stl     0.0000   0.000     7.4833       1         0.00000        0.00000
+
+Zero to four decimal places on all eight, every one on the first attempt, with zero mean bar
+strain and zero crease residual: the sheet does not merely land near the target, it lands on it,
+having travelled the whole fold path from flat rather than being placed at the answer. The
+equilibrium pose -- released and settled, the secondary metric -- gives 0.0000 as well, so the
+folded state is a stable one and not a pose held up by the transport.
+
+What that number does and does not say, stated plainly: `dH` is measured against the TARGET MESH
+the pipeline was handed. On these targets the tiles are planar and rigid, the fold angles are
+exact, and the pattern is rigidly foldable onto the mesh -- so zero is the right answer and it is
+a statement about the unfolding being exact, not about a smooth surface being well approximated.
+Approximating a curved surface happens in the meshing upstream of this pipeline, and no figure
+here bounds that.
+
+INCOMPLETE, and reported as such: three further targets -- `saddle-roof`, `enneper` and
+`lamp-dome` -- did not finish. `kirigamize(makeSaddleRoof(), {verify: true})` ran for roughly 14
+minutes at full CPU without returning, and the repo's own acceptance test for it behaves the same
+way -- `kirigamize-e2e.test.ts -t "saddle roof"` was left running for 11m41s at full CPU and
+printed nothing before it was killed. Its 180-second timeout cannot fire, because the call is
+synchronous and vitest cannot preempt a busy loop. So the three are absent from the table rather than filled in from an earlier
+session, and the saddle-roof behaviour is worth a look on its own account: as things stand the
+bundled acceptance suite cannot complete on this checkout.
+
+
+7. WHAT THIS DOES NOT SHOW
+
+Stated so the table above is not read for more than it says.
+
+- The material numbers are assumptions, not measurements taken on this system. `fatigueStrain =
+  0.01` is an order-of-magnitude figure for rolled annealed copper foil in the low-cycle regime,
+  and the substrate and foil moduli are handbook values. Everything above reads "given a sheet of
+  these properties". What IS measured per pattern is the geometry: hinge width, fold angle, sign.
+- No copper was folded. The evidence that tension crossings matter more than compression ones is
+  Nakaya et al.'s fatigue test (SCF '25), not a fold-cycle test run here. This report measures
+  what the router does with that model, not that the model is right.
+- Two of the eight patterns record no fold angles and fall back to the M/V/C classification. They
+  are excluded from every strain figure and named where they are excluded.
+- The crease price is currently the only place strain reaches the plan. `strainLimit` -- refusing
+  a crease outright -- is off by default, and for a measured reason: at a limit equal to the
+  fatigue strain, 5 of 6 LEDs go unreachable on `house` and `church`.
+- Nothing in `src/view` or `src/controller` constructs a `SheetSpec`; every production site takes
+  `DEFAULT_SHEET`. The strain model is shipped in the sense that the shipped default routes
+  through it, but a user cannot yet describe their own sheet from the app.

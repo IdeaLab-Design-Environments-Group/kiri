@@ -92,6 +92,36 @@ function distToSeg(p: Vec2, a: Vec2, b: Vec2): number {
 }
 
 /**
+ * The longest single segment of `net` in the plan.
+ *
+ * The runs these tests probe against have to be *found*, not written down. Their positions come out of the
+ * router, and the router replans whenever tape width changes — so a literal coordinate describes only the
+ * plan that one tape width happened to produce, and silently stops describing any run at all when it moves.
+ */
+function longestRun(routed: RoutedCircuit, net: string): [Vec2, Vec2] {
+  let best: [Vec2, Vec2] | null = null;
+  let bestL = 0;
+  for (const t of routed.traces) {
+    if (t.net !== net) continue;
+    for (let i = 1; i < t.pts.length; i++) {
+      const a = t.pts[i - 1]!, b = t.pts[i]!;
+      const L = Math.hypot(b.x - a.x, b.y - a.y);
+      if (L > bestL) { bestL = L; best = [a, b]; }
+    }
+  }
+  if (!best) throw new Error(`the plan carries no ${net} run to probe against`);
+  return best;
+}
+
+/** A run of length `2 * half` parallel to `ab`, its centre `d` from `ab`'s midpoint along `ab`'s normal. */
+function beside([a, b]: [Vec2, Vec2], d: number, half: number): Vec2[] {
+  const L = Math.hypot(b.x - a.x, b.y - a.y);
+  const ux = (b.x - a.x) / L, uy = (b.y - a.y) / L;
+  const cx = (a.x + b.x) / 2 - uy * d, cy = (a.y + b.y) / 2 + ux * d;
+  return [{ x: cx - ux * half, y: cy - uy * half }, { x: cx + ux * half, y: cy + uy * half }];
+}
+
+/**
  * The width test at a single point of `ab`, oriented along it.
  *
  * {@link tapeOnBody} takes its normal from the segment's own direction, so a degenerate segment `(p, p)`
@@ -119,7 +149,11 @@ describe("model/wire-rules", () => {
   it("finds nothing wrong with a wire laid along copper of its own net", { timeout: 20_000 }, () => {
     const { ctx, routed } = fixture();
     // A chord between two points of one routed GND run: on the material, on its own net, ends on copper.
-    const wire: Trace2D = { pts: [{ x: 12.5, y: -37.4 }, { x: 14.8, y: -37.0 }], net: "gnd" };
+    // Taken from the middle of the run rather than from remembered coordinates, so it stays a chord of that
+    // run whatever width the tape is.
+    const [ra, rb] = longestRun(routed, "gnd");
+    const at = (t: number): Vec2 => ({ x: ra.x + (rb.x - ra.x) * t, y: ra.y + (rb.y - ra.y) * t });
+    const wire: Trace2D = { pts: [at(0.4), at(0.6)], net: "gnd" };
     const faults = checkWire(wire, ctx, routed);
     expect(faults).toEqual([]);
     expect(isBuildable(faults)).toBe(true);
@@ -127,8 +161,10 @@ describe("model/wire-rules", () => {
 
   it("reports off-body for a wire whose centreline is on the sheet but whose half-width is not", { timeout: 20_000 }, () => {
     const { faces, ctx, routed, tapeW } = fixture();
-    // Parallel to face 0's bottom edge (y = -132.29), inset less than half a tape width.
-    const y = -132.29 + 0.8;
+    // Parallel to face 0's bottom edge (y = -132.29), inset less than half a tape width. The edge is a fact
+    // about the pattern and stays a literal; the inset is a fraction of the strip, because "less than half a
+    // tape width" is the whole premise and a fixed millimetre figure stops satisfying it as the roll narrows.
+    const y = -132.29 + tapeW * 0.4;
     const a = { x: -20, y }, b = { x: 20, y };
 
     // The control, and the whole point of the test: a centreline reading passes this wire.
@@ -225,7 +261,7 @@ describe("model/wire-rules", () => {
     const dx = pad.gnd.x - pad.pwr.x, dy = pad.gnd.y - pad.pwr.y, L = Math.hypot(dx, dy);
     const ux = dx / L, uy = dy / L;          // along the chip's axis
     const px = -dy / L, py = dx / L;         // across it
-    const off = 1.0;                          // less than the half tape width `overLed` clears by
+    const off = tapeW * 0.3;                  // less than the half tape width `overLed` clears by
     expect(off).toBeLessThan(tapeW * 0.5);
     const mx = (pad.pwr.x + pad.gnd.x) / 2 + px * off;
     const my = (pad.pwr.y + pad.gnd.y) / 2 + py * off;
@@ -347,10 +383,11 @@ describe("model/wire-rules", () => {
 
   it("ranks proximity to another net by distance: on top of it, near it, then clear", { timeout: 20_000 }, () => {
     const { ctx, routed, tapeW } = fixture();
-    // The GND run along y = -69.4, with the wire parallel to it at a growing centreline separation.
-    const at = (d: number) => kinds(checkWire({ pts: [{ x: -10, y: -69.4 + d }, { x: 10, y: -69.4 + d }], net: "pwr" }, ctx, routed));
+    // The plan's longest GND run, with the wire parallel to it at a growing centreline separation.
+    const gnd = longestRun(routed, "gnd");
+    const at = (d: number) => kinds(checkWire({ pts: beside(gnd, d, 8), net: "pwr" }, ctx, routed));
     // Written in tape widths, not in millimetres: both bounds scale with `tapeW`, and a literal would only
-    // land in the right band on a pattern whose tape happens to be 3.25 units wide.
+    // land in the right band on the one pattern whose tape happened to be that many units wide.
     expect(at(tapeW * 0.3)).toContain("too-close");   // strips deep in each other
     expect(at(tapeW * 0.92)).toContain("too-close");  // barely, but still sharing copper
     expect(at(tapeW * 1.15)).toContain("unweedable"); // they clear; the backing between them tears
@@ -367,9 +404,10 @@ describe("model/wire-rules", () => {
     // width `w` share copper whenever their centrelines are closer than `w`. Anything inside that is one
     // net laid on another -- a short -- and no amount of weeding fixes it, because there is no backing
     // between them to weed.
-    const at = (d: number) => checkWire({ pts: [{ x: -10, y: -69.4 + d }, { x: 10, y: -69.4 + d }], net: "pwr" }, ctx, routed);
+    const gnd = longestRun(routed, "gnd");
+    const at = (d: number) => checkWire({ pts: beside(gnd, d, 8), net: "pwr" }, ctx, routed);
 
-    // A hair inside a full tape width: 3.25mm strips at 3.15mm centres still share 0.1mm of copper. Sampled
+    // A hair inside a full tape width: strips at 0.97 of a width between centres still share copper. Sampled
     // this close to the bound on purpose -- a looser pair of samples pins only the ORDERING of the two
     // tolerances and leaves the constant itself free to drift by a third of a tape width unnoticed.
     const overlapping = at(tapeW * 0.97);

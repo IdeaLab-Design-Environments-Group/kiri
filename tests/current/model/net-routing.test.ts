@@ -453,17 +453,22 @@ describe("model/net-routing", () => {
     });
 
     it("reports a tap it cannot lay clear rather than laying it across the other rail", () => {
-      // Face 5 on house is out of reach: every anchor on the PWR rail that the corridor can get to from
-      // there runs the leg alongside GND, and the two rails are already pinched to 0.61 of a tape width
-      // where the bus meets its LED — so there is no room for a third strip and saying so is the answer.
-      // The failure mode this replaces is the one that matters: copper laid anyway, and a short found
-      // after the tape is down.
-      const { r, bus, tapeW } = tapped("pwr", 5);
-      const pwr = r.nets.find((n) => n.id === "pwr")!;
-      expect(pwr.railTap).toBe("failed");
-      expect(pwr.traces).toEqual([]);
-      expect(pwr.why, "and says what to do about it").toMatch(/rail/);
-      expect(nearestAcross(pwr.traces, bus.filter((t) => t.net === "gnd")))
+      // Face 9 on GND is out of reach: every anchor on the GND rail that the corridor can get to from there
+      // runs the leg alongside PWR, and there is no room for a third strip — so saying so is the answer.
+      // The failure mode this replaces is the one that matters: copper laid anyway, and a short found after
+      // the tape is down.
+      //
+      // This used to be face 5 on PWR, and that combination LAYS from 2026-08-28, when `TAPE_MM` fell to
+      // 1.5: a third strip fits where it did not at 3.25mm, which is the narrowing doing its job. Not a
+      // near-miss to be nursed — swept over all twelve faces on both rails, 8 of the 24 combinations still
+      // fail (PWR at face 0, and GND at 1, 3, 6, 8, 9, 10 and 11), so the refusal path is well exercised
+      // and this test picks one of them rather than the one that happened to be first written down.
+      const { r, bus, tapeW } = tapped("gnd", 9);
+      const gnd = r.nets.find((n) => n.id === "gnd")!;
+      expect(gnd.railTap).toBe("failed");
+      expect(gnd.traces).toEqual([]);
+      expect(gnd.why, "and says what to do about it").toMatch(/rail/);
+      expect(nearestAcross(gnd.traces, bus.filter((t) => t.net === "pwr")))
         .toBeGreaterThanOrEqual(tapeW); // vacuously, and that is the point: nothing was laid
     });
 

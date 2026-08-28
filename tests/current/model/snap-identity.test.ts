@@ -368,12 +368,18 @@ describe("model/snap-identity", () => {
     // The second limitation, and the one that bites where a person actually draws. An LED's leg is a vertex
     // of a short piece of leg copper in a crowded corner, so a stub drawn from it — perfectly snapped, on the
     // right net — still has other segments of that same net within a tape width of it, and those pairs share
-    // no endpoint. Half a leg segment costs 0.108336 on house and 0.017598 on church.
+    // no endpoint. Half a leg segment costs 0.064901 on house.
     //
-    // akde-hex is excluded deliberately rather than quietly: its tape is 3.25 in a pattern spanning tens of
-    // units, nothing else of the net is near, and the same stub there costs 0.000000. The charge is about
-    // crowding, not about the snap.
-    for (const file of ["house.fkld", "church.fkld"]) {
+    // Excluded deliberately rather than quietly, because the charge is about crowding and not about the
+    // snap: akde-hex, whose pattern spans tens of units with nothing else of the net near, has always cost
+    // 0.000000 here — and **church joined it when `TAPE_MM` fell to 1.5 on 2026-08-28**. "Within a tape
+    // width" is the window, so halving the roll halves what counts as near, and church's nearest same-net
+    // segment is now outside it; it takes about six times today's tape before that stub is charged at all.
+    //
+    // The window is the whole mechanism, and it can be read straight off the numbers: at 2.1667x today's
+    // tape — which is 3.25/1.5, the roll these figures were first taken at — house charges 0.108336 and
+    // church 0.017598, the two values this comment used to record.
+    for (const file of ["house.fkld"]) {
       const { tapeW, routed, ctx } = bus(file);
       const leg = resolveVertex({ kind: "led", led: 0, leg: 0 }, ctx)!;
       const rail = railAt(routed.traces, leg)!;
@@ -386,13 +392,17 @@ describe("model/snap-identity", () => {
     // The design question, measured: for a pad that does NOT coincide — a part in series on a rail — is a
     // wire better off storing the plan's nearest vertex than resolving the pad?
     //
-    // It is cheaper and it is still not free. Copying makes `sharesEnd` fire, and the charge falls from
-    // 0.408955 to 0.079113 on house and from 1.057274 to 0.069436 on church — but not to zero, because a
-    // broken rail puts several segments of the same net within a tape width of the break, and the exempted
-    // pair is only one of them. Buying a partial discount at the price of baking a coordinate — which is
-    // what makes a wire stop following its part, and go stale the moment the router re-plans — is a bad
-    // trade. This test exists so that the number, not the intuition, is what anyone weighs.
-    for (const file of ["house.fkld", "church.fkld"]) {
+    // It is cheaper, and **at the 1.5mm roll it is now free**. Copying makes `sharesEnd` fire, and on house
+    // the charge falls from 0.359887 to 0.000000. At 2.1667x today's tape — 3.25/1.5, the roll the original
+    // figures were taken at — it fell from 0.408955 to 0.079113 and stopped there, because a broken rail put
+    // several segments of the same net within a tape width of the break and the exempted pair was only one
+    // of them. Narrowing the roll narrowed that window until the exempted pair is the only one left.
+    //
+    // So the discount is now total, and the argument is unchanged: it was never that copying cost something,
+    // but that a baked coordinate makes a wire stop following its part and go stale the moment the router
+    // re-plans. This test exists so that the number, not the intuition, is what anyone weighs — and the
+    // number now says the temptation is stronger than it was.
+    for (const file of ["house.fkld"]) {
       const { tapeW, routed, ctx } = seriesPart(file);
       const pad = resolveVertex({ kind: "pad", part: 0, pad: "1" }, ctx)!;
       const near = nearestVertex(routed.traces, pad);
@@ -400,8 +410,12 @@ describe("model/snap-identity", () => {
       const to = (o: Vec2): Vec2 => ({ x: o.x + dir.x, y: o.y + dir.y });
       const recomputed = overlapCost(routed, tapeW, { net: near.net, pts: [pad, to(pad)] });
       const copied = overlapCost(routed, tapeW, { net: near.net, pts: [near.at, to(near.at)] });
-      expect(copied, `${file} copied`).toBeGreaterThan(0); // NOT free — this is the point of the test
+      // The load-bearing half: copying is strictly cheaper, which is the temptation being weighed.
       expect(copied, `${file} cheaper`).toBeLessThan(recomputed);
+      expect(recomputed, `${file} recomputed`).toBeGreaterThan(0);
+      // And the discount really is total at this roll, rather than merely small — pinned so that a change
+      // restoring a residual charge is noticed rather than silently welcomed.
+      expect(copied, `${file} copied`).toBe(0);
       // And the copy itself survives resolution unchanged, so the shortfall is the router's scoring and
       // not a coordinate lost on the way through.
       expect(resolveVertex({ kind: "free", x: near.at.x, y: near.at.y }, ctx)).toEqual(near.at);

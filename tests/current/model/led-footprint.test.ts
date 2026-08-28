@@ -17,7 +17,9 @@ import {
   planRoutes,
   seatLed,
   tapeWidthFor,
+  weedGapFor,
 } from "../../../src/model/electronics-routing.js";
+import { DEFAULT_SHEET, minWebMm } from "../../../src/model/fold-strain.js";
 
 const EXAMPLES = new URL("../../../public/examples/", import.meta.url).pathname;
 
@@ -165,11 +167,17 @@ describe("model/led-footprint", () => {
 
   describe("a part that cannot be cut is reported, not drawn wrong", () => {
     it("holds the weeding floor at the number LED_GAP_FRAC has always meant", () => {
-      // MIN_WEED_MM is LED_GAP_FRAC restated in millimetres so a footprint can be compared with it. It is
-      // NOT a new, smaller constant: if this drifts, the 0603 verdict below has been bought rather than
-      // reasoned.
-      expect(MIN_WEED_MM).toBeCloseTo(TAPE_MM * LED_GAP_FRAC, 12);
+      // MIN_WEED_MM is the width of substrate the tweezers can lift, so a footprint can be compared with it.
+      // It is NOT a new, smaller constant: if this drifts, the 0603 verdict below has been bought rather than
+      // reasoned. 1.1375 is the figure this codebase has always cut to and is the assertion that matters.
       expect(MIN_WEED_MM).toBeCloseTo(1.1375, 6);
+      // It used to be spelled `TAPE_MM * LED_GAP_FRAC`, and stopped being that when the tape narrowed to
+      // 1.5mm on 2026-08-28: the tweezers do not know how wide the roll is, so a weeding floor that shrinks
+      // with the tape claims thinner tape makes the web easier to lift, which is backwards. It now comes
+      // from the sheet, whose thickness is what the web's stiffness actually depends on — and at the default
+      // sheet that reproduces the old number exactly, which is why the line above is unchanged.
+      expect(MIN_WEED_MM).toBeCloseTo(minWebMm(DEFAULT_SHEET), 12);
+      expect(MIN_WEED_MM).not.toBeCloseTo(TAPE_MM * LED_GAP_FRAC, 6);
     });
 
     it("refuses an LED_0603: its 0.70mm bare gap is below what a vinyl cutter can weed", { timeout: 60000 }, () => {
@@ -326,8 +334,13 @@ describe("model/led-footprint", () => {
       // paper is not a cut. So the floor stays where it is, and this pins the two numbers that decide it.
       const seat = ledSeat("LED_1206")!;
       const across = 1.7; // the 1206's pad, across the chip's axis
-      expect(landingWidth({ x: 0, y: 0 }, { x: seat.gap, y: 0 }, TAPE_MM)).toBeCloseTo(TAPE_MM * LED_GAP_FRAC, 6);
-      expect(TAPE_MM * LED_GAP_FRAC).toBeLessThan(across);
+      // In millimetres throughout, so `tapeMm` is `TAPE_MM` and the weeding gap is `MIN_WEED_MM` itself.
+      const land = landingWidth({ x: 0, y: 0 }, { x: seat.gap, y: 0 }, TAPE_MM, weedGapFor(TAPE_MM, TAPE_MM));
+      expect(land).toBeCloseTo(seat.gap - MIN_WEED_MM, 6);
+      expect(land).toBeLessThan(across); // the leg still overhangs the tape, which is the trade above
+      // What the copper leaves bare between the two nets is the floor exactly, and the floor is the sheet's,
+      // not the roll's: narrowing the tape must not narrow the web the tweezers have to lift.
+      expect(seat.gap - land).toBeCloseTo(MIN_WEED_MM, 6);
     });
   });
 });
