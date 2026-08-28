@@ -57,20 +57,13 @@
  */
 import type { FlatFace, GapEdge, Vec2 } from "./electronics.js";
 import { pointInFace } from "./electronics.js";
-import {
-  FOLD_PENALTY_FRAC,
-  MIN_LAND_FRAC,
-  TAPE_MM,
-  buildCorridor,
-  patternDiag,
-  ptKey,
-  searchCorridor,
-  narrowedTo,
-  weedGapFor,
-  type Corridor,
-  type PadField,
-  type Trace2D,
-} from "./electronics-routing.js";
+// Imported from the modules that own each concern rather than from the router's facade: net routing is
+// reached BY the router, so importing the router back would close a cycle.
+import { FOLD_PENALTY_FRAC, MIN_LAND_FRAC, TAPE_MM, weedGapFor } from "./tape-width.js";
+import { buildCorridor, searchCorridor } from "./corridor.js";
+import { patternDiag, ptKey } from "./trace-geometry.js";
+import { narrowedTo } from "./pad-landing.js";
+import type { Corridor, PadField, Trace2D } from "./trace-types.js";
 import { DEFAULT_SHEET, minWebMm, type SheetSpec } from "./fold-strain.js";
 import type { NetPoint, PadObstacle, ResolvedNet } from "./netlist.js";
 

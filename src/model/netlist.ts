@@ -19,15 +19,14 @@ import { componentById } from "./library.js";
 import {
   applyPlacement, padOf, placeComponent, placementOf, type PlacedComponent,
 } from "./electronics-parts.js";
-// A live circular import with electronics-routing.js — that file already imports `resolveNetlist` from
-// here. Safe because both `partFit` and `acrossRun` are plain function declarations, used only inside a
-// function body below, never at module-evaluation time — so which module finishes initialising first
-// does not matter. Pulled in rather than re-derived because `partFit(fp).gap` is the same arithmetic
-// `freeParts()` sizes a dropped part's housing from; a second copy of it here is exactly the kind of
-// drift `partFit`'s own header warns against.
-import {
-  landingWidthFor, MIN_LAND_FRAC, padRoomFor, weedGapFor, type PadField,
-} from "./electronics-routing.js";
+// Taken from the modules that own each rule rather than from electronics-routing.js. This import used to
+// close a live cycle — the router imports `resolveNetlist` from here — which was safe only because every
+// name was a plain function declaration used inside a function body, never at module-evaluation time.
+// That is a property nobody could see from a call site, so the widths and landings moved to leaf modules
+// and the cycle went with them.
+import { MIN_LAND_FRAC, weedGapFor } from "./tape-width.js";
+import { landingWidthFor, padRoomFor } from "./pad-landing.js";
+import type { PadField } from "./trace-types.js";
 
 /** One terminal, resolved: which pad of which part, where it is, and the net it is on. */
 export interface NetPoint {

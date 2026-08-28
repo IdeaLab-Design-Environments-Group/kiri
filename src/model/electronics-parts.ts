@@ -44,10 +44,11 @@ import {
   type Box, type Footprint,
 } from "./footprint.js";
 import { acrossPart, padAxis, seatSigns } from "./parts.js";
-// A live circular import with electronics-routing.js, exactly as `netlist.ts` already has: that file's
-// `partFit` and `acrossRun` are the two readings a placement has to agree with, and a second copy of either
-// is a second thing to drift. See `netlist.ts`'s note on the same import.
-import { acrossRun, partFit } from "./electronics-routing.js";
+// `partFit` and `acrossRun` are the two readings a placement has to agree with, and a second copy of
+// either is a second thing to drift. Taken from `part-fit.ts` rather than from the router's facade: this
+// used to be a live cycle (the router reaches placement through `netlist.ts`), safe only by the accident
+// that both names were function declarations read inside a function body.
+import { acrossRun, partFit } from "./part-fit.js";
 
 /**
  * How a part sits on the sheet: `at = origin + m · padLocal`.
