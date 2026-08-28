@@ -209,4 +209,14 @@ describe("architecture: import boundaries (docs/import-boundaries.md)", () => {
       expect(offenders, `${entry} closure: ${offenders.join(", ")}`).toEqual([]);
     }
   });
+
+  it("R10: electronics UI edits go through circuit commands, not direct circuit assignment", () => {
+    const source = readFileSync(join(SRC, "view/electronics-modal.ts"), "utf8");
+    const directWrites = source
+      .split("\n")
+      .map((line, i) => ({ line, n: i + 1 }))
+      .filter(({ line }) => /\bthis\.circuit\s*=/.test(line) && !/editCircuit/.test(line))
+      .map(({ line, n }) => `${n}: ${line.trim()}`);
+    expect(directWrites, directWrites.join("\n")).toEqual([]);
+  });
 });

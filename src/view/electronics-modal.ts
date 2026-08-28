@@ -38,6 +38,29 @@ import {
   type Terminal,
 } from "../model/electronics.js";
 import {
+  type CircuitCommand,
+  type PartSelection as CommandPartSelection,
+  addNet as addNetCommand,
+  appendLed,
+  appendLegacyPart,
+  appendPlacedPart,
+  assignPad as assignPadCommand,
+  clearPlacedCircuit,
+  cloneCircuit,
+  cycleLedFlip,
+  cyclePartFlip,
+  deleteNet as deleteNetCommand,
+  editCircuit,
+  movePlacedPart,
+  recolourNet as recolourNetCommand,
+  removeLed,
+  removeSelectedPart,
+  renameNet as renameNetCommand,
+  replaceCircuit,
+  rotateFreePart,
+  toggleBattery,
+} from "../model/circuit-commands.js";
+import {
   type Mirror,
   buildCopperCarrierExport,
   buildCopperSvgExport,
@@ -61,10 +84,26 @@ import {
 } from "../model/net-palette.js";
 import { printScale } from "../model/print-scale.js";
 import { DEFAULT_SHEET, type SheetSpec } from "../model/fold-strain.js";
-import { netPlacement, placement } from "../model/parts.js";
-import { type Footprint, padAt, padNamed, terminals } from "../model/footprint.js";
-import { type Component, BAT_COIN_20, R_1206, SW_SPDT } from "../model/footprints.generated.js";
-import { LIBRARY, footprintById } from "../model/library.js";
+import { placement } from "../model/parts.js";
+import { type Footprint, terminals } from "../model/footprint.js";
+import { type Component, R_1206, SW_SPDT } from "../model/footprints.generated.js";
+import { footprintById } from "../model/library.js";
+import {
+  BLOCKED,
+  BLOCKED_SHOWN,
+  DEFAULT_LED,
+  GROUP_OF,
+  OFFERED,
+  PART_BY_ID,
+  PART_GROUPS,
+  ledPart,
+  ledPitch,
+  loadRestOfLibrary,
+  matches,
+  paletteCount,
+  partLabel,
+} from "./electronics-palette.js";
+export { UNSHELVED, shelfFor } from "./electronics-palette.js";
 import {
   type RoutedCircuit,
   type Terminals,
@@ -176,208 +215,6 @@ const PART_PICK_FLOOR_MM = 2;
  * The floor is what a 1206 LED's ring has always come out at, so nothing already on screen moves.
  */
 const SELECT_RING_FLOOR_MM = 1.7;
-
-/**
- * The LED packages a saved circuit may name. The first is what an LED with no `component` of its own
- * means, so a circuit authored before there was a choice still loads as the 1206 it was drawn as.
- *
- * Named rather than matched on `/^LED/`, because the list is a claim about what can be seated on a hinge
- * — two pads at a pitch a tile gap can be opened out to — and not everything the library calls an LED
- * would qualify.
- *
- * Nothing chooses between them any more; the picker that did is gone (see {@link ElectronicsModal.newLed}).
- * The list stays because the ids it holds are still written in saved files and still have to be read.
- */
-const LED_IDS = ["LED_1206", "LED_0603"] as const;
-
-/** Those parts, resolved against the library once. */
-const LED_PARTS: Component[] = LED_IDS.flatMap((id) => LIBRARY.filter((c) => c.id === id));
-const LED_BY_ID = new Map(LED_PARTS.map((c) => [c.id, c]));
-/** What an LED is when it does not say — see {@link LED_IDS}. */
-const DEFAULT_LED = LED_PARTS[0]!;
-
-/** The library part a placed LED is, falling back to the default for an id the library no longer has. */
-function ledPart(led: Led): Component {
-  return LED_BY_ID.get(led.component ?? "") ?? DEFAULT_LED;
-}
-
-/**
- * Centre to centre between an LED's two terminals, in millimetres — the part's own, off its footprint.
- *
- * Wanted only where there is no copper to draw the part on — see {@link ElectronicsModal.ledPads}. Where
- * there is, the pads are the router's, and the pitch is already in them.
- */
-function ledPitch(fp: Footprint): number {
-  try {
-    return Math.abs(padAt(padNamed(fp, "2")).x - padAt(padNamed(fp, "1")).x);
-  } catch {
-    return 0;
-  }
-}
-
-/**
- * The parts a fixed tool already places, so the palette does not offer them a second time.
- *
- * **LEDs came out of this set on 2026-08-28.** They were here so that the LED tool was "the only way to
- * place one", on the reasoning that an LED offered in the palette "would be placed along a rail with both
- * its pads on one net". That is a guess about what the author wants, enforced by hiding the part: neither
- * placement rule excludes an LED — `netPlacement` asks only for a terminal to wire — and both its pads are
- * assignable from the pads panel like any other part's.
- *
- * So an LED is now an ordinary component. Pick it from the palette, drop it, and wire its two pads to
- * whichever nets you meant; nothing assigns them for you. The LED tool still exists for the hinge case,
- * where an LED straddles a fold and the bus router lays the two rails to it — that is a different part of
- * the app and is untouched here.
- */
-const FIXED_PLACEMENT = new Set<Footprint>([BAT_COIN_20]);
-
-/**
- * How the palette shelves the parts it offers, first match winning.
- *
- * Presentation only, and name-based because the FabLib's filenames are the only thing there is to
- * shelve by — a footprint carries its geometry, not its aisle. Forty entries in one scroll is a wall;
- * forty in nine shelves of five is a menu.
- *
- * The catch-all used to be a shelf called "Other", and once every part in the library became placeable
- * it held 53 of the 129 — a wall of microcontrollers, sensors and bare IC packages behind a heading that
- * said nothing about any of them, which is the one shelf a person cannot skim. The rules below name what
- * is actually in there, so the fallback now catches nothing at all; it stays only so that a part added to
- * the library is somewhere rather than nowhere, and its heading says so plainly.
- *
- * Order is the specification: first match wins, so a narrow rule has to precede a wide one. `SOT_23_5`
- * is a transistor and `TSOT_23_5` a package outline; a sensor in an SOIC is shelved by what it does, not
- * by what it is moulded in — which is only true while the sensor rule comes first.
- */
-const PART_GROUPS: { label: string; match: RegExp }[] = [
-  { label: "LEDs", match: /^LED/ },
-  { label: "Resistors", match: /^R_/ },
-  { label: "Capacitors", match: /^CP?_/ },
-  { label: "Inductors", match: /^L_/ },
-  { label: "Crystals & oscillators", match: /^(Crystal|ECS_|Osc)/ },
-  { label: "Diodes & transistors", match: /^(Diode|SOD|SOT|TO[-_]|Q_|Bridge)/ },
-  { label: "Switches & buttons", match: /^(Switch|SW_|Button|Jumper|Potentiometer)/ },
-  { label: "Microcontrollers & modules", match: /^(ESP32|ESP_WROOM|RaspberryPi|SeeedStudio|Module_|Microchip_)/ },
-  { label: "Sensors", match: /^(Sensor_|ST_VL|Mic_MEMS)/ },
-  { label: "Motor drivers", match: /^MotorDriver/ },
-  { label: "Analog & logic ICs", match: /^(Amplifier|OpAmp|Comparator|LevelShifter|Multiplexer)/ },
-  { label: "Headers & sockets", match: /^(PinHeader|PinSocket|Header)/ },
-  { label: "Connectors & terminals", match: /^(Conn|TerminalBlock|MicroSD)/ },
-  { label: "Power", match: /^(Battery|BAT_)|PWRJack/ },
-  { label: "IC packages", match: /^(QFN|TQFP|TSOT|TSSOP|SOIC|SSOP|HSOP|HTSSOP|VFLGA|WSON|SMD_)/ },
-  { label: "Not yet shelved", match: /^/ },
-];
-
-/** The catch-all's heading, which {@link PART_GROUPS} is expected to leave empty. */
-export const UNSHELVED = "Not yet shelved";
-
-/** Which shelf a part's id falls on. Exported so the shelving can be checked without a DOM. */
-export function shelfFor(id: string): string {
-  return PART_GROUPS.find((g) => g.match.test(id))!.label;
-}
-
-/**
- * The palette's contents: the library parts that go in series on a rail, and the ones that do not with
- * the reason ready to read out.
- *
- * The rule is {@link placement}'s, not this file's. It is the same reading of a footprint that
- * `partFit` and `acrossPart` route and draw by, so the palette cannot offer a part the router would
- * then refuse — which is the whole reason it does not live here.
- *
- * These grow: the library arrives in two halves, and {@link admit} is asked the same question about
- * both. Which half a part came from decides only when it loads, never whether it can be placed.
- */
-const OFFERED: Component[] = [];
-const BLOCKED: { component: Component; why: string }[] = [];
-const PART_BY_ID = new Map<string, Component>();
-/** Which shelf each offered part sits on, worked out once as it is admitted. */
-const GROUP_OF = new Map<string, string>();
-
-/**
- * Sort a batch of library parts onto the shelves, or onto the list of what cannot be placed.
- *
- * Idempotent by id, so loading the second half twice cannot double the list, and sorted afterwards so
- * the picker reads the same however the halves arrived.
- */
-function admit(parts: readonly Component[]): void {
-  const known = new Set([...PART_BY_ID.keys(), ...BLOCKED.map((b) => b.component.id)]);
-  for (const c of parts) {
-    if (FIXED_PLACEMENT.has(c.footprint) || known.has(c.id)) continue;
-    known.add(c.id);
-    const p = netPlacement(c.footprint);
-    if (!p.placeable) {
-      BLOCKED.push({ component: c, why: p.why });
-      continue;
-    }
-    OFFERED.push(c);
-    PART_BY_ID.set(c.id, c);
-    GROUP_OF.set(c.id, shelfFor(c.id));
-  }
-  OFFERED.sort((a, b) => a.id.localeCompare(b.id));
-  BLOCKED.sort((a, b) => a.component.id.localeCompare(b.component.id));
-}
-
-admit(LIBRARY);
-
-/**
- * The library is whole and already here.
- *
- * It used to arrive in two halves, the second fetched the first time this page opened, and this returned
- * the request so a caller could wait for it. The split is gone — `library.ts` joins the two generated
- * modules statically — but the wait is kept, resolved, because "the picker is ready" is a real thing for
- * a caller to await and it costs a promise that is already settled.
- */
-function loadRestOfLibrary(): Promise<void> {
-  return Promise.resolve();
-}
-
-/**
- * How many parts the palette will spell out when a search turns up ones it cannot place.
- *
- * Enough to see that the thing you searched for is in the library, short enough that the answer stays a
- * glance. The tail is counted rather than listed.
- */
-const BLOCKED_SHOWN = 12;
-
-/**
- * What a part is called in the picker: its library id, then the human note.
- *
- * The id leads because it is the half that is unique. The FabLib's notes come from the footprints' own
- * `descr`, and four different pin headers all describe themselves as "Through hole straight pin
- * header" — put that first and a shelf reads as the same row four times over, with the part number cut
- * off the end. The id sorts sensibly within a shelf too. The note follows it, and both are searched.
- */
-function partLabel(c: Component): string {
-  return c.note ? `${c.id} · ${c.note}` : c.id;
-}
-
-/**
- * The line beside the picker: how much of the library is on offer.
- *
- * It used to exist to say that most of the library was NOT on offer — a rail can only pass through a
- * part with two or three terminals, so two thirds of the FabLib sat unplaceable and a picker that simply
- * omitted them would read as a library missing its parts. With nets, a part is a set of pads to wire
- * rather than something a rail passes through, so everything with a terminal is placeable and the line
- * has only the good news left to give: how many there are.
- *
- * **Shortened 2026-08-28.** It used to read `128 parts — search by name or package`, which was a sentence
- * wide enough to need a line of its own under the picker and so cost the toolbar a whole row's height.
- * The hint half of it is now the search box's own placeholder — where a hint about what to type belongs —
- * and what is left is short enough to sit beside the field it describes.
- */
-function paletteCount(searching: boolean, shown: number, blocked: number): string {
-  if (!searching) {
-    const all = `${OFFERED.length} parts`;
-    return blocked === 0 ? all : `${all} · ${BLOCKED.length} with no terminal to wire`;
-  }
-  const found = `${shown} match`;
-  return blocked === 0 ? found : `${found} · ${blocked} with no terminal to wire`;
-}
-
-/** Whether every whitespace-separated term of `query` appears in the part's note or id. */
-function matches(c: Component, terms: string[]): boolean {
-  const hay = `${c.id} ${c.note}`.toLowerCase();
-  return terms.every((t) => hay.includes(t));
-}
 
 /** How the copper is shown, matching the two ways it can be cut.
  *
@@ -878,7 +715,7 @@ export class ElectronicsModal {
     // opens a fresh pattern and finds no nets at all has to invent PWR and GND before they can put a
     // single pad on anything. Deleting one is still theirs to do — `withDefaultNets` only ever seeds a
     // circuit that has never declared a net, so a deletion is not undone on the next pattern.
-    this.circuit = withDefaultNets({ leds: [], battery: null });
+    this.runCommand(replaceCircuit(withDefaultNets({ leds: [], battery: null })));
     // The old pattern's copper is not this pattern's copper, whatever the routing mode says. Cleared here
     // rather than re-planned, because the circuit it would plan for is empty.
     this.routed = EMPTY_ROUTE;
@@ -1222,7 +1059,7 @@ export class ElectronicsModal {
   private clear(): void {
     // The declared nets survive: they are names the author chose, they cost nothing to keep, and the
     // parts they were wired to are what Clear is for. Their terminals cannot survive — the parts are gone.
-    this.circuit = { leds: [], battery: null, nets: this.nets(), terminals: [] };
+    this.runCommand(clearPlacedCircuit(this.nets()));
     this.select(null);
     this.syncButtons();
     // Clear means clear, in every mode. Left to `replan` with Auto off, the copper for the circuit that
@@ -1260,6 +1097,11 @@ export class ElectronicsModal {
   private select(sel: Selection | null, how: "picked" | "placed" = "placed"): void {
     this.selected = sel;
     this.selectedByPick = how === "picked" && sel !== null;
+  }
+
+  /** Apply a pure circuit command. Gesture handling stays in the view; mutation rules stay in the model. */
+  private runCommand(command: CircuitCommand): void {
+    this.circuit = editCircuit(this.circuit, command);
   }
 
   private onCanvasClick(e: MouseEvent): void {
@@ -1312,10 +1154,7 @@ export class ElectronicsModal {
         // pads on the same tile and bridge nothing.
         const rot = ((Math.atan2(q.x - p.x, -(q.y - p.y)) * 180) / Math.PI + 360) % 360;
         const mid = { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 };
-        this.circuit = {
-          ...this.circuit,
-          parts: [...placed, { component: part.id, x: mid.x, y: mid.y, free: true, rot }],
-        };
+        this.runCommand(appendPlacedPart({ component: part.id, x: mid.x, y: mid.y, free: true, rot }));
         this.select({ kind: "part", index: placed.length });
         this.emit();
         return;
@@ -1340,7 +1179,7 @@ export class ElectronicsModal {
       const seat: PlacedPart = onRail
         ? { component: part.id, x: near!.point.x, y: near!.point.y, rot: near!.rot }
         : { component: part.id, x: flat.x, y: flat.y, free: true };
-      this.circuit = { ...this.circuit, parts: [...placed, seat] };
+      this.runCommand(appendPlacedPart(seat));
       this.select({ kind: "part", index: placed.length });
       this.emit();
       return;
@@ -1350,9 +1189,8 @@ export class ElectronicsModal {
       // move whenever the circuit does, so an index along one would name different copper afterwards.
       const near = this.nearestOnRail(flat);
       if (!near || near.dist > this.pickRadius()) return;
-      const key = this.tool === "switch" ? "switches" : "resistors";
       const existing = (this.tool === "switch" ? this.circuit.switches : this.circuit.resistors) ?? [];
-      this.circuit = { ...this.circuit, [key]: [...existing, { x: near.point.x, y: near.point.y }] };
+      this.runCommand(appendLegacyPart(this.tool === "switch" ? "switch" : "resistor", { x: near.point.x, y: near.point.y }));
       this.select({ kind: this.tool === "switch" ? "switch" : "resistor", index: existing.length });
       this.emit();
       return;
@@ -1361,10 +1199,7 @@ export class ElectronicsModal {
       // Toggle the single battery on/off the clicked face (it tapes onto a gray tile).
       const face = pointInFace(this.faces, flat);
       if (face < 0) return;
-      this.circuit = {
-        ...this.circuit,
-        battery: this.circuit.battery?.face === face ? null : { face },
-      };
+      this.runCommand(toggleBattery(face));
     } else if (this.placeMode === "free") {
       // An LED asked for on a tile is an ordinary free part carrying an LED footprint. It gets no `Led`
       // entry, so the router does not bridge it across a hinge and does not decide which leg is PWR — which
@@ -1382,13 +1217,7 @@ export class ElectronicsModal {
         return;
       }
       const placed = this.circuit.parts ?? [];
-      this.circuit = {
-        ...this.circuit,
-        parts: [...placed, { component: id, x: flat.x, y: flat.y, free: true }],
-        // No terminals. A newly placed part arrives unwired, LED or not — see the note where
-        // `defaultLedTerminals` used to be.
-        terminals: this.netTerminals(),
-      };
+      this.runCommand(appendPlacedPart({ component: id, x: flat.x, y: flat.y, free: true }));
       this.select({ kind: "part", index: placed.length });
     } else {
       // LEDs straddle a gap: snap the click to the nearest hinge between two tiles.
@@ -1410,7 +1239,7 @@ export class ElectronicsModal {
         this.render();
         return;
       }
-      this.circuit = { ...this.circuit, leds: [...this.circuit.leds, led] };
+      this.runCommand(appendLed(led));
       this.select({ kind: "led", index: this.circuit.leds.length - 1 });
     }
     this.emit();
@@ -1534,7 +1363,7 @@ export class ElectronicsModal {
       snapRadiusFlat: () => this.partPickRadius(null),
       circuit: () => this.circuit,
       commit: (next) => {
-        this.circuit = next;
+        this.runCommand(replaceCircuit(next));
         this.emit();
       },
       context: () => this.wireContext(),
@@ -1766,10 +1595,7 @@ export class ElectronicsModal {
   private recolourNet(id: string, raw: string): void {
     const colour = (raw ?? "").trim();
     if (!colour) return;
-    this.circuit = {
-      ...this.circuit,
-      nets: this.nets().map((n) => (n.id === id ? { ...n, color: colour } : n)),
-    };
+    this.runCommand(recolourNetCommand(id, colour));
     this.emit();
   }
 
@@ -1871,6 +1697,20 @@ export class ElectronicsModal {
     this.render();
   }
 
+  /**
+   * Draw the pads of the selected part, as the same tree the nets above are drawn as.
+   *
+   * A pad row is a row, not a boxed control. The old panel drew each pad as a bordered pill holding a
+   * `<select>`, which put fourteen nested rectangles down a narrow column and left nothing lined up: the
+   * eye had to find the net name inside a box inside a box. Rows hung off one guide line read as what
+   * they are — the children of the part named above them — and it is the same shape as {@link renderNets},
+   * so the panel has one idea in it instead of two.
+   *
+   * The net is TYPED, not picked. A menu could only ever offer the nets that already exist, so wiring a
+   * pad to a new net meant leaving the pad, declaring the net above, and coming back — and the menu grew a
+   * row per net until it was the thing it was meant to save you from. Typing a name that is not a net's
+   * declares it; see {@link ensureNet}.
+   */
   private renderPads(): void {
     this.padList.innerHTML = "";
     const sel = this.partSelection();
@@ -1882,34 +1722,98 @@ export class ElectronicsModal {
     }
     this.padsGroup.hidden = false;
     this.padPart.textContent = `${comp.id} pads`;
-    for (const [padName] of terminals(comp.footprint)) {
-      const row = document.createElement("label");
+
+    // One list of the declared names, shared by every row. The browser draws it as the menu the `<select>`
+    // used to be, but only once the author starts typing — so it suggests without being the only way in.
+    const list = document.createElement("datalist");
+    list.id = `el-nets-${sel.index}`;
+    for (const net of this.nets()) {
+      const opt = document.createElement("option");
+      opt.value = net.name;
+      list.appendChild(opt);
+    }
+    this.padList.appendChild(list);
+
+    const pads = terminals(comp.footprint);
+    pads.forEach(([padName], i) => {
+      const on = this.padNet(sel.index, padName);
+      const net = this.nets().find((n) => n.id === on);
+
+      const row = document.createElement("div");
       row.className = "el-pad";
+      row.setAttribute("role", "treeitem");
+      // The last row closes the guide line, exactly as a file tree closes a branch.
+      if (i === pads.length - 1) row.classList.add("is-last");
+
       const tag = document.createElement("span");
       tag.className = "el-pad-name";
       tag.textContent = padName;
-      const pick = document.createElement("select");
-      pick.className = "el-pad-net";
-      pick.dataset.pad = padName;
-      const none = document.createElement("option");
-      none.value = "";
-      none.textContent = "—";
-      pick.appendChild(none);
-      for (const net of this.nets()) {
-        const opt = document.createElement("option");
-        opt.value = net.id;
-        opt.textContent = net.name;
-        pick.appendChild(opt);
-      }
-      const on = this.padNet(sel.index, padName);
-      pick.value = on;
-      // An unassigned pad is the likeliest authoring mistake, so it is marked rather than merely blank.
-      row.classList.toggle("is-unassigned", on === "");
-      pick.addEventListener("change", () => this.assignPad(sel.index, padName, pick.value));
+      tag.title = `Pad ${padName}`;
+
+      // The net's own colour, so a glance down the column groups the pads without reading a word of it.
+      // Held at zero size rather than dropped when the pad is on nothing, so the names stay aligned.
+      const dot = document.createElement("i");
+      dot.className = "el-pad-dot";
+      // `setAttribute`, not `.style` — the same way the nets tree colours its own dots, and the only one
+      // the test DOM implements.
+      if (net) dot.setAttribute("style", `background:${netColour(net, this.nets().indexOf(net))}`);
+      else dot.classList.add("is-empty");
+
+      const name = document.createElement("input");
+      name.type = "text";
+      name.className = "el-pad-net";
+      name.value = net?.name ?? "";
+      name.placeholder = "—";
+      name.dataset.pad = padName;
+      name.setAttribute("list", list.id);
+      name.setAttribute("aria-label", `Net for pad ${padName}`);
+      name.title = "Type a net name. A name that is not yet a net declares it; empty takes the pad off.";
+      name.addEventListener("change", () => this.wirePad(sel.index, padName, name.value));
+
       row.appendChild(tag);
-      row.appendChild(pick);
+      row.appendChild(dot);
+      row.appendChild(name);
       this.padList.appendChild(row);
-    }
+    });
+  }
+
+  /**
+   * Put a pad on the net of this name, declaring the net if there is not one yet.
+   *
+   * Empty takes the pad off its net, which is what clearing the box has to mean — the alternative is a box
+   * you cannot empty. A name is matched case-insensitively because {@link nameTaken} refuses to declare
+   * two nets that differ only in case, so "GND" and "gnd" can only ever mean the one net.
+   */
+  private wirePad(part: number, pad: string, raw: string): void {
+    const id = this.ensureNet(raw);
+    this.assignPad(part, pad, id);
+  }
+
+  /**
+   * The id of the net called `raw`, declaring it if it is new. `""` for a blank name.
+   *
+   * Shares its id and colour minting with {@link addNet} through {@link mintNet} rather than repeating it:
+   * two places inventing net ids is two places to get `Terminal.net` pointing at nothing.
+   */
+  private ensureNet(raw: string): string {
+    const name = raw.trim();
+    if (!name) return "";
+    const found = this.nets().find((n) => n.name.trim().toLowerCase() === name.toLowerCase());
+    if (found) return found.id;
+    const net = this.mintNet(name);
+    this.runCommand(addNetCommand(net));
+    return net.id;
+  }
+
+  /** A new net, named and coloured, with an id nothing else holds. Never added to the circuit here. */
+  private mintNet(name: string): Net {
+    const ids = new Set(this.nets().map((n) => n.id));
+    let n = 1;
+    while (ids.has(`n${n}`)) n++;
+    // Coloured on the way in, not when it is first drawn: the colour is saved with the circuit, so
+    // minting it at draw time would give the same net a different colour in a file that was reopened
+    // before it was ever painted.
+    return { id: `n${n}`, name, color: nextNetColour(this.nets().map((x, i) => netColour(x, i))) };
   }
 
   /** The nets the author has declared, in declaration order. */
@@ -1950,14 +1854,7 @@ export class ElectronicsModal {
       this.statusEl.textContent = `There is already a net called ${name} — names have to be unique`;
       return;
     }
-    const ids = new Set(this.nets().map((n) => n.id));
-    let n = 1;
-    while (ids.has(`n${n}`)) n++;
-    // Coloured on the way in, not when it is first drawn: the colour is saved with the circuit, so
-    // minting it at draw time would give the same net a different colour in a file that was reopened
-    // before it was ever painted.
-    const colour = nextNetColour(this.nets().map((x, i) => netColour(x, i)));
-    this.circuit = { ...this.circuit, nets: [...this.nets(), { id: `n${n}`, name, color: colour }] };
+    this.runCommand(addNetCommand(this.mintNet(name)));
     this.netNew.value = "";
     this.emit();
   }
@@ -1974,10 +1871,7 @@ export class ElectronicsModal {
       this.renderNets(); // put the box back to the name that actually holds
       return;
     }
-    this.circuit = {
-      ...this.circuit,
-      nets: this.nets().map((n) => (n.id === id ? { ...n, name } : n)),
-    };
+    this.runCommand(renameNetCommand(id, name));
     this.emit();
   }
 
@@ -1994,11 +1888,7 @@ export class ElectronicsModal {
     const on = this.netTerminals().filter((t) => t.net === id).length;
     const net = this.nets().find((n) => n.id === id);
     this.openNets.delete(id);
-    this.circuit = {
-      ...this.circuit,
-      nets: this.nets().filter((n) => n.id !== id),
-      terminals: this.netTerminals().filter((t) => t.net !== id),
-    };
+    this.runCommand(deleteNetCommand(id));
     this.emit();
     // After the emit, not before: `render()` rewrites the status line from the circuit, so a message set
     // first is overwritten by the redraw it triggers.
@@ -2019,28 +1909,8 @@ export class ElectronicsModal {
     // Open the branch the pad lands on, so the row that just appeared is one the author can see. A tree
     // that silently gains a hidden child is a tree that looks like nothing happened.
     if (net) this.openNets.add(net);
-    const rest = this.netTerminals().filter((t) => !(t.part === part && t.pad === pad));
-    this.circuit = {
-      ...this.circuit,
-      terminals: net ? [...rest, { part, pad, net }] : rest,
-    };
+    this.runCommand(assignPadCommand(part, pad, net));
     this.emit();
-  }
-
-  /**
-   * Fix up the terminals after the part at `removed` is deleted.
-   *
-   * Drop the ones that were on it, and bring every index above it down by one. Missing this is the
-   * failure the contract warned about: nothing errors, the netlist still resolves, and it wires pads that
-   * belong to a different part.
-   */
-  private reindexTerminals(removed: number): void {
-    const kept = this.netTerminals()
-      .filter((t) => t.part !== removed)
-      .map((t) => (t.part > removed ? { ...t, part: t.part - 1 } : t));
-    if (kept.length !== this.netTerminals().length || kept.some((t, i) => t !== this.netTerminals()[i])) {
-      this.circuit = { ...this.circuit, terminals: kept };
-    }
   }
 
   /**
@@ -2250,11 +2120,7 @@ export class ElectronicsModal {
       // started. Flipping one instead would mirror its pads about a break that does not exist.
       const free = part.kind === "part" ? (this.circuit.parts ?? [])[part.index] : undefined;
       if (free?.free) {
-        this.circuit = {
-          ...this.circuit,
-          parts: (this.circuit.parts ?? []).map((p, i) =>
-            i === part.index ? { ...p, rot: (((p.rot ?? 0) + 90) % 360 + 360) % 360 } : p),
-        };
+        this.runCommand(rotateFreePart(part.index));
         this.emit();
         return;
       }
@@ -2271,16 +2137,7 @@ export class ElectronicsModal {
     // The third step matters. Fixing an orientation forbids the router from turning that LED, and turning one
     // the wrong way can force a PWR/GND crossing that it would otherwise have avoided -- so there has to be a
     // way to hand the decision back. Without it the first press was permanent.
-    const next: boolean | undefined =
-      led.flip === undefined ? !this.plannedFlip(sel.index) : undefined;
-    this.circuit = {
-      ...this.circuit,
-      leds: this.circuit.leds.map((l, i) => {
-        if (i !== sel.index) return l;
-        const { flip: _drop, ...rest } = l;
-        return next === undefined ? rest : { ...rest, flip: next };
-      }),
-    };
+    this.runCommand(cycleLedFlip(sel.index, this.plannedFlip(sel.index)));
     this.emit();
   }
 
@@ -2296,21 +2153,13 @@ export class ElectronicsModal {
    * to hand the decision back.
    */
   private turnPartRound(sel: PartSelection): void {
-    const { field, items } = this.listFor(sel.kind);
+    const { items } = this.listFor(sel.kind);
     const item = items[sel.index];
     if (!item) {
       this.statusEl.textContent = "Select a component first, then press R to turn it round";
       return;
     }
-    const next: boolean | undefined = item.flip === undefined ? !this.plannedPartFlip(sel) : undefined;
-    this.circuit = {
-      ...this.circuit,
-      [field]: items.map((q, i) => {
-        if (i !== sel.index) return q;
-        const { flip: _drop, ...rest } = q;
-        return next === undefined ? rest : { ...rest, flip: next };
-      }),
-    };
+    this.runCommand(cyclePartFlip(sel as CommandPartSelection, this.plannedPartFlip(sel)));
     this.emit();
   }
 
@@ -2337,15 +2186,11 @@ export class ElectronicsModal {
     const part = this.partSelection();
     if (!part) {
       if (!this.circuit.leds[sel.index]) return;
-      this.circuit = { ...this.circuit, leds: this.circuit.leds.filter((_, i) => i !== sel.index) };
+      this.runCommand(removeLed(sel.index));
     } else {
-      const { field, items } = this.listFor(part.kind);
+      const { items } = this.listFor(part.kind);
       if (!items[sel.index]) return;
-      this.circuit = { ...this.circuit, [field]: items.filter((_, i) => i !== sel.index) };
-      // `Terminal.part` is an INDEX into `circuit.parts`, so removing one shifts every part above it and
-      // silently re-points their terminals at their neighbours — a netlist that still resolves and wires
-      // the wrong pads. Its own terminals go with it; the ones above it come down one.
-      if (part.kind === "part") this.reindexTerminals(sel.index);
+      this.runCommand(removeSelectedPart(part as CommandPartSelection));
     }
     this.select(null);
     this.emit();
@@ -2591,11 +2436,7 @@ export class ElectronicsModal {
       // A press that never moved is a selection, not a move: committing it would re-plan the circuit to put
       // the part back exactly where it already is, and cost most of a second doing it.
       if (Math.hypot(dx, dy) < 1e-9) return this.render();
-      this.circuit = {
-        ...this.circuit,
-        parts: (this.circuit.parts ?? []).map((q, i) =>
-          i === drag.index ? { ...q, x: q.x + dx, y: q.y + dy } : q),
-      };
+      this.runCommand(movePlacedPart(drag.index, dx, dy));
       this.emit();
       return;
     }
@@ -3220,92 +3061,6 @@ export class ElectronicsModal {
     }
     this.statusEl.textContent = msg;
   }
-}
-
-/**
- * A circuit safe to hand to the store: every array and object copied, so an edit here cannot reach back
- * into what the controller already holds.
- *
- * **Read this before adding a field to `Circuit`.** This function has silently eaten six fields — `flip`,
- * `component`, `nets`/`terminals`, `wires`, `free`, `color` — and each one had the same symptom: the value
- * drew on the canvas and was simply not there one hop later. Nothing throws. Nothing logs.
- *
- * Six times is not six mistakes, it is the shape of a hand-written whitelist over a model that gains a
- * field every few hours. So the default is inverted: everything this function does not deep-copy by name
- * is carried through by `...rest`, and a newly added field survives without anyone remembering it.
- *
- * `...rest` carries **by reference**, which is exact for a primitive and not good enough for a nested
- * structure — a new array field would be shared with the modal's own circuit rather than copied. That is
- * still strictly better than losing it, and the round-trip test in the suite is what tells you a field has
- * arrived and wants a real copy here.
- */
-function cloneCircuit(c: Circuit): Circuit {
-  // Everything named here is deep-copied below; `rest` is whatever the model has gained since.
-  const { leds, battery, resistors, switches, parts, nets, terminals, wires, ...rest } = c;
-  return {
-    ...rest,
-    // `flip` travels with the LED: it is the author's decision about which way round the part goes, and a
-    // clone that dropped it would lose the rotation the moment the circuit reached the store. So does
-    // `component`, for the same reason and with the same trap: dropped, every 0603 would reach the store
-    // as the default 1206 and be routed to a pitch its legs cannot reach. Both are written only where the
-    // author actually chose one, so an unturned 1206 clones to exactly the `{a, b}` it always did.
-    leds: leds.map((l) => ({
-      a: l.a,
-      b: l.b,
-      ...(l.flip === undefined ? {} : { flip: l.flip }),
-      ...(l.component === undefined ? {} : { component: l.component }),
-    })),
-    battery: battery ? { face: battery.face } : null,
-    // Likewise the resistors: a clone that dropped them would draw one on the canvas and lose it the moment
-    // the circuit reached the store — gone from the folded model, and from the next render back.
-    // `flip` travels with each of them for the same reason it travels with an LED: it is the author's
-    // decision about which way round the part goes, and a clone that dropped it would lose the turn the
-    // moment the circuit reached the store.
-    resistors: (resistors ?? []).map(withFlip),
-    switches: (switches ?? []).map(withFlip),
-    // And every library part, which is the same trap once more: a clone that dropped `parts` would draw
-    // one on the canvas and lose it the moment the circuit reached the store.
-    // `free` and `rot` travel too, and for the sharper version of the same reason: a free part that lost
-    // its flag would come back as a part in series, and the router would cut a rail for it somewhere the
-    // author never put it. Written only where they are set, so a seated part clones to the same object it
-    // always did and the recorded geometry above stays exact.
-    parts: (parts ?? []).map((p) => ({
-      component: p.component,
-      ...withFlip(p),
-      ...(p.free ? { free: true } : {}),
-      ...(p.rot === undefined ? {} : { rot: p.rot }),
-    })),
-    // And the netlist, which is the same trap once more and a worse one: a clone that dropped these would
-    // show the nets in the bar and lose every one of them the moment the circuit reached the store.
-    // `color` travels with the net for the same reason `flip` travels with a part: the author chose it,
-    // and a clone that dropped it would show the colour in the sidebar and lose it the moment the circuit
-    // reached the store. Written only where there is one, so a circuit authored before colours existed
-    // still clones to exactly the `{ id, name }` it always did.
-    nets: (nets ?? []).map((n) => (n.color === undefined
-      ? { id: n.id, name: n.name }
-      : { id: n.id, name: n.name, color: n.color })),
-    terminals: (terminals ?? []).map((t) => ({ part: t.part, pad: t.pad, net: t.net })),
-    // And the hand-drawn wires, which is the same trap a fourth time: this function copies field by field
-    // and silently drops anything it does not name, so a wire left out here would draw on the canvas and
-    // vanish the instant the circuit went round through the store. `net` and `width` travel only where the
-    // wire actually carries one — an absent `net` MEANS "a net of its own" (see {@link ManualWire.net}),
-    // so writing `undefined` in would be a different wire from the one the author drew.
-    wires: (wires ?? []).map(cloneWire),
-  };
-}
-
-/** One hand-drawn wire, copied down to its vertices so the stored circuit shares nothing with the editor's. */
-function cloneWire(w: ManualWire): ManualWire {
-  const out: ManualWire = { id: w.id, pts: w.pts.map((v) => ({ ...v })) };
-  if (w.net !== undefined) out.net = w.net;
-  if (w.width !== undefined) out.width = w.width;
-  return out;
-}
-
-/** A placed part's point, keeping the authored turn only where there is one — an absent `flip` means the
- *  router chooses, and writing `undefined` in would be a different thing from leaving it out. */
-function withFlip<T extends PlacedOnRail>(p: T): PlacedOnRail {
-  return p.flip === undefined ? { x: p.x, y: p.y } : { x: p.x, y: p.y, flip: p.flip };
 }
 
 /**

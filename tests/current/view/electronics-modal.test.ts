@@ -1710,14 +1710,12 @@ describe("view/electronics-modal", () => {
       }));
     }
 
-    /** Put a placed part's pad on a net, through the pad panel. */
+    /** Put a placed part's pad on a net, through the pad panel — by typing the name, as the author does. */
     function wirePad(modal: any, pad: string, netName: string): void {
-      const pick = modal.overlay.querySelectorAll(".el-pad-net").find((p: any) => p.dataset.pad === pad);
-      expect(pick, `no pad row called ${pad}`).toBeTruthy();
-      const opt = pick.children.find((o: any) => o.textContent === netName);
-      expect(opt, `net ${netName} is not offered on pad ${pad}`).toBeTruthy();
-      pick.value = opt.value;
-      pick.dispatch("change", {});
+      const box = modal.overlay.querySelectorAll(".el-pad-net").find((p: any) => p.dataset.pad === pad);
+      expect(box, `no pad row called ${pad}`).toBeTruthy();
+      box.value = netName;
+      box.dispatch("change", {});
     }
 
     /** Place one library part on the rail and select it, so its pads are on offer. */
@@ -1816,7 +1814,9 @@ describe("view/electronics-modal", () => {
         const [a, b] = spots(modal);
         placeAndSelect(modal, "C_1206", a!);
         wirePad(modal, "1", "SIG");
-        const wired = modal.circuit.nets.find((n: any) => n.name === "SIG").id;
+        // Kept as a check that the net really was declared — the box below reads back the NAME, which is
+        // the whole point of typing it, but the id is what `Terminal.net` holds.
+        expect(modal.circuit.nets.find((n: any) => n.name === "SIG")).toBeTruthy();
 
         placeAndSelect(modal, "R_1206", b!);
         expect(partRows(modal)).toHaveLength(2);
@@ -1826,7 +1826,7 @@ describe("view/electronics-modal", () => {
         expect(modal.selected).toEqual({ kind: "part", index: 0 });
         expect(modal.overlay.querySelector(".el-pad-part").textContent).toContain("C_1206");
         const pick = modal.overlay.querySelectorAll(".el-pad-net").find((p: any) => p.dataset.pad === "1");
-        expect(pick.value, "the first part's assignment is not readable again").toBe(wired);
+        expect(pick.value, "the first part's assignment is not readable again").toBe("SIG");
       });
 
       it("says how many of each part's pads are on a net, and marks one with none", () => {
@@ -1964,6 +1964,41 @@ describe("view/electronics-modal", () => {
 
         placeAndSelect(modal, "C_1206", at);
         expect(modal.overlay.querySelector(".el-pads").hidden).toBe(false);
+      });
+
+      it("declares a net from the pad row when the name typed is not one yet", () => {
+        // The reason the pad's net is typed and not picked. A menu can only offer what already exists, so
+        // wiring a pad to a new net meant leaving the pad, declaring the net in the box above, and coming
+        // back to it — three gestures for the commonest edit there is.
+        const { modal, at } = withRails();
+        const before = modal.circuit.nets.length;
+        placeAndSelect(modal, "C_1206", at);
+        wirePad(modal, "1", "SDA");
+
+        const made = modal.circuit.nets.find((n: any) => n.name === "SDA");
+        expect(made, "typing a new name did not declare the net").toBeTruthy();
+        expect(modal.circuit.nets).toHaveLength(before + 1);
+        // Wired to the net it just made, not merely alongside it.
+        expect(modal.circuit.terminals).toEqual([{ part: 0, pad: "1", net: made.id }]);
+        // And it is a net like any other: coloured, and offered to every row after it.
+        expect(made.color).toBeTruthy();
+        expect(made.id).not.toBe("");
+      });
+
+      it("takes an existing net by name rather than declaring a second one that reads the same", () => {
+        // Two nets called GND is the failure this has to not have: the pads would divide between them and
+        // the netlist would resolve, so nothing would report it. Case is not a difference, because
+        // `addNet` already refuses to declare two names that differ only by it.
+        const { modal, at } = withRails();
+        addNet(modal, "GND");
+        const n = modal.circuit.nets.length;
+        placeAndSelect(modal, "C_1206", at);
+        wirePad(modal, "1", "gnd");
+
+        expect(modal.circuit.nets).toHaveLength(n);
+        expect(modal.circuit.terminals[0].net).toBe(
+          modal.circuit.nets.find((x: any) => x.name === "GND").id,
+        );
       });
 
       it("moves a pad from one net to another rather than putting it on both", () => {
@@ -2129,16 +2164,40 @@ describe("view/electronics-modal", () => {
       // worse than no label at all.
       const { modal } = withRails();
       const mid = (t: any): { x: number; y: number } => t.pts[Math.floor(t.pts.length / 2)];
+      // The ROOMIEST run of each net, not the first one in the list. A part needs its own gap of run to sit
+      // in, and when `TAPE_MM` fell to 1.5 on 2026-08-28 the replan left the first GND run too short for the
+      // switch — the fixture then placed two parts instead of four and the test read as a designator bug,
+      // which it is not. Whether a short run can hold a part is `resistor.test.ts`'s business, not this
+      // test's; here the parts simply have to exist so that they can be numbered.
+      const runLen = (t: any): number => {
+        let s = 0;
+        for (let i = 1; i < t.pts.length; i++) s += Math.hypot(t.pts[i].x - t.pts[i - 1].x, t.pts[i].y - t.pts[i - 1].y);
+        return s;
+      };
+      const roomiest = (net: string): any =>
+        modal.routed.traces.filter((t: any) => t.net === net).sort((a: any, b: any) => runLen(b) - runLen(a))[0];
       // One of each kind, each on a run of its own -- two parts on one run and the second will not fit.
       modal.selectTool("resistor");
-      tapFlat(modal, mid(modal.routed.traces.find((t: any) => t.net === "pwr")));
+      tapFlat(modal, mid(roomiest("pwr")));
       modal.selectTool("switch");
-      tapFlat(modal, mid(modal.routed.traces.find((t: any) => t.net === "gnd")));
+      // Longest GND run first, then its other points: a switch reaches a pitch plus half a pad off its own
+      // centreline, so it is refused near a bend or where the other rail runs close, and which points those
+      // are moves with the tape. See `resistor.test.ts › slides one dropped at the very end of a run`.
+      sw: for (const t of modal.routed.traces.filter((x: any) => x.net === "gnd").sort((a: any, b: any) => runLen(b) - runLen(a))) {
+        for (const p of t.pts) {
+          tapFlat(modal, p);
+          if (modal.drawnParts().some((d: any) => d.component === "SW_SPDT")) break sw;
+        }
+      }
       modal.selectPlaceMode("free");
       pick(modal, "R_2010");
-      for (const t of modal.routed.traces.filter((x: any) => x.width === undefined)) {
-        tapFlat(modal, mid(t));
-        if (modal.routedParts().length) break;
+      // Every point of every un-parted run, until one takes it: free placement needs bare pattern under the
+      // whole part, and which points have that moves with the plan.
+      outer: for (const t of modal.routed.traces.filter((x: any) => x.width === undefined)) {
+        for (const p of t.pts) {
+          tapFlat(modal, p);
+          if (modal.routedParts().length) break outer;
+        }
       }
       // The LEDs come last, which is the order both cut files take them in — see `drawnParts`.
       expect(modal.drawnParts().map((d: any) => d.component))
