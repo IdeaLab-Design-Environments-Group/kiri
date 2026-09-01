@@ -52,6 +52,7 @@ import { footprintById } from "./library.js";
 import {
   DEFAULT_SHEET,
   creaseCostFraction,
+  STRAIN_BAND_CAP,
   maxTraceWidthMm,
   minWebMm,
   overStrainLimit,
@@ -363,6 +364,18 @@ export function planRoutes(
    * from the thing it is a baseline for measures the fork as much as the price.
    */
   creasePenaltyFrac: number = FOLD_PENALTY_FRAC,
+  /**
+   * Cap on the crease severity bands the search minimises before it minimises cost — see
+   * `fold-strain.ts › strainBand`.
+   *
+   * Here for the same reason `creasePenaltyFrac` is: at `0` bands are off and the search orders purely on
+   * cost, which is the sum-minimising router this one has to be compared against. A baseline routed by
+   * different code from the thing it is a baseline for measures the fork as much as the ordering.
+   *
+   * Defaults **off**: measured to change no route on any shipped pattern, on either sheet. See
+   * `corridor.ts › buildCorridor` for the measurement and the likely reason.
+   */
+  bandCap: number = 0,
 ): RoutedCircuit {
   // **New parameters APPEND. Never insert one.** Every optional parameter here has a default, so an
   // inserted one leaves every existing call compiling while it silently receives the wrong argument —
@@ -436,7 +449,8 @@ export function planRoutes(
   // used to happen, and is what put copper outside the body. Better to report them honestly.
   // The crossing penalty is the pattern's bounding-box diagonal, as in the paper: larger than any single step
   // in the graph, so a crease is crossed only when nothing else reaches the tile.
-  const corridor = buildCorridor(faces, gaps, patternDiag(faces) * creasePenaltyFrac, tapeW, sheet, tapeMm);
+  const corridor = buildCorridor(
+    faces, gaps, patternDiag(faces) * creasePenaltyFrac, tapeW, sheet, tapeMm, bandCap);
   const reach = reachableFaces(corridor, battery.face);
   for (let i = targets.length - 1; i >= 0; i--) {
     const t = targets[i]!;

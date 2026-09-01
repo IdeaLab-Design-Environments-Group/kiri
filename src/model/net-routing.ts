@@ -60,6 +60,7 @@ import { pointInFace } from "./electronics.js";
 // Imported from the modules that own each concern rather than from the router's facade: net routing is
 // reached BY the router, so importing the router back would close a cycle.
 import { FOLD_PENALTY_FRAC, MIN_LAND_FRAC, TAPE_MM, weedGapFor } from "./tape-width.js";
+import { STRAIN_BAND_CAP } from "./fold-strain.js";
 import { buildCorridor, searchCorridor } from "./corridor.js";
 import { patternDiag, ptKey } from "./trace-geometry.js";
 import { narrowedTo } from "./pad-landing.js";
@@ -959,9 +960,14 @@ export function planNets(
    * before. Appended, never inserted — see `planRoutes`.
    */
   pads: PadObstacle[] = [],
+  /** Cap on the crease severity bands the search minimises first — `fold-strain.ts › strainBand`. `0` is
+   *  the pure cost ordering, and is the default: bands are measured to change no route on any shipped
+   *  pattern. See `corridor.ts › buildCorridor`. */
+  bandCap: number = 0,
 ): NetRouting {
   if (!nets.length) return { nets: [], traces: [], orders: 0 };
-  const c = buildCorridor(faces, gaps, patternDiag(faces) * FOLD_PENALTY_FRAC, tapeW, sheet, tapeMm);
+  const c = buildCorridor(
+    faces, gaps, patternDiag(faces) * FOLD_PENALTY_FRAC, tapeW, sheet, tapeMm, bandCap);
   const clearance = weedFloorFor(tapeW, tapeMm, sheet);
   const padGap = padClearanceFor(tapeW, tapeMm);
 

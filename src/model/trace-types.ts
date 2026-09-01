@@ -182,6 +182,17 @@ export interface Corridor {
   /** Extra cost for crossing at this node — a mountain fold, a steep valley or a cut. */
   cost: Map<string, number>;
   /**
+   * Severity band of the crease at this node — see `fold-strain.ts › strainBand`.
+   *
+   * Distinct from {@link cost} in the arithmetic that consumes it: a cost is *summed* along a route, a band is
+   * *maximised*. Fatigue is a max statistic — a trace fails at its single worst crossing, not at the total of
+   * them — so no amount of summing moves the worst crossing, which is the number that decides whether the
+   * trace survives folding.
+   *
+   * Empty when bands are switched off, in which case `searchCorridor` orders purely on cost, as it always did.
+   */
+  band: Map<string, number>;
+  /**
    * Nodes copper may not use at all, because the crease there strains it past
    * {@link SheetSpec.strainLimit}.
    *

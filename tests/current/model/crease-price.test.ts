@@ -17,6 +17,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { type Led, flatFaces, gapGraph, ledOf, pointInFace } from "../../../src/model/electronics.js";
 import { FOLD_PENALTY_FRAC, patternDiag, planRoutes, totalLength } from "../../../src/model/electronics-routing.js";
+import { STRAIN_BAND_CAP } from "../../../src/model/fold-strain.js";
 
 const EXAMPLES = new URL("../../../public/examples/", import.meta.url).pathname;
 
@@ -41,10 +42,15 @@ function ledsOn(gaps: { faceA: number; faceB: number }[], max: number): Led[] {
 }
 
 /** Tension (mountain) and compression (valley) crossings, by the face the copper is on. */
-function crossings(name: string, ledCount: number, creaseFrac?: number) {
+function crossings(name: string, ledCount: number, creaseFrac?: number, bandCap = 0) {
   const { faces, gaps } = load(name);
   const leds = ledsOn(gaps, ledCount);
-  const r = planRoutes(faces, gaps, { leds, battery: { face: 0 } }, undefined, undefined, creaseFrac);
+  // `bandCap` defaults to 0 here, not to the shipped value: these cases measure the *crease price*, and the
+  // bottleneck ordering is a second, independent thing the router does. Leaving it on would mean the
+  // "length-only" baseline was not length-only -- it comes out at 14 crossings rather than 17, because
+  // bands steer a route even when the price is zero. Bands get their own cases below.
+  const r = planRoutes(faces, gaps, { leds, battery: { face: 0 } },
+                       undefined, undefined, creaseFrac, bandCap);
   const gapFor = new Map<string, (typeof gaps)[number]>();
   for (const g of gaps) gapFor.set(`${Math.min(g.faceA, g.faceB)}_${Math.max(g.faceA, g.faceB)}`, g);
   const step = patternDiag(faces) / 3000;
@@ -114,5 +120,40 @@ describe("model/crease-price", () => {
     expect(knee).toEqual(crossings("church.fkld", 12, 0.7));
     // And the knee really is at the shipped value rather than below it: just under, the plan still differs.
     expect(crossings("church.fkld", 12, 0.3)).not.toEqual(knee);
+  });
+
+  describe("the bottleneck ordering", () => {
+    /** `searchCorridor` minimises the worst crease *band* a run crosses before it minimises cost — see
+     *  `fold-strain.ts › strainBand`. It is a different statement from the crease price: a price is summed
+     *  along a route and can only reduce how many creases are crossed, while fatigue is a max statistic and
+     *  a trace fails at its single worst crossing. */
+    it("steers a route on its own, with no crease price at all", { timeout: 60000 }, () => {
+      const flat = crossings("church.fkld", 12, 0, 0);
+      const banded = crossings("church.fkld", 12, 0, STRAIN_BAND_CAP);
+      expect(flat.tension).toBe(17);
+      expect(banded.tension).toBe(14);
+      // The same trade the price makes, bought a different way: fewer crossings, more copper.
+      expect(banded.tension).toBeLessThan(flat.tension);
+      expect(banded.len).toBeGreaterThan(flat.len);
+    });
+
+    it("adds nothing on top of the crease price on the shipped sheet", { timeout: 60000 }, () => {
+      // Not a disappointment — it is the saturation result stated a second way. At 0.4mm the copper passes
+      // its fatigue strain at about 7 degrees of fold, so every crossing on these patterns is already lost
+      // and every band caps to the same value. With nothing to choose between, the search falls back on
+      // cost and plans identically. The bands only have something to say on a sheet thin enough that some
+      // folds are survivable; see `scripts/bench-band.ts`.
+      const priced = crossings("church.fkld", 12, undefined, 0);
+      const both = crossings("church.fkld", 12, undefined, STRAIN_BAND_CAP);
+      expect(both.tension).toBe(priced.tension);
+      expect(both.len).toBeCloseTo(priced.len, 2);
+    });
+
+    it("leaves every route untouched when it is switched off", { timeout: 60000 }, () => {
+      // The escape hatch has to be real: at `bandCap` 0 this is the router as it was before bands existed.
+      const before = crossings("church.fkld", 12, undefined, 0);
+      expect(before.tension).toBe(11);
+      expect(before.len).toBeCloseTo(15.86, 2);
+    });
   });
 });

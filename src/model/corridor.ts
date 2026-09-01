@@ -25,6 +25,8 @@ import type { Corridor } from "./trace-types.js";
 import {
   DEFAULT_SHEET,
   creaseCostFraction,
+  STRAIN_BAND_CAP,
+  strainBand,
   overStrainLimit,
   type SheetSpec,
 } from "./fold-strain.js";
@@ -55,6 +57,9 @@ const OCCUPIED_TOLL = 500;
 const EDGE_CROSSINGS = [1 / 4, 3 / 4];
 
 const SHARED_TOLL = 2;
+/** Weight of one severity band when band and cost are packed into a single heap priority. Far above any
+ *  reachable path cost, so a lower band always sorts first and cost only breaks ties within a band. */
+const BAND_STRIDE = 1e12;
 
 
 const OWN_TAPE_DISCOUNT = 0.2;
@@ -313,6 +318,22 @@ function creaseRefused(g: GapEdge, tapeW: number, tapeMm: number, sheet: SheetSp
   return overStrainLimit(hingeMm, g.dihedral, sheet);
 }
 
+function creaseBand(
+  g: GapEdge,
+  tapeW: number,
+  tapeMm: number,
+  sheet: SheetSpec,
+  cap: number,
+): number {
+  // A cut is severed material, not a fold: it is always the worst thing a trace can cross, so it takes the top
+  // band outright rather than being handed to the strain model, which has no dihedral to work from.
+  if (g.assignment === "C") return cap;
+  if (g.dihedral == null) return g.assignment === "M" ? cap : 0;
+  const mmPerUnit = tapeW > 0 ? tapeMm / tapeW : 0;
+  const hingeMm = Math.hypot(g.legB.x - g.legA.x, g.legB.y - g.legA.y) * mmPerUnit;
+  return strainBand(hingeMm, g.dihedral, sheet, undefined, cap);
+}
+
 function creaseFraction(g: GapEdge, tapeW: number, tapeMm: number, sheet: SheetSpec): number {
   if (g.assignment === "C") return 1;
   if (g.dihedral == null) return g.assignment === "M" ? 1 : 0;
@@ -340,11 +361,29 @@ export function buildCorridor(
   /** The tape in mm — see {@link seatLed}. Only the crease strain needs it, and only to read the hinge
    *  width in millimetres; the graph itself is built in pattern units. */
   tapeMm: number = TAPE_MM,
+  /**
+   * Cap for the crease severity bands the search minimises before it minimises cost — see
+   * `fold-strain.ts › strainBand`. Zero switches bands off entirely and gives the pure cost ordering.
+   *
+   * **Off by default, because it is measured to do nothing here.** `scripts/bench-band.ts` routes all six
+   * shipped patterns both ways: on the 0.4mm sheet every tension crossing is already past the copper's
+   * fatigue strain, every band caps to the same value, and all six plan identically -- 0% change in
+   * crossings and in copper. On a 0.05mm film the physics does move (house's worst band falls from 3 to 1
+   * and three of its eleven crossings drop below fatigue) and the routes still do not.
+   *
+   * The reason looks structural rather than physical: this router works on a face-adjacency corridor -- face
+   * centroids and two crossing points per edge, six gaps on `house` -- and an ordering can only exploit
+   * routes that exist to choose between. The same algorithm on a ~17,000-node lattice cuts fatiguing
+   * crossings by up to 100% (`traceformroutebench`). Switching it on here changes routes anyway, which broke
+   * seven route-pinning tests for no measured gain, so it stays available and off.
+   */
+  bandCap: number = 0,
 ): Corridor {
   const mids = new Map<number, Vec2[]>();
   const faceOf = new Map<string, number[]>();
   const point = new Map<string, Vec2>();
   const cost = new Map<string, number>();
+  const band = new Map<string, number>();
 
   // Crossing penalties, after Nakaya et al., "4D Leaf Circuits" (SCF '25), Algorithm 1.
   //
@@ -358,10 +397,15 @@ export function buildCorridor(
   // Cuts are ours to add: the material is severed there, so tape spanning one is bridging a hole rather than
   // lying on a substrate.
   const penaltyOf = new Map<string, number>();
+  const bandOf = new Map<string, number>();
   const refusedEdges = new Set<string>();
   for (const g of gaps) {
     const price = foldPenalty * creaseFraction(g, tapeW, tapeMm, sheet);
     if (price > 0) penaltyOf.set(edgeKeyOf(g.verts[0], g.verts[1]), price);
+    if (bandCap > 0) {
+      const b = creaseBand(g, tapeW, tapeMm, sheet, bandCap);
+      if (b > 0) bandOf.set(edgeKeyOf(g.verts[0], g.verts[1]), b);
+    }
     if (creaseRefused(g, tapeW, tapeMm, sheet)) refusedEdges.add(edgeKeyOf(g.verts[0], g.verts[1]));
   }
   const refused = new Set<string>();
@@ -392,6 +436,8 @@ export function buildCorridor(
         faceOf.set(key, owners);
         const pen = penaltyOf.get(edgeKeyOf(va, vb));
         if (pen) cost.set(key, pen);
+        const b = bandOf.get(edgeKeyOf(va, vb));
+        if (b) band.set(key, b);
         if (refusedEdges.has(edgeKeyOf(va, vb))) refused.add(key);
       }
     }
@@ -418,7 +464,7 @@ export function buildCorridor(
   for (const key of gapKeys) {
     if (!point.has(key)) continue;
   }
-  return { mids, faceOf, point, chords, cost, refused };
+  return { mids, faceOf, point, chords, cost, band, refused };
 }
 
 /**
@@ -486,7 +532,23 @@ export function searchCorridor(
     return step * chip * shared * own + fold;
   };
 
+  // Bottleneck ordering.
+  //
+  // Fatigue is a max statistic: a trace fails at its single worst crossing, not at the sum of them. Ordering
+  // purely on cost -- which is what this did, and what Nakaya et al.\'s rule does -- can only ever reduce how
+  // *many* creases a run crosses, and leaves the worst one exactly where it was. So a route is compared first
+  // on the worst crease band it crosses and only then on cost, which means among routes that are equally
+  // survivable the cheapest still wins, and nothing changes at all on a pattern whose creases share one band.
+  //
+  // The two are packed into the one number the heap orders on. BAND_STRIDE is far above any reachable path
+  // cost -- a pattern diagonal is a few hundred units and the dearest node multiplies a step by
+  // OCCUPIED_TOLL -- so a lower band always sorts first and cost only ever breaks ties within a band.
+  const banded = c.band.size > 0;
+  const bandAt = (key: string): number => (banded ? (c.band.get(key) ?? 0) : 0);
+  const pack = (worst: number, run: number): number => worst * BAND_STRIDE + run;
+
   const dist = new Map<string, number>();
+  const worstOf = new Map<string, number>();
   const prev = new Map<string, string>();
   const seen = new Set<string>();
   const heap = new MinHeap();
@@ -499,8 +561,12 @@ export function searchCorridor(
     // leg -- terminal to first waypoint -- costing nothing, so the search would happily set off from a node
     // behind the terminal and doubled back to get going.
     const d = cost(k, origin ? Math.sqrt(dist2(origin, m)) : 0);
-    dist.set(k, d);
-    heap.push(k, d);
+    const w = bandAt(k);
+    if (pack(w, d) < pack(worstOf.get(k) ?? Infinity, dist.get(k) ?? Infinity)) {
+      dist.set(k, d);
+      worstOf.set(k, w);
+      heap.push(k, pack(w, d));
+    }
   }
 
   let end: string | null = null;
@@ -514,6 +580,7 @@ export function searchCorridor(
     const at: string | null = top;
     if (seen.has(at)) continue;
     const best = dist.get(at)!;
+    const worst = worstOf.get(at) ?? 0;
     if (goal.has(at)) { end = at; break; }
     seen.add(at);
     const here = c.point.get(at)!;
@@ -538,10 +605,12 @@ export function searchCorridor(
         const cuts = theirs ? crossesAny(here, m, theirs) : false;
         if (cuts && strict) continue;
         const w = best + cost(k, Math.sqrt(dist2(here, m))) * (sweeps || cuts ? TERMINAL_TOLL : 1);
-        if (w < (dist.get(k) ?? Infinity)) {
+        const nextWorst = Math.max(worst, bandAt(k));
+        if (pack(nextWorst, w) < pack(worstOf.get(k) ?? Infinity, dist.get(k) ?? Infinity)) {
           dist.set(k, w);
+          worstOf.set(k, nextWorst);
           prev.set(k, at);
-          heap.push(k, w);
+          heap.push(k, pack(nextWorst, w));
         }
       }
     }
