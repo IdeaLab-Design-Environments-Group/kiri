@@ -1,4 +1,5 @@
 import { type BarHingeModel, TILE_COLLIDE_SIGN } from "./model.js";
+import { guideTarget } from "./fold-kinematics.js";
 
 /**
  * Gershenfeld bar-and-hinge force math, written once as pure CPU functions over the SoA
@@ -104,6 +105,23 @@ export function computeThetas(m: BarHingeModel, lastTheta: Float32Array): void {
     x = Math.max(-1, Math.min(1, x));
     const y = dot(cross(n1, ehat), n2);
     let theta = Math.atan2(y, x);
+
+    // A SEAM hinge takes the branch nearest its own target instead. Unwrapping against the previous
+    // frame is right for a scored crease, whose two panels are hinged together for the whole fold, so
+    // a jump of 2π can only be the ±π wrap. A seam's two panels are NOT joined while the fold runs —
+    // they start across the sheet and swing independently — so their relative angle passes through ±π
+    // for real, and the unwrapper faithfully records a full turn that means nothing for a joint that
+    // did not exist yet. Measured on house, five of its nine seams finished a fold reading +268°
+    // where the dihedral was −92°: the hinge was then driven by a 358° error instead of 2°, which
+    // held the artifact 0.6% of a span off its form and its seams 0.28% open — visible as a hairline
+    // down every taped edge. The target is the branch the joint is meant to be on, and it is within
+    // ±π by construction, so this needs no history and cannot drift.
+    if ((m.creases.seamPeer3?.[i] ?? -1) >= 0) {
+      const target = m.creases.targetTheta[i];
+      theta += TWO_PI * Math.round((target - theta) / TWO_PI);
+      lastTheta[i] = theta;
+      continue;
+    }
 
     // Unwrap relative to the last value (avoid 2π jumps as the fold passes ±π).
     let diff = theta - lastTheta[i];
@@ -355,10 +373,18 @@ export function accumulateForces(m: BarHingeModel, lastTheta: Float32Array, fold
   // seams or not at all. Undefined ⇒ 1 (printed mode's build-time `relaxPrintedGoal` never lets go).
   if (m.softDriven) {
     const kGoal = (m.params.kGoal ?? 0) * (m.guideWeight ?? 1);
+    // Aim along the net's own kinematics where it has one — the pose in which every panel is rigid
+    // and every crease is at exactly `foldPercent` of its target. The straight rest→goal chord is
+    // the fallback for a net that has no such fold, and it is a poor target: halfway along it every
+    // vertex sits at its chord midpoint, bars foreshortened by up to 100%, and its own crease angles
+    // read 0% folded. See `fold-kinematics.ts`.
+    const aim = guideTarget(m, foldPercent);
     for (let i = 0; i < m.numNodes; i++) {
       if (!m.driven[i]) continue;
       for (let d = 0; d < 3; d++) {
-        const tgt = m.rest[3 * i + d] + (m.goal[3 * i + d] - m.rest[3 * i + d]) * foldPercent;
+        const tgt = aim
+          ? aim[3 * i + d]
+          : m.rest[3 * i + d] + (m.goal[3 * i + d] - m.rest[3 * i + d]) * foldPercent;
         F[3 * i + d] += kGoal * (tgt - pos[3 * i + d]);
       }
     }

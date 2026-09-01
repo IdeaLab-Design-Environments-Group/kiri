@@ -236,6 +236,8 @@ describe("a declared folded form is guided to, not blended into", () => {
       const m = built!.scene.model;
       // The whole bug in one assertion: a pinned node is a position written into the model, and a
       // file may declare EVERY vertex driven, which pinned the entire mesh and left nothing to solve.
+      // This holds even for the panel the artifact rests on: it is held by the guide, as a force, so
+      // that it is simulated like the rest of the sheet rather than being the one part that is not.
       expect(Array.from(m.fixed).some((f) => f === 1)).toBe(false);
       expect(Array.from(m.driven).some((d) => d === 1)).toBe(true);
       expect(m.softDriven).toBe(true);

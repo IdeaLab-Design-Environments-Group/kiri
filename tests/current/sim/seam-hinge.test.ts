@@ -113,6 +113,11 @@ describe("seam hinges — a taped lip pair folds like a crease", () => {
     // Half folded: the lips are still a sheet apart, so the seam hinges must be inert. With them
     // acting, this pair of couples is about two different lines and leaves |Στ| ≈ 8.9e-2 on a model
     // whose forces otherwise sum to no torque at all — enough to spin church 50% of a span off.
+    //
+    // Probed with the guide silenced — it is an external field pulling toward a pose this probe is
+    // not sitting at, so it is entitled to torque the model and is not what is under test. What is
+    // left is the sheet's own forces, which must sum to no torque at all.
+    model.softDriven = false;
     for (let i = 0; i < 3 * model.numNodes; i++) model.position[i] = 0.5 * (model.position[i] + model.goal[i]);
     const withHinges = netTorque(model, 0.5, last);
     const k = c.k.slice();
@@ -139,4 +144,51 @@ describe("seam hinges — a taped lip pair folds like a crease", () => {
       expect(worst).toBeLessThan(15); // 3° / 4° measured — the seams fold, they do not just meet
     }
   }, 30000);
+
+  it("closes: the seams meet, and no hinge is driving a whole turn of error", { timeout: 40000 }, () => {
+    // `computeThetas` unwraps each crease against its previous value, which is right for a scored
+    // crease — its two panels are hinged together all fold, so a 2π jump can only be the ±π wrap. A
+    // seam's panels are not joined while the fold runs; they start across the sheet and swing
+    // independently, so the angle between them passes through ±π for real and the unwrapper records
+    // a full turn that means nothing for a joint that did not exist yet. Five of house's nine seams
+    // finished a fold reading +268° where the dihedral was −92°, so the hinge drove a 358° error
+    // instead of 2° — holding the artifact 0.6% of a span off its form with its seams 0.28% open,
+    // which reads on screen as a hairline down every taped edge of a house that is otherwise shut.
+    for (const [name, gapBound] of [["house.fkld", 0.005], ["church.fkld", 0.005]] as const) {
+      const { model, solver } = buildScene(load(name))!.scene;
+      const runner = new FoldRunner(model, solver);
+      runner.setTarget(1);
+      for (let i = 0; i < 3000 && !runner.settled(); i++) runner.frame();
+
+      let lo = Infinity, hi = -Infinity;
+      for (let i = 0; i < 3 * model.numNodes; i++) {
+        if (model.goal[i] < lo) lo = model.goal[i];
+        if (model.goal[i] > hi) hi = model.goal[i];
+      }
+      const modelSpan = hi - lo;
+
+      // Every taped pair actually meets. 0.00% / 0.03% of a span measured.
+      const seams = model.seams!;
+      let worstGap = 0;
+      for (let i = 0; i < seams.count; i++) {
+        const a = seams.n0[i], b = seams.n1[i];
+        worstGap = Math.max(worstGap, Math.hypot(
+          model.position[3 * a] - model.position[3 * b],
+          model.position[3 * a + 1] - model.position[3 * b + 1],
+          model.position[3 * a + 2] - model.position[3 * b + 2],
+        ));
+      }
+      expect(worstGap / modelSpan).toBeLessThan(gapBound);
+
+      // And the angle the solver is driving each seam by is the angle it actually has — the check
+      // that would have caught the winding, which the pose-space assertions above did not.
+      const c = model.creases;
+      const solverTheta = (solver as unknown as { theta: Float32Array }).theta;
+      for (let i = c.count - (model.seamCreases ?? 0); i < c.count; i++) {
+        const actual = measureTheta(model, c.face1[i], c.face2[i], c.n3[i], c.n4[i]);
+        expect(Math.abs(solverTheta[i] - actual)).toBeLessThan(1e-3);
+        expect(deg(Math.abs(actual - c.targetTheta[i]))).toBeLessThan(2);
+      }
+    }
+  });
 });

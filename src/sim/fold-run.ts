@@ -42,6 +42,21 @@ import { kineticDamp, removeRigidBodyMotion } from "./stabilize.js";
  * fix if this bites again; it is not done here because it would also re-time every existing preset.
  */
 const FOLD_EASE = 0.05;
+/**
+ * A frame stops early once some node has moved this fraction of the model's span, so fast motion is
+ * DRAWN rather than skipped.
+ *
+ * Letting go of the guide is a snap-through: the pose the guide holds is not an equilibrium of the
+ * pattern alone, so somewhere around half-released the mesh crosses a barrier and slides to the one
+ * that is. That is real, and not a rate artifact — stretching the release from 1 second to 15 makes
+ * no difference to it (36.2% of a span moved in a single frame either way). But at 80 steps a frame
+ * the whole slide happens in about five rendered frames, so what reaches the screen is not a fold
+ * settling, it is a flick. Under this cap the same slide is spread over fifty-odd frames and reads
+ * as what it is.
+ */
+const FAST_MOTION = 0.01;
+/** Steps between checks of how far the frame has got. Small enough to stop close to the budget. */
+const CHUNK = 1;
 /** Guided cadence: solver steps per frame, all at that frame's foldPercent. */
 const GUIDED_STEPS_PER_FRAME = 80;
 /** Free cadence: solver steps per frame. */
@@ -59,9 +74,15 @@ export class FoldRunner {
   foldPercent = 0;
   private target = 0;
   private prevKE = Infinity;
+  /** Scratch copy of the pose at the start of a frame, for measuring how far it moved. */
+  private before: Float32Array | null = null;
+  /** The share of a full frame's stepping the last frame did; the guide fades by the same share. */
+  private releaseShare = 1;
+  /** Largest extent of the model, for reading node motion as a fraction of it. */
+  private readonly span: number;
   /** Taken to a declared shape (pinned or softly guided) ⇒ quasi-static ease + quench at target. */
   readonly toGoal: boolean;
-  /** Nothing pinned ⇒ remove rigid-body motion each step. */
+  /** Nothing pinned and nothing holding the placement ⇒ remove rigid-body motion each step. */
   readonly unpinned: boolean;
   /** There is a soft guide, so there is something to let go of at the end. */
   readonly guideHeld: boolean;
@@ -77,9 +98,20 @@ export class FoldRunner {
         break;
       }
     }
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let i = 0; i < 3 * model.numNodes; i++) {
+      if (model.rest[i] < lo) lo = model.rest[i];
+      if (model.rest[i] > hi) hi = model.rest[i];
+    }
+    this.span = hi > lo ? hi - lo : 1;
     this.guideHeld = model.softDriven === true && model.guideWeight !== undefined;
     this.toGoal = pinned || this.guideHeld;
-    this.unpinned = !pinned;
+    // Re-centring exists for a fold that nothing holds in place. A kinematic guide DOES hold it in
+    // place — its target is a specific pose, not just a shape — so removing rigid-body motion there
+    // does not stabilise the model, it drags it: the panel the artifact rests on wandered 11-15% of
+    // a span through the fold with this on, against 0.9% with it off.
+    this.unpinned = !pinned && model.foldDrive !== "kinematic";
     if (this.guideHeld) model.guideWeight = 1;
   }
 
@@ -119,15 +151,30 @@ export class FoldRunner {
   frame(): void {
     const m = this.model;
     if (this.toGoal) {
-      this.foldPercent += (this.target - this.foldPercent) * FOLD_EASE;
-      if (this.atTarget()) this.foldPercent = this.target;
-      const at = this.foldPercent === this.target;
-      this.solver.foldPercent = this.foldPercent;
-      for (let i = 0; i < GUIDED_STEPS_PER_FRAME; i++) {
-        this.solver.step();
-        if (this.unpinned) removeRigidBodyMotion(m);
-        if (at) this.prevKE = kineticDamp(m, this.prevKE);
+      // A frame is stepped in chunks and CUT SHORT once enough has visibly happened, so fast motion
+      // is drawn rather than skipped. Everything measured per frame — the ease and the guide's
+      // release — is scaled by the share of a frame that actually ran, so cutting a frame short
+      // changes how much of the fold is DRAWN and never how fast the fold happens.
+      const before = (this.before ??= new Float32Array(m.position.length));
+      before.set(m.position);
+      const budget = FAST_MOTION * this.span;
+      let ran = 0;
+      while (ran < GUIDED_STEPS_PER_FRAME) {
+        const chunk = Math.min(CHUNK, GUIDED_STEPS_PER_FRAME - ran);
+        const share = chunk / GUIDED_STEPS_PER_FRAME;
+        this.foldPercent += (this.target - this.foldPercent) * FOLD_EASE * share;
+        if (this.atTarget()) this.foldPercent = this.target;
+        const at = this.foldPercent === this.target;
+        this.solver.foldPercent = this.foldPercent;
+        for (let i = 0; i < chunk; i++) {
+          this.solver.step();
+          if (this.unpinned) removeRigidBodyMotion(m);
+          if (at) this.prevKE = kineticDamp(m, this.prevKE);
+        }
+        ran += chunk;
+        if (this.maxNodeMove(before) > budget) break; // enough has happened to be worth drawing
       }
+      this.releaseShare = ran / GUIDED_STEPS_PER_FRAME;
     } else {
       // Free fold (self-supporting origami/kirigami, e.g. the Miyamoto RES tower): drive crease
       // targets and let the OS-faithful under-damped dynamics settle — exactly as Origami Simulator
@@ -156,7 +203,18 @@ export class FoldRunner {
       this.model.guideWeight = 1; // still being folded, or the slider moved back — hold on
       return;
     }
-    this.model.guideWeight = Math.max(0, (this.model.guideWeight ?? 1) - GUIDE_RELEASE_PER_FRAME);
+    this.model.guideWeight = Math.max(0, (this.model.guideWeight ?? 1) - GUIDE_RELEASE_PER_FRAME * this.releaseShare);
+  }
+
+  /** How far the furthest node moved since `before`. */
+  private maxNodeMove(before: Float32Array): number {
+    const p = this.model.position;
+    let worst = 0;
+    for (let i = 0; i < this.model.numNodes; i++) {
+      const d = Math.hypot(p[3 * i] - before[3 * i], p[3 * i + 1] - before[3 * i + 1], p[3 * i + 2] - before[3 * i + 2]);
+      if (d > worst) worst = d;
+    }
+    return worst;
   }
 
   /**

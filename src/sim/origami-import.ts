@@ -23,6 +23,7 @@ import { type CreaseParams, processFold, type WorkFold } from "./fold-ops.js";
 import { type BarHingeModel, DEFAULT_PARAMS, type SolverParams, TILE_COLLIDE_SIGN } from "./model.js";
 import type { EdgeAssignment, FoldNet, FoldNetEdge } from "./foldnet.js";
 import { FoldSolver, measureTheta } from "./solver.js";
+import { buildCreaseTree, kinematicPose, spreadAnchors, type CreaseTree } from "./fold-kinematics.js";
 import { type Vec3, vec3 } from "./vec3.js";
 import type { FoldScene, SimMaterial } from "./build.js";
 
@@ -462,7 +463,196 @@ function applyDeclaredGoal(
   }
   if (softGuide) buildSeamCreases(model); // measures its own targets in this same goal pose
   model.position.set(flat);
+  if (softGuide) adoptFoldKinematics(model);
   return true;
+}
+
+/**
+ * How far the kinematic fold may land from the declared form before it is not that form's fold,
+ * as a fraction of the model's span.
+ *
+ * There is no judgement call here to make, because the measured population has no middle: every net
+ * that admits a coordinated fold lands its declared form to **0.000%** — house, church and puffin,
+ * and kirigami-flap too, whose one loop closes on a facet crease of target zero — while akde-hex, a
+ * form no fold can reach (34% strain on its own bars), misses by **88.7%**. So the threshold is set
+ * near the passing side rather than midway: it need only be above measurement noise, and every
+ * thousandth it is raised is slack a net that does NOT fold to its form can hide in.
+ *
+ * That slack was the bug. At the old 0.02 with a poorly conditioned metric (see `spreadAnchors`), a
+ * net whose panel graph carries loops the tree ignores would land its form badly wrong, report well
+ * under tolerance, and be driven as though it were a tree — the panels those loops placed swinging
+ * off on their own while the modal said "coordinated". A fold that is really coordinated has margin
+ * of four hundred times over this number; one that needs the slack was never entitled to it.
+ */
+const CLOSURE_TOL = 0.002;
+/**
+ * Seam reach on the kinematic path, replacing `SEAM_CAPTURE`'s 0.35 of a span.
+ *
+ * A seam spring exists to close a fold the guide could not: aiming down the chord, nothing else
+ * brings a cut's two lips together, so the spring has to reach across the sheet and haul. The
+ * kinematic guide already delivers them coincident at `s = 1` by construction, so that long reach
+ * becomes a second driver of the fold — and it drives it early. Measured on house it takes the fold
+ * to 94% of its target angles at a slider of 0.8; the same run with the seams removed entirely reads
+ * 80%, dead on. Shortened to hold rather than haul, the fold tracks the slider to within a point on
+ * every preset and lands closer as well.
+ */
+const KINEMATIC_SEAM_CAPTURE = 0.03;
+/**
+ * Guide stiffness on the kinematic path, against `ORIGAMI_PARAMS.kGoal`'s 4.
+ *
+ * The guide was kept far below the axial bars for a reason: aimed down the chord it asks for a pose
+ * that is not an isometry, so leaning on it would drag bars off their rest length — the very thing
+ * that made the old fold a blend. Aimed along the net's own kinematics that reason is gone, because
+ * the target IS a rigid-panel fold; pulling hard toward it cannot stretch anything, and measured, it
+ * does not (0.00% at every fraction). What holding firmly buys is the anchor: the panel the artifact
+ * rests on stays within 0.9% of a span through the whole fold instead of 5%, without being nailed.
+ * The guide still lets go at the end, so the settled pose is still the pattern's own.
+ */
+const KINEMATIC_KGOAL = 64;
+
+/**
+ * Drive the fold along the net's own panel kinematics, if the net admits one.
+ *
+ * The test is not "is the panel graph a tree" but the stronger thing it is a proxy for: **does
+ * folding every hinge to its target actually reproduce the declared form?** Measured, house, church
+ * and puffin land it to 0.000% of a span, and so does kirigami-flap — its one loop closes on a facet
+ * crease whose target is zero, so the tree fold shuts it exactly. The AKDE cones miss by 74–76%,
+ * which is their declared form asking for something no fold can do (34% and 118% strain on their own
+ * bars); they keep the chord guide, and the modal says so.
+ *
+ * Two things follow for a net that passes:
+ *
+ *  - **The goal is re-placed.** The declared form is only ever used up to rigid motion — seams are
+ *    coincidences, crease targets are dihedrals, the wrong-side test is relative — so `model.goal`
+ *    becomes the kinematic pose at `s = 1`: the same shape, positioned so the root panel sits exactly
+ *    where the flat sheet leaves it. Now `s = 0` is the flat sheet and `s = 1` is the goal exactly,
+ *    and no rigid drift is demanded of the sheet at either end.
+ *  - **The fold is reckoned from the panel the artifact rests on** — the one the folded form puts
+ *    lowest. It stays where the flat sheet leaves it and everything else swings up from it, like
+ *    paper on a table. It is held there by the guide, as a FORCE, and not pinned: a pinned node is a
+ *    position written into the model, `forces.ts` zeroes it and `collision.ts` skips it, so the panel
+ *    would be the one part of the sheet not actually being simulated. Measured, nailing it buys
+ *    nothing — the shape puffin settles into is the same to within 0.01% of a span either way, and
+ *    the difference in where it *lands* (0.11% against 2.61%) is pure rigid drift of an artifact
+ *    whose shape is equally exact.
+ */
+function adoptFoldKinematics(model: BarHingeModel): void {
+  const tree = buildCreaseTree(model);
+  const pose = new Float32Array(3 * model.numNodes);
+  kinematicPose(model, tree, 1, pose);
+
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (let i = 0; i < 3 * model.numNodes; i++) {
+    if (model.goal[i] < lo) lo = model.goal[i];
+    if (model.goal[i] > hi) hi = model.goal[i];
+  }
+  const span = hi > lo ? hi - lo : 1;
+
+  // Compared through distances to a handful of anchor nodes rather than by fitting one pose onto the
+  // other: that is rigid-invariant (which is the only way the two are allowed to differ) and needs no
+  // alignment — and the Kabsch fit that would do it lives in `pipeline/verify.ts`, which imports this
+  // module. A mirrored fold is excluded on other grounds: this pose's dihedrals ARE the targets,
+  // measured off the declared form, so a reflection of it would have to disagree with them.
+  //
+  // The anchors must be SPREAD, and that is not a detail. Distances to anchors read a node's error
+  // only along the directions from the node to each anchor, so anchors that huddle together read a
+  // sideways swing at `sin` of the angle they subtend — a net folds wrong and the number stays small.
+  // Measured with the root panel's three corners as the anchors, blindness tracked exactly the size
+  // of that one triangle: house's spans 49% of the model and hid a 1.7× error, church's 19% hid 8×,
+  // and puffin's 5.2% reported a real MISS OF 10.7% OF THE SPAN as 0.55% — a tenth of the model, well
+  // under the 2% tolerance. Finer meshes have smaller triangles, so the check got blinder the more it
+  // had to check. Farthest-point sampling instead: the extremes of the form, four of them so they are
+  // not coplanar, which pins a point outright with no reflection ambiguity either.
+  const anchors = spreadAnchors(model.goal, model.numNodes, 4);
+  let closure = 0;
+  for (let i = 0; i < model.numNodes; i++) {
+    for (const a of anchors) {
+      const dp = Math.hypot(
+        pose[3 * i] - pose[3 * a],
+        pose[3 * i + 1] - pose[3 * a + 1],
+        pose[3 * i + 2] - pose[3 * a + 2],
+      );
+      const dg = Math.hypot(
+        model.goal[3 * i] - model.goal[3 * a],
+        model.goal[3 * i + 1] - model.goal[3 * a + 1],
+        model.goal[3 * i + 2] - model.goal[3 * a + 2],
+      );
+      closure = Math.max(closure, Math.abs(dp - dg));
+    }
+  }
+  model.foldClosure = closure / span;
+  if (closure > CLOSURE_TOL * span) {
+    model.foldDrive = "chord";
+    return;
+  }
+
+  model.foldDrive = "kinematic";
+  model.creaseTree = tree;
+  // A copy: `params` is the module-level ORIGAMI_PARAMS, shared by every model built from it.
+  model.params = { ...model.params, seamCapture: KINEMATIC_SEAM_CAPTURE, kGoal: KINEMATIC_KGOAL };
+
+  // Fold UP off the table, not down through it. Which side the shape ends up on is fixed by the
+  // crease signs, not by the choice of root — measured, every one of house's 16 panels, church's 19
+  // and puffin's 96 gives a fold that descends — so the only way to turn it over is to turn the
+  // whole scene over. A half-turn about an axis lying IN the root panel's plane does exactly that:
+  // the flat sheet stays flat and stays in that plane (it is the paper turned over, the same net
+  // seen from its other face), while everything the fold raises swaps sides. Rest, current pose and
+  // goal all move together, so it is a rigid motion of the scene and no length, angle or coincidence
+  // in the model changes.
+  if (foldsAwayFromRoot(model, tree, pose)) {
+    turnOver(model, tree);
+    kinematicPose(model, tree, 1, pose); // hinge axes are read off `rest`, so re-fold after moving it
+  }
+  model.goal.set(pose);
+}
+
+/** True when the folded shape sits on the far side of the root panel from the root's own normal. */
+function foldsAwayFromRoot(model: BarHingeModel, tree: CreaseTree, pose: Float32Array): boolean {
+  const { c, n } = rootPlane(model, tree, pose);
+  let far = 0;
+  for (let i = 0; i < model.numNodes; i++) {
+    far +=
+      (pose[3 * i] - c[0]) * n[0] + (pose[3 * i + 1] - c[1]) * n[1] + (pose[3 * i + 2] - c[2]) * n[2];
+  }
+  return far < 0;
+}
+
+/** Centroid and outward normal of the root panel, in a given pose. */
+function rootPlane(
+  model: BarHingeModel,
+  tree: CreaseTree,
+  pose: Float32Array,
+): { c: [number, number, number]; n: [number, number, number]; u: [number, number, number] } {
+  const a = model.faces.a[tree.root], b = model.faces.b[tree.root], d = model.faces.c[tree.root];
+  const P = (i: number): [number, number, number] => [pose[3 * i], pose[3 * i + 1], pose[3 * i + 2]];
+  const pa = P(a), pb = P(b), pd = P(d);
+  const c: [number, number, number] = [(pa[0] + pb[0] + pd[0]) / 3, (pa[1] + pb[1] + pd[1]) / 3, (pa[2] + pb[2] + pd[2]) / 3];
+  const ux = pb[0] - pa[0], uy = pb[1] - pa[1], uz = pb[2] - pa[2];
+  const vx = pd[0] - pa[0], vy = pd[1] - pa[1], vz = pd[2] - pa[2];
+  const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+  const nl = Math.hypot(nx, ny, nz) || 1;
+  const ul = Math.hypot(ux, uy, uz) || 1;
+  return { c, n: [nx / nl, ny / nl, nz / nl], u: [ux / ul, uy / ul, uz / ul] };
+}
+
+/** Half-turn of rest, pose and goal about an axis in the root panel's plane. */
+function turnOver(model: BarHingeModel, tree: CreaseTree): void {
+  const { c, u } = rootPlane(model, tree, model.rest);
+  // Rotation by π about a unit axis u is 2uuᵀ − I.
+  const R = [
+    2 * u[0] * u[0] - 1, 2 * u[0] * u[1], 2 * u[0] * u[2],
+    2 * u[1] * u[0], 2 * u[1] * u[1] - 1, 2 * u[1] * u[2],
+    2 * u[2] * u[0], 2 * u[2] * u[1], 2 * u[2] * u[2] - 1,
+  ];
+  for (const arr of [model.rest, model.position, model.goal]) {
+    for (let i = 0; i < model.numNodes; i++) {
+      const x = arr[3 * i] - c[0], y = arr[3 * i + 1] - c[1], z = arr[3 * i + 2] - c[2];
+      arr[3 * i] = c[0] + R[0] * x + R[1] * y + R[2] * z;
+      arr[3 * i + 1] = c[1] + R[3] * x + R[4] * y + R[5] * z;
+      arr[3 * i + 2] = c[2] + R[6] * x + R[7] * y + R[8] * z;
+    }
+  }
 }
 
 /** Two nodes are the same joint when the declared goal puts them this close, relative to its span. */

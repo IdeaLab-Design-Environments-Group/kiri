@@ -14,7 +14,12 @@ import type { BarHingeModel } from "./model.js";
  *     instead of bouncing, and the per-contact force is clamped for explicit-integration stability.
  *
  * Excludes a (node, triangle) pair when the node shares a face with the triangle (its 1-face-ring
- * neighbourhood), so creases and shared edges fold freely instead of self-triggering. This is
+ * neighbourhood), so creases and shared edges fold freely instead of self-triggering. The ring is
+ * built on the WELDED sheet: a cut's two taped lips are duplicate nodes that the fold brings to the
+ * same point, so they share no face and would otherwise read as two layers interpenetrating — the
+ * solver would push apart precisely the seams the tape holds shut. Measured before this, with
+ * collision on, taped seams stood 2.8% of a span open on house and 4.1% on a 144-facet bulb, whose
+ * lips splayed into visible flaps; welded, they shut to 0.02% and 0.14%. This is
  * proximity-only (no continuous CCD): it stops the common layer-on-layer interpenetration of a
  * fold; very fast motion could still tunnel, and pure edge-edge crossings aren't handled.
  */
@@ -38,8 +43,10 @@ export const DEFAULT_COLLISION: CollisionParams = {
 
 export interface CollisionState {
   params: CollisionParams;
-  /** vertex → set of vertices sharing a face with it (1-face-ring; excluded from contact). */
+  /** vertex → set of WELD IDS sharing a face with it (1-face-ring; excluded from contact). */
   faceRing: Set<number>[];
+  /** vertex → weld id: taped lips of one cut collapse to a single id, being one point once shut. */
+  weld: Int32Array;
   cellSize: number;
   /** scratch hash, reused each step: cell key → triangle indices. */
   hash: Map<number, number[]>;
@@ -51,19 +58,41 @@ const cellKey = (ix: number, iy: number, iz: number): number =>
 
 /** Precompute the exclusion neighbourhood and grid sizing for a model. */
 export function buildCollisionState(m: BarHingeModel, params: CollisionParams): CollisionState {
+  // Weld each cut's taped lips together first (union-find over the seam pairs). They are one point
+  // of the artifact, so they must be one point to the contact test as well.
+  const weld = new Int32Array(m.numNodes);
+  for (let i = 0; i < m.numNodes; i++) weld[i] = i;
+  const find = (x: number): number => { while (weld[x] !== x) x = weld[x] = weld[weld[x]]; return x; };
+  const union = (x: number, y: number): void => { const rx = find(x), ry = find(y); if (rx !== ry) weld[rx] = ry; };
+  const c3 = m.creases.seamPeer3, c4 = m.creases.seamPeer4;
+  if (c3 && c4) {
+    for (let i = 0; i < m.creases.count; i++) {
+      if (c3[i] >= 0) union(m.creases.n3[i], c3[i]);
+      if (c4[i] >= 0) union(m.creases.n4[i], c4[i]);
+    }
+  }
+  for (let i = 0; i < m.numNodes; i++) weld[i] = find(i);
+
   const faceRing: Set<number>[] = Array.from({ length: m.numNodes }, () => new Set<number>());
   for (let f = 0; f < m.faces.count; f++) {
-    const a = m.faces.a[f], b = m.faces.b[f], c = m.faces.c[f];
-    faceRing[a].add(b).add(c);
-    faceRing[b].add(a).add(c);
-    faceRing[c].add(a).add(b);
+    const a = weld[m.faces.a[f]], b = weld[m.faces.b[f]], c = weld[m.faces.c[f]];
+    // Every node of the face, and every node welded to one, gets the whole face in its ring.
+    for (const n of [m.faces.a[f], m.faces.b[f], m.faces.c[f]]) faceRing[n].add(a).add(b).add(c);
   }
+  // A weld group shares one ring: the lips of a shut seam neighbour whatever either of them does.
+  const byWeld = new Map<number, Set<number>>();
+  for (let i = 0; i < m.numNodes; i++) {
+    const g = byWeld.get(weld[i]);
+    if (g) for (const v of faceRing[i]) g.add(v);
+    else byWeld.set(weld[i], faceRing[i]);
+  }
+  for (let i = 0; i < m.numNodes; i++) faceRing[i] = byWeld.get(weld[i])!;
   let sum = 0;
   for (let i = 0; i < m.beams.count; i++) sum += m.beams.rest[i];
   const avgEdge = m.beams.count ? sum / m.beams.count : params.thickness;
   // Cell large enough to find contacts within h, but ~edge-sized so cells stay sparse.
   const cellSize = Math.max(params.thickness * 2, avgEdge);
-  return { params, faceRing, cellSize, hash: new Map() };
+  return { params, faceRing, weld, cellSize, hash: new Map() };
 }
 
 /** Closest point on triangle (a,b,c) to p; returns the point and its barycentric weights. */
@@ -120,6 +149,7 @@ export function accumulateCollisionForces(m: BarHingeModel, st: CollisionState):
 
   // --- broad phase: insert each triangle into the grid cells its (h-expanded) AABB covers ---
   const fa = m.faces.a, fb = m.faces.b, fc = m.faces.c;
+  const wl = st.weld;
   for (let f = 0; f < m.faces.count; f++) {
     const a = fa[f], b = fb[f], c = fc[f];
     const ax = pos[3 * a], ay = pos[3 * a + 1], az = pos[3 * a + 2];
@@ -145,13 +175,15 @@ export function accumulateCollisionForces(m: BarHingeModel, st: CollisionState):
     if (m.fixed[vtx]) continue; // pinned/driven nodes are prescribed; don't push them
     const px = pos[3 * vtx], py = pos[3 * vtx + 1], pz = pos[3 * vtx + 2];
     const ring = st.faceRing[vtx];
+    const wv = wl[vtx];
     const bucket = hash.get(cellKey(Math.floor(px / cs), Math.floor(py / cs), Math.floor(pz / cs)));
     if (!bucket) continue;
     for (let bi = 0; bi < bucket.length; bi++) {
       const f = bucket[bi];
       const a = fa[f], b = fb[f], c = fc[f];
-      if (a === vtx || b === vtx || c === vtx) continue;
-      if (ring.has(a) || ring.has(b) || ring.has(c)) continue; // shares a face → fold, not contact
+      const wa = wl[a], wb = wl[b], wc = wl[c];
+      if (wa === wv || wb === wv || wc === wv) continue;
+      if (ring.has(wa) || ring.has(wb) || ring.has(wc)) continue; // shares a face → fold, not contact
       const q = closestOnTriangle(
         px, py, pz,
         pos[3 * a], pos[3 * a + 1], pos[3 * a + 2],

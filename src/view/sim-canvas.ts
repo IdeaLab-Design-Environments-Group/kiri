@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import type { FoldNet, FoldScene, FoldSolver, SimMaterial } from "../sim/index.js";
+import type { FoldDrive, FoldNet, FoldScene, FoldSolver, SimMaterial } from "../sim/index.js";
 import { FoldRunner, FOLD_REACHED_EPS, meanTensileStrain } from "../sim/index.js";
 import { DEFAULT_MAX_SUBDIV, MAX_TILE_GAP, MIN_TILE_GAP, TILE_INSET_FRAC } from "../model/tile-subdiv.js";
 import type { AnchoredMesh } from "../model/trace-anchor.js";
@@ -166,8 +166,10 @@ export class SimCanvas implements SimView {
   private running = false;
   /** Drives the solver over time — owns foldPercent and the cadence. See `sim/fold-run.ts`. */
   private runner: FoldRunner | null = null;
-  private onStatus: ((s: { stretch: number; held: boolean }) => void) | null = null;
+  private onStatus: ((s: { stretch: number; held: boolean; drive: FoldDrive }) => void) | null = null;
   private lastReported = -1;
+  /** Last `held` flag sent to the status listener, so a change in it is reported on its own. */
+  private lastHeld: boolean | null = null;
   /** Freeze stepping once folded + settled so the pose is dead still (no twitch). */
   private frozen = false;
   /** Previous frame's node positions, for the position-delta settle test. */
@@ -218,6 +220,7 @@ export class SimCanvas implements SimView {
 
     this.runner = new FoldRunner(model, scene.solver);
     this.lastReported = -1;
+    this.lastHeld = null;
     this.frozen = false;
     this.settledFrames = 0;
     this.framesAtTarget = 0;
@@ -305,8 +308,12 @@ export class SimCanvas implements SimView {
 
     // CPU reference solver for all modes (guided AKDE presets are verified on this path).
     this.cpu = scene.solver;
-    // Self-collision so folded layers don't pass through each other. Driven (guided) nodes are
-    // fixed and skipped, so prescribed shapes are unaffected; free folds get layer-vs-layer contact.
+    // Self-collision so folded layers don't pass through each other. It applies to guided folds too:
+    // nothing is pinned on that path any more, so the old "driven nodes are fixed and skipped" no
+    // longer holds and the contact test sees every node. That is fine — what it must NOT do is read a
+    // shut seam as interpenetration, which is why `collision.ts` welds each cut's taped lips before
+    // building its exclusion ring. Without that, every fold drawn here had its seams prised 3-4% of a
+    // span open while the sim's own tests, which run without collision, reported them shut.
     this.cpu.enableCollision();
 
     // Frame the camera to the model's ACTUAL bounding box — the union of the flat rest and the
@@ -345,7 +352,7 @@ export class SimCanvas implements SimView {
   }
 
   /** Subscribe to fold-quality updates (mean tensile strain + whether the guide is still held). */
-  setStatusListener(fn: (s: { stretch: number; held: boolean }) => void): void {
+  setStatusListener(fn: (s: { stretch: number; held: boolean; drive: FoldDrive }) => void): void {
     this.onStatus = fn;
     this.lastReported = -1;
   }
@@ -421,10 +428,17 @@ export class SimCanvas implements SimView {
   private reportStatus(): void {
     if (!this.onStatus || !this.fold) return;
     const stretch = meanTensileStrain(this.fold.model);
-    // Only on a visible change, so the DOM is not written 60 times a second for nothing.
-    if (Math.abs(stretch - this.lastReported) < 1e-4 && this.lastReported >= 0) return;
+    const held = !(this.runner?.guideReleased() ?? true);
+    // Only on a visible change, so the DOM is not written 60 times a second for nothing. `held` is
+    // part of that change: throttling on the stretch alone strands the label, because the guide lets
+    // go over the second AFTER the mesh has stopped moving. On house the last emitted status is
+    // frame 172, "(held)", and the fold settles — hands off — at 194, by which time the stretch has
+    // not moved 1e-4 in a while and `maybeFreeze` has stopped `advance()` for good. The readout then
+    // says the guide is still holding a fold that is standing on its own.
+    if (held === this.lastHeld && Math.abs(stretch - this.lastReported) < 1e-4 && this.lastReported >= 0) return;
     this.lastReported = stretch;
-    this.onStatus({ stretch, held: !(this.runner?.guideReleased() ?? true) });
+    this.lastHeld = held;
+    this.onStatus({ stretch, held, drive: this.fold.model.foldDrive ?? "chord" });
   }
 
   /**

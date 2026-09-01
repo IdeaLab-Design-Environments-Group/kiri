@@ -12,7 +12,7 @@
  * caught it was the thing hiding it. With the stand-in typed against this, that cannot happen again: the
  * modal, the real canvas and the double are checked against one declaration.
  */
-import type { FoldScene } from "../sim/index.js";
+import type { FoldScene, FoldDrive } from "../sim/index.js";
 import type { AnchoredMesh } from "../model/trace-anchor.js";
 
 /** What the modal needs of the 3D view — no more, so the double is cheap and the boundary stays thin. */
@@ -30,7 +30,7 @@ export interface SimView {
    * Origami Simulator keeps the same number on screen at all times, and that is what makes a fold
    * that is really a shape-blend visible instead of plausible.
    */
-  setStatusListener(fn: (s: { stretch: number; held: boolean }) => void): void;
+  setStatusListener(fn: (s: { stretch: number; held: boolean; drive: FoldDrive }) => void): void;
   warmToTarget(): void;
   start(): void;
   stop(): void;

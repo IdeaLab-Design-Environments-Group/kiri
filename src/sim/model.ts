@@ -110,6 +110,9 @@ export const DEFAULT_PARAMS: SolverParams = {
  */
 export const TILE_COLLIDE_SIGN = 1;
 
+/** How a fold is driven — see `BarHingeModel.foldDrive`. */
+export type FoldDrive = "kinematic" | "chord";
+
 export interface BarHingeModel {
   numNodes: number;
 
@@ -221,6 +224,25 @@ export interface BarHingeModel {
    * line and the rest are seams. Undefined ⇒ none were built (no declared folded form).
    */
   seamCreases?: number;
+
+  /**
+   * How the fold is driven. `"kinematic"` — the guide aims along the net's own panel kinematics
+   * (`fold-kinematics.ts`), which is only possible when the panel graph is a tree. `"chord"` — the
+   * straight `rest → goal` blend, the fallback for a net with a loop in it.
+   */
+  foldDrive?: FoldDrive;
+  /**
+   * How far the kinematic fold landed from the declared form, as a fraction of the model's span —
+   * the number `adoptFoldKinematics` gated on. Kept because it is the one honest measure of whether
+   * "coordinated" was the right call, and a gate whose verdict nothing can read is a gate that drifts.
+   */
+  foldClosure?: number;
+  /** The panel tree the fold is driven along; absent ⇒ the chord fallback. */
+  creaseTree?: import("./fold-kinematics.js").CreaseTree;
+  /** Scratch for the guide's target pose (one per model, rebuilt when `foldPercent` moves). */
+  guideScratch?: Float32Array;
+  /** The `foldPercent` `guideScratch` currently holds. */
+  guideScratchFold?: number;
 
   faces: {
     count: number;

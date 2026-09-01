@@ -270,6 +270,32 @@ describe("view/sim-canvas", () => {
     expect(removeRigidBodyMotion).toHaveBeenCalled();
   });
 
+  it("says the guide has let go, even after the mesh has stopped moving", async () => {
+    // The footer reads "stretch x% (held)" while the guide is still holding the fold toward its
+    // declared form. The guide lets go over the second AFTER the mesh settles, so a status throttled
+    // on the stretch alone never gets to report it: the label strands on "(held)" describing a fold
+    // that is standing on its own creases and seams.
+    const { SimCanvas } = await import("../../../src/view/sim-canvas.js");
+    const container = { clientWidth: 400, clientHeight: 300, appendChild: vi.fn() } as any;
+    const canvas = new SimCanvas(container);
+    const scene = makeScene({ pinned: false });
+    scene.model.softDriven = true;
+    scene.model.guideWeight = 1;
+    gpuCreate.mockReturnValueOnce(null);
+    canvas.setScene(scene);
+
+    const seen: boolean[] = [];
+    canvas.setStatusListener(({ held }: { held: boolean }) => seen.push(held));
+    canvas.setFoldPercent(1);
+    canvas.start();
+    const loop = raf.mock.calls[0]?.[0] as (() => void) | undefined;
+    for (let i = 0; i < 400; i++) loop?.(); // fold, arrive, and let go
+
+    // With no beams the stretch is 0 for every frame of this, so nothing but `held` ever changes.
+    expect(seen[0]).toBe(true); // holding while it folds
+    expect(seen.at(-1)).toBe(false); // and it says so when it lets go
+  });
+
   it("colours the overlay from the layout's own palettes, not from copies of them", async () => {
     const { SimCanvas } = await import("../../../src/view/sim-canvas.js");
     const { SVGPCB_COLOURS } = await import("../../../src/model/part-render.js");

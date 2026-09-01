@@ -253,14 +253,17 @@ export class SimModal {
       // against the previous scene would point at vertices that no longer exist.
       this.canvas.setOverlay(this.traces);
       this.canvas.setOverlayVisible(this.showElectronics);
-      this.canvas.setStatusListener(({ stretch, held }) => {
+      this.canvas.setStatusListener(({ stretch, held, drive }) => {
         const pct = stretch * 100;
         // Origami Simulator paints strain red past 5%; the same threshold reads here as "this is no
         // longer a fold the sheet could make".
         this.strainEl.classList.toggle("is-hot", pct > 5);
+        // "coordinated" — every panel turning on its hinge together, which needs the net's own
+        // kinematics; "guided" — the fallback for a net that has no such fold (see fold-kinematics.ts).
+        const how = drive === "kinematic" ? "coordinated" : "guided";
         this.strainEl.textContent = held
-          ? `stretch ${pct.toFixed(1)}% (held)`
-          : `stretch ${pct.toFixed(1)}%`;
+          ? `${how} · stretch ${pct.toFixed(1)}% (held)`
+          : `${how} · stretch ${pct.toFixed(1)}%`;
       });
       this.syncDetailVisibility();
       this.applyFold();

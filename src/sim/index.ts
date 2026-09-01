@@ -11,7 +11,7 @@ export { buildFoldNet, foldNetFromMesh } from "./foldnet.js";
 export type { FoldNet, FoldNetEdge, EdgeAssignment } from "./foldnet.js";
 
 export { buildModel, setFixed, DEFAULT_PARAMS } from "./model.js";
-export type { BarHingeModel, SolverParams } from "./model.js";
+export type { BarHingeModel, FoldDrive, SolverParams } from "./model.js";
 
 export {
   computeFaceNormals,

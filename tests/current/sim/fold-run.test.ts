@@ -114,3 +114,55 @@ describe("the ramp", () => {
     expect(r.guideReleased()).toBe(true);
   });
 });
+
+describe("the fold is drawn, not skipped", () => {
+  it("no frame jumps a node across the model, ramping or letting go", { timeout: 30000 }, async () => {
+    // Letting go of the guide is a snap-through: the pose the guide holds is not an equilibrium of
+    // the pattern alone, so the mesh crosses a barrier and slides to the one that is. That is real —
+    // stretching the release from 1 second to 15 does not change it — but at a full frame's worth of
+    // stepping the whole slide landed in about five rendered frames, moving a node 36% of the span
+    // in ONE of them. Correct when paused, a flick in motion. Frames are cut short through fast
+    // motion instead, with everything measured per frame scaled by the share that ran, so the fold
+    // itself is untouched.
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const { buildScene } = await import("../../../src/sim/scene.js");
+    const fold = JSON.parse(
+      readFileSync(fileURLToPath(new URL("../../../public/examples/house.fkld", import.meta.url)), "utf8"),
+    );
+    const { model, solver } = buildScene(fold)!.scene;
+
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < 3 * model.numNodes; i++) {
+      lo = Math.min(lo, model.rest[i]);
+      hi = Math.max(hi, model.rest[i]);
+    }
+    const span = hi - lo;
+
+    const runner = new FoldRunner(model, solver);
+    runner.setTarget(1);
+    const before = new Float32Array(model.position.length);
+    let worst = 0;
+    let sawRelease = false;
+    for (let f = 0; f < 2000 && !runner.settled(); f++) {
+      before.set(model.position);
+      runner.frame();
+      if (runner.atTarget()) sawRelease = true;
+      for (let i = 0; i < model.numNodes; i++) {
+        worst = Math.max(worst, Math.hypot(
+          model.position[3 * i] - before[3 * i],
+          model.position[3 * i + 1] - before[3 * i + 1],
+          model.position[3 * i + 2] - before[3 * i + 2],
+        ) / span);
+      }
+    }
+    expect(sawRelease).toBe(true); // the run actually got as far as letting go
+    expect(runner.settled()).toBe(true);
+    // 1.2% measured. It was 36.2% before frames could be cut short, and 4.3% once they could; the
+    // rest went when the guide started aiming along the net's own kinematics (`fold-kinematics.ts`),
+    // because the sheet then arrives at a real equilibrium of its creases and letting go of it moves
+    // almost nothing — the release frames now peak at 0.1%. The bound stays loose: it is here to
+    // catch a frame that skips a snap, not to pin today's number.
+    expect(worst).toBeLessThan(0.08);
+  });
+});
