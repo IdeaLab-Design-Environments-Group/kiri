@@ -1,0 +1,170 @@
+solid bat_ear_right
+  facet normal 0.000000 0.000000 -1.000000
+    outer loop
+      vertex 4.25 10.5 -1.2
+      vertex 9.5 7.2 -1.2
+      vertex 1.7000000000000002 4.2 -1.2
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 -1.000000
+    outer loop
+      vertex 4.25 10.5 -1.2
+      vertex 5.9 19.799999999999997 -1.2
+      vertex 9.5 7.2 -1.2
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 -1.000000
+    outer loop
+      vertex 4.25 10.5 -1.2
+      vertex -0.09999999999999964 10.8 -1.2
+      vertex 5.9 19.799999999999997 -1.2
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 -1.000000
+    outer loop
+      vertex 4.25 10.5 -1.2
+      vertex 1.7000000000000002 4.2 -1.2
+      vertex -0.09999999999999964 10.8 -1.2
+    endloop
+  endfacet
+  facet normal 0.122358 -0.318131 -0.940118
+    outer loop
+      vertex 1.7000000000000002 4.2 -1.2
+      vertex 9.5 7.2 -1.2
+      vertex 13 5 0
+    endloop
+  endfacet
+  facet normal 0.122358 -0.318131 -0.940118
+    outer loop
+      vertex 1.7000000000000002 4.2 -1.2
+      vertex 13 5 0
+      vertex 0 0 0
+    endloop
+  endfacet
+  facet normal 0.383274 0.109507 -0.917120
+    outer loop
+      vertex 9.5 7.2 -1.2
+      vertex 5.9 19.799999999999997 -1.2
+      vertex 13 5 0
+    endloop
+  endfacet
+  facet normal 0.383274 0.109507 -0.917120
+    outer loop
+      vertex 5.9 19.799999999999997 -1.2
+      vertex 7 26 0
+      vertex 13 5 0
+    endloop
+  endfacet
+  facet normal -0.357277 0.238185 -0.903117
+    outer loop
+      vertex 5.9 19.799999999999997 -1.2
+      vertex -0.09999999999999964 10.8 -1.2
+      vertex -3 11 0
+    endloop
+  endfacet
+  facet normal -0.357277 0.238185 -0.903117
+    outer loop
+      vertex 5.9 19.799999999999997 -1.2
+      vertex -3 11 0
+      vertex 7 26 0
+    endloop
+  endfacet
+  facet normal -0.386419 -0.105387 -0.916282
+    outer loop
+      vertex -0.09999999999999964 10.8 -1.2
+      vertex 1.7000000000000002 4.2 -1.2
+      vertex -3 11 0
+    endloop
+  endfacet
+  facet normal -0.386419 -0.105387 -0.916282
+    outer loop
+      vertex 1.7000000000000002 4.2 -1.2
+      vertex 0 0 0
+      vertex -3 11 0
+    endloop
+  endfacet
+  facet normal 0.122358 -0.318131 0.940118
+    outer loop
+      vertex 0 0 0
+      vertex 13 5 0
+      vertex 1.7000000000000002 4.2 1.2
+    endloop
+  endfacet
+  facet normal 0.122358 -0.318131 0.940118
+    outer loop
+      vertex 13 5 0
+      vertex 9.5 7.2 1.2
+      vertex 1.7000000000000002 4.2 1.2
+    endloop
+  endfacet
+  facet normal 0.383274 0.109507 0.917120
+    outer loop
+      vertex 13 5 0
+      vertex 7 26 0
+      vertex 5.9 19.799999999999997 1.2
+    endloop
+  endfacet
+  facet normal 0.383274 0.109507 0.917120
+    outer loop
+      vertex 13 5 0
+      vertex 5.9 19.799999999999997 1.2
+      vertex 9.5 7.2 1.2
+    endloop
+  endfacet
+  facet normal -0.357277 0.238185 0.903117
+    outer loop
+      vertex 7 26 0
+      vertex -3 11 0
+      vertex 5.9 19.799999999999997 1.2
+    endloop
+  endfacet
+  facet normal -0.357277 0.238185 0.903117
+    outer loop
+      vertex -3 11 0
+      vertex -0.09999999999999964 10.8 1.2
+      vertex 5.9 19.799999999999997 1.2
+    endloop
+  endfacet
+  facet normal -0.386419 -0.105387 0.916282
+    outer loop
+      vertex -3 11 0
+      vertex 0 0 0
+      vertex 1.7000000000000002 4.2 1.2
+    endloop
+  endfacet
+  facet normal -0.386419 -0.105387 0.916282
+    outer loop
+      vertex -3 11 0
+      vertex 1.7000000000000002 4.2 1.2
+      vertex -0.09999999999999964 10.8 1.2
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 1.000000
+    outer loop
+      vertex 4.25 10.5 1.2
+      vertex 1.7000000000000002 4.2 1.2
+      vertex 9.5 7.2 1.2
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 1.000000
+    outer loop
+      vertex 4.25 10.5 1.2
+      vertex 9.5 7.2 1.2
+      vertex 5.9 19.799999999999997 1.2
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 1.000000
+    outer loop
+      vertex 4.25 10.5 1.2
+      vertex 5.9 19.799999999999997 1.2
+      vertex -0.09999999999999964 10.8 1.2
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 1.000000
+    outer loop
+      vertex 4.25 10.5 1.2
+      vertex -0.09999999999999964 10.8 1.2
+      vertex 1.7000000000000002 4.2 1.2
+    endloop
+  endfacet
+endsolid bat_ear_right
