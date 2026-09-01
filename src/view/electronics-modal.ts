@@ -104,6 +104,13 @@ import {
 } from "./electronics-palette.js";
 export { UNSHELVED, shelfFor } from "./electronics-palette.js";
 import {
+  type ExportRequest,
+  type ExportResult,
+  carrierExport,
+  stripsExport,
+} from "./electronics-export.js";
+import { shellMarkup } from "./electronics-shell.js";
+import {
   type NetPanelRow,
   type NetRow,
   buildNetRows,
@@ -159,7 +166,6 @@ import { HOME, currentRoute, goToRoute, onRouteChange } from "./route.js";
 /** The page this editor lives at. `#/electronics`, and the Back button is the way out. */
 const ROUTE = "electronics";
 
-const SVG_NS = "http://www.w3.org/2000/svg";
 const MARGIN = 8; // mm — must match the SVG export so preview ↔ export register
 
 /**
@@ -189,6 +195,18 @@ type Tool = "led" | "battery" | "wire" | "resistor" | "switch" | (string & {});
  * - `free` — standing on a tile where it was dropped, wired by declared nets or hand-drawn copper.
  */
 type PlaceMode = "gap" | "free";
+
+/**
+ * Which face of the sheet is being edited.
+ *
+ * Inside and outside are **separate circuits** — their own parts, nets, wires and terminals — not one
+ * circuit with a per-trace layer flag. Nothing downstream (the router, the presenters, the export
+ * builders) knows a second side exists; each is just called once per side, against that side's own
+ * {@link Circuit}, exactly as it always was called once against the one circuit. Only this file's `side`
+ * field and the {@link ElectronicsModal.circuit}/{@link ElectronicsModal.routed}/
+ * {@link ElectronicsModal.stale} accessors below know there are two.
+ */
+type Side = "inside" | "outside";
 
 /**
  * What the last tap picked up.
@@ -285,10 +303,9 @@ export class ElectronicsModal {
    * the {@link Circuit}: it says when this editor does its arithmetic, not anything about the board.
    */
   private autoRoute = true;
-  /** True when the circuit has been edited since the copper on screen was planned. */
-  private stale = false;
   private readonly placeButtons = new Map<PlaceMode, HTMLButtonElement>();
   private readonly mirrorButtons = new Map<keyof Mirror, HTMLButtonElement>();
+  private readonly sideButtons = new Map<Side, HTMLButtonElement>();
   /** The library picker — one control for the whole library, so a part added to it costs no toolbar room. */
   private readonly partSelect: HTMLSelectElement;
   /** Narrows the picker. At this many footprints the list is longer than the screen and the names are things
@@ -373,8 +390,45 @@ export class ElectronicsModal {
   private gaps: GapEdge[] = [];
   private points: Vec2[] = [];
   private bounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
-  private circuit: Circuit = withDefaultNets({ leds: [], battery: null });
-  private routed: RoutedCircuit = EMPTY_ROUTE;
+  /** The two circuits, one per side. Every other method reads/writes {@link circuit}, {@link routed} and
+   *  {@link stale} — plain accessors below that route to whichever of these {@link side} names — so this
+   *  is the only place the editor holds two of anything. */
+  private insideCircuit: Circuit = withDefaultNets({ leds: [], battery: null });
+  private outsideCircuit: Circuit = withDefaultNets({ leds: [], battery: null });
+  private insideRouted: RoutedCircuit = EMPTY_ROUTE;
+  private outsideRouted: RoutedCircuit = EMPTY_ROUTE;
+  private insideStale = false;
+  private outsideStale = false;
+  private side: Side = "inside";
+
+  /** The circuit being edited right now. Reads and writes both go through here unchanged from before this
+   *  field became two — placing, routing, exporting and every command still see one {@link Circuit}. */
+  private get circuit(): Circuit {
+    return this.side === "inside" ? this.insideCircuit : this.outsideCircuit;
+  }
+  private set circuit(c: Circuit) {
+    if (this.side === "inside") this.insideCircuit = c;
+    else this.outsideCircuit = c;
+  }
+  /** The active side's last plan. Switching {@link side} switches which plan this reads without touching
+   *  either one — each side keeps the plan (and {@link stale} flag) it had when it was last active. */
+  private get routed(): RoutedCircuit {
+    return this.side === "inside" ? this.insideRouted : this.outsideRouted;
+  }
+  private set routed(r: RoutedCircuit) {
+    if (this.side === "inside") this.insideRouted = r;
+    else this.outsideRouted = r;
+  }
+  /** True when the active side's circuit has been edited since ITS copper was planned. The other side
+   *  carries its own flag, so leaving one side stale under Manual and switching away does not lose that
+   *  state — the Route button reflects whichever side you come back to. */
+  private get stale(): boolean {
+    return this.side === "inside" ? this.insideStale : this.outsideStale;
+  }
+  private set stale(s: boolean) {
+    if (this.side === "inside") this.insideStale = s;
+    else this.outsideStale = s;
+  }
 
   // Pan/zoom: `contentBox()` is the drawn pattern box in sheet mm; `view` is the visible window into it.
   private view = { x: 0, y: 0, w: 1, h: 1 };
@@ -407,130 +461,7 @@ export class ElectronicsModal {
     this.overlay = document.createElement("div");
     this.overlay.className = "el-page";
     this.overlay.hidden = true;
-    this.overlay.innerHTML = `
-      <div class="el-page-inner" role="region" aria-label="Electronics editor">
-        <header class="el-page-header">
-          <button type="button" class="el-back sim-modal-close" aria-label="Back to the model">← Model</button>
-          <span class="el-page-title">Electronics</span>
-        </header>
-        <div class="el-body">
-          <div class="el-toolbar">
-            <div class="el-toolbar-row">
-              <span class="el-group">
-                <span class="el-group-label">Place</span>
-                <span class="el-seg">
-                  <button type="button" class="el-tool" data-tool="battery" title="Place the battery — click a tile">Battery</button>
-                  <button type="button" class="el-tool" data-tool="wire" title="Draw copper by hand — tap to lay a vertex, tap the last one (or Enter) to finish, Backspace to take one back, X+tap to drop one, Delete to remove the selected wire">Wire</button>
-                </span>
-              </span>
-              <span class="el-group el-parts">
-                <label class="el-group-label el-part-label" for="el-part">Part</label>
-                <span class="el-part-picker">
-                  <span class="el-part-fields">
-                    <input type="search" id="el-part-search" class="el-part-search" placeholder="Search by name or package" aria-label="Search the component library" autocomplete="off">
-                    <span class="el-part-menu-wrap">
-                      <button type="button" class="el-part-trigger" aria-haspopup="listbox" aria-expanded="false" title="Pick a library part, then click either rail to place it. The copper is broken there, so the tape does not short the part out"></button>
-                      <div class="el-part-menu" role="listbox" aria-label="Component library" hidden></div>
-                      <select id="el-part" class="el-part" aria-hidden="true" tabindex="-1" title="Pick a library part, then click either rail to place it. The copper is broken there, so the tape does not short the part out"></select>
-                    </span>
-                  </span>
-                  <span class="el-part-count" aria-live="polite"></span>
-                </span>
-              </span>
-            </div>
-            <div class="el-toolbar-row">
-              <span class="el-group el-place-modes">
-                <span class="el-group-label">Seat</span>
-                <span class="el-seg">
-                  <button type="button" class="el-place" data-place="gap" title="Across a fold: the component bridges the hinge between two tiles, a pad on each side">Across a fold</button>
-                  <button type="button" class="el-place" data-place="free" title="On a tile: the component stands where you put it, and its pads are wired by nets or by hand-drawn copper">On a tile</button>
-                </span>
-              </span>
-              <span class="el-group el-view-modes">
-                <span class="el-group-label">Copper</span>
-                <span class="el-seg">
-                  <button type="button" class="el-view" data-view="traces" title="Show the copper as separate strips">Strips</button>
-                  <button type="button" class="el-view" data-view="carrier" title="Show the copper as one carrier frame holding every trace in place">Carrier</button>
-                </span>
-              </span>
-              <span class="el-group el-route-modes">
-                <span class="el-group-label">Route</span>
-                <span class="el-seg">
-                  <button type="button" class="el-auto" data-auto="on" title="Re-plan the copper on every edit, as it has always been">Auto</button>
-                  <button type="button" class="el-auto" data-auto="off" title="Leave the copper alone while you place and move things. The canvas keeps showing the last plan until you press Route">Manual</button>
-                </span>
-                <button type="button" class="el-route" title="Re-plan the copper now">Route</button>
-              </span>
-              <span class="el-group el-mirror-modes">
-                <span class="el-group-label">Mirror</span>
-                <span class="el-seg">
-                  <button type="button" class="el-mirror" data-axis="x" title="Mirror the cut left-right — for cutting through the backing or laying the tape adhesive side up" aria-pressed="false">⇄ Left-right</button>
-                  <button type="button" class="el-mirror" data-axis="y" title="Mirror the cut top-bottom" aria-pressed="false">⇅ Top-bottom</button>
-                </span>
-              </span>
-              <span class="el-group">
-                <span class="el-group-label">Export</span>
-                <span class="el-seg">
-                  <button type="button" class="el-export" title="Download the copper as separate strips to cut">Strips SVG</button>
-                  <button type="button" class="el-export-carrier" title="Download one carrier frame holding every trace in place: align it, stick the traces down, snip the tabs">Carrier SVG</button>
-                </span>
-              </span>
-              <span class="el-group el-view-group">
-                <span class="el-group-label">Zoom</span>
-                <span class="el-seg">
-                  <button type="button" class="el-zoom-out" title="Zoom out" aria-label="Zoom out">−</button>
-                  <button type="button" class="el-zoom-in" title="Zoom in" aria-label="Zoom in">+</button>
-                  <button type="button" class="el-fit" title="Fit to screen">Fit</button>
-                </span>
-              </span>
-              <span class="el-group el-group-end">
-                <button type="button" class="el-clear" title="Remove all LEDs, the battery and routes">Clear all</button>
-              </span>
-            </div>
-          </div>
-          <div class="el-workspace">
-            <aside class="el-side" aria-label="Nets and pads">
-              <div class="el-side-sect">
-                <div class="el-side-head">
-                  <span class="el-side-title">Nets</span>
-                  <span class="el-side-tally" aria-live="polite"></span>
-                  <button type="button" class="el-net-add" aria-label="New net" title="Declare a net. Names are yours — PWR, GND, SDA — and a pad is wired by putting it on one">+</button>
-                </div>
-                <input type="text" class="el-net-new" placeholder="New net name" aria-label="New net name" autocomplete="off">
-                <div class="el-net-list" role="tree" aria-label="Declared nets"></div>
-              </div>
-              <div class="el-side-sect el-placed" hidden>
-                <div class="el-side-head">
-                  <span class="el-side-title">Parts</span>
-                  <span class="el-side-tally el-placed-tally" aria-live="polite"></span>
-                </div>
-                <div class="el-placed-list" role="list"></div>
-              </div>
-              <div class="el-side-sect el-pads" hidden>
-                <div class="el-side-head">
-                  <span class="el-side-title el-pad-part"></span>
-                </div>
-                <div class="el-pad-list"></div>
-              </div>
-            </aside>
-            <div class="el-canvas-wrap">
-              <svg class="el-svg" xmlns="${SVG_NS}" aria-label="Electronics flat-pattern canvas"></svg>
-            </div>
-          </div>
-          <div class="el-footer-row">
-            <p class="el-legend">
-              <span class="el-key"><i class="el-swatch el-key-pwr"></i>PWR tape</span>
-              <span class="el-key"><i class="el-swatch el-key-gnd"></i>GND tape</span>
-              <span class="el-key"><i class="el-swatch el-key-batt"></i>Battery</span>
-              <span class="el-key"><i class="el-swatch" style="background:${SVGPCB_COLOURS.mask}"></i>Part pad — drawn, not cut</span>
-              <span class="el-key"><i class="el-swatch" style="background:${SVGPCB_COLOURS.componentLabel}"></i>Part label (R1)</span>
-              <span class="el-key"><i class="el-swatch el-swatch-ring el-key-led"></i>LED the copper never reached</span>
-            </p>
-            <span class="sim-status el-status"></span>
-          </div>
-        </div>
-      </div>
-    `;
+    this.overlay.innerHTML = shellMarkup();
     // Beside the model page, not inside it and not after the footer. `#app` keeps existing while the
     // editor is up — `installResizableLayout` is bound to it — and is hidden by a class on `<body>`.
     // Nothing here may move the viewer's iframe: hiding an ancestor keeps its document, but re-parenting
@@ -603,8 +534,14 @@ export class ElectronicsModal {
       this.toolButtons.set(tool, btn);
     }
     this.overlay.querySelector(".el-clear")!.addEventListener("click", () => this.clear());
-    this.overlay.querySelector(".el-export")!.addEventListener("click", () => this.exportCopper());
-    this.overlay.querySelector(".el-export-carrier")!.addEventListener("click", () => this.exportCarrier());
+    for (const btn of this.overlay.querySelectorAll<HTMLButtonElement>(".el-export")) {
+      const side: Side = btn.dataset.side === "outside" ? "outside" : "inside";
+      btn.addEventListener("click", () => this.exportCopper(side));
+    }
+    for (const btn of this.overlay.querySelectorAll<HTMLButtonElement>(".el-export-carrier")) {
+      const side: Side = btn.dataset.side === "outside" ? "outside" : "inside";
+      btn.addEventListener("click", () => this.exportCarrier(side));
+    }
     for (const btn of this.overlay.querySelectorAll<HTMLButtonElement>(".el-view")) {
       const mode = btn.dataset.view as ViewMode;
       btn.addEventListener("click", () => this.selectView(mode));
@@ -626,6 +563,11 @@ export class ElectronicsModal {
       const axis = btn.dataset.axis === "y" ? "y" : "x";
       btn.addEventListener("click", () => this.toggleMirror(axis));
       this.mirrorButtons.set(axis, btn);
+    }
+    for (const btn of this.overlay.querySelectorAll<HTMLButtonElement>(".el-face")) {
+      const side: Side = btn.dataset.side === "outside" ? "outside" : "inside";
+      btn.addEventListener("click", () => this.selectSide(side));
+      this.sideButtons.set(side, btn);
     }
     this.overlay.querySelector(".el-zoom-in")!.addEventListener("click", () => this.zoomBy(1.25));
     this.overlay.querySelector(".el-zoom-out")!.addEventListener("click", () => this.zoomBy(0.8));
@@ -730,15 +672,25 @@ export class ElectronicsModal {
     if (fold === this.fold) return;
     this.fold = fold;
     this.rebuildGeometry();
-    // Seeded, not empty: a circuit always has the battery's two rails to wire to, and an author who
-    // opens a fresh pattern and finds no nets at all has to invent PWR and GND before they can put a
-    // single pad on anything. Deleting one is still theirs to do — `withDefaultNets` only ever seeds a
-    // circuit that has never declared a net, so a deletion is not undone on the next pattern.
-    this.runCommand(replaceCircuit(withDefaultNets({ leds: [], battery: null })));
-    // The old pattern's copper is not this pattern's copper, whatever the routing mode says. Cleared here
-    // rather than re-planned, because the circuit it would plan for is empty.
-    this.routed = EMPTY_ROUTE;
-    this.stale = false;
+    // Both sides, not just the active one: a new pattern's faces and gaps are not the old pattern's, so
+    // anything placed on the side not currently being viewed would be left pointing at gap/face indices
+    // that no longer mean anything. Reset through the same command each side always resets through —
+    // run once per side by flipping which one `runCommand`'s accessor targets — rather than duplicating
+    // what that command does.
+    const openSide = this.side;
+    for (const s of ["inside", "outside"] as const) {
+      this.side = s;
+      // Seeded, not empty: a circuit always has the battery's two rails to wire to, and an author who
+      // opens a fresh pattern and finds no nets at all has to invent PWR and GND before they can put a
+      // single pad on anything. Deleting one is still theirs to do — `withDefaultNets` only ever seeds a
+      // circuit that has never declared a net, so a deletion is not undone on the next pattern.
+      this.runCommand(replaceCircuit(withDefaultNets({ leds: [], battery: null })));
+      // The old pattern's copper is not this pattern's copper, whatever the routing mode says. Cleared
+      // here rather than re-planned, because the circuit it would plan for is empty.
+      this.routed = EMPTY_ROUTE;
+      this.stale = false;
+    }
+    this.side = openSide;
     this.openNets.clear();
     this.select(null);
     this.computeBounds();
@@ -837,6 +789,24 @@ export class ElectronicsModal {
     this.mirror = { ...this.mirror, [axis]: !this.mirror[axis] };
     this.syncButtons();
     this.render();
+  }
+
+  /**
+   * Switch which side's circuit is being edited.
+   *
+   * Nothing is reset: each side already keeps its own {@link circuit}, {@link routed} plan and
+   * {@link stale} flag (the accessors above pick which triple `side` names), so switching is exactly
+   * flipping which one every other method sees — the previously active side is left exactly as it was,
+   * ready to switch back to. A selection is not carried across: it names an index into the side just left,
+   * so it is cleared rather than pointing at the wrong circuit's parts.
+   */
+  private selectSide(side: Side): void {
+    if (side === this.side) return;
+    this.side = side;
+    this.select(null);
+    this.syncButtons();
+    this.render();
+    this.renderNets();
   }
 
   private selectTool(tool: Tool): void {
@@ -1108,6 +1078,10 @@ export class ElectronicsModal {
       btn.classList.toggle("is-active", this.mirror[axis]);
       btn.setAttribute("aria-pressed", this.mirror[axis] ? "true" : "false");
     }
+    for (const [s, btn] of this.sideButtons) {
+      btn.classList.toggle("is-active", s === this.side);
+      btn.setAttribute("aria-pressed", s === this.side ? "true" : "false");
+    }
   }
 
   /** Set the selection, and record how it was made. Every write to `selected` goes through here so the
@@ -1134,7 +1108,7 @@ export class ElectronicsModal {
     if (onPart) {
       this.select(onPart, "picked");
       // The pad panel follows the selection: it is the selected part's pads it is offering.
-      this.renderSide();
+      this.renderSidebar();
       this.render();
       return;
     }
@@ -1145,7 +1119,7 @@ export class ElectronicsModal {
     // a row of parts would cost two taps each.
     if (this.selectedByPick) {
       this.select(null);
-      this.renderSide();
+      this.renderSidebar();
       this.render();
       return;
     }
@@ -1231,7 +1205,7 @@ export class ElectronicsModal {
       const id = DEFAULT_LED.id;
       if (pointInFace(this.faces, flat) < 0) {
         this.select(null);
-        this.renderSide();
+        this.renderSidebar();
         this.render();
         return;
       }
@@ -1243,7 +1217,7 @@ export class ElectronicsModal {
       const hit = nearestGap(this.gaps, flat);
       if (!hit || hit.dist > this.pickRadius()) {
         this.select(null); // a tap on bare cloth clears the selection
-        this.renderSide();
+        this.renderSidebar();
         this.render();
         return;
       }
@@ -1254,7 +1228,7 @@ export class ElectronicsModal {
         // An LED already here: select it, so it can be rotated or removed. Tapping it no longer deletes it —
         // deleting on the same gesture that selects would make rotating one impossible.
         this.select({ kind: "led", index: at }, "picked");
-        this.renderSide();
+        this.renderSidebar();
         this.render();
         return;
       }
@@ -1464,7 +1438,7 @@ export class ElectronicsModal {
       empty.className = "el-side-empty";
       empty.textContent = "No nets yet — name one above to declare it.";
       this.netList.appendChild(empty);
-      this.renderSide();
+      this.renderSidebar();
       return;
     }
     for (const net of buildNetRows(this.circuit, this.routed, this.openNets)) {
@@ -1527,7 +1501,7 @@ export class ElectronicsModal {
 
       if (net.open && net.pads.length) this.netList.appendChild(this.netChildren(net.pads, net.colour));
     }
-    this.renderSide();
+    this.renderSidebar();
   }
 
   /**
@@ -1633,8 +1607,12 @@ export class ElectronicsModal {
    *
    * One call rather than two at every site, because the two panels are not independent — the pads panel
    * shows the selection, and the parts list is where the selection is now made.
+   *
+   * Named `renderSidebar`, not `renderSide`, since {@link Side} arrived: "side" now means the face of the
+   * sheet being edited, and a `renderSide()` beside a `selectSide()` reads as though it paints one of
+   * those rather than the panel down the right-hand edge.
    */
-  private renderSide(): void {
+  private renderSidebar(): void {
     this.renderParts();
     this.renderPads();
   }
@@ -1704,7 +1682,7 @@ export class ElectronicsModal {
   private selectPart(index: number): void {
     if (!(this.circuit.parts ?? [])[index]) return;
     this.select({ kind: "part", index }, "picked");
-    this.renderSide();
+    this.renderSidebar();
     this.render();
   }
 
@@ -1980,41 +1958,39 @@ export class ElectronicsModal {
     return Math.max(2, diag * 0.06);
   }
 
+  /**
+   * Run `fn` with {@link side} temporarily active, then restore whichever side was active before.
+   *
+   * Exporting a side does not require switching to it first: the router is cheap enough (~0.75s) to plan
+   * on demand at export time, and the export methods below already read everything — `circuit`, `routed`,
+   * `tapeW()`, `keepOff()` — through the {@link side}-scoped accessors, so borrowing `side` for the
+   * duration of one export call is enough to make every one of them answer for the requested side instead
+   * of the one on screen. Nothing renders in between, so the canvas never flashes the other side.
+   */
+  private withSide<T>(side: Side, fn: () => T): T {
+    const prior = this.side;
+    this.side = side;
+    try {
+      // Plan on demand when this side's copper is out of date, so a cut file is never made from a plan
+      // its own circuit has already moved on from. {@link stale} is exactly that question — edited since
+      // this copper was planned — and it is the honest gate here even though the canvas deliberately keeps
+      // *drawing* stale copper under Manual: a drawing that says "out of date" on the status line beside it
+      // is honest, whereas a file on the cutting mat carries no such caption. It is also the only gate that
+      // works for the side not on screen, which under Manual accumulates edits nothing ever re-plans.
+      //
+      // Not an identity check against EMPTY_ROUTE: a side auto-planned once while empty holds a *fresh*
+      // empty plan rather than that singleton, so `=== EMPTY_ROUTE` silently stopped firing for exactly
+      // the side this feature exists to export — one edited while the author was looking at the other.
+      if (this.stale) this.forceReplan();
+      return fn();
+    } finally {
+      this.side = prior;
+    }
+  }
+
   /** Download the copper as a cutting file, at the width the preview draws — planned and drawn alike. */
-  private exportCopper(): void {
-    const traces = this.allTraces();
-    // Hand-drawn copper counts. A sheet carrying only wires the author drew has real copper on it, and
-    // refusing to export one while telling them to place a battery was blaming them for a file we simply
-    // were not building.
-    if (!this.fold || !traces.length) {
-      this.statusEl.textContent = "Nothing to export — place a battery and at least one LED, or draw a wire";
-      return;
-    }
-    const out = this.design.strips({
-      fold: this.fold, traces, tapeW: this.tapeW(), baseName: "kiri", pads: this.routed.pads,
-      mirror: this.mirror, sheetMm: this.sheetMm, resistors: this.routed.resistors,
-      switches: this.routed.switches, parts: this.routedParts(),
-    });
-    this.download(out.filename, out.svg);
-    const { pwr, gnd } = out.counts;
-    const w = Math.round(out.widthMm * 100) / 100;
-    let msg =
-      `Exported ${out.filename} — ${pwr} PWR strip${pwr === 1 ? "" : "s"}, ` +
-      `${gnd} GND strip${gnd === 1 ? "" : "s"}, ${w}mm wide${this.mirrorNote()}`;
-    // The strip width follows the pattern, and a flat pattern need not be at a physical scale.
-    if (out.tooNarrow) msg += " — too narrow to cut; scale the pattern up before cutting";
-    // And the drawn wires this file could not take. The strips file cuts two layers, PWR and GND, and a
-    // wire on neither is left out of it — see {@link unlayeredWires}. Said out loud, with the way out,
-    // because the canvas has already shown the author that copper and they would otherwise find it missing
-    // on the mat.
-    const missed = this.unlayeredWires();
-    if (missed > 0) {
-      msg +=
-        ` — warning: ${missed} drawn wire${missed === 1 ? " is" : "s are"} not in this file;` +
-        ` the strips file cuts PWR and GND only, so draw a wire from a battery terminal to put it on a rail` +
-        ` (the carrier file carries them all)`;
-    }
-    this.statusEl.textContent = msg;
+  private exportCopper(side: Side): void {
+    this.withSide(side, () => this.saveExport(stripsExport(this.exportRequest(side))));
   }
 
   /** Turn the selected LED round: swap which of its two pads is `+`.
@@ -2303,7 +2279,7 @@ export class ElectronicsModal {
       // The sidebar follows the press, not just the click. Selecting here and repainting only the canvas
       // left the parts list and the pads panel showing the PREVIOUS part for the whole gesture — and for
       // a press that never moves, for good, since a drag that goes nowhere commits nothing.
-      this.renderSide();
+      this.renderSidebar();
       this.svg.setPointerCapture(e.pointerId);
       return;
     }
@@ -2820,52 +2796,29 @@ export class ElectronicsModal {
   }
 
   /** Download the carrier: one piece of copper with every trace held in place. */
-  private exportCarrier(): void {
-    const traces = this.allTraces();
-    if (!this.fold || !traces.length) {
-      this.statusEl.textContent = "Nothing to export — place a battery and at least one LED, or draw a wire";
-      return;
-    }
-    // Every trace, drawn ones included — and unlike the strips file the carrier takes them whatever net
-    // they are on, because it holds runs in a frame rather than sorting them onto two cut layers.
-    const out = this.design.carrier({
-      fold: this.fold, traces, tapeW: this.tapeW(), baseName: "kiri", keepOff: this.keepOff(),
-      mirror: this.mirror, sheetMm: this.sheetMm, pads: this.routed.pads,
-      resistors: this.routed.resistors, switches: this.routed.switches, parts: this.routedParts(),
-    });
-    this.download(out.filename, out.svg);
-    const w = Math.round(out.widthMm * 100) / 100;
-    let msg =
-      `Exported ${out.filename} — one frame holding ${out.counts.traces} trace` +
-      `${out.counts.traces === 1 ? "" : "s"}, ${out.counts.tabs} tab` +
-      `${out.counts.tabs === 1 ? "" : "s"} to snip, ${w}mm wide${this.mirrorNote()}`;
-    if (out.padTabs > 0) {
-      msg += ` — ${out.padTabs} tab${out.padTabs === 1 ? "" : "s"} grip a pad (run too short to grip elsewhere)`;
-    }
-    if (out.componentTabs > 0) {
-      msg += ` — warning: ${out.componentTabs} tab${out.componentTabs === 1 ? "" : "s"} pass over a component`;
-    }
-    if (out.crossingTabs > 0) {
-      msg += ` — warning: ${out.crossingTabs} tab${out.crossingTabs === 1 ? "" : "s"} cross another trace`;
-    }
-    if (out.unclosedCuts > 0) {
-      // The carrier is cut as a solid shape. Where a stretch of its edge would not close into a loop it is
-      // drawn as a plain line instead: it still cuts, but that part arrives as line art rather than copper,
-      // and in software that reads shapes it will look like an outline. Worth saying, since the file opens
-      // looking almost right.
-      msg +=
-        ` — ${out.unclosedCuts} cut${out.unclosedCuts === 1 ? "" : "s"} could not be closed into a shape` +
-        ` and ${out.unclosedCuts === 1 ? "is" : "are"} drawn as ${out.unclosedCuts === 1 ? "a line" : "lines"}`;
-    }
-    if (out.tooNarrow) msg += " — too narrow to cut; scale the pattern up before cutting";
-    this.statusEl.textContent = msg;
+  private exportCarrier(side: Side): void {
+    this.withSide(side, () => this.saveExport(carrierExport(this.exportRequest(side))));
   }
 
-  /** Says so when the file just saved is a mirror image, since the shape alone will not tell you. */
-  private mirrorNote(): string {
-    if (!this.mirror.x && !this.mirror.y) return "";
-    const axes = [this.mirror.x ? "left-right" : "", this.mirror.y ? "top-bottom" : ""].filter(Boolean);
-    return ` — mirrored ${axes.join(" and ")}`;
+  /** Gather what a cutting file is built from, for whichever side {@link withSide} has made active.
+   *
+   *  Every field here reads through a side-scoped accessor or method, so this is the single point at which
+   *  "the side being exported" becomes plain data — {@link electronics-export} is told which side it is
+   *  building for and never learns that the editor holds two. */
+  private exportRequest(side: Side): ExportRequest {
+    return {
+      design: this.design, fold: this.fold, traces: this.allTraces(), tapeW: this.tapeW(), side,
+      mirror: this.mirror, sheetMm: this.sheetMm, pads: this.routed.pads, resistors: this.routed.resistors,
+      switches: this.routed.switches, parts: this.routedParts(), keepOff: this.keepOff(),
+      unlayeredWires: this.unlayeredWires(),
+    };
+  }
+
+  /** Save the file if one was built, and say the line either way — a refused export that printed nothing
+   *  would look like a button that does not work. */
+  private saveExport(out: ExportResult): void {
+    if (out.filename && out.svg !== undefined) this.download(out.filename, out.svg);
+    this.statusEl.textContent = out.message;
   }
 
   private download(filename: string, svg: string): void {

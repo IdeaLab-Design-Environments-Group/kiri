@@ -1122,7 +1122,11 @@ body.is-electronics .app-legend {
   flex: 1 1 auto;
   min-height: 0;
 }
-.el-side {
+/* The two rails either side of the canvas: `el-side` is what the circuit IS (nets, parts, pads), `el-tools`
+   is what you DO to it (how copper is drawn, when it is routed, and what comes out). They share every rule
+   here on purpose — two rails that looked different would read as two kinds of thing. */
+.el-side,
+.el-tools {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
@@ -1136,6 +1140,18 @@ body.is-electronics .app-legend {
   border: 1px solid var(--border, #e4e7ec);
   border-radius: 4px;
 }
+/* Narrower than the netlist rail: every control in it is a fixed-width segment or a one-line button, so the
+   room a long net name needs would only be empty space here. */
+.el-tools { flex-basis: 12rem; }
+/* Full width, stacked — a rail is a column, so a segment laid out for a toolbar row would leave its halves
+   at their content widths and ragged against the section header above them. */
+.el-tools .el-seg { display: flex; }
+.el-tools .el-seg > * { flex: 1 1 0; text-align: center; }
+.el-tools .el-route,
+.el-tools .el-export,
+.el-tools .el-export-carrier { display: block; width: 100%; }
+/* The four cut files read as one list rather than four loose buttons. */
+.el-export-sect { gap: 0.25rem; }
 .el-side-sect { display: flex; flex-direction: column; gap: 0.3rem; }
 .el-side-head {
   display: flex;

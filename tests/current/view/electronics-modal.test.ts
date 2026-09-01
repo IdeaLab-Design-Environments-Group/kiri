@@ -393,7 +393,7 @@ describe("view/electronics-modal", () => {
         const closed = html.lastIndexOf("</span>", at);
         return opened !== -1 && opened > closed;
       };
-      for (const cls of ["el-tool", "el-place", "el-view", "el-mirror", "el-auto"]) {
+      for (const cls of ["el-tool", "el-place", "el-view", "el-mirror", "el-auto", "el-face"]) {
         const found = [...html.matchAll(new RegExp(`class="${cls}"`, "g"))];
         expect(found.length, `no .${cls} buttons at all`).toBeGreaterThan(0);
         for (const m of found) {
@@ -408,8 +408,21 @@ describe("view/electronics-modal", () => {
     it("does not label two different groups with the same word", () => {
       // There were briefly two groups both captioned "Place": one for what to place, one for how it sits.
       // A toolbar that says the same word twice about different things is worse than an unlabelled one.
+      //
+      // Both rails, not just the top bar. Copper/Route/Mirror/Export/Zoom moved off the toolbar into the
+      // right-hand rail and became `.el-side-title` rather than `.el-group-label`; checking only the latter
+      // would have quietly stopped watching five of the captions this rule was written for, and would miss
+      // the new way to break it — the same word used once in the top bar and once in a rail.
+      //
+      // The pads section's title is excluded because it is not a caption: it holds whichever part is
+      // selected, so it is content, and a part that happened to be called "Export" is not a naming clash.
       const { modal } = openOn(grid2x2());
-      const labels = modal.overlay.querySelectorAll(".el-group-label")
+      const captions = [
+        ...modal.overlay.querySelectorAll(".el-group-label"),
+        ...modal.overlay.querySelectorAll(".el-side-title")
+          .filter((l: any) => !String(l.className ?? "").includes("el-pad-part")),
+      ];
+      const labels = captions
         .map((l: any) => String(l.textContent).trim())
         .filter((t: string) => t.length > 0);
       expect(new Set(labels).size, `duplicate group captions: ${labels.join(", ")}`).toBe(labels.length);
@@ -496,6 +509,121 @@ describe("view/electronics-modal", () => {
       expect(modal.circuit.leds).toEqual([]);
       expect(modal.routed.traces).toEqual([]);
       expect(modal.stale).toBe(false);
+    });
+  });
+
+  describe("sides", () => {
+    /** Press one of the toolbar's buttons by class — the same helper as the "copper is re-planned" tests. */
+    function press(modal: any, cls: string, i = 0): void {
+      modal.overlay.querySelectorAll(`.${cls}`)[i].dispatch("click", {});
+    }
+
+    it("opens on the inside, and keeps each side's circuit independent across a switch", () => {
+      const { modal } = openOn(grid2x2());
+      expect(modal.side).toBe("inside");
+
+      modal.selectTool("battery");
+      tapFlat(modal, { x: 0.5, y: 0.5 });
+      expect(modal.circuit.battery).toEqual({ face: 0 });
+
+      // Outside starts as its own fresh circuit — the battery just placed on the inside is not on it.
+      press(modal, "el-face", 1); // Outside
+      expect(modal.side).toBe("outside");
+      expect(modal.circuit.battery).toBeNull();
+
+      modal.selectTool("battery");
+      tapFlat(modal, { x: 1.5, y: 0.5 }); // a different tile, so the two batteries are distinguishable
+      expect(modal.circuit.battery).toEqual({ face: 1 });
+
+      // Switching back finds the inside battery exactly where it was left, undisturbed by the outside edit.
+      press(modal, "el-face", 0); // Inside
+      expect(modal.side).toBe("inside");
+      expect(modal.circuit.battery).toEqual({ face: 0 });
+    });
+
+    it("keeps each side's routed plan and stale flag separate", () => {
+      // Manual, so switching sides cannot itself trigger a re-plan of whichever side render() lands on —
+      // isolating the claim under test, which is that a side's stored plan and stale flag survive a visit
+      // to the other side untouched, not merely that they end up looking similar after Auto recomputes them.
+      const { modal } = openOn(grid2x2());
+      press(modal, "el-auto", 1); // Manual
+      modal.selectTool("battery");
+      tapFlat(modal, { x: 0.5, y: 0.5 });
+      modal.selectTool("led");
+      tapFlat(modal, { x: 1, y: 0.5 });
+      expect(modal.stale, "an edit under Manual marks the side stale").toBe(true);
+      press(modal, "el-route"); // plan the inside once, on request
+      const insidePlan = modal.routed;
+      expect(insidePlan.traces.length).toBeGreaterThan(0);
+      expect(modal.stale).toBe(false);
+
+      press(modal, "el-face", 1); // Outside — empty, never planned, and Manual leaves it that way
+      expect(modal.routed.traces).toEqual([]);
+      expect(modal.stale).toBe(false);
+
+      press(modal, "el-face", 0); // Inside again — untouched by visiting the outside
+      expect(modal.routed).toBe(insidePlan);
+      expect(modal.stale).toBe(false);
+    });
+
+    it("exports either side without switching to it first", () => {
+      const anchors: any[] = [];
+      const { modal } = openOn(grid2x2());
+      const origCreate = (globalThis as any).document.createElement;
+      (globalThis as any).document.createElement = (tag: string) => {
+        const el = origCreate.call((globalThis as any).document, tag);
+        if (tag === "a") anchors.push(el);
+        return el;
+      };
+      (globalThis as any).URL = { createObjectURL: () => "blob:mock", revokeObjectURL: () => {} };
+      (globalThis as any).Blob = class { constructor(readonly parts: any[]) {} };
+
+      // Place on the outside only, under Manual and never routed there, then leave for the (empty) inside
+      // without ever pressing Route on the outside — its `routed` is still the untouched EMPTY_ROUTE.
+      press(modal, "el-face", 1);
+      press(modal, "el-auto", 1); // Manual
+      modal.selectTool("battery");
+      tapFlat(modal, { x: 0.5, y: 0.5 });
+      modal.selectTool("led");
+      tapFlat(modal, { x: 1, y: 0.5 });
+      expect(modal.routed.traces, "outside was never routed on request").toEqual([]);
+      press(modal, "el-face", 0); // back to the (empty) inside
+      expect(modal.side).toBe("inside");
+
+      // Exporting the outside's Strips button plans it on demand — no Route press on that side was ever
+      // made — and downloads real copper, while leaving the editor looking at the inside throughout: no
+      // flash of the other side's canvas.
+      press(modal, "el-export", 1); // Strips SVG — Outside
+      expect(modal.side, "export must not leave the editor on the other side").toBe("inside");
+      expect(anchors).toHaveLength(1);
+      expect(anchors[0].download).toBe("kiri-outside-copper.svg");
+      expect(modal.statusEl.textContent).toContain("strip");
+
+      // The inside, still empty, correctly reports nothing to export.
+      press(modal, "el-export", 0); // Strips SVG — Inside
+      expect(modal.statusEl.textContent).toContain("Nothing to export on the inside");
+
+      (globalThis as any).document.createElement = origCreate;
+      delete (globalThis as any).URL;
+      delete (globalThis as any).Blob;
+    });
+
+    it("resets both sides on a new pattern", () => {
+      const { modal } = openOn(grid2x2());
+      modal.selectTool("battery");
+      tapFlat(modal, { x: 0.5, y: 0.5 });
+      press(modal, "el-face", 1);
+      modal.selectTool("battery");
+      tapFlat(modal, { x: 1.5, y: 0.5 });
+      expect(modal.circuit.battery).not.toBeNull();
+
+      modal.setPattern(grid2x2()); // a different FoldFile object, same shape
+      expect(modal.circuit.battery, "outside not cleared by a new pattern").toBeNull();
+      press(modal, "el-face", 0);
+      expect(modal.circuit.battery, "inside not cleared by a new pattern").toBeNull();
+      // setPattern does not silently change which side is being viewed.
+      press(modal, "el-face", 1);
+      expect(modal.side).toBe("outside");
     });
   });
 
@@ -659,9 +787,11 @@ describe("view/electronics-modal", () => {
     modal.selectTool("led");
     tapFlat(modal, modal.gaps[0].point);
 
+    // Two Strips buttons now, one per side — inside and outside are separate circuits with separate
+    // exports, and this is the first (inside) one, which is also the side the editor opens on.
     modal.overlay.querySelector(".el-export").dispatch("click", {});
     expect(anchors).toHaveLength(1);
-    expect(anchors[0].download).toBe("kiri-copper.svg");
+    expect(anchors[0].download).toBe("kiri-inside-copper.svg");
     expect(modal.statusEl.textContent).toContain("strip");
 
     (globalThis as any).document.createElement = origCreate;
@@ -709,9 +839,10 @@ describe("view/electronics-modal", () => {
     modal.selectTool("led");
     tapFlat(modal, modal.gaps[0].point);
 
+    // First (inside) of the two Carrier buttons — see the Strips test above.
     modal.overlay.querySelector(".el-export-carrier").dispatch("click", {});
     expect(anchors).toHaveLength(1);
-    expect(anchors[0].download).toBe("kiri-copper-carrier.svg");
+    expect(anchors[0].download).toBe("kiri-inside-copper-carrier.svg");
     expect(modal.statusEl.textContent).toContain("tab");
 
     (globalThis as any).document.createElement = origCreate;
@@ -831,7 +962,7 @@ describe("view/electronics-modal", () => {
       modal.overlay.querySelector(".el-export").dispatch("click", {});
 
       expect(anchors).toHaveLength(1);
-      expect(anchors[0].download).toBe("kiri-copper-mirrored-x.svg");
+      expect(anchors[0].download).toBe("kiri-inside-copper-mirrored-x.svg");
       expect(modal.statusEl.textContent).toContain("mirrored left-right");
 
       (globalThis as any).document.createElement = origCreate;
