@@ -963,11 +963,12 @@ export function planNets(
   /** Cap on the crease severity bands the search minimises first — `fold-strain.ts › strainBand`. `0` is
    *  the pure cost ordering, and is the default: bands are measured to change no route on any shipped
    *  pattern. See `corridor.ts › buildCorridor`. */
-  bandCap: number = 0,
+  bandCap: number = STRAIN_BAND_CAP,
+  graded: boolean = true,
 ): NetRouting {
   if (!nets.length) return { nets: [], traces: [], orders: 0 };
   const c = buildCorridor(
-    faces, gaps, patternDiag(faces) * FOLD_PENALTY_FRAC, tapeW, sheet, tapeMm, bandCap);
+    faces, gaps, patternDiag(faces) * FOLD_PENALTY_FRAC, tapeW, sheet, tapeMm, bandCap, graded);
   const clearance = weedFloorFor(tapeW, tapeMm, sheet);
   const padGap = padClearanceFor(tapeW, tapeMm);
 

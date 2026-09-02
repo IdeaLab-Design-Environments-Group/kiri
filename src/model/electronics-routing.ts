@@ -375,7 +375,8 @@ export function planRoutes(
    * Defaults **off**: measured to change no route on any shipped pattern, on either sheet. See
    * `corridor.ts › buildCorridor` for the measurement and the likely reason.
    */
-  bandCap: number = 0,
+  bandCap: number = STRAIN_BAND_CAP,
+  graded: boolean = true,
 ): RoutedCircuit {
   // **New parameters APPEND. Never insert one.** Every optional parameter here has a default, so an
   // inserted one leaves every existing call compiling while it silently receives the wrong argument —
@@ -450,7 +451,7 @@ export function planRoutes(
   // The crossing penalty is the pattern's bounding-box diagonal, as in the paper: larger than any single step
   // in the graph, so a crease is crossed only when nothing else reaches the tile.
   const corridor = buildCorridor(
-    faces, gaps, patternDiag(faces) * creasePenaltyFrac, tapeW, sheet, tapeMm, bandCap);
+    faces, gaps, patternDiag(faces) * creasePenaltyFrac, tapeW, sheet, tapeMm, bandCap, graded);
   const reach = reachableFaces(corridor, battery.face);
   for (let i = targets.length - 1; i >= 0; i--) {
     const t = targets[i]!;

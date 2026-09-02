@@ -25,6 +25,8 @@ import type { Corridor } from "./trace-types.js";
 import {
   DEFAULT_SHEET,
   creaseCostFraction,
+  foldStrain,
+  traceformCreaseFraction,
   STRAIN_BAND_CAP,
   strainBand,
   overStrainLimit,
@@ -334,11 +336,37 @@ function creaseBand(
   return strainBand(hingeMm, g.dihedral, sheet, undefined, cap);
 }
 
-function creaseFraction(g: GapEdge, tapeW: number, tapeMm: number, sheet: SheetSpec): number {
+/** The largest tensile strain any crease in this pattern carries, for {@link traceformCreaseFraction}. */
+function patternEpsMax(gaps: GapEdge[], tapeW: number, tapeMm: number, sheet: SheetSpec): number {
+  let max = 0;
+  for (const g of gaps) {
+    if (g.dihedral == null) continue;
+    const eps = foldStrain(hingeMmOf(g, tapeW, tapeMm), g.dihedral, sheet);
+    if (eps > max) max = eps;
+  }
+  return max;
+}
+
+function hingeMmOf(g: GapEdge, tapeW: number, tapeMm: number): number {
+  const mmPerUnit = tapeW > 0 ? tapeMm / tapeW : 0;
+  return Math.hypot(g.legB.x - g.legA.x, g.legB.y - g.legA.y) * mmPerUnit;
+}
+
+/**
+ * `epsMax > 0` prices the crease as a graded fraction of the pattern's worst crossing; otherwise it
+ * clips at the fatigue limit, which on these stacks is a threshold in all but name (see
+ * {@link gradedCreaseFraction}). Closure is taken at full price either way -- a crease folded back on
+ * itself can short, and that hazard is not a matter of degree.
+ */
+function creaseFraction(
+  g: GapEdge, tapeW: number, tapeMm: number, sheet: SheetSpec, epsMax = 0,
+): number {
   if (g.assignment === "C") return 1;
   if (g.dihedral == null) return g.assignment === "M" ? 1 : 0;
-  const mmPerUnit = tapeW > 0 ? tapeMm / tapeW : 0;
-  const hingeMm = Math.hypot(g.legB.x - g.legA.x, g.legB.y - g.legA.y) * mmPerUnit;
+  const hingeMm = hingeMmOf(g, tapeW, tapeMm);
+  if (epsMax > 0) {
+    return traceformCreaseFraction(hingeMm, g.dihedral, epsMax, sheet);
+  }
   return creaseCostFraction(hingeMm, g.dihedral, sheet);
 }
 
@@ -377,8 +405,17 @@ export function buildCorridor(
    * crossings by up to 100% (`traceformroutebench`). Switching it on here changes routes anyway, which broke
    * seven route-pinning tests for no measured gain, so it stays available and off.
    */
-  bandCap: number = 0,
+  bandCap: number = STRAIN_BAND_CAP,
+  /**
+   * Price creases as a graded fraction of this pattern's worst crossing rather than clipping at the
+   * fatigue limit — see {@link gradedCreaseFraction}. Clipping arrives at 3.7 degrees of fold on a
+   * 0.4mm substrate at a 1.5mm hinge, so every real crease sits at the ceiling and a 30 degree fold
+   * and a 120 degree fold are charged alike; grading is what makes the signed strain model order
+   * severity rather than merely detect it.
+   */
+  graded: boolean = true,
 ): Corridor {
+  const epsMax = graded ? patternEpsMax(gaps, tapeW, tapeMm, sheet) : 0;
   const mids = new Map<number, Vec2[]>();
   const faceOf = new Map<string, number[]>();
   const point = new Map<string, Vec2>();
@@ -400,7 +437,7 @@ export function buildCorridor(
   const bandOf = new Map<string, number>();
   const refusedEdges = new Set<string>();
   for (const g of gaps) {
-    const price = foldPenalty * creaseFraction(g, tapeW, tapeMm, sheet);
+    const price = foldPenalty * creaseFraction(g, tapeW, tapeMm, sheet, epsMax);
     if (price > 0) penaltyOf.set(edgeKeyOf(g.verts[0], g.verts[1]), price);
     if (bandCap > 0) {
       const b = creaseBand(g, tapeW, tapeMm, sheet, bandCap);
