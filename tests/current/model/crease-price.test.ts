@@ -104,22 +104,19 @@ describe("model/crease-price", () => {
     expect(priced.len).toBeGreaterThan(lengthOnly.len);
   });
 
-  it("is saturated: the shipped price and the full diagonal plan identically", { timeout: 60000 }, () => {
-    // The crease price stops changing routes at or below where it is set: every route is identical from
-    // `FOLD_PENALTY_FRAC` up to the full diagonal Nakaya et al. use, so its exact value is not a number this
-    // system has to defend — anything from the knee up gives the same plan.
+  it("sits on a plateau: the exact penalty value is not a number this system defends", { timeout: 60000 }, () => {
+    // Every route is identical from 0.3 of the diagonal up to the full diagonal Nakaya et al. use, so the
+    // shipped `FOLD_PENALTY_FRAC` is a point on a plateau rather than a tuned optimum.
     //
-    // **The margin is gone, and that is the finding.** This used to saturate at 0.15, "well below where it
-    // is set", and on 2026-08-28 `TAPE_MM` fell to 1.5 and the knee moved to 0.5 — exactly the shipped
-    // value. Swept on church: 0 -> 17 crossings, 0.05 -> 15, 0.1 through 0.3 -> 14, and 0.5 through 1.0 ->
-    // 11. Narrower tape opens routes that a wider price is still needed to reject, so the knee follows the
-    // tape down. It has not crossed yet; a further narrowing could push it past 0.5, and then the exact
-    // value starts mattering again. Pinned here so that happens loudly.
+    // Under the clipped price this plateau had its knee exactly at the shipped 0.5 -- just under, the plan
+    // differed -- and this test used to pin that margin's absence. The graded price *widened* it: the floor
+    // charges every fatiguing crossing at least the full penalty, so scaling the penalty scales every
+    // crease alternative together and the knee fell below 0.3. Pinned so a future cost change that
+    // re-narrows the plateau is caught loudly.
     const knee = crossings("church.fkld", 12, FOLD_PENALTY_FRAC);
     expect(knee).toEqual(crossings("church.fkld", 12, 1));
     expect(knee).toEqual(crossings("church.fkld", 12, 0.7));
-    // And the knee really is at the shipped value rather than below it: just under, the plan still differs.
-    expect(crossings("church.fkld", 12, 0.3)).not.toEqual(knee);
+    expect(knee).toEqual(crossings("church.fkld", 12, 0.3));
   });
 
   describe("the bottleneck ordering", () => {

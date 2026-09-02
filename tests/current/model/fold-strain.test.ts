@@ -226,8 +226,14 @@ describe("model/fold-strain", () => {
       return on.length ? on[0]![1] : 0;
     }
 
-    it("charges a mountain folded flat the full price, as the rule it replaces did", () => {
-      expect(creasePrice(twoTiles("M", 180))).toBe(1000);
+    it("charges a fatiguing mountain at least the full price, and the worst one double", () => {
+      // The floor is the class rule's flat price: a shallow-but-fatiguing mountain must never be a
+      // bargain, or the router buys a tensile crossing with its own gradient (measured: at price parity
+      // the benchmark's router crossed one on bat_body/C rather than detour).  Above the floor the charge
+      // grades to twice the flat price at the pattern's worst crossing -- which, on a two-tile pattern,
+      // the only crossing is.
+      expect(creasePrice(twoTiles("M", 180))).toBe(2000);
+      expect(creasePrice(twoTiles("M", 30))).toBeGreaterThanOrEqual(1000);
     });
 
     it("charges a gentle mountain less, which the rule it replaces could not", () => {

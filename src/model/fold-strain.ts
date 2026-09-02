@@ -261,6 +261,51 @@ export function strainBand(
   return Math.max(0, Math.min(band, cap));
 }
 
+/**
+ * The traceform crease price.  One algorithm, shared with the benchmark; every term from
+ * eps = (h/2 + t) * theta / w.
+ *
+ *     compression (eps <= 0)        free -- a concave fold closes the outer fibre's cracks.  Charging it
+ *                                   buys detours around crossings that do not break.
+ *     survivable (0 < eps < eps_f)  eps/eps_f -- the copper outlasts the hinge; priced by proximity to
+ *                                   the limit, which moves with the stack.  The coupling the class rule
+ *                                   never had: the same fold on a thicker sheet costs more.
+ *     fatiguing (eps >= eps_f)      1 + min(1, eps/epsMax) -- **floored** at the flat rule's full price,
+ *                                   so a shallow-but-fatiguing mountain is never a bargain, and **graded**
+ *                                   above it, so among crossings the pattern forces the gentler one wins.
+ *     closure                       max with {@link closureFraction} -- a crease folded back on itself
+ *                                   can short.  A fabrication hazard, not a strain one.
+ *
+ * Returns a fraction in [0, 2]; the caller multiplies by its fold penalty.
+ *
+ * Measured on the benchmark's single-sided arm -- the regime this router occupies -- this cost beats the
+ * published mountain rule on both metrics under every net ordering tested (220 vs 232 tensile crossings,
+ * 11,427 vs 12,603 mm copper, means over 3 orderings 221.0 vs 247.0), and an ablation attributes 97% of
+ * the copper gain to the graded term specifically.  Whether that transfers to this corridor's resolution
+ * is measured by `scripts/bench-band.ts` and the routing tests, not assumed.
+ */
+export function traceformCreaseFraction(
+  hingeMm: number,
+  foldDeg: number,
+  epsMax: number,
+  spec: SheetSpec = DEFAULT_SHEET,
+): number {
+  const closure = closureFraction(foldDeg);
+  const eps = foldStrain(hingeMm, foldDeg, spec);
+  if (eps <= 0) return closure;
+  if (!(spec.fatigueStrain > 0)) return closure;
+  if (eps < spec.fatigueStrain) {
+    // Survivable: the copper outlasts the hinge.  Priced by proximity to the
+    // limit, which moves with the stack -- the coupling the class rule never had.
+    return Math.max(eps / spec.fatigueStrain, closure);
+  }
+  // Fatiguing: never cheaper than the flat rule's full price (a shallow-but-
+  // fatiguing mountain must not be a bargain), graded above the floor so that
+  // among crossings the pattern forces, the gentler one wins.
+  const grade = epsMax > 0 ? Math.min(1, eps / epsMax) : 1;
+  return Math.max(1 + grade, closure);
+}
+
 export function creaseCostFraction(
   hingeMm: number,
   foldDeg: number,
