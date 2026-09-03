@@ -370,7 +370,7 @@ export function accumulateForces(m: BarHingeModel, lastTheta: Float32Array, fold
   //
   // `guideWeight` is how hard the hands are holding: 1 while the fold is being driven to the slider
   // target, then taken to 0 to LET GO, after which the pose is held by the pattern's own creases and
-  // seams or not at all. Undefined ⇒ 1 (printed mode's build-time `relaxPrintedGoal` never lets go).
+  // seams or not at all. Undefined ⇒ 1 for callers that do not animate guide release.
   if (m.softDriven) {
     const kGoal = (m.params.kGoal ?? 0) * (m.guideWeight ?? 1);
     // Aim along the net's own kinematics where it has one — the pose in which every panel is rigid

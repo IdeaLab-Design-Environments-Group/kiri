@@ -94,6 +94,13 @@ describe("sim/scene", () => {
     const printed = buildScene(fold, "printed");
     expect(printed?.material).toBe("printed");
     expect(printed?.scene.material).toBe("printed");
+    // Printed rendering and material constraints must not switch back to the old keyframe blend.
+    // It follows the same live, softly guided simulation as vinyl: driven nodes receive forces,
+    // while bars, creases, collision and the thickness barrier remain free to move every node.
+    expect(Array.from(printed!.scene.model.driven).some((d) => d === 1)).toBe(true);
+    expect(Array.from(printed!.scene.model.fixed).some((f) => f === 1)).toBe(false);
+    expect(printed!.scene.model.softDriven).toBe(true);
+    expect(printed!.scene.model.guideWeight).toBe(1);
     const c = printed!.scene.model.creases;
     expect(c.thetaMax).toBeDefined();
     // one-sided closure: targets are capped at θ_max only on the tile-collide side; the fabric side

@@ -97,8 +97,8 @@ export class FoldSolver {
    */
   private driveBoundary(): void {
     const m = this.model;
-    // 3D-printed soft-driven mode: driven nodes are moved by the goal-spring force (forces.ts),
-    // not hard-placed here, so thick-hinge barriers can relax an over-closed goal pose.
+    // Viewer scenes are soft-driven: driven nodes move via the goal-spring force (forces.ts), not
+    // hard placement here, so the sheet physics and any thick-hinge barriers remain authoritative.
     if (m.softDriven) return;
     const fp = this.foldPercent;
     for (let i = 0; i < m.numNodes; i++) {

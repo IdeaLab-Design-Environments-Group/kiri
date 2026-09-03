@@ -46,9 +46,8 @@ export interface SolverParams {
    */
   foldValley: number;
   /**
-   * 3D-PRINTED mode only. Stiffness of the soft goal-spring that pulls a *soft-driven* boundary
-   * node toward its kinematic target rest→goal·foldPercent (replaces the hard pin so thick-hinge
-   * barriers can push the goal pose open). Unused in vinyl mode.
+   * Stiffness of the soft goal-spring that pulls a *soft-driven* boundary node toward its
+   * kinematic target rest→goal·foldPercent. Used by both vinyl and printed viewer scenes.
    */
   kGoal?: number;
   /**
@@ -128,9 +127,9 @@ export interface BarHingeModel {
   /** N — 1 = boundary node kinematically driven rest→goal by foldPercent (forward process). */
   driven: Uint8Array;
   /**
-   * 3D-PRINTED mode only. When true, driven nodes are NOT hard-pinned: the solver skips the
-   * kinematic placement and instead a goal-spring (params.kGoal) pulls them toward rest→goal,
-   * so the thick-hinge barriers can relax an over-closed goal pose. Undefined ⇒ vinyl (hard pin).
+   * When true, driven nodes are NOT hard-pinned: the solver skips kinematic placement and instead
+   * a goal-spring (params.kGoal) pulls them toward rest→goal, allowing the sheet physics (and, in
+   * printed mode, thick-hinge barriers) to determine the live pose.
    */
   softDriven?: boolean;
   /**
@@ -140,7 +139,7 @@ export interface BarHingeModel {
    * it to 0. After the release the pose is held by the pattern's own creases and seams or not at
    * all — a fold that springs open here would spring open in paper, and the strain readout and the
    * shape on screen say so instead of an external field hiding it. Undefined ⇒ 1 (never let go),
-   * which is what printed mode's build-time `relaxPrintedGoal` wants.
+   * Callers outside the viewer may leave it undefined to hold a guide continuously.
    */
   guideWeight?: number;
 

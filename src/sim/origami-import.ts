@@ -371,8 +371,8 @@ function beamStrainAt(model: BarHingeModel): number {
  *    the way Origami Simulator's crease-target fold is; and because the guide is RELEASED once the
  *    fold reaches its target (`guideWeight` → 0), the final pose must hold under the pattern's own
  *    creases and seams rather than be held there by an external field.
- *    (Printed mode keeps the hard pin: its rigid tiles are relaxed against the thickness barriers at
- *    build time by `relaxPrintedGoal`, and the runtime drives to that relaxed pose.)
+ *    Printed mode uses this same force-driven path. Its rigid-panel stiffness and thickness barrier
+ *    change the equilibrium, but positions remain solver output rather than a second keyframe path.
  *  - Otherwise the model is left **free** (no driven nodes) and folds by crease targets alone —
  *    exactly the paper's uniform method (origami, honeycomb kirigami, anything self-supporting).
  *
@@ -430,12 +430,13 @@ function applyDeclaredGoal(
     model.goal[3 * n + 2] = gs[2] + t[2];
     if (drivenDecl[origin[n]]) {
       model.driven[n] = 1;
-      // VINYL: soft-guided (below) — no pin, so the bars, creases and self-collision all still act
-      // on this node. PRINTED: hard-pinned, and the solver places it kinematically.
+      // A normal viewer scene is soft-guided — no pin, so bars, creases, thickness barriers and
+      // self-collision all still act on this node. The verification transport audit is the sole
+      // caller that explicitly requests a hard pin.
       if (!softGuide) model.fixed[n] = 1;
     }
   }
-  // Vinyl: guide with a weak, fading spring instead of prescribing positions. A file may declare
+  // Guide with a weak, fading spring instead of prescribing positions. A file may declare
   // EVERY vertex driven (house.fkld: 18 of 18), and hard-pinning them all reduces the "simulation"
   // to a per-vertex straight-line blend rest→goal — not an isometry, so mid-fold bars stretched or
   // collapsed by up to 100%, faces swept through each other, and `collision.ts` (which skips fixed
@@ -939,8 +940,7 @@ export interface BuildSceneOptions {
    * kinematic transport described in `pipeline/verify.ts`, which drives every vertex along
    * rest→goal on purpose and audits the tensile strain of that path as a statement about the
    * pattern. Nothing that is meant to look like a fold should ask for this: it writes positions
-   * into the model rather than solving for them (see `applyDeclaredGoal`). Printed mode sets it
-   * implicitly, its goal pose having been relaxed against the tile thickness at build time.
+   * into the model rather than solving for them (see `applyDeclaredGoal`).
    */
   pinDeclaredGoal?: boolean;
   /** Printed thickness/gap (mm); defaults to the file's meta or DEFAULT_PRINTED. */
@@ -978,15 +978,15 @@ export function buildSceneFromFold(
   const { fold: processed, creaseParams } = processFold(work, { splitCuts: opts.splitCuts ?? true });
   const model = assembleModel(processed, creaseParams, params);
   // Adaptive: drive a declared folded-form footprint if the file states one; else free fold.
-  const driven = applyDeclaredGoal(fold, processed, model, !opts.printed && !opts.pinDeclaredGoal);
+  applyDeclaredGoal(fold, processed, model, !opts.pinDeclaredGoal);
 
-  // 3D-printed: rigid tiles can't close past the thickness limit. Set per-crease θ_max + clamp
-  // the design targets (handles free-fold patterns); for driven files additionally relax the goal
-  // pose so the kinematically-pinned hinges physically open to ≤ θ_max.
+  // 3D-printed: rigid tiles can't close past the thickness limit. Set per-crease θ_max and clamp
+  // the design targets (handles free-fold patterns). Guided files use the same live, force-driven
+  // simulation as vinyl, so this barrier participates throughout the fold instead of being baked
+  // into a replacement goal keyframe.
   if (opts.printed) {
     const pp = opts.printedParams ?? printedParamsFromMeta(fold) ?? DEFAULT_PRINTED;
     applyPrintedClosure(model, pp);
-    if (driven) relaxPrintedGoal(model);
   }
 
   const net = netFromModel(processed, model, cutPairs);
@@ -1017,32 +1017,4 @@ function applyPrintedClosure(model: BarHingeModel, pp: PrintedParams): void {
     c.thetaMax[i] = thetaMax;
     if (TILE_COLLIDE_SIGN * c.targetTheta[i] > thetaMax) c.targetTheta[i] = TILE_COLLIDE_SIGN * thetaMax;
   }
-}
-
-/**
- * Build-time goal relaxation for driven (guided) printed files: the declared goal pose may close
- * hinges past θ_max (it was authored thickness-free). Soft-drive from the goal with the thick-hinge
- * barriers active, settle, and freeze the result as the new goal — so the runtime hard-drive lands
- * on a thickness-respecting pose where tiles stop short of colliding. Keeps the live loop stable.
- */
-function relaxPrintedGoal(model: BarHingeModel): void {
-  const savedFixed = model.fixed.slice();
-  const savedPos = model.position.slice();
-  const savedVel = model.velocity.slice();
-
-  for (let i = 0; i < model.numNodes; i++) if (model.driven[i]) model.fixed[i] = 0; // unpin
-  model.softDriven = true;
-  model.position.set(model.goal);
-  model.velocity.fill(0);
-
-  const solver = new FoldSolver(model);
-  solver.foldPercent = 1;
-  solver.solveUntilSettled({ maxIters: 3000, keEps: 1e-7, quench: true, guard: true });
-
-  model.goal.set(model.position); // relaxed, thickness-respecting goal
-
-  model.softDriven = false; // runtime drives hard to the relaxed goal
-  model.fixed.set(savedFixed);
-  model.position.set(savedPos);
-  model.velocity.set(savedVel);
 }
