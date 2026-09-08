@@ -212,8 +212,13 @@
        stroke widths and dasharrays below are interpreted in CSS pixels,
        not viewBox user units. Without this the stroke widths balloon to
        the viewBox scale and a thin "5 2" dashed line becomes a 5-units
-       black blob bigger than the entire viewport. */
-    svg polygon, svg line, svg circle, svg path { vector-effect: non-scaling-stroke; }
+       black blob bigger than the entire viewport.
+       `text` is in the list for the same reason: the labels below carry a
+       white halo (paint-order: stroke), and 2 user units of halo on a 2-unit
+       viewBox is a blob the size of the canvas. There is no such escape hatch
+       for FONT SIZE, so the label size is set in user units at render time --
+       see `labelSize` in the script. */
+    svg polygon, svg line, svg circle, svg path, svg text { vector-effect: non-scaling-stroke; }
     /* Opaque full-sheet silhouette drawn beneath the (optional) translucent faces, so dart/vent
        gaps read as slits in a solid body of paper rather than see-through holes. */
     svg .body-fill { stroke: none; fill: var(--body); fill-opacity: 1; }
@@ -221,12 +226,12 @@
     svg .face.top { fill: var(--face-top); }
     svg .face.bot { fill: var(--face-bot); }
     svg .face-text {
-      fill: var(--muted); font-size: 9px; text-anchor: middle;
+      fill: var(--muted); text-anchor: middle;
       font-family: ui-monospace, monospace;
       paint-order: stroke; stroke: white; stroke-width: 2;
     }
     svg .vert-text {
-      fill: var(--ink); font-size: 9px; text-anchor: middle;
+      fill: var(--ink); text-anchor: middle;
       font-family: ui-monospace, monospace;
       paint-order: stroke; stroke: white; stroke-width: 2;
     }
@@ -438,12 +443,32 @@
   }
 
   // ---- rendering ------------------------------------------------------------
+  /**
+   * How big a `LABEL_PX`-pixel label is in viewBox user units, for the canvas at
+   * its current size.
+   *
+   * The viewBox is a fixed 2x2 (`-1 -1 2 2`) with `xMidYMid meet`, so one user
+   * unit is `min(width, height) / 2` pixels and a font-size stated in px is read
+   * as that many USER UNITS instead: `font-size: 9px` in the stylesheet drew every
+   * vertex label nine units tall on a two-unit canvas, which is why switching
+   * Vertices, Face Text or Molecules on painted the viewer black. Stroke has
+   * `vector-effect` to escape this; font-size has nothing, so it is computed here.
+   */
+  const LABEL_PX = 9;
+  function labelSize(svg) {
+    const box = svg.getBoundingClientRect ? svg.getBoundingClientRect() : null;
+    const side = box ? Math.min(box.width, box.height) : 0;
+    return LABEL_PX * 2 / Math.max(side, 1);   // an unrendered canvas still gets a sane number
+  }
+
   function render() {
     if (!currentFile) return;
     const svg = document.getElementById('canvas');
     svg.innerHTML = '';
     svg.setAttribute('viewBox', '-1 -1 2 2');
     svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+
+    const label = labelSize(svg);   // user units per label, for every text below
 
     const model = buildModel(currentFile);
     if (!model.vs.length) {
@@ -485,6 +510,7 @@
         const t = document.createElementNS(NS, 'text');
         t.setAttribute('x', f.p[0]); t.setAttribute('y', f.p[1]);
         t.setAttribute('class', 'face-text');
+        t.setAttribute('font-size', label);
         t.textContent = `f${f.i}`;
         svg.appendChild(t);
       }
@@ -528,7 +554,8 @@
         const t = document.createElementNS(NS, 'text');
         t.setAttribute('x', m[0]); t.setAttribute('y', m[1]);
         t.setAttribute('class', 'vert-text');
-        t.setAttribute('dy', -0.005);
+        t.setAttribute('font-size', label);
+        t.setAttribute('dy', -label * 0.6);   // clear of the edge it annotates
         t.textContent = `θ=${theta.toFixed(2)}`;
         svg.appendChild(t);
       }
@@ -552,8 +579,9 @@
         svg.appendChild(c);
 
         const tx = document.createElementNS(NS, 'text');
-        tx.setAttribute('x', v.p[0]); tx.setAttribute('y', v.p[1] + 0.005);
+        tx.setAttribute('x', v.p[0]); tx.setAttribute('y', v.p[1] + label * 0.35);
         tx.setAttribute('class', 'vert-text');
+        tx.setAttribute('font-size', label);
         tx.textContent = `${v.i}`;
         svg.appendChild(tx);
       }
