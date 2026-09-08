@@ -33,12 +33,13 @@ import {
   patternDiag,
   segsCross,
   seamCrossing,
-  tapeOnBody,
+  tapeOffBodyAt,
   type PadPair,
   type RoutedCircuit,
   type Trace2D,
 } from "./electronics-routing.js";
 import { toFlat, type WireContext } from "./manual-wire.js";
+import { bridgeSpanFor } from "./tape-width.js";
 
 /**
  * What can be wrong with a hand-drawn wire.
@@ -135,50 +136,38 @@ export function checkWire(t: Trace2D, ctx: WireContext, routed: RoutedCircuit): 
  * hunt along the boundary for a wire lying well inside the sheet, across a slit, is worse than saying
  * nothing: the message names a place the problem is not. {@link seamCrossing} separates them.
  *
- * The point comes from `seamCrossing` and not from {@link firstOffBody} for a reason worth keeping: on an
+ * The point comes from `seamCrossing` and not from {@link tapeOffBodyAt} for a reason worth keeping: on an
  * unopened cut there is material on BOTH sides, so a sampler looking for somewhere off the sheet finds
  * nothing, and any point it named would be one it had not derived.
+ *
+ * An opened cut narrower than `tape-width.ts › BRIDGE_MM` is not a fault at all: the router bridges such an
+ * opening itself, and the author's wire is held to the same allowance. Only a wider hole, or one the wire
+ * ends in, is off the body.
  */
 function offBody(t: Trace2D, ctx: WireContext, tapeW: number, out: WireFault[]): void {
+  const bridgeW = bridgeSpanFor(tapeW, ctx.tapeMm);
   for (let i = 1; i < t.pts.length; i++) {
     const a = t.pts[i - 1]!, b = t.pts[i]!;
-    if (tapeOnBody(ctx.faces, tapeW, a, b)) continue;
     // Ahead of the boundary reading, because a wire can do both at once and the cut is the more specific
     // statement: a strip that spans a slit AND runs off the far edge is still, first, spanning a slit.
     const seam = seamCrossing(ctx.faces, a, b);
-    out.push(seam
-      ? {
+    if (seam) {
+      out.push({
         kind: "spans-cut",
         at: seam,
         why: "the wire spans a cut — the material is severed along this line, so the tape is bridging a hole",
-      }
-      : {
+      });
+      continue;
+    }
+    const off = tapeOffBodyAt(ctx.faces, tapeW, a, b, bridgeW);
+    if (off) {
+      out.push({
         kind: "off-body",
-        at: firstOffBody(ctx.faces, tapeW, a, b),
+        at: off,
         why: "the wire runs off the edge of the sheet — at this width part of the tape has no material under it",
       });
+    }
   }
-}
-
-/**
- * The point on `ab` where the strip first leaves the material.
- *
- * Sampled the same way {@link tapeOnBody} samples, so the point reported is one the check itself rejected
- * rather than a nearby guess. Falls back to the midpoint if nothing is found, which cannot happen while this
- * is only called on a segment that already failed, but leaving it to `undefined` would put a hole in a type.
- */
-function firstOffBody(faces: FlatFace[], tapeW: number, a: Vec2, b: Vec2): Vec2 {
-  const L = Math.hypot(b.x - a.x, b.y - a.y);
-  const half = tapeW * 0.5;
-  const nx = L < 1e-12 ? 0 : (-(b.y - a.y) / L) * half;
-  const ny = L < 1e-12 ? 0 : ((b.x - a.x) / L) * half;
-  const steps = Math.max(9, Math.ceil(L / half));
-  for (let k = 0; k <= steps; k++) {
-    const u = k / steps;
-    const m = { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u };
-    if (pointOff(faces, m.x + nx, m.y + ny) || pointOff(faces, m.x - nx, m.y - ny)) return m;
-  }
-  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
 }
 
 /**
@@ -509,8 +498,5 @@ function nearPolyline(pts: Vec2[], p: Vec2): number {
   }
   return best;
 }
-
-/** Whether this point has no material under it — {@link pointInFace} returns -1 off the sheet. */
-const pointOff = (faces: FlatFace[], x: number, y: number): boolean => pointInFace(faces, { x, y }) < 0;
 
 const isOrigin = (p: Vec2): boolean => p.x === 0 && p.y === 0;

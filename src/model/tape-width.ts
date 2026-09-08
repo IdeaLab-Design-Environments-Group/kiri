@@ -248,6 +248,29 @@ export function weedGapFor(tapeW: number, tapeMm: number, sheet: SheetSpec = DEF
 }
 
 /**
+ * The widest opening in the sheet that copper tape may span unsupported, in millimetres.
+ *
+ * A cut that has opened is a hole in the silhouette, and until 2026-09-04 the router kept copper off every
+ * hole whatever its width. But a kirigami net's cuts open as wedges from the vertex the two patches still
+ * share, and near that apex the opening is a millimetre or two — a span adhesive copper foil bridges on its
+ * own, and one that closes again as the net folds up, so the tape across it is never put in tension.
+ * Five millimetres is a stated allowance rather than a measurement: 35µm foil on its adhesive stays flat
+ * over that much air, and past it the strip starts to sag and snag when weeded. A zero-width seam is NOT
+ * covered by this — see `corridor.ts › seamsOf` — because a slit that reads as whole in the flat pattern
+ * opens when the sheet folds, which is the opposite motion.
+ */
+export const BRIDGE_MM = 5;
+
+/**
+ * {@link BRIDGE_MM} in a pattern's own units — converted by the tape's two widths, like {@link weedGapFor},
+ * so a hole the router will bridge and a hole a hand wire may cross are the same physical opening.
+ */
+export function bridgeSpanFor(tapeW: number, tapeMm: number = TAPE_MM): number {
+  if (!(tapeMm > 0) || !(tapeW > 0)) return 0;
+  return (BRIDGE_MM * tapeW) / tapeMm;
+}
+
+/**
  * The narrowest copper worth cutting, as a fraction of the tape width.
  *
  * Named rather than written as a bare `0.35` in two places. It is the same number as {@link LED_GAP_FRAC}

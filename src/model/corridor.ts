@@ -21,7 +21,7 @@ import {
   dist2,
   pointInFace,
 } from "./electronics.js";
-import type { Corridor } from "./trace-types.js";
+import type { Corridor, CorridorBridge } from "./trace-types.js";
 import {
   DEFAULT_SHEET,
   creaseCostFraction,
@@ -32,7 +32,7 @@ import {
   overStrainLimit,
   type SheetSpec,
 } from "./fold-strain.js";
-import { FOLD_PENALTY_FRAC, TAPE_MM } from "./tape-width.js";
+import { FOLD_PENALTY_FRAC, TAPE_MM, bridgeSpanFor } from "./tape-width.js";
 import {
   add,
   cross,
@@ -148,22 +148,99 @@ export function crossesSeam(faces: FlatFace[], a: Vec2, b: Vec2): boolean {
   return seamCrossing(faces, a, b) !== null;
 }
 
-export function tapeOnBody(faces: FlatFace[], tapeW: number, a: Vec2, b: Vec2): boolean {
+/**
+ * Whether a strip of tape from `a` to `b` can be laid on the material — or, given a `bridgeW`
+ * ({@link bridgeSpanFor}), bridging an opening no wider than that. Never across a zero-width seam.
+ *
+ * Strict by default. The router asks this of the legs it does not search — the first hop out of a terminal,
+ * the escape past the other net's terminal — and those must stay on the sheet: the only copper it lays over
+ * air is a bridge hop between two lips, priced as such in `buildCorridor`. A hand-drawn wire is held to the
+ * bridging allowance instead, by `wire-rules.ts`, which passes it.
+ */
+export function tapeOnBody(faces: FlatFace[], tapeW: number, a: Vec2, b: Vec2, bridgeW = 0): boolean {
   // Before the sampling, because it is the case sampling cannot see: a zero-width cut leaves material on
   // both sides and severed material in between. See {@link seamsOf}.
   if (crossesSeam(faces, a, b)) return false;
+  return tapeOffBodyAt(faces, tapeW, a, b, bridgeW) === null;
+}
+
+/**
+ * Where a strip from `a` to `b` first hangs off the material — for longer than `bridgeW`, when one is given —
+ * or null if it never does. The seam reading is {@link crossesSeam}'s and is not repeated here.
+ *
+ * The strip is read along its centreline and both edges, so tape tracking a boundary with its centre on the
+ * sheet and half its width off it is caught. With an allowance, each line may leave the material for up to
+ * `bridgeW` of its length and land again — that is copper spanning a narrow opening — but a stretch that
+ * reaches either end of the segment is not a bridge, since there is no far bank for it to land on.
+ */
+export function tapeOffBodyAt(faces: FlatFace[], tapeW: number, a: Vec2, b: Vec2, bridgeW = 0): Vec2 | null {
   const L = Math.hypot(b.x - a.x, b.y - a.y);
   const half = tapeW * 0.5;
   const nx = L < 1e-12 ? 0 : (-(b.y - a.y) / L) * half;
   const ny = L < 1e-12 ? 0 : ((b.x - a.x) / L) * half;
   const steps = Math.max(9, Math.ceil(L / half));
-  for (let k = 0; k <= steps; k++) {
-    const u = k / steps;
-    const m = { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u };
-    if (pointInFace(faces, { x: m.x + nx, y: m.y + ny }) < 0) return false;
-    if (pointInFace(faces, { x: m.x - nx, y: m.y - ny }) < 0) return false;
+  if (!(bridgeW > 0)) {
+    // The strict reading, sampled exactly as it always was: the first sample with nothing under either
+    // edge of the tape is the answer.
+    for (let k = 0; k <= steps; k++) {
+      const u = k / steps;
+      const m = { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u };
+      if (pointInFace(faces, { x: m.x + nx, y: m.y + ny }) < 0) return m;
+      if (pointInFace(faces, { x: m.x - nx, y: m.y - ny }) < 0) return m;
+    }
+    return null;
   }
-  return true;
+  const coarse = L / steps;
+  for (const [ox, oy] of [[0, 0], [nx, ny], [-nx, -ny]] as const) {
+    const p = { x: a.x + ox, y: a.y + oy }, q = { x: b.x + ox, y: b.y + oy };
+    const off = offBodyRun(faces, p, q, coarse, bridgeW, true);
+    if (off) return { x: off.x - ox, y: off.y - oy }; // reported on the centreline, where the author drew it
+  }
+  return null;
+}
+
+/**
+ * The first point on `ab` where the line leaves the material for longer than `allow`, or null.
+ *
+ * Sampled at `coarse` steps as {@link tapeOnBody} always has been, which is cheap enough to run for every
+ * chord of every face at corridor build. Only where a sample is off the sheet is the run around it walked
+ * at a fine step, both ways, until it lands again or has already exceeded the allowance — so the cost of the
+ * finer reading is paid only over holes. An opening narrower than a coarse step can slip between two samples
+ * unseen, as it always could, and every such opening is well inside the allowance anyway.
+ *
+ * `ends` says whether the segment's own endpoints are sampled. A chord between two edge nodes excludes them
+ * (its ends sit on edges by construction); a hand wire includes them. A run that reaches an end of the
+ * segment is refused whatever its length when `ends` is set — tape ending in mid-air is not a bridge — and
+ * judged by its length like any other when it is not.
+ */
+export function offBodyRun(
+  faces: FlatFace[], a: Vec2, b: Vec2, coarse: number, allow: number, ends: boolean,
+): Vec2 | null {
+  const L = Math.hypot(b.x - a.x, b.y - a.y);
+  const at = (t: number): Vec2 => (L < 1e-12 ? a : { x: a.x + ((b.x - a.x) * t) / L, y: a.y + ((b.y - a.y) * t) / L });
+  const off = (t: number): boolean => pointInFace(faces, at(t)) < 0;
+  if (L < 1e-12) return ends && off(0) ? a : null;
+  const step = Math.min(coarse, L);
+  const fine = Math.min(Math.max((allow > 0 ? allow : step) / 16, L * 1e-9), L / 8);
+  const first = ends ? 0 : step, last = ends ? L : L - step;
+  for (let t = first; t <= last + 1e-9 * L; t += step) {
+    if (!off(t)) continue;
+    // Walk the run out to where the material resumes, giving up as soon as it is longer than allowed.
+    let lo = t, hi = t;
+    while (lo - fine >= 0 && off(lo - fine)) {
+      lo -= fine;
+      if (hi - lo > allow) return at(t);
+    }
+    while (hi + fine <= L && off(hi + fine)) {
+      hi += fine;
+      if (hi - lo > allow) return at(t);
+    }
+    const reachesEnd = lo - fine < 0 || hi + fine > L;
+    if (ends && reachesEnd) return at(t);
+    // Back on material past the run; the next sample can start from there.
+    t = hi + fine - step;
+  }
+  return null;
 }
 
 
@@ -235,7 +312,8 @@ function chordInside(f: FlatFace, a: Vec2, b: Vec2, faces: FlatFace[], tapeW: nu
     const m = { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u };
     if (!pointInPolyLocal(f.poly, m)) return false;
     // The strip's edges may leave this tile onto a neighbour -- that is just crossing a crease -- but they may
-    // not leave the material altogether.
+    // not leave the material altogether. Not even over an opening a bridge would span: a chord is travel
+    // within one tile, and the only copper the router lays over air is a bridge hop between two lips.
     if (pointInFace(faces, { x: m.x + nx, y: m.y + ny }) < 0) return false;
     if (pointInFace(faces, { x: m.x - nx, y: m.y - ny }) < 0) return false;
   }
@@ -263,7 +341,10 @@ export function reachableFaces(c: Corridor, start: number): Set<number> {
       // agree with `searchCorridor` or an LED is called reachable and then never routed — reported as
       // wired, drawn with no copper.
       if (c.refused.has(ptKey(m))) continue;
-      for (const f of c.faceOf.get(ptKey(m)) ?? []) {
+      const onto = [...(c.faceOf.get(ptKey(m)) ?? [])];
+      // And across any opened cut this node bridges — the tile on the far lip is reachable too.
+      for (const b of c.bridges.get(ptKey(m)) ?? []) onto.push(...(c.faceOf.get(b.to) ?? []));
+      for (const f of onto) {
         if (seen.has(f)) continue;
         seen.add(f);
         queue.push(f);
@@ -447,6 +528,17 @@ export function buildCorridor(
   }
   const refused = new Set<string>();
   const gapKeys = new Set(gaps.map((g) => ptKey(g.point)));
+  const bridgeW = bridgeSpanFor(tapeW, tapeMm);
+
+  // How many faces name each edge: one means a lip or the sheet's boundary, two a hinge.
+  const facesOn = new Map<string, number>();
+  for (const f of faces) {
+    const n = f.verts.length;
+    for (let k = 0; k < n; k++) {
+      const key = edgeKeyOf(f.verts[k]!, f.verts[(k + 1) % n]!);
+      facesOn.set(key, (facesOn.get(key) ?? 0) + 1);
+    }
+  }
 
   faces.forEach((f, fi) => {
     const list: Vec2[] = [];
@@ -481,6 +573,62 @@ export function buildCorridor(
     mids.set(fi, list);
   });
 
+  // Bridges over opened cuts.
+  //
+  // A cut that has opened has no shared edge for a crossing node to sit on: it is two lips, one per face,
+  // with a hole between them. Where that hole is narrower than the tape can span (`bridgeW`, five
+  // millimetres by default), a node is placed on each lip and the two are linked, so the search can step
+  // across the way it steps across a hinge. On a kirigami net the cuts open as wedges from the vertex the
+  // two patches still share, so the bridgeable stretch is the end of the lip nearest that apex — which is
+  // also where the opening closes again as the net folds, so the tape over it is never pulled.
+  //
+  // A last resort, not an option: tape over a hole is bridging air, not bending on a substrate, so a hop
+  // costs {@link BRIDGE_TOLL_DIAGS} pattern diagonals — more than any route over creases can add up to —
+  // and carries the top severity band. A tile is bridged to only when nothing else reaches it, and every
+  // route that had a way over the material keeps it.
+  const bridges = new Map<string, CorridorBridge[]>();
+  if (bridgeW > 0) {
+    const toll = BRIDGE_TOLL_DIAGS * bboxDiag(faces);
+    const lips: { face: number; a: Vec2; b: Vec2 }[] = [];
+    faces.forEach((f, fi) => {
+      const n = f.verts.length;
+      for (let k = 0; k < n; k++) {
+        if (facesOn.get(edgeKeyOf(f.verts[k]!, f.verts[(k + 1) % n]!)) !== 1) continue;
+        lips.push({ face: fi, a: f.poly[k]!, b: f.poly[(k + 1) % n]! });
+      }
+    });
+    const addNode = (fi: number, p: Vec2): string => {
+      const key = ptKey(p);
+      if (!point.has(key)) {
+        point.set(key, p);
+        mids.get(fi)!.push(p);
+      }
+      const owners = faceOf.get(key) ?? [];
+      if (!owners.includes(fi)) owners.push(fi);
+      faceOf.set(key, owners);
+      return key;
+    };
+    const link = (from: string, to: string): void => {
+      const list = bridges.get(from) ?? [];
+      if (!list.some((l) => l.to === to)) list.push({ to, price: toll, band: bandCap > 0 ? bandCap : 0 });
+      bridges.set(from, list);
+    };
+    for (let i = 0; i < lips.length; i++) {
+      for (let j = i + 1; j < lips.length; j++) {
+        const A = lips[i]!, B = lips[j]!;
+        if (A.face === B.face) continue;
+        for (const [u, v] of bridgeSpans(A, B, bridgeW, faces)) {
+          // Nudged a hair inside their own tiles, so that a point-in-face test lands each node on the tile it
+          // belongs to rather than on the boundary line, where the even-odd test is a coin toss.
+          const ka = addNode(A.face, nudgeInto(u, faces[A.face]!));
+          const kb = addNode(B.face, nudgeInto(v, faces[B.face]!));
+          link(ka, kb);
+          link(kb, ka);
+        }
+      }
+    }
+  }
+
   // A chord is only a way through if it stays on the tile. Concave faces have pairs of edge midpoints whose
   // straight line leaves the material, and taking one would put copper off the body.
   const chords = new Map<number, Set<string>>();
@@ -501,7 +649,92 @@ export function buildCorridor(
   for (const key of gapKeys) {
     if (!point.has(key)) continue;
   }
-  return { mids, faceOf, point, chords, cost, band, refused };
+  return { mids, faceOf, point, chords, cost, band, refused, bridges };
+}
+
+/** How finely a lip is scanned for the stretch of it that faces the other lip within reach. */
+const LIP_SAMPLES = 32;
+
+/**
+ * What one hop over an opened cut costs, in pattern diagonals.
+ *
+ * Far above the crease price (half a diagonal at most per crossing — `tape-width.ts › FOLD_PENALTY_FRAC`)
+ * and far below `BAND_STRIDE`, so that a bridge loses to any route over the material and the band ordering
+ * still works above it. Twenty is not calibrated against anything: it only has to be more creases than a
+ * route on these patterns ever crosses.
+ */
+const BRIDGE_TOLL_DIAGS = 20;
+
+/** The pattern's bounding-box diagonal — `electronics-routing.ts › patternDiag`, which cannot be imported
+ *  here without a cycle. */
+function bboxDiag(faces: FlatFace[]): number {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const f of faces) for (const p of f.poly) {
+    if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+  }
+  return Number.isFinite(minX) ? Math.hypot(maxX - minX, maxY - minY) : 0;
+}
+
+/**
+ * Where tape may cross from lip `A` to lip `B`: pairs of points, one on each lip, no further apart than
+ * `bridgeW`, with nothing but air between them.
+ *
+ * The stretch of `A` within reach of `B` is found by sampling, and crossed at its quarter points the way a
+ * hinge is crossed at {@link EDGE_CROSSINGS}: two places rather than one so the two rails need not share a
+ * point, and off the middle for the same reason. Each point's mate is its foot on `B`, and the foot must
+ * fall strictly within `B`: two lips that merely meet at a corner — the collinear boundary edges of two
+ * tiles either side of a hinge, say — have every foot clamped to that corner, and the "opening" between them
+ * is the boundary line itself, which a point-in-face test reads as off the sheet. A pair is also dropped
+ * when the two points touch — that is a seam, not an opening, and seams are refused by {@link seamsOf} —
+ * or when there is material between them, since then it is not a hole being bridged at all.
+ */
+function bridgeSpans(
+  A: { a: Vec2; b: Vec2 }, B: { a: Vec2; b: Vec2 }, bridgeW: number, faces: FlatFace[],
+): [Vec2, Vec2][] {
+  const L = len(sub(A.b, A.a));
+  if (L < 1e-12) return [];
+  // The first stretch of A within reach of B, as a parameter range along A.
+  let lo = -1, hi = -1;
+  for (let k = 0; k <= LIP_SAMPLES; k++) {
+    const t = k / LIP_SAMPLES;
+    const p = add(A.a, scale(sub(A.b, A.a), t));
+    const near = segPointDist(B.a, B.b, p) <= bridgeW;
+    if (near && lo < 0) lo = t;
+    if (near) hi = t;
+    else if (lo >= 0) break;
+  }
+  if (lo < 0) return [];
+  const out: [Vec2, Vec2][] = [];
+  for (const q of EDGE_CROSSINGS) {
+    const p = add(A.a, scale(sub(A.b, A.a), lo + (hi - lo) * q));
+    const foot = footOnSeg(p, B.a, B.b);
+    if (!foot) continue; // its perpendicular misses B: a corner contact or a lip that has swung past
+    const span = len(sub(foot, p));
+    if (span <= 1e-9 * L || span > bridgeW) continue;
+    const mid = scale(add(p, foot), 0.5);
+    if (pointInFace(faces, mid) >= 0) continue; // material between the lips: not a hole
+    out.push([p, foot]);
+  }
+  return out;
+}
+
+/** The foot of the perpendicular from `p` onto segment `ab`, or null when it falls outside the segment. */
+function footOnSeg(p: Vec2, a: Vec2, b: Vec2): Vec2 | null {
+  const d = sub(b, a);
+  const l2 = d.x * d.x + d.y * d.y;
+  if (l2 < 1e-24) return null;
+  const t = ((p.x - a.x) * d.x + (p.y - a.y) * d.y) / l2;
+  if (t <= 1e-9 || t >= 1 - 1e-9) return null;
+  return add(a, scale(d, t));
+}
+
+/** `p`, moved a hair toward the face's centroid — off its boundary line and unambiguously inside it. */
+function nudgeInto(p: Vec2, f: FlatFace): Vec2 {
+  const toC = sub(f.centroid, p);
+  const d = len(toC);
+  if (d < 1e-12) return p;
+  return add(p, scale(unit(toC), d * 1e-6));
 }
 
 /**
@@ -649,6 +882,23 @@ export function searchCorridor(
           prev.set(k, at);
           heap.push(k, pack(nextWorst, w));
         }
+      }
+    }
+    // And across an opened cut, where this node sits on a lip narrow enough to bridge. The hop is priced
+    // as a cut on top of its length, and carries a cut's severity band — see `buildCorridor`.
+    for (const b of c.bridges.get(at) ?? []) {
+      const k = b.to;
+      const m = c.point.get(k);
+      if (!m || c.refused.has(k)) continue;
+      const cuts = theirs ? crossesAny(here, m, theirs) : false;
+      if (cuts && strict) continue;
+      const w = best + cost(k, Math.sqrt(dist2(here, m))) * (cuts ? TERMINAL_TOLL : 1) + b.price;
+      const nextWorst = Math.max(worst, banded ? b.band : 0);
+      if (pack(nextWorst, w) < pack(worstOf.get(k) ?? Infinity, dist.get(k) ?? Infinity)) {
+        dist.set(k, w);
+        worstOf.set(k, nextWorst);
+        prev.set(k, at);
+        heap.push(k, pack(nextWorst, w));
       }
     }
   }

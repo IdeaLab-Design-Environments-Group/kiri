@@ -175,6 +175,7 @@ export {
   reachableFaces,
   searchCorridor,
   seamCrossing,
+  tapeOffBodyAt,
   tapeOnBody,
 } from "./corridor.js";
 import { batteryTerminals, ledSeat, seatLed } from "./pad-landing.js";

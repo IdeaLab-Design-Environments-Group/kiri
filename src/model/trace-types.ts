@@ -201,6 +201,25 @@ export interface Corridor {
    * behind one comes back from {@link reachableFaces} as unreachable rather than expensively reachable.
    */
   refused: Set<string>;
+  /**
+   * Hops across an opened cut, by the node they leave from — see `corridor.ts › buildCorridor`.
+   *
+   * A hinge crossing needs no entry here: the node sits on the shared edge and belongs to both tiles. A cut
+   * that has opened has no shared edge, only two lips with a hole between them, so a node on one lip is linked
+   * to a node on the other by one of these where the opening is narrow enough for tape to span
+   * (`tape-width.ts › BRIDGE_MM`). Priced as a cut, which is the dearest crossing there is.
+   */
+  bridges: Map<string, CorridorBridge[]>;
+}
+
+/** One hop across an opened cut: where it lands, what it costs and how severe a crossing it is. */
+export interface CorridorBridge {
+  /** Key of the node on the far lip. */
+  to: string;
+  /** Added to the route's cost, like a crease's `cost`. */
+  price: number;
+  /** Maximised along the route, like a crease's `band`. */
+  band: number;
 }
 
 /** Unordered key for the edge between two vertex ids. */

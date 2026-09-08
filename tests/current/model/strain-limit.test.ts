@@ -81,6 +81,29 @@ describe("model/strain-limit", () => {
     for (const i of strict.unreachable) expect(strict.pads[i]).toBeTruthy(); // still reported, not dropped
   });
 
+  it("strands the LED even on a pattern with nothing else to hold it: three tiles, two flat mountains", () => {
+    // The same claim with the geometry laid bare, and with no opening anywhere for the router to bridge
+    // across instead (`gap-bridge.test.ts`). The battery is on the first tile and the LED on the far hinge,
+    // so both its legs sit behind the first crease.
+    const row: FoldFile = {
+      vertices_coords: [[0, 0], [40, 0], [80, 0], [120, 0], [120, 40], [80, 40], [40, 40], [0, 40]],
+      faces_vertices: [[0, 1, 6, 7], [1, 2, 5, 6], [2, 3, 4, 5]],
+      edges_vertices: [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 6], [6, 7], [7, 0], [1, 6], [2, 5]],
+      edges_assignment: ["B", "B", "B", "B", "B", "B", "B", "B", "M", "M"],
+      edges_foldAngle: [0, 0, 0, 0, 0, 0, 0, 0, 180, 180],
+    } as FoldFile;
+    const faces = flatFaces(row);
+    const gaps = gapGraph(row, faces).gaps;
+    expect(gaps).toHaveLength(2);
+    const far = gaps.find((g) => Math.min(g.faceA, g.faceB) === 1)!;
+    const leds = [ledOf(far.faceA, far.faceB)];
+    const loose = planRoutes(faces, gaps, { leds, battery: { face: 0 } });
+    const strict = planRoutes(faces, gaps, { leds, battery: { face: 0 } }, undefined, limited(0.001));
+    expect(loose.unreachable).toEqual([]);
+    expect(strict.unreachable).toEqual([0]);
+    for (const i of strict.unreachable) expect(strict.pads[i]).toBeTruthy(); // still reported, not dropped
+  });
+
   it("lays no copper over a crease it refused", () => {
     // The load-bearing assertion: a refusal that the router then routed over would be worse than no
     // refusal at all, because it would report a fold-safe circuit that is not one.
