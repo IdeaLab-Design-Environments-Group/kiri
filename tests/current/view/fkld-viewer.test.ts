@@ -70,6 +70,7 @@ interface ViewerApi {
   render: () => void;
   layers: Record<string, { on: boolean }>;
   canvas: StubEl;
+  status: StubEl;
   toggles: { name: string; press: (on: boolean) => void }[];
 }
 
@@ -112,7 +113,12 @@ function loadViewer(): ViewerApi {
       press: (on: boolean) => { box.checked = on; box.fire("change"); },
     };
   });
-  return { ...api, canvas: document.getElementById("canvas"), toggles };
+  return {
+    ...api,
+    canvas: document.getElementById("canvas"),
+    status: document.getElementById("status-text"),
+    toggles,
+  };
 }
 
 function example(name: string): unknown {
@@ -169,6 +175,32 @@ describe("view/fkld-viewer", () => {
     viewer.toggles.find((t) => t.name === "Vertices")!.press(true);
     const size = Number(texts(viewer.canvas)[0]!.getAttribute("font-size"));
     expect(size).toBeCloseTo((9 * VIEWBOX_SPAN) / Math.min(CANVAS_PX.width, CANVAS_PX.height), 6);
+  });
+
+  it("says so when a layer the file has no data for is switched on", () => {
+    // `house.fkld` is kirigamized with the dart strategy, so no vertex is tucked, so no edge carries a
+    // molecule theta: pressing Molecules correctly draws nothing. Silence there is indistinguishable
+    // from a broken toggle -- which is exactly how it was read.
+    const viewer = loadViewer();
+    viewer.loadObject(example("house.fkld"), "house.fkld");
+    viewer.toggles.find((t) => t.name === "Molecules")!.press(true);
+    expect(viewer.status.textContent).toMatch(/annotates none/);
+  });
+
+  it("stays quiet when the layer does have something to draw", () => {
+    const viewer = loadViewer();
+    viewer.loadObject(example("akde-hex.fkld"), "akde-hex.fkld");
+    viewer.toggles.find((t) => t.name === "Molecules")!.press(true);
+    expect(viewer.status.textContent).not.toMatch(/annotates none/);
+    expect(texts(viewer.canvas).some((t) => t.textContent.startsWith("θ="))).toBe(true);
+  });
+
+  it("points at Vertices when Curvature is switched on alone", () => {
+    // Curvature only recolours the vertex dots, so on its own it is a no-op on screen.
+    const viewer = loadViewer();
+    viewer.loadObject(example("house.fkld"), "house.fkld");
+    viewer.toggles.find((t) => t.name === "Curvature")!.press(true);
+    expect(viewer.status.textContent).toMatch(/switch Vertices on/);
   });
 
   it("gives text the same stroke escape hatch the shapes have", () => {

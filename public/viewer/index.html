@@ -455,6 +455,16 @@
    * `vector-effect` to escape this; font-size has nothing, so it is computed here.
    */
   const LABEL_PX = 9;
+  /**
+   * What the last render actually put on the canvas, per optional layer.
+   *
+   * A layer whose data the file does not carry draws nothing, which on screen is
+   * indistinguishable from a toggle that does not work -- `house.fkld` is
+   * kirigamized with the dart strategy, so it tucks no vertex, so no edge carries
+   * a molecule theta, so Molecules is silently empty. The toggle handler reads
+   * this and says so rather than leaving the viewer looking broken.
+   */
+  const drawn = { Molecules: 0, Vertices: 0, 'Face Text': 0 };
   function labelSize(svg) {
     const box = svg.getBoundingClientRect ? svg.getBoundingClientRect() : null;
     const side = box ? Math.min(box.width, box.height) : 0;
@@ -505,8 +515,10 @@
         svg.appendChild(poly);
       }
     }
+    drawn['Face Text'] = 0;
     if (layers['Face Text'].on) {
       for (const f of model.fs) {
+        drawn['Face Text']++;
         const t = document.createElementNS(NS, 'text');
         t.setAttribute('x', f.p[0]); t.setAttribute('y', f.p[1]);
         t.setAttribute('class', 'face-text');
@@ -545,6 +557,7 @@
       }
     }
     // Molecule labels (optional).
+    drawn.Molecules = 0;
     if (layers.Molecules.on) {
       const thetas = currentFile['fkld:edges_moleculeTheta'] || [];
       for (const e of model.es) {
@@ -558,9 +571,11 @@
         t.setAttribute('dy', -label * 0.6);   // clear of the edge it annotates
         t.textContent = `θ=${theta.toFixed(2)}`;
         svg.appendChild(t);
+        drawn.Molecules++;
       }
     }
     // Vertices.
+    drawn.Vertices = 0;
     if (layers.Vertices.on) {
       const cls = currentFile['fkld:vertices_curvatureClass'] || [];
       for (const v of model.vs) {
@@ -584,8 +599,31 @@
         tx.setAttribute('font-size', label);
         tx.textContent = `${v.i}`;
         svg.appendChild(tx);
+        drawn.Vertices++;
       }
     }
+  }
+
+  /**
+   * Explain a toggle that changed nothing, right after it is pressed.
+   *
+   * Only from the handler, never from `render` itself: rotating or zooming
+   * re-renders constantly and would otherwise stamp over the load message.
+   */
+  function noteEmptyLayer(name) {
+    if (!layers[name].on) return;
+    if (name === 'Curvature' && !layers.Vertices.on) {
+      setStatus('Curvature colours the vertex dots — switch Vertices on to see it.');
+      return;
+    }
+    if (name === 'Molecules' && drawn.Molecules === 0) {
+      const has = (currentFile?.['fkld:edges_moleculeTheta'] || []).some(t => t != null);
+      setStatus(has
+        ? 'Molecules: no annotated edge is on screen.'
+        : 'Molecules: this file annotates none — θ and w are emitted for tucked vertices only, and a dart-strategy kirigamization tucks nothing.');
+      return;
+    }
+    if (drawn[name] === 0 && name in drawn) setStatus(`${name}: nothing to draw in this file.`);
   }
 
   // ---- toggles bar ----------------------------------------------------------
@@ -602,6 +640,7 @@
         layers[name].on = cb.checked;
         label.classList.toggle('on', cb.checked);
         render();
+        noteEmptyLayer(name);
       });
       label.prepend(cb);
       g.appendChild(label);
