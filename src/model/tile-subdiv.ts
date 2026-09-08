@@ -16,6 +16,16 @@ export const TILE_INSET_FRAC = 0.16;
 export const MIN_TILE_GAP = 0.02;
 export const MAX_TILE_GAP = 0.45;
 /**
+ * Printed tile thickness as a fraction of the flat pattern's bounding-box diagonal.
+ *
+ * Shared by the 3D-printed render and by the sim's closure limit, because they are the same tile: a
+ * printed model can only fold until two tiles of this thickness meet across the gap the shrink above
+ * opens, and a limit derived from anything else stops the fold at an angle that matches nothing on
+ * screen. (`stl-export.ts` has its own 0.02 default for the exported height; the two are close but
+ * not tied, so an exported sheet is fractionally thicker than the one simulated.)
+ */
+export const TILE_THICK_FRAC = 0.018;
+/**
  * Detail "level" (the slider/menu value) → actual subdivision cap = level + DETAIL_OFFSET. So level 0
  * gives 1 subdivision deep, and the 0–4 slider spans caps 1–5. Shared by sim + export.
  */

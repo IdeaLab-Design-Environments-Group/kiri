@@ -31,4 +31,21 @@ describe("services/sim-scene-service", () => {
     expect(built?.title).toContain("store-A.fold");
     expect(built?.scene.net.faces.length).toBeGreaterThan(0);
   });
+
+  it("reuses each material scene and resets its dynamic state", () => {
+    const loaded: LoadedModel = { kind: "fold", name: "store-A.fold", object: fold };
+    const vinyl = resolveSimScene(loaded, null, "vinyl")!;
+    vinyl.scene.model.position[0] = 99;
+    vinyl.scene.model.velocity[0] = 42;
+    vinyl.scene.solver.foldPercent = 0.8;
+
+    const printed = resolveSimScene(loaded, null, "printed")!;
+    const vinylAgain = resolveSimScene(loaded, null, "vinyl")!;
+
+    expect(printed.scene).not.toBe(vinyl.scene);
+    expect(vinylAgain.scene).toBe(vinyl.scene);
+    expect(vinylAgain.scene.model.position[0]).toBe(vinylAgain.scene.model.rest[0]);
+    expect(vinylAgain.scene.model.velocity[0]).toBe(0);
+    expect(vinylAgain.scene.solver.foldPercent).toBe(0);
+  });
 });

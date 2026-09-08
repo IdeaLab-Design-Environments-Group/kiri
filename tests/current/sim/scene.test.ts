@@ -76,10 +76,15 @@ describe("sim/scene", () => {
   });
 
   it("printedThetaMax = 2·atan(g/t); thicker tiles (or smaller gaps) close less", () => {
-    expect(printedThetaMax({ thicknessMm: 1.5, gapMm: 0.8 })).toBeCloseTo(2 * Math.atan(0.8 / 1.5), 6);
-    const base = printedThetaMax({ thicknessMm: 1.5, gapMm: 0.8 });
-    expect(printedThetaMax({ thicknessMm: 3, gapMm: 0.8 })).toBeLessThan(base); // thicker → closes less
-    expect(printedThetaMax({ thicknessMm: 1.5, gapMm: 0.4 })).toBeLessThan(base); // smaller gap → closes less
+    expect(printedThetaMax(0.8, 1.5)).toBeCloseTo(2 * Math.atan(0.8 / 1.5), 6);
+    const base = printedThetaMax(0.8, 1.5);
+    expect(printedThetaMax(0.8, 3)).toBeLessThan(base); // thicker → closes less
+    expect(printedThetaMax(0.4, 1.5)).toBeLessThan(base); // smaller gap → closes less
+    // limits: no gap ⇒ cannot fold at all; vanishing thickness ⇒ no limit
+    expect(printedThetaMax(0, 1.5)).toBe(0);
+    expect(printedThetaMax(1, 1e-12)).toBeCloseTo(Math.PI, 6);
+    // scale-invariant: only the ratio matters, so model units serve as well as millimetres
+    expect(printedThetaMax(0.008, 0.015)).toBeCloseTo(base, 6);
   });
 
   it("3D-printed material tags the scene, limits closure per crease, clamps targets, and stays finite", { timeout: 25000 }, () => {

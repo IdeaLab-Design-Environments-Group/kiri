@@ -19,6 +19,7 @@
  * cuts open because `splitCuts` made their lips independent nodes.
  */
 import type { FoldFile } from "../model/fold-file.js";
+import { TILE_INSET_FRAC, TILE_THICK_FRAC } from "../model/tile-subdiv.js";
 import { type CreaseParams, processFold, type WorkFold } from "./fold-ops.js";
 import { type BarHingeModel, DEFAULT_PARAMS, type SolverParams, TILE_COLLIDE_SIGN } from "./model.js";
 import type { EdgeAssignment, FoldNet, FoldNetEdge } from "./foldnet.js";
@@ -81,24 +82,35 @@ export const PRINTED_PARAMS: SolverParams = {
   rigidFacets: true,
 };
 
-/** Fabrication geometry for the printed thickness limit (mm). */
-export interface PrintedParams {
-  /** Tile thickness (printed wall, mm). */
-  thicknessMm: number;
-  /** Bare-fabric hinge gap between tiles at a fold line (mm). */
-  gapMm: number;
+/**
+ * Printed tile geometry as fractions of the flat pattern — the same two numbers the 3D-printed
+ * render extrudes by and the STL export cuts to, so the fold stops where the tiles on screen touch.
+ *
+ * This replaced a fixed 1.2 mm / 1.0 mm pair. Those millimetres described no tile anyone could see:
+ * the flat pattern carries no real size until the export scales it, the renderer draws tiles
+ * `TILE_THICK_FRAC` of a diagonal thick with gaps the Gap slider sets, and the ratio between the two
+ * is what decides the closure. The constants fixed every model's limit at 2·atan(1.0/1.2) = 79.6°
+ * whatever was on screen, so a printed model stopped short of a fold its own tiles had room for —
+ * and the Gap slider, the one control that ought to change how far it closes, moved only the drawn
+ * gaps.
+ */
+export interface PrintedTiles {
+  /** Tile shrink toward its centroid: the Gap slider, `TILE_INSET_FRAC` by default. */
+  gapFrac: number;
+  /** Tile height as a fraction of the flat pattern's bounding-box diagonal. */
+  thickFrac: number;
 }
-export const DEFAULT_PRINTED: PrintedParams = { thicknessMm: 1.2, gapMm: 1.0 };
+export const DEFAULT_PRINTED_TILES: PrintedTiles = { gapFrac: TILE_INSET_FRAC, thickFrac: TILE_THICK_FRAC };
 
 /**
- * Max fold angle θ toward the TILE side (θ=0 flat) before two rigid tiles of thickness t on one
- * face, bridged by a bare-cloth hinge gap g, collide: θ_max = 2·atan(g/t). Thinner tiles or wider
- * gaps fold more (t→0 ⇒ θ_max→π; g→0 ⇒ θ_max→0). Scale-invariant (depends only on g/t). One-sided:
- * the fabric-backing side has no such limit and folds freely (see TILE_COLLIDE_SIGN).
+ * Max fold angle θ toward the TILE side (θ=0 flat) before two rigid tiles of thickness `t` on one
+ * face, bridged by a bare-cloth hinge gap `g`, collide: θ_max = 2·atan(g/t). Thinner tiles or wider
+ * gaps fold more (t→0 ⇒ θ_max→π; g→0 ⇒ θ_max→0). Scale-invariant — it depends only on g/t, so the
+ * two may be given in millimetres or in the model's own units, as long as they agree. One-sided: the
+ * fabric-backing side has no such limit and folds freely (see TILE_COLLIDE_SIGN).
  */
-export function printedThetaMax(p: PrintedParams): number {
-  const t = Math.max(p.thicknessMm, 1e-6);
-  return 2 * Math.atan(p.gapMm / t);
+export function printedThetaMax(gap: number, thickness: number): number {
+  return 2 * Math.atan(Math.max(gap, 0) / Math.max(thickness, 1e-9));
 }
 
 /** True when a fold file has the vertices/faces/edges needed to simulate. */
@@ -943,8 +955,8 @@ export interface BuildSceneOptions {
    * into the model rather than solving for them (see `applyDeclaredGoal`).
    */
   pinDeclaredGoal?: boolean;
-  /** Printed thickness/gap (mm); defaults to the file's meta or DEFAULT_PRINTED. */
-  printedParams?: PrintedParams;
+  /** Printed tile geometry (fractions of the pattern); defaults to `DEFAULT_PRINTED_TILES`. */
+  printedTiles?: PrintedTiles;
 }
 
 export function buildSceneFromFold(
@@ -984,37 +996,82 @@ export function buildSceneFromFold(
   // the design targets (handles free-fold patterns). Guided files use the same live, force-driven
   // simulation as vinyl, so this barrier participates throughout the fold instead of being baked
   // into a replacement goal keyframe.
-  if (opts.printed) {
-    const pp = opts.printedParams ?? printedParamsFromMeta(fold) ?? DEFAULT_PRINTED;
-    applyPrintedClosure(model, pp);
-  }
+  if (opts.printed) applyPrintedClosure(model, opts.printedTiles);
 
   const net = netFromModel(processed, model, cutPairs);
   const solver = new FoldSolver(model);
   return { net, model, solver, material: opts.printed ? "printed" : "vinyl" };
 }
 
-/** Read printed thickness from the file's architecture meta, if present (gap stays default). */
-function printedParamsFromMeta(fold: FoldFile): PrintedParams | null {
-  const arch = (fold as Record<string, unknown>)["fkld:meta_architecture"] as
-    | { materialThickness?: number }
-    | undefined;
-  const t = arch?.materialThickness;
-  return typeof t === "number" && t > 0 ? { thicknessMm: t, gapMm: DEFAULT_PRINTED.gapMm } : null;
+/**
+ * Set each crease's closure limit θ_max from the tiles that are actually drawn and printed, and clip
+ * its design target to it on the tile-collide side only.
+ *
+ * The tiles sit on one face (the +normal side, `TILE_COLLIDE_SIGN`), so folding toward them is
+ * capped while the fabric-backing side keeps its full target and folds freely — one-sided closure,
+ * the same side the runtime barrier in `forces.ts` enforces.
+ *
+ * The limit is `θ_max = 2·atan(g/t)` as before, but g and t are now measured off the joinery rather
+ * than assumed:
+ *
+ *  - **t** = `thickFrac` · (flat pattern's bbox diagonal) — what `sim-canvas` extrudes each tile by.
+ *  - **g** = `gapFrac` · (r₁ + r₂), the two tiles' inradii. Each tile pulls its edge midpoint in by
+ *    `gapFrac` of its own inradius (`updatePrintedTiles`), and the two pull apart from the shared
+ *    hinge, so the gap they open between them is the sum.
+ *
+ * Which creases get a limit follows the same rule the renderer pinches by:
+ *
+ *  - **M / V** — a real hinge between two tiles, gap opened, limited as above.
+ *  - **F** — the interior triangulation diagonal of ONE polygon. No gap is opened there because the
+ *    two triangles are one fused tile, so the tile side cannot close at all: θ_max = 0.
+ *  - **seams** (`"C"`, a taped lip pair) — the renderer opens no gap at a lip either, but a seam is a
+ *    joint in the tape rather than a pair of tiles pivoting apart, and this model says nothing about
+ *    its clearance. Left unlimited rather than guessed at.
+ */
+export function applyPrintedClosure(model: BarHingeModel, tiles: PrintedTiles = DEFAULT_PRINTED_TILES): void {
+  const c = model.creases;
+  const rest = model.rest;
+  const lo = [Infinity, Infinity, Infinity];
+  const hi = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < rest.length; i += 3) {
+    for (let d = 0; d < 3; d++) {
+      if (rest[i + d] < lo[d]) lo[d] = rest[i + d];
+      if (rest[i + d] > hi[d]) hi[d] = rest[i + d];
+    }
+  }
+  const diag = Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) || 1;
+  const t = Math.max(tiles.thickFrac * diag, 1e-9);
+  const gapFrac = Math.max(tiles.gapFrac, 0);
+
+  // The pattern's own angles, kept so a later Gap change re-derives the clip from them; re-clipping
+  // an already-clipped target would ratchet the fold shut a notch per drag instead of reopening it.
+  // (Sized against `count` each time: `buildSeamCreases` grows the crease arrays, so a stale pair
+  // from an earlier call would read past its end and hand every seam a NaN limit.)
+  if (c.designTheta?.length !== c.count) c.designTheta = Float32Array.from(c.targetTheta);
+  if (c.thetaMax?.length !== c.count) c.thetaMax = new Float32Array(c.count);
+  const design = c.designTheta;
+  const thetaMax = c.thetaMax;
+  const seam = c.seamPeer3;
+  for (let i = 0; i < c.count; i++) {
+    const a = c.assignment[i];
+    if (seam && seam[i] >= 0) thetaMax[i] = Math.PI; // taped joint, not a tile pair — no tile limit
+    else if (a === "F") thetaMax[i] = 0; // one fused tile: no gap, nothing to fold about
+    else {
+      const g = gapFrac * (inradius(rest, c.n3[i], c.n4[i], c.n1[i]) + inradius(rest, c.n3[i], c.n4[i], c.n2[i]));
+      thetaMax[i] = printedThetaMax(g, t);
+    }
+    c.targetTheta[i] = TILE_COLLIDE_SIGN * design[i] > thetaMax[i] ? TILE_COLLIDE_SIGN * thetaMax[i] : design[i];
+  }
 }
 
-/**
- * Set each crease's thickness limit θ_max (printed mode) and clamp its design target on the
- * tile-collide side only. The tiles sit on one face (the +normal side, `TILE_COLLIDE_SIGN`), so
- * folding toward them is capped at θ_max while the fabric-backing side keeps its full target and
- * folds freely (one-sided closure; the runtime barrier in `forces.ts` enforces the same side).
- */
-function applyPrintedClosure(model: BarHingeModel, pp: PrintedParams): void {
-  const thetaMax = printedThetaMax(pp);
-  const c = model.creases;
-  c.thetaMax = new Float32Array(c.count);
-  for (let i = 0; i < c.count; i++) {
-    c.thetaMax[i] = thetaMax;
-    if (TILE_COLLIDE_SIGN * c.targetTheta[i] > thetaMax) c.targetTheta[i] = TILE_COLLIDE_SIGN * thetaMax;
-  }
+/** Inradius 2·area/perimeter of the triangle on nodes `a`,`b`,`c` — the tile's pinch depth per unit Gap. */
+function inradius(p: Float32Array, a: number, b: number, c: number): number {
+  const ux = p[3 * b] - p[3 * a], uy = p[3 * b + 1] - p[3 * a + 1], uz = p[3 * b + 2] - p[3 * a + 2];
+  const vx = p[3 * c] - p[3 * a], vy = p[3 * c + 1] - p[3 * a + 1], vz = p[3 * c + 2] - p[3 * a + 2];
+  const twiceArea = Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
+  const peri =
+    Math.hypot(ux, uy, uz) +
+    Math.hypot(vx, vy, vz) +
+    Math.hypot(vx - ux, vy - uy, vz - uz);
+  return peri > 0 ? twiceArea / peri : 0;
 }

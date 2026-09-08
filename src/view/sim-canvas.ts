@@ -1,8 +1,8 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { FoldDrive, FoldNet, FoldScene, FoldSolver, SimMaterial } from "../sim/index.js";
-import { FoldRunner, FOLD_REACHED_EPS, meanTensileStrain } from "../sim/index.js";
-import { DEFAULT_MAX_SUBDIV, MAX_TILE_GAP, MIN_TILE_GAP, TILE_INSET_FRAC } from "../model/tile-subdiv.js";
+import { applyPrintedClosure, FoldRunner, FOLD_REACHED_EPS, meanTensileStrain } from "../sim/index.js";
+import { DEFAULT_MAX_SUBDIV, MAX_TILE_GAP, MIN_TILE_GAP, TILE_INSET_FRAC, TILE_THICK_FRAC } from "../model/tile-subdiv.js";
 import type { AnchoredMesh } from "../model/trace-anchor.js";
 import { GND_COLOUR, PWR_COLOUR } from "../model/net-palette.js";
 import { SVGPCB_COLOURS } from "../model/part-render.js";
@@ -48,9 +48,9 @@ const COLOR_CUT = 0x000000;
 const COLOR_TILE = 0xdfe3e8;
 const COLOR_CLOTH = 0x5a5048;
 const COLOR_HINGE = 0xb08d57;
-/** Printed tile thickness as a fraction of the model's bbox diagonal (visual; physics is ratio-based). */
-const TILE_THICK_FRAC = 0.018;
-// `TILE_INSET_FRAC` (tile shrink toward centroid) is shared with the STL export via `tile-subdiv.ts`.
+// `TILE_INSET_FRAC` (shrink toward centroid) and `TILE_THICK_FRAC` (tile height) live in
+// `tile-subdiv.ts`: the STL export draws the same tiles, and the sim's closure limit is derived from
+// this same pair, so a printed fold stops where the tiles on screen actually touch.
 
 /** Freeze after this many consecutive frames whose max node motion is below the settle threshold. */
 const SETTLE_FRAMES = 10;
@@ -575,8 +575,10 @@ export class SimCanvas implements SimView {
    */
   private buildPrintedTiles(net: FoldNet): void {
     if (!this.fold) return;
-    const pos = this.fold.model.position;
-    // Visual thickness from the model size (physics closure is ratio-based, set elsewhere).
+    // Thickness from the FLAT pattern's size, the same measure `applyPrintedClosure` prices the
+    // fold against. Taken from the live pose it would shrink as the model folds, so rebuilding the tiles
+    // mid-fold (dragging Gap) would quietly thin them and no longer match the closure limit.
+    const pos = this.fold.model.rest;
     let minX = Infinity, minY = Infinity, minZ = Infinity, maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
     for (let i = 0; i < pos.length; i += 3) {
       minX = Math.min(minX, pos[i]); maxX = Math.max(maxX, pos[i]);
@@ -587,6 +589,10 @@ export class SimCanvas implements SimView {
     // One-sided: the full tile thickness extrudes to ONE side of the hinge plane (the +normal face);
     // the cloth surface mesh stays at the plane as the backing.
     this.tileT = diag * TILE_THICK_FRAC;
+    // The closure limit is a property of THESE tiles, so it is re-derived here rather than only when
+    // the scene was built. That is what makes the Gap slider a fabrication control: widening the gap
+    // between the tiles lets the model fold further, instead of only looking as though it should.
+    applyPrintedClosure(this.fold.model, { gapFrac: this.tileInset, thickFrac: TILE_THICK_FRAC });
 
     if (this.thickMesh) { // rebuild just this layer — drop the previous tile mesh first
       this.group.remove(this.thickMesh);

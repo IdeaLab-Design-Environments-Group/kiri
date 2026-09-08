@@ -37,8 +37,16 @@ export { importOrigamiSimulatorSvg, DEFAULT_VERT_TOL } from "./svg-import.js";
 export type { SvgImportOptions, SvgImportStats } from "./svg-import.js";
 
 // FOLD/FKLD adapters + scene resolution (Node-safe: no Three.js anywhere below).
-export { buildSceneFromFold, isFoldable, ORIGAMI_PARAMS, PRINTED_PARAMS, DEFAULT_PRINTED, printedThetaMax } from "./fold-adapter.js";
-export type { PrintedParams } from "./fold-adapter.js";
+export {
+  buildSceneFromFold,
+  isFoldable,
+  ORIGAMI_PARAMS,
+  PRINTED_PARAMS,
+  DEFAULT_PRINTED_TILES,
+  printedThetaMax,
+  applyPrintedClosure,
+} from "./fold-adapter.js";
+export type { PrintedTiles } from "./fold-adapter.js";
 export { buildScene, canSimulate, pyramidInputsFromFold } from "./scene.js";
 export type { BuiltScene, SimKind, FoldMode } from "./scene.js";
 

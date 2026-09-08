@@ -115,6 +115,61 @@ describe("the ramp", () => {
   });
 });
 
+/**
+ * `warmToTarget` runs on the main thread, so it is time-boxed. Settling a fold takes as many frames
+ * as watching it does — on puffin, three hundred of them at ~10 ms each — and warming to completion
+ * held the page for seconds with nothing painted every time the modal opened at a fold or the
+ * Vinyl/3D-printed tabs were switched. What the budget must NOT do is change the fold: it stops the
+ * burst early and the animation loop, which calls the same `frame()`, carries the rest.
+ */
+describe("warming to the target does not hold the thread", () => {
+  const guided = (): { m: BarHingeModel; r: FoldRunner } => {
+    const m = hinge();
+    m.softDriven = true;
+    m.guideWeight = 1;
+    return { m, r: runnerFor(m) };
+  };
+
+  it("stops at the budget instead of running to settled", () => {
+    const { r } = guided();
+    r.setTarget(1);
+    r.warmToTarget(2000, 0); // no budget at all: one frame, then hand over
+    expect(r.settled()).toBe(false);
+    expect(r.foldPercent).toBeGreaterThan(0);
+    expect(r.foldPercent).toBeLessThan(1);
+  });
+
+  it("takes the same path as the animation loop, budget or none", () => {
+    const a = guided();
+    a.r.setTarget(1);
+    a.r.warmToTarget(2000, 0);
+    const after = a.r.foldPercent;
+
+    const b = guided();
+    b.r.setTarget(1);
+    b.r.frame();
+    expect(b.r.foldPercent).toBe(after); // the budgeted burst ran exactly one ordinary frame
+  });
+
+  it("still arrives when there is time for it", () => {
+    const { r } = guided();
+    r.setTarget(1);
+    r.warmToTarget(2000, 10000);
+    expect(r.settled()).toBe(true);
+  });
+
+  it("does nothing at all for a fold that has to be watched, or one already flat", () => {
+    const free = runnerFor(hinge()); // no goal: a free fold is never fast-forwarded
+    free.setTarget(1);
+    free.warmToTarget(2000, 10000);
+    expect(free.foldPercent).toBe(0);
+
+    const { r } = guided();
+    r.warmToTarget(2000, 10000); // target still 0
+    expect(r.foldPercent).toBe(0);
+  });
+});
+
 describe("the fold is drawn, not skipped", () => {
   it("no frame jumps a node across the model, ramping or letting go", { timeout: 30000 }, async () => {
     // Letting go of the guide is a snap-through: the pose the guide holds is not an equilibrium of

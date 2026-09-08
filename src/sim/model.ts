@@ -208,6 +208,13 @@ export interface BarHingeModel {
      */
     thetaMax?: Float32Array;
     /**
+     * 3D-PRINTED mode only. The pattern's own fold angles, before the thickness limit clipped
+     * `targetTheta` to what the tiles can close. Kept because the limit is re-derived whenever the
+     * Gap changes, and re-clipping an already-clipped target would ratchet the fold down a notch on
+     * every drag of the slider instead of reopening it.
+     */
+    designTheta?: Float32Array;
+    /**
      * SEAM hinges only (see `seamCreases`): the node on the far lip that `n3`/`n4` is taped to, or
      * −1 for a scored crease. `forces.ts` gauges how far the joint is from being made by how far
      * apart these still are — a hinge cannot carry a moment before the tape is on it.

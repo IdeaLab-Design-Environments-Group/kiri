@@ -76,6 +76,17 @@ export class FoldSolver {
    * No-op equivalent if never called: the bare Gershenfeld model has no collisions.
    */
   enableCollision(params: CollisionParams = DEFAULT_COLLISION): void {
+    const active = this.model.collide?.params;
+    // Cached simulator scenes retain their immutable collision neighbourhood. Rebuilding its sets and
+    // weld map on every material-tab revisit is particularly costly on large meshes; only rebuild when
+    // the caller actually changes the contact policy.
+    if (
+      active &&
+      active.thickness === params.thickness &&
+      active.k === params.k &&
+      active.damp === params.damp &&
+      active.maxForce === params.maxForce
+    ) return;
     this.model.collide = buildCollisionState(this.model, params);
     this.dt = computeDt(this.model);
   }

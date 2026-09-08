@@ -38,6 +38,7 @@ describe("view/sim-modal", () => {
   afterEach(() => {
     delete (globalThis as any).document;
     delete (globalThis as any).window;
+    delete (globalThis as any).requestAnimationFrame;
   });
 
   it("mounts the trigger and toggles its enabled state", async () => {
@@ -89,6 +90,31 @@ describe("view/sim-modal", () => {
     modal.close();
     expect(canvasInstances[0]?.stop).toHaveBeenCalled();
     expect(overlay.hidden).toBe(true);
+  });
+
+  it("paints a material selection before requesting its scene", async () => {
+    const { document } = installDom();
+    const frames: (() => void)[] = [];
+    (globalThis as any).requestAnimationFrame = (cb: () => void) => { frames.push(cb); return frames.length; };
+    const { SimModal } = await import("../../../src/view/sim-modal.js");
+    const modal = new SimModal() as any;
+    const scene = {
+      net: { vertices: [{}, {}], faces: [[0, 1, 0]], edges: [] },
+      model: { creases: { count: 0 } },
+    } as unknown as FoldScene;
+    const requested: string[] = [];
+    modal.setProvider((material?: string) => {
+      requested.push(material ?? "default");
+      return { scene, title: material ?? "vinyl" };
+    });
+
+    await modal.open();
+    modal.selectMaterial("printed");
+
+    expect(requested).toEqual(["vinyl"]);
+    expect(modal.statusEl.textContent).toContain("Preparing 3D-printed");
+    frames.shift()?.();
+    expect(requested).toEqual(["vinyl", "printed"]);
   });
 
   it("reports missing provider output and closes on overlay click or Escape", async () => {

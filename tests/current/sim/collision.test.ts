@@ -64,6 +64,18 @@ describe("self-collision (penalty)", () => {
     settle(solver, m);
     expect(zGap(m)).toBeCloseTo(0.008, 3); // unchanged — no contact forces
   });
+
+  it("retains the precomputed collision neighbourhood when its policy is unchanged", () => {
+    const m = twoTriangles(0.008);
+    const solver = new FoldSolver(m);
+    solver.enableCollision();
+    const first = m.collide;
+    solver.enableCollision();
+    expect(m.collide).toBe(first);
+
+    solver.enableCollision({ thickness: 0.04, k: 220, damp: 8, maxForce: 2.5 });
+    expect(m.collide).not.toBe(first);
+  });
 });
 
 function load(name: string): FoldFile {

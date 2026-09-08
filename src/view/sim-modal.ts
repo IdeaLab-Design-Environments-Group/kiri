@@ -4,7 +4,7 @@ import type { AnchoredMesh } from "../model/trace-anchor.js";
 import type { SimView } from "./sim-view.js";
 
 /** Returns a ready fold scene when the sim opens, or null when no model is loaded. */
-export type SimSceneProvider = () => { scene: FoldScene; title: string } | null;
+export type SimSceneProvider = (material?: SimMaterial) => { scene: FoldScene; title: string } | null;
 
 /**
  * "Simulation & Routing" trigger + modal hosting the Three.js fold simulation, with the planned copper drawn
@@ -41,6 +41,10 @@ export class SimModal {
   private materialListener: ((m: SimMaterial) => void) | null = null;
   private detailListener: ((d: number) => void) | null = null;
   private gapListener: ((g: number) => void) | null = null;
+  /** Idle build of the inactive material, so the first tab switch does not block on a large model. */
+  private idleWarm: number | null = null;
+  /** Invalidates a queued tab rebuild when the user clicks back before the next paint. */
+  private materialLoad = 0;
 
   constructor() {
     this.trigger = document.createElement("button");
@@ -181,7 +185,18 @@ export class SimModal {
     this.material = m;
     this.syncDetailVisibility(); // detail only affects the 3D-printed tiles
     this.materialListener?.(m); // update the store before rebuilding so the provider sees the new material
-    if (this.canvas) this.loadWorld();
+    if (this.canvas) {
+      // Let the selected tab and its loading message paint before the (first-time) scene build. Repeated
+      // switches use the service cache and are immediate; this keeps the initial large-model build from
+      // making the control itself appear unresponsive.
+      this.statusEl.textContent = `Preparing ${m === "printed" ? "3D-printed" : "vinyl / paper"} simulation…`;
+      const load = ++this.materialLoad;
+      const rebuild = (): void => {
+        if (load === this.materialLoad && m === this.material && !this.overlay.hidden) this.loadWorld();
+      };
+      if (typeof requestAnimationFrame === "function") requestAnimationFrame(rebuild);
+      else rebuild(); // non-browser test environments
+    }
   }
 
   private setMaterialTabsActive(m: SimMaterial): void {
@@ -234,11 +249,14 @@ export class SimModal {
 
   close(): void {
     this.overlay.hidden = true;
+    this.materialLoad++;
+    this.cancelIdleWarm();
     this.canvas?.stop();
   }
 
   private loadWorld(): void {
-    const built = this.provider?.() ?? null;
+    this.cancelIdleWarm();
+    const built = this.provider?.(this.material) ?? null;
     if (!built) {
       this.statusEl.textContent = "No foldable model — load a FOLD/FKLD crease pattern, then reopen.";
       this.canvas?.stop();
@@ -277,10 +295,33 @@ export class SimModal {
       this.statusEl.textContent =
         `Folding ${built.title} — ${net.vertices.length} verts, ${triLabel}, ` +
         `${built.scene.model.creases.count} creases. Drag to orbit.`;
+      this.warmInactiveMaterial();
     } catch (err) {
       this.statusEl.textContent = `Cannot simulate this model: ${(err as Error).message}`;
       this.canvas.stop();
     }
+  }
+
+  /** Populate the other material's service cache only when the browser is otherwise idle. */
+  private warmInactiveMaterial(): void {
+    const idle = (window as Window & {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+    }).requestIdleCallback;
+    if (!idle || !this.provider || this.overlay.hidden) return;
+    const current = this.material;
+    this.idleWarm = idle.call(window, () => {
+      this.idleWarm = null;
+      if (!this.overlay.hidden && this.material === current) {
+        this.provider?.(current === "vinyl" ? "printed" : "vinyl");
+      }
+    }, { timeout: 1500 });
+  }
+
+  private cancelIdleWarm(): void {
+    if (this.idleWarm == null) return;
+    const cancel = (window as Window & { cancelIdleCallback?: (id: number) => void }).cancelIdleCallback;
+    cancel?.call(window, this.idleWarm);
+    this.idleWarm = null;
   }
 
   private applyFold(): void {

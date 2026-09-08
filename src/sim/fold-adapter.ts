@@ -12,7 +12,8 @@ export {
   isFoldable,
   ORIGAMI_PARAMS,
   PRINTED_PARAMS,
-  DEFAULT_PRINTED,
+  DEFAULT_PRINTED_TILES,
   printedThetaMax,
+  applyPrintedClosure,
 } from "./origami-import.js";
-export type { FoldScene, SimMaterial, PrintedParams } from "./origami-import.js";
+export type { FoldScene, SimMaterial, PrintedTiles } from "./origami-import.js";

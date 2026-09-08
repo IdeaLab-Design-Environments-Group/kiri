@@ -67,6 +67,12 @@ const FREE_PER_STEP_EASE = 0.014;
 const GUIDE_RELEASE_PER_FRAME = 1 / 60;
 /** |targetFold − foldPercent| below this counts as "at the target fold". */
 export const FOLD_REACHED_EPS = 1e-3;
+/**
+ * How long a `warmToTarget` burst may hold the main thread, in ms. About one dropped frame at 60fps:
+ * long enough that a small model still arrives folded, short enough that a large one never stalls
+ * the page — it animates the rest of the way instead.
+ */
+export const WARM_BUDGET_MS = 120;
 
 /** Drives one fold scene's solver over time. Owns `foldPercent`; the view owns everything visual. */
 export class FoldRunner {
@@ -219,10 +225,22 @@ export class FoldRunner {
 
   /**
    * Fast-forward to the target without drawing the frames — for opening a modal already scrolled to
-   * a fold. Runs the same `frame()`, so it takes the same path the animation would.
+   * a fold, or switching material there. Runs the same `frame()`, so it takes the same path the
+   * animation would.
+   *
+   * **Time-boxed, because this runs on the main thread.** Settling a fold takes as many frames as
+   * watching it does — three hundred on puffin, and that is a small model — so warming it to
+   * completion froze the whole page for seconds with nothing painted: the Vinyl/3D-printed tabs
+   * looked broken on exactly the models where the wait was longest. Past the budget the warm simply
+   * stops and hands the rest to the animation loop, which was already going to run `frame()` every
+   * rAF. Nothing about the fold changes — only whether the frames in front of it are drawn.
    */
-  warmToTarget(maxFrames = 2000): void {
+  warmToTarget(maxFrames = 2000, budgetMs = WARM_BUDGET_MS): void {
     if (!this.toGoal || this.target < FOLD_REACHED_EPS) return; // a free fold has to be watched
-    for (let i = 0; i < maxFrames && !this.settled(); i++) this.frame();
+    const until = Date.now() + Math.max(0, budgetMs);
+    for (let i = 0; i < maxFrames && !this.settled(); i++) {
+      this.frame();
+      if (Date.now() >= until) break;
+    }
   }
 }
