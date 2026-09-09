@@ -71,6 +71,7 @@ interface ViewerApi {
   layers: Record<string, { on: boolean }>;
   canvas: StubEl;
   status: StubEl;
+  sample: StubEl;
   toggles: { name: string; press: (on: boolean) => void }[];
 }
 
@@ -117,6 +118,7 @@ function loadViewer(): ViewerApi {
     ...api,
     canvas: document.getElementById("canvas"),
     status: document.getElementById("status-text"),
+    sample: document.getElementById("load-sample"),
     toggles,
   };
 }
@@ -210,6 +212,19 @@ describe("view/fkld-viewer", () => {
     const rule = /svg polygon,[^{]*\{\s*vector-effect: non-scaling-stroke;/.exec(css);
     expect(rule, "the non-scaling-stroke rule moved or was renamed").not.toBeNull();
     expect(rule![0]).toContain("svg text");
+  });
+
+  it("loads the bundled sample from a button, where the one-entry dropdown used to be", () => {
+    // The shell's "Load sample" button moved in here. The dropdown it replaced held exactly one option
+    // pointing at the same house.fkld, so the two controls were the same action in two toolbars; what
+    // must not come back is a <select> that a reader has to open to find it has one entry.
+    const html = readFileSync(VIEWER, "utf8");
+    expect(html).toContain('id="load-sample"');
+    expect(html, "the one-entry Example dropdown is back").not.toContain('id="example-select"');
+
+    const viewer = loadViewer();
+    expect(viewer.sample.handlers.click ?? [], "the button is markup with nothing behind it")
+      .toHaveLength(1);
   });
 
   it("states no font-size in CSS pixels for the SVG labels", () => {

@@ -53,16 +53,11 @@ class ViewerFrameMock {
 
 class HeaderActionsMock {
   createPyramidHandler: (() => void) | null = null;
-  loadSampleHandler: (() => void) | null = null;
   kirigamizeHandler: (() => void) | null = null;
   enabledCalls: boolean[] = [];
 
   onCreatePyramid(handler: () => void): void {
     this.createPyramidHandler = handler;
-  }
-
-  onLoadSample(handler: () => void): void {
-    this.loadSampleHandler = handler;
   }
 
   onKirigamize(handler: () => void): void {

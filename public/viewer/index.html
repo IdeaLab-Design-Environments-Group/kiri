@@ -286,7 +286,7 @@
     </div>
     <div class="group">
       <span class="lbl">Example:</span>
-      <select id="example-select"></select>
+      <button id="load-sample" title="Load the bundled sample model (house.fkld)">Load sample</button>
     </div>
     <div class="group">
       <span class="lbl">Import:</span>
@@ -1053,24 +1053,21 @@
     if (e.key === '0')                  { fitToView();    e.preventDefault(); }
   });
 
-  // ---- example dropdown ----------------------------------------------------
-  function populateExamples() {
-    const sel = document.getElementById('example-select');
-    const examples = [
-      ['House — kirigamized gable box (FKLD)',  '../examples/house.fkld'],
-    ];
-    for (const [label, key] of examples) {
-      const o = document.createElement('option');
-      o.value = key; o.textContent = label;
-      sel.appendChild(o);
-    }
-    sel.addEventListener('change', () => loadExample(sel.value));
-    // Auto-load the first example.
-    loadExample(examples[0][1]);
+  // ---- the bundled sample --------------------------------------------------
+  // This was a <select> that only ever held one entry, pointing at the same house.fkld the shell's own
+  // "Load sample" button fetched -- two controls, one file, in two different toolbars. The shell's
+  // button was removed and this is where it landed, in the place its dropdown used to occupy. Choosing
+  // among many models is what the shell's Examples page is for.
+  const SAMPLE = '../examples/house.fkld';
+  function installSample() {
+    const btn = document.getElementById('load-sample');
+    if (btn) btn.addEventListener('click', () => loadExample(SAMPLE));
+    // As before: the viewer opens on the sample rather than on an empty canvas.
+    loadExample(SAMPLE);
   }
 
   // Bootstrap.
-  populateExamples();
+  installSample();
   </script>
 
   <!-- Bundled examples are inlined here by examples/scripts/embed-example.coffee.

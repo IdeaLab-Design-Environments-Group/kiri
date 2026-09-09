@@ -1,15 +1,17 @@
 /**
- * **View** — the header action bar: "Create pyramid", "Load sample" and
- * "Kirigamize ▶" buttons, plus a slot for the 3D-Sim trigger. Emits intents
- * (`onCreatePyramid`, `onLoadSample`, `onKirigamize`) and exposes
+ * **View** — the header action bar: "Create pyramid" and "Kirigamize ▶", plus a slot for the page
+ * triggers mounted before them. Emits intents (`onCreatePyramid`, `onKirigamize`) and exposes
  * `setKirigamizeEnabled`; it holds no app state.
+ *
+ * "Load sample" used to sit between the two. It fetched `public/examples/house.fkld` -- the same file
+ * the viewer's own one-entry Example dropdown pointed at -- so the header and the viewer's toolbar
+ * carried the same action twice. The button now lives in the viewer, where that dropdown was.
  */
 import { el } from "./dom.js";
 
 export class HeaderActions {
   readonly element: HTMLElement;
   private readonly createBtn: HTMLButtonElement;
-  private readonly sampleBtn: HTMLButtonElement;
   private readonly kirigamizeBtn: HTMLButtonElement;
 
   constructor() {
@@ -17,9 +19,6 @@ export class HeaderActions {
     this.createBtn = el("button", "sim-trigger") as HTMLButtonElement;
     this.createBtn.type = "button";
     this.createBtn.textContent = "Create pyramid";
-    this.sampleBtn = el("button", "sim-trigger") as HTMLButtonElement;
-    this.sampleBtn.type = "button";
-    this.sampleBtn.textContent = "Load sample";
     this.kirigamizeBtn = el("button", "export-trigger") as HTMLButtonElement;
     this.kirigamizeBtn.type = "button";
     this.kirigamizeBtn.textContent = "Kirigamize ▶";
@@ -29,19 +28,15 @@ export class HeaderActions {
   /**
    * Append the action buttons. Call *after* any earlier triggers (e.g. the
    * 3D-Sim button) have been mounted into `element`, to preserve their order:
-   * [3D Sim] [Create pyramid] [Load sample] [Kirigamize ▶].
+   * [3D Sim] … [Create pyramid] [Kirigamize ▶].
    */
   appendActionButtons(): void {
-    this.element.append(this.createBtn, this.sampleBtn, this.kirigamizeBtn);
+    this.element.append(this.createBtn, this.kirigamizeBtn);
   }
 
   /** Generate an AKDE pyramid from the transferred creation pipeline. */
   onCreatePyramid(handler: () => void): void {
     this.createBtn.addEventListener("click", handler);
-  }
-
-  onLoadSample(handler: () => void): void {
-    this.sampleBtn.addEventListener("click", handler);
   }
 
   onKirigamize(handler: () => void): void {

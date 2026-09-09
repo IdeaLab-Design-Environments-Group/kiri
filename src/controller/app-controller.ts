@@ -91,7 +91,6 @@ export class AppController {
     // View intents → controller handlers.
     this.convert.onFileChosen((file) => this.loadFromFile(file));
     this.header.onCreatePyramid(() => this.createPyramid());
-    this.header.onLoadSample(() => void this.loadSample());
     this.header.onKirigamize(() => this.kirigamize());
 
     // Secondary design path: the pattern editor commits a drawn grid as FKLD,
