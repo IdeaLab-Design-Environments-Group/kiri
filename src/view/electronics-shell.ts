@@ -55,6 +55,13 @@ export function shellMarkup(): string {
                   <button type="button" class="el-place" data-place="free" title="On a tile: the component stands where you put it, and its pads are wired by nets or by hand-drawn copper">On a tile</button>
                 </span>
               </span>
+              <span class="el-group el-build-modes">
+                <span class="el-group-label">Build</span>
+                <span class="el-seg">
+                  <button type="button" class="el-build" data-material="vinyl" title="Vinyl / paper: one continuous sheet, scored at the creases. Nothing is cut away, so the copper may run anywhere and a crease is priced by its assignment">Vinyl</button>
+                  <button type="button" class="el-build" data-material="printed" title="3D-printed: rigid tiles with a bare hinge gap between them. The gaps are what an LED bridges, and their measured width is what the crease strain is computed from">3D-printed</button>
+                </span>
+              </span>
               <span class="el-group el-face-modes">
                 <span class="el-group-label">Side</span>
                 <span class="el-seg">
@@ -106,8 +113,8 @@ export function shellMarkup(): string {
               <div class="el-side-sect el-route-modes">
                 <div class="el-side-head"><span class="el-side-title">Route</span></div>
                 <span class="el-seg">
-                  <button type="button" class="el-auto" data-auto="on" title="Re-plan the copper on every edit, as it has always been">Auto</button>
-                  <button type="button" class="el-auto" data-auto="off" title="Leave the copper alone while you place and move things. The canvas keeps showing the last plan until you press Route">Manual</button>
+                  <button type="button" class="el-auto" data-auto="on" title="Re-plan the copper on every edit that moves it. Wiring a net still waits for Route">Auto</button>
+                  <button type="button" class="el-auto" data-auto="off" title="The default: leave the copper alone while you place and wire things. The canvas keeps showing the last plan until you press Route">Manual</button>
                 </span>
                 <button type="button" class="el-route" title="Re-plan the copper now">Route</button>
               </div>
@@ -124,6 +131,10 @@ export function shellMarkup(): string {
                 <button type="button" class="el-export" data-side="outside" title="Download the outside's copper as separate strips to cut">Strips — Outside</button>
                 <button type="button" class="el-export-carrier" data-side="inside" title="Download the inside's carrier frame: align it, stick the traces down, snip the tabs">Carrier — Inside</button>
                 <button type="button" class="el-export-carrier" data-side="outside" title="Download the outside's carrier frame: align it, stick the traces down, snip the tabs">Carrier — Outside</button>
+              </div>
+              <div class="el-side-sect el-form-sect">
+                <div class="el-side-head"><span class="el-side-title">Form</span></div>
+                <button type="button" class="el-form" title="Fold this build in 3D with the copper on it — the same simulation the model page opens, in the material selected here">Folded form</button>
               </div>
               <div class="el-side-sect el-view-group">
                 <div class="el-side-head"><span class="el-side-title">Zoom</span></div>

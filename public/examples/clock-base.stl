@@ -1,0 +1,142 @@
+solid clock_base
+  facet normal 0.000000 0.000000 -1.000000
+    outer loop
+      vertex 0 -10 0
+      vertex 44 -34 0
+      vertex -44 -34 0
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 -1.000000
+    outer loop
+      vertex 0 -10 0
+      vertex 44 14 0
+      vertex 44 -34 0
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 -1.000000
+    outer loop
+      vertex 0 -10 0
+      vertex -44 14 0
+      vertex 44 14 0
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 -1.000000
+    outer loop
+      vertex 0 -10 0
+      vertex -44 -34 0
+      vertex -44 14 0
+    endloop
+  endfacet
+  facet normal 0.000000 -0.965429 0.260666
+    outer loop
+      vertex -44 -34 0
+      vertex 44 -34 0
+      vertex 36.08 -29.68 16
+    endloop
+  endfacet
+  facet normal 0.000000 -0.965429 0.260666
+    outer loop
+      vertex -44 -34 0
+      vertex 36.08 -29.68 16
+      vertex -36.08 -29.68 16
+    endloop
+  endfacet
+  facet normal 0.896212 0.000000 0.443625
+    outer loop
+      vertex 44 -34 0
+      vertex 44 14 0
+      vertex 36.08 9.68 16
+    endloop
+  endfacet
+  facet normal 0.896212 0.000000 0.443625
+    outer loop
+      vertex 44 -34 0
+      vertex 36.08 9.68 16
+      vertex 36.08 -29.68 16
+    endloop
+  endfacet
+  facet normal 0.000000 0.965429 0.260666
+    outer loop
+      vertex 44 14 0
+      vertex -44 14 0
+      vertex -36.08 9.68 16
+    endloop
+  endfacet
+  facet normal 0.000000 0.965429 0.260666
+    outer loop
+      vertex 44 14 0
+      vertex -36.08 9.68 16
+      vertex 36.08 9.68 16
+    endloop
+  endfacet
+  facet normal -0.896212 0.000000 0.443625
+    outer loop
+      vertex -44 14 0
+      vertex -44 -34 0
+      vertex -36.08 -29.68 16
+    endloop
+  endfacet
+  facet normal -0.896212 0.000000 0.443625
+    outer loop
+      vertex -44 14 0
+      vertex -36.08 -29.68 16
+      vertex -36.08 9.68 16
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 1.000000
+    outer loop
+      vertex -36.08 -29.68 16
+      vertex 36.08 -29.68 16
+      vertex 4.568416727701794 -10 16
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 1.000000
+    outer loop
+      vertex -36.08 -29.68 16
+      vertex 4.568416727701794 -10 16
+      vertex -4.568416727701807 -10 16
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 1.000000
+    outer loop
+      vertex 36.08 -29.68 16
+      vertex 36.08 9.68 16
+      vertex 4.568416727701794 0 16
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 1.000000
+    outer loop
+      vertex 36.08 -29.68 16
+      vertex 4.568416727701794 0 16
+      vertex 4.568416727701794 -10 16
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 1.000000
+    outer loop
+      vertex 36.08 9.68 16
+      vertex -36.08 9.68 16
+      vertex -4.568416727701807 0 16
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 1.000000
+    outer loop
+      vertex 36.08 9.68 16
+      vertex -4.568416727701807 0 16
+      vertex 4.568416727701794 0 16
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 1.000000
+    outer loop
+      vertex -36.08 9.68 16
+      vertex -36.08 -29.68 16
+      vertex -4.568416727701807 -10 16
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 1.000000
+    outer loop
+      vertex -36.08 9.68 16
+      vertex -4.568416727701807 -10 16
+      vertex -4.568416727701807 0 16
+    endloop
+  endfacet
+endsolid clock_base

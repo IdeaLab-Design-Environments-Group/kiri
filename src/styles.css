@@ -1520,6 +1520,15 @@ body.is-electronics .app-legend {
 /* Tiles are fill-only so coplanar (F-edge) triangles merge into clean rigid panels — no internal
    triangulation lines. The pinched gaps read as the lighter cloth showing through between tiles. */
 .el-tile { fill: #b3b8c1; stroke: none; }
+/* Vinyl: one continuous sheet, nothing cut away. Same grey as a printed tile, since it is the same material
+   under the copper — what is missing is the gaps, which is the difference between the two builds. */
+.el-sheet { fill: #b3b8c1; stroke: none; }
+/* Score lines on that sheet. Mountain and valley are drawn apart because they are priced apart: copper over
+   a mountain is in tension and cracks, over a valley it is in compression and does not. */
+.el-crease { fill: none; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.el-crease-m { stroke: #c8553d; }
+.el-crease-v { stroke: #3f7d9e; }
+.el-crease-f { stroke: #9aa0aa; stroke-dasharray: 4 3; }
 /* The carrier frame: one piece of copper, its window the unfolded pattern, holding the traces on thin tabs. */
 .el-carrier { fill: #c9863f; fill-opacity: 0.3; stroke: #a8702f; stroke-width: 0.6; vector-effect: non-scaling-stroke; }
 .el-carrier-tab { stroke: #a8702f; stroke-opacity: 0.85; stroke-linecap: butt; }
@@ -1706,3 +1715,323 @@ body.is-electronics .app-legend {
 .el-key-pwr { color: #ff0000; }
 .el-key-gnd { color: #222222; }
 .el-key-batt { color: #2b2f36; }
+
+/* ---- Tutorials page ------------------------------------------------------ */
+/* Same shape as the electronics page — a page, not a dialog — and it borrows `.el-page-title` and
+   `.el-back` rather than restating them. What is its own here is the card grid: a poster-sized video
+   with a title over it and a sentence under it, which is the whole page. */
+.tut-page {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 14px;
+}
+.tut-page[hidden] { display: none; }
+body.is-tutorials #app,
+body.is-tutorials .app-legend {
+  display: none;
+}
+.tut-page-inner {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--card, #fff);
+  border: 1px solid var(--border, #e4e7ec);
+  border-radius: var(--radius, 12px);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.tut-page-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--border, #e4e7ec);
+}
+/* The filter box sits at the right-hand end of the header, with the count after it. */
+.tut-search {
+  margin-left: auto;
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.28rem 0.6rem;
+  min-width: 200px;
+  border: 1px solid var(--border, #e4e7ec);
+  border-radius: var(--radius-sm, 8px);
+  background: #fff;
+  color: #344054;
+}
+.tut-search:focus {
+  outline: none;
+  border-color: var(--accent, #2563eb);
+}
+.tut-tally {
+  font-size: 0.78rem;
+  color: #667085;
+  white-space: nowrap;
+}
+.tut-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 1rem 1.25rem 2rem;
+}
+.tut-section + .tut-section { margin-top: 2rem; }
+.tut-section[hidden] { display: none; }
+.tut-section-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.tut-section-intro {
+  margin: 0.15rem 0 0.9rem;
+  font-size: 0.85rem;
+  color: #667085;
+}
+/* Three across at most. `auto-fill` put five on a wide monitor, which shrinks each clip below the
+   point where the UI being demonstrated is legible — these are screen recordings of a dense editor,
+   not thumbnails. Below the breakpoints the count steps down rather than the cards getting narrower. */
+.tut-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+}
+@media (max-width: 1180px) {
+  .tut-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .tut-grid { grid-template-columns: minmax(0, 1fr); }
+}
+.tut-card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border, #e4e7ec);
+  border-radius: var(--radius, 12px);
+  background: #fff;
+  overflow: hidden;
+}
+.tut-card[hidden] { display: none; }
+.tut-card-head {
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid var(--border, #e4e7ec);
+  background: var(--surface-soft, #f8f9fb);
+}
+.tut-card-title {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+/* The recordings are 16:9-ish screen captures; a fixed aspect box keeps the grid from reflowing as
+   each poster lands. `#0d1117` rather than white, so letterboxing reads as frame and not as a gap. */
+.tut-video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1512 / 864;
+  background: #0d1117;
+  object-fit: contain;
+}
+.tut-card-blurb {
+  margin: 0;
+  padding: 0.7rem 0.8rem 0.85rem;
+  font-size: 0.83rem;
+  line-height: 1.45;
+  color: #475467;
+}
+
+/* ---- Examples page -------------------------------------------------------
+   The same page furniture as Tutorials — full-bleed card, sticky-feeling header, scrolling body — with
+   its own grid below it. The tiles carry the only new idea here: two pictures in one frame, the folded
+   form and the flat pattern, cross-faded on hover and focus. Everything is drawn from the app's tokens
+   rather than from a palette of its own, so a model tile and the editor beside it look like one product. */
+.ex-page {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 14px;
+}
+.ex-page[hidden] { display: none; }
+body.is-examples #app,
+body.is-examples .app-legend {
+  display: none;
+}
+.ex-page-inner {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--card, #fff);
+  border: 1px solid var(--border, #e4e7ec);
+  border-radius: var(--radius, 12px);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.ex-page-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--border, #e4e7ec);
+}
+.ex-search {
+  margin-left: auto;
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.28rem 0.6rem;
+  min-width: 200px;
+  border: 1px solid var(--border, #e4e7ec);
+  border-radius: var(--radius-sm, 8px);
+  background: #fff;
+  color: #344054;
+}
+.ex-search:focus {
+  outline: none;
+  border-color: var(--accent, #1f6feb);
+  box-shadow: 0 0 0 3px var(--accent-soft, #eef3ff);
+}
+.ex-tally {
+  font-size: 0.78rem;
+  color: var(--muted, #667085);
+  white-space: nowrap;
+}
+.ex-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 1rem 1.25rem 2.5rem;
+}
+.ex-lede {
+  margin: 0 0 1.4rem;
+  max-width: 62ch;
+  font-size: 0.88rem;
+  color: var(--muted, #667085);
+}
+.ex-group + .ex-group {
+  margin-top: 2.2rem;
+  padding-top: 1.6rem;
+  border-top: 1px solid var(--border, #e4e7ec);
+}
+.ex-group[hidden] { display: none; }
+.ex-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+.ex-group-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+/* The part count as a quiet pill, so the heading keeps its weight to itself. */
+.ex-group-count {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted, #667085);
+  background: var(--surface-soft, #f3f5f9);
+  border-radius: 999px;
+  padding: 0.1rem 0.5rem;
+}
+.ex-group-intro {
+  margin: 0.2rem 0 1rem;
+  max-width: 68ch;
+  font-size: 0.85rem;
+  color: var(--muted, #667085);
+}
+.ex-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 1rem;
+}
+.ex-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  padding: 0;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: var(--card, #fff);
+  border: 1px solid var(--border, #e4e7ec);
+  border-radius: var(--radius, 12px);
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+}
+.ex-tile[hidden] { display: none; }
+.ex-tile:hover,
+.ex-tile:focus-visible {
+  transform: translateY(-2px);
+  border-color: #cdd6e4;
+  box-shadow: var(--shadow-md, 0 6px 20px rgba(16, 24, 40, 0.1));
+}
+.ex-tile:focus-visible {
+  outline: 2px solid var(--accent, #1f6feb);
+  outline-offset: 2px;
+}
+.ex-tile:active { transform: translateY(0); }
+/* The picture frame. Square, on a soft ground, with both drawings stacked in it. */
+.ex-art {
+  position: relative;
+  display: block;
+  aspect-ratio: 1 / 1;
+  background:
+    radial-gradient(120% 120% at 50% 15%, #fff 0%, var(--surface-soft, #f3f5f9) 70%, #e9edf4 100%);
+  border-bottom: 1px solid var(--border, #e4e7ec);
+}
+.ex-art img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  padding: 6%;
+  box-sizing: border-box;
+  transition: opacity 200ms ease, transform 200ms ease;
+}
+.ex-art-flat { opacity: 0; transform: scale(0.96); }
+.ex-tile:hover .ex-art-folded,
+.ex-tile:focus-visible .ex-art-folded { opacity: 0; transform: scale(1.02); }
+.ex-tile:hover .ex-art-flat,
+.ex-tile:focus-visible .ex-art-flat { opacity: 1; transform: scale(1); }
+.ex-tile-title {
+  padding: 0.7rem 0.8rem 0.1rem;
+  font-size: 0.92rem;
+  font-weight: 620;
+  letter-spacing: -0.005em;
+}
+.ex-tile-blurb {
+  padding: 0 0.8rem 0.7rem;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: #475467;
+}
+/* The two numbers, pushed to the bottom of the tile so a row of tiles lines them up whatever the blurb. */
+.ex-stats {
+  margin-top: auto;
+  display: flex;
+  gap: 1.1rem;
+  padding: 0.55rem 0.8rem;
+  border-top: 1px solid var(--border, #e4e7ec);
+  background: var(--surface-soft, #f3f5f9);
+}
+.ex-stat {
+  display: flex;
+  align-items: baseline;
+  gap: 0.28rem;
+}
+.ex-stat-value {
+  font-size: 0.85rem;
+  font-weight: 640;
+  font-variant-numeric: tabular-nums;
+}
+.ex-stat-label {
+  font-size: 0.72rem;
+  color: var(--muted, #667085);
+}
+@media (prefers-reduced-motion: reduce) {
+  .ex-tile,
+  .ex-art img { transition: none; }
+  .ex-tile:hover,
+  .ex-tile:focus-visible { transform: none; }
+}

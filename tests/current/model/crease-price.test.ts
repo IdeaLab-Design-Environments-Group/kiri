@@ -21,10 +21,14 @@ import { STRAIN_BAND_CAP } from "../../../src/model/fold-strain.js";
 
 const EXAMPLES = new URL("../../../public/examples/", import.meta.url).pathname;
 
-function load(name: string) {
+/**
+ * `gapFrac` is the build: the shipped inter-tile gap of the 3D-printed sheet by default, or 0 for the
+ * vinyl one, which is scored rather than cut and so has no gap between its faces at all.
+ */
+function load(name: string, gapFrac?: number) {
   const fold = JSON.parse(readFileSync(`${EXAMPLES}${name}`, "utf8"));
   const faces = flatFaces(fold);
-  return { faces, gaps: gapGraph(fold, faces).gaps };
+  return { faces, gaps: gapGraph(fold, faces, gapFrac).gaps };
 }
 
 function ledsOn(gaps: { faceA: number; faceB: number }[], max: number): Led[] {
@@ -42,8 +46,8 @@ function ledsOn(gaps: { faceA: number; faceB: number }[], max: number): Led[] {
 }
 
 /** Tension (mountain) and compression (valley) crossings, by the face the copper is on. */
-function crossings(name: string, ledCount: number, creaseFrac?: number, bandCap = 0) {
-  const { faces, gaps } = load(name);
+function crossings(name: string, ledCount: number, creaseFrac?: number, bandCap = 0, gapFrac?: number) {
+  const { faces, gaps } = load(name, gapFrac);
   const leds = ledsOn(gaps, ledCount);
   // `bandCap` defaults to 0 here, not to the shipped value: these cases measure the *crease price*, and the
   // bottleneck ordering is a second, independent thing the router does. Leaving it on would mean the
@@ -102,6 +106,27 @@ describe("model/crease-price", () => {
     // The trade itself, independent of the four figures above: fewer creases crossed, more copper spent.
     expect(priced.tension).toBeLessThan(lengthOnly.tension);
     expect(priced.len).toBeGreaterThan(lengthOnly.len);
+  });
+
+  it("still avoids mountains on a vinyl sheet, where there is no hinge to measure a strain across", () => {
+    // The vinyl build is scored, not cut: its two faces stay joined, so `legA` and `legB` coincide and
+    // nothing in the pattern says how wide the zone that bends is. The strain model has no width to run
+    // on, and `corridor.ts › measuredHingeMm` refuses to invent one -- it falls back to the classification
+    // the strain model replaced (a mountain costs full price, anything else nothing). What must not happen
+    // is the third possibility: a zero width read as zero strain, which would make every crease free and
+    // route copper straight over the folds that crack it.
+    const priced = crossings("church.fkld", 12, undefined, 0, 0);
+    const lengthOnly = crossings("church.fkld", 12, 0, 0, 0);
+    expect(priced.tension).toBeLessThan(lengthOnly.tension);
+    expect(priced.len).toBeGreaterThan(lengthOnly.len);
+
+    // And on this pattern the weaker model buys exactly what the strain model does — 11 crossings for
+    // 15.86 units of copper, the same plan to the hundredth. That is a recorded negative result, not a
+    // claim about vinyl in general: on a 0.4mm sheet every tension crossing is already past the copper's
+    // fatigue strain (see `buildCorridor`'s note), so the graded price is a flat mountain charge in all
+    // but name and the classification cannot differ from it. On a thinner sheet, where the strains spread
+    // out, it would.
+    expect(priced).toEqual(crossings("church.fkld", 12));
   });
 
   it("sits on a plateau: the exact penalty value is not a number this system defends", { timeout: 60000 }, () => {

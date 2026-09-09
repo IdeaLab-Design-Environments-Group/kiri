@@ -97,6 +97,12 @@ class SimModalMock {
     this.enabledCalls.push(enabled);
   }
 
+  openCalls = 0;
+  open(): Promise<void> {
+    this.openCalls++;
+    return Promise.resolve();
+  }
+
   onMaterialChange(cb: (m: unknown) => void): void {
     this.materialListener = cb;
   }
@@ -181,6 +187,22 @@ class ElectronicsModalMock {
   }
   setPreview(routed: unknown): void {
     this.previewCalls.push(routed);
+  }
+  materialListener: ((m: unknown) => void) | null = null;
+  formListener: (() => void) | null = null;
+  materialCalls: unknown[] = [];
+  closeCalls = 0;
+  onMaterialChange(cb: (m: unknown) => void): void {
+    this.materialListener = cb;
+  }
+  onOpenForm(cb: () => void): void {
+    this.formListener = cb;
+  }
+  setMaterial(m: unknown): void {
+    this.materialCalls.push(m);
+  }
+  close(): void {
+    this.closeCalls++;
   }
 }
 
@@ -492,6 +514,29 @@ describe("controller/app-controller", () => {
       expect(m.tris.length % 3).toBe(0); // triangles, in threes
       expect(m.tris.length).toBeGreaterThan(0);
     }
+  });
+
+  it("lays the copper on the build the sim folds — one material, whichever control moves it", () => {
+    // The two are not two views of one sheet: the printed build has a hinge gap cut between its tiles and
+    // the vinyl one does not, and that gap is what a component bridges and what the crease strain is
+    // measured across. Routing for one while folding the other would be routing for neither.
+    const { store, sim, electronics } = setup();
+    expect(electronics.materialCalls.at(-1)).toBe("vinyl"); // the store's default reaches the editor
+
+    electronics.materialListener!("printed"); // the editor's Build toggle
+    expect(store.getState().simMaterial).toBe("printed");
+    expect(electronics.materialCalls.at(-1)).toBe("printed");
+
+    sim.materialListener!("vinyl"); // …and the sim's own tabs, the other way round
+    expect(store.getState().simMaterial).toBe("vinyl");
+    expect(electronics.materialCalls.at(-1)).toBe("vinyl");
+  });
+
+  it("opens the folded form on the build the editor is laid out for", () => {
+    const { sim, electronics } = setup();
+    electronics.formListener!();
+    expect(electronics.closeCalls).toBe(1); // leaves the editor page…
+    expect(sim.openCalls).toBe(1); // …and folds what it was showing
   });
 
   it("drives the Electronics tool's gap from the sim's Gap slider", () => {

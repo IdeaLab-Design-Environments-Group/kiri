@@ -73,6 +73,21 @@ export interface Net {
 }
 
 /**
+ * The `Terminal.part` a battery terminal carries.
+ *
+ * The battery is not in {@link Circuit.parts} — it is one per circuit, stored as {@link Circuit.battery},
+ * and it has no footprint in the library — but it is the part everything else is wired back to, and the
+ * panel that lists parts and offers their pads had nothing to show for it. A negative index is the
+ * addressing that costs nothing elsewhere: every real terminal indexes an array, so no `parts` index can
+ * ever collide with it, and `reindexTerminals` shifts terminals ABOVE a deleted part, which -1 never is.
+ */
+export const BATTERY_PART = -1;
+
+/** The battery's two terminals, named as they are drawn on the sheet. */
+export const BATTERY_PWR_PAD = "+";
+export const BATTERY_GND_PAD = "−";
+
+/**
  * One pad of one part, and the net it belongs to. A netlist, entry by entry.
  *
  * The pad is named, not indexed: `terminals()` yields a footprint's pads by their own names, so "2" is
@@ -80,7 +95,7 @@ export interface Net {
  * re-point at a different pin the moment a footprint was regenerated.
  */
 export interface Terminal {
-  /** Index into {@link Circuit.parts}. */
+  /** Index into {@link Circuit.parts}, or {@link BATTERY_PART} for one of the battery's two terminals. */
   part: number;
   /** The pad's own name in its footprint. */
   pad: string;

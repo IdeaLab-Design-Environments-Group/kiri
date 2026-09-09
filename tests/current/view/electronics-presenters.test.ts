@@ -55,10 +55,37 @@ describe("view/electronics-presenters > derivedNetRows", () => {
 
   it("puts the battery on both rails once copper exists", () => {
     const c = bare({ nets: rails(), battery: { face: 0, x: 0, y: 0 } as never });
-    expect(derivedNetRows(c, routedSomething())).toEqual([
+    expect(derivedNetRows(c, routedSomething({ battery: true }))).toEqual([
       { net: PWR_NET_ID, label: "Battery +", derived: true },
       { net: GND_NET_ID, label: "Battery −", derived: true },
     ]);
+  });
+
+  it("puts the battery on both rails on a plan that laid no copper at all", () => {
+    // A battery with nothing to light routes to no traces: there is nowhere for the rails to go yet. The
+    // author has pressed Route, the plan came back carrying the battery, and its two terminals ARE PWR
+    // and GND -- reading `PWR 0 · GND 0` there says the battery is unwired, which is not what is true.
+    const c = bare({ nets: rails(), battery: { face: 0, x: 0, y: 0 } as never });
+    const planned = { ...EMPTY_ROUTE, battery: true } as RoutedCircuit;
+    expect(derivedNetRows(c, planned)).toEqual([
+      { net: PWR_NET_ID, label: "Battery +", derived: true },
+      { net: GND_NET_ID, label: "Battery −", derived: true },
+    ]);
+  });
+
+  it("claims nothing for an LED on a plan that laid no copper", () => {
+    // The other half of the same rule: which leg of an LED is PWR is a routing OUTPUT, so an empty plan
+    // knows nothing about it and must say nothing -- unlike the battery, whose rails are construction.
+    const c = bare({ nets: rails(), leds: [{ a: 0, b: 1 }], battery: { face: 0, x: 0, y: 0 } as never });
+    const planned = { ...EMPTY_ROUTE, battery: true } as RoutedCircuit;
+    expect(derivedNetRows(c, planned).map((r) => r.label)).toEqual(["Battery +", "Battery −"]);
+  });
+
+  it("says nothing about a battery the plan does not have, however the circuit reads", () => {
+    // The rows say what was ROUTED. A battery placed since the last plan is not on the copper on screen,
+    // and claiming it there would make the panel disagree with the drawing beside it until Route.
+    const c = bare({ nets: rails(), battery: { face: 0, x: 0, y: 0 } as never });
+    expect(derivedNetRows(c, routedSomething())).toEqual([]);
   });
 
   it("counts a routed LED's two legs, and says nothing for an unreachable one", () => {
@@ -82,7 +109,7 @@ describe("view/electronics-presenters > derivedNetRows", () => {
 
   it("never marks a derived row as storable — no part or pad to point at", () => {
     const c = bare({ nets: rails(), battery: { face: 0, x: 0, y: 0 } as never });
-    for (const row of derivedNetRows(c, routedSomething())) {
+    for (const row of derivedNetRows(c, routedSomething({ battery: true }))) {
       expect(row.derived).toBe(true);
       expect(row.part).toBeUndefined();
       expect(row.pad).toBeUndefined();
@@ -118,7 +145,7 @@ describe("view/electronics-presenters > netPanelRows", () => {
       parts: [{ component: "R_1206", x: 0, y: 0 }],
       terminals: [{ part: 0, pad: "1", net: PWR_NET_ID }],
     });
-    expect(netPanelRows(c, routedSomething()).map((r) => r.derived)).toEqual([false, true, true]);
+    expect(netPanelRows(c, routedSomething({ battery: true })).map((r) => r.derived)).toEqual([false, true, true]);
   });
 });
 
@@ -201,7 +228,7 @@ describe("view/electronics-presenters > buildNetRows", () => {
 
   it("counts the router's derived rows in the tally, so a routed rail does not read 0", () => {
     const c = bare({ nets: rails(), battery: { face: 0, x: 0, y: 0 } as never });
-    const rows = buildNetRows(c, routedSomething(), new Set());
+    const rows = buildNetRows(c, routedSomething({ battery: true }), new Set());
     expect(rows.map((r) => r.tally.text)).toEqual(["1", "1"]);
   });
 

@@ -60,6 +60,18 @@ function alongRun(run: { pts: { x: number; y: number }[] }, u: number): { x: num
   return { ...run.pts[0]! };
 }
 
+/** Press the Route button. Placing the battery and an LED puts them on the PWR and GND rails, and a net
+ *  assignment is planned on request rather than on the edit, so a fixture that wants copper asks for it. */
+function route(modal: any): void {
+  modal.overlay.querySelector(".el-route").dispatch("click", {});
+}
+
+/** Turn Auto on. Manual is the default now — nothing plans until the author asks — so a test whose
+ *  subject is what the ROUTER does with an edit says so here, rather than pressing Route after each one. */
+function auto(modal: any): void {
+  modal.overlay.querySelectorAll(".el-auto")[0].dispatch("click", {});
+}
+
 function openOn(fold: FoldFile): { modal: any; edits: unknown[] } {
   const { document } = installDom();
   const modal = new ElectronicsModal() as any;
@@ -70,6 +82,14 @@ function openOn(fold: FoldFile): { modal: any; edits: unknown[] } {
   modal.setPattern(fold);
   modal.open();
   return { modal, edits };
+}
+
+/** Press the Build toggle, the way a user picks which sheet the copper is going on. */
+function selectBuild(modal: any, material: "vinyl" | "printed"): void {
+  modal.overlay
+    .querySelectorAll(".el-build")
+    .find((b: any) => b.dataset.material === material)!
+    .dispatch("click", {});
 }
 
 describe("view/electronics-modal", () => {
@@ -86,6 +106,7 @@ describe("view/electronics-modal", () => {
     // bridges. Leaving them at the default while the sim shows 40% would have the tool laying parts on
     // a build that no longer exists.
     const { modal } = openOn(grid2x2());
+    selectBuild(modal, "printed"); // the tiles and their gaps exist only on this build
     modal.selectTool("led");
     tapFlat(modal, { x: 1, y: 0.5 }); // the hinge between faces 0 and 1
     const placed = modal.circuit.leds.length;
@@ -102,6 +123,59 @@ describe("view/electronics-modal", () => {
     expect(modal.svg.innerHTML).not.toBe(before); // and it is on screen, not just in the fields
     // The LED is stored as the pair of faces it straddles, so a wider gap moves it -- it does not lose it.
     expect(modal.circuit.leds).toHaveLength(placed);
+  });
+
+  it("cuts the tiles apart on the printed build and leaves the vinyl sheet whole", () => {
+    // The two builds are different sheets, not two skins on one. The printed one has a hinge gap cut
+    // between its tiles -- that gap is what a component bridges and what the crease strain is measured
+    // across -- and the vinyl one is scored, with nothing cut away and so nothing between the faces.
+    const { modal } = openOn(grid2x2());
+    const faces = modal.faces.map((f: any) => f.poly.map((p: any) => [p.x, p.y]));
+
+    selectBuild(modal, "vinyl");
+    expect(modal.tiles.map((t: any) => t.ring.length)).not.toContain(0);
+    // Every gap's two leg pads sit on the crease itself: no gap, so nowhere to stand off to.
+    for (const g of modal.gaps) expect([g.legA.x, g.legA.y]).toEqual([g.legB.x, g.legB.y]);
+    // …and the sheet drawn is the faces themselves, with the creases scored on it.
+    expect(modal.svg.innerHTML).toContain("el-sheet");
+    expect(modal.svg.innerHTML).toContain("el-crease");
+    expect(modal.svg.innerHTML).not.toContain("el-tile");
+
+    selectBuild(modal, "printed");
+    for (const g of modal.gaps) expect([g.legA.x, g.legA.y]).not.toEqual([g.legB.x, g.legB.y]);
+    expect(modal.svg.innerHTML).toContain("el-tile");
+    expect(modal.svg.innerHTML).not.toContain("el-crease");
+    // The pattern is the same pattern on both: only what is cut out of it changed.
+    expect(modal.faces.map((f: any) => f.poly.map((p: any) => [p.x, p.y]))).toEqual(faces);
+  });
+
+  it("keeps what is placed when the build changes, and tells the controller once", () => {
+    const { modal } = openOn(grid2x2());
+    const seen: string[] = [];
+    modal.onMaterialChange((m: string) => seen.push(m));
+    selectBuild(modal, "printed");
+    modal.selectTool("led");
+    tapFlat(modal, { x: 1, y: 0.5 });
+    expect(modal.circuit.leds).toHaveLength(1);
+
+    selectBuild(modal, "vinyl");
+    // Stored as the faces it straddles, so it re-lands on the same crease of the other build.
+    expect(modal.circuit.leds).toHaveLength(1);
+    expect(seen).toEqual(["printed", "vinyl"]);
+
+    // An update arriving FROM the store must not be reported straight back to it.
+    modal.setMaterial("printed");
+    expect(seen).toEqual(["printed", "vinyl"]);
+    selectBuild(modal, "printed"); // already there: not a change, so not an event either
+    expect(seen).toEqual(["printed", "vinyl"]);
+  });
+
+  it("asks for the folded form of the build on screen", () => {
+    const { modal } = openOn(grid2x2());
+    let asked = 0;
+    modal.onOpenForm(() => asked++);
+    modal.overlay.querySelector(".el-form").dispatch("click", {});
+    expect(asked).toBe(1);
   });
 
   it("ignores a gap change that is not a change", () => {
@@ -188,11 +262,31 @@ describe("view/electronics-modal", () => {
       tapFlat(modal, { x: 0.5, y: 0.5 });
       modal.selectTool("led");
       tapFlat(modal, modal.gaps[0].point);
+      route(modal);
       expect(modal.routed.traces.length, "nothing routed, so nothing to derive").toBeGreaterThan(0);
 
       const counts = netCounts(modal);
       expect(counts.PWR, "PWR still reads zero on a routed circuit").toBeGreaterThan(0);
       expect(counts.GND, "GND still reads zero on a routed circuit").toBeGreaterThan(0);
+    });
+
+    it("puts the battery on PWR and GND the moment it is placed, and keeps it there through Route", () => {
+      // A battery on its own has nowhere to send copper, so the plan comes back with no traces at all --
+      // and the panel used to read `PWR 0 · GND 0` on a circuit the author had just routed. Its two
+      // terminals are the rails by construction, so they are stored with it and the rows are the
+      // author's own, not the router's: an × on each, and re-pointable from the pads panel.
+      const { modal } = openOn(grid2x2());
+      modal.selectTool("battery");
+      tapFlat(modal, { x: 0.5, y: 0.5 });
+      expect(netCounts(modal).PWR).toBe(1);
+      expect(netCounts(modal).GND).toBe(1);
+
+      route(modal);
+      expect(modal.routed.traces, "this test is about a plan with no copper in it").toHaveLength(0);
+      expect(netCounts(modal).PWR).toBe(1);
+      expect(netCounts(modal).GND).toBe(1);
+      // One row each and not two is the count itself: the derived pair stands down where the battery
+      // has terminals of its own.
     });
 
     it("claims nothing before anything is routed", () => {
@@ -213,12 +307,16 @@ describe("view/electronics-modal", () => {
       tapFlat(modal, { x: 0.5, y: 0.5 });
       modal.selectTool("led");
       tapFlat(modal, modal.gaps[0].point);
+      route(modal);
       expect(netCounts(modal).PWR).toBeGreaterThan(0); // the rows are really there...
 
-      // ...and none of them is on the circuit or in what the controller was handed.
-      expect(modal.circuit.terminals ?? [], "a derived row was written to the circuit").toHaveLength(0);
+      // ...and none of the DERIVED ones is on the circuit or in what the controller was handed. The
+      // battery's own two terminals are stored, by design; the LED's are the router's and must not be.
+      const stored = (modal.circuit.terminals ?? []) as any[];
+      expect(stored.every((t) => t.part === -1), "a derived row was written to the circuit").toBe(true);
       const sent = edits[edits.length - 1] as any;
-      expect(sent.terminals ?? [], "a derived row reached the store").toHaveLength(0);
+      expect((sent.terminals ?? []).every((t: any) => t.part === -1), "a derived row reached the store")
+        .toBe(true);
     });
 
     it("does not let an edit elsewhere write the derived rows into the circuit", () => {
@@ -230,11 +328,14 @@ describe("view/electronics-modal", () => {
       modal.selectTool("led");
       tapFlat(modal, modal.gaps[0].point);
 
-      // Any edit that goes through the terminal-rebuilding path.
+      // Any edit that goes through the terminal-rebuilding path. Deleting GND takes the battery's own
+      // `−` with it, which is the point of that path; what must not appear is a row for the LED.
       const gnd = modal.circuit.nets.findIndex((n: any) => n.id === "gnd");
       modal.overlay.querySelectorAll(".el-net-del")[gnd].dispatch("click", {});
 
-      expect(modal.circuit.terminals ?? [], "an edit persisted the derived rows").toHaveLength(0);
+      const stored = (modal.circuit.terminals ?? []) as any[];
+      expect(stored.map((t) => `${t.part}:${t.pad}`), "an edit persisted the derived rows")
+        .toEqual(["-1:+"]);
     });
   });
 
@@ -437,6 +538,7 @@ describe("view/electronics-modal", () => {
       tapFlat(got.modal, { x: 0.5, y: 0.5 });
       got.modal.selectTool("led");
       tapFlat(got.modal, { x: 1, y: 0.5 });
+      route(got.modal); // the battery and the LED are the PWR/GND rails, planned on request
       return got;
     }
 
@@ -445,14 +547,90 @@ describe("view/electronics-modal", () => {
       modal.overlay.querySelectorAll(`.${cls}`)[i].dispatch("click", {});
     }
 
-    it("re-plans on every edit by default, as it always has", () => {
+    it("re-plans a part seated in a run on the spot once Auto is turned on", () => {
+      // Placing a part in a run is an edit that still asks the segment, so under Auto it plans there and
+      // then. What it is NOT asserted on any more is an LED or the battery: those two are the PWR and GND
+      // rails themselves, and joining a net waits for Route whatever the segment says — see below.
       const { modal } = withCopper();
+      auto(modal);
       const before = modal.routed.traces.length;
       expect(before).toBeGreaterThan(0);
-      modal.selectTool("led");
-      tapFlat(modal, { x: 0.5, y: 1 }); // a second hinge
+      const run = modal.routed.traces[0];
+      modal.selectTool("resistor");
+      tapFlat(modal, run.pts[Math.floor(run.pts.length / 2)]);
+      expect(modal.circuit.resistors).toHaveLength(1);
       expect(modal.routed.traces.length).not.toBe(before);
       expect(modal.stale).toBe(false);
+    });
+
+    it("leaves the shortcuts alone while the author is typing in the sidebar", () => {
+      // The reported defect: typing PWR into a name box made the text vanish mid-word. The editor's
+      // shortcuts are on `document`, so the R of "PWR" turned the selected part round and repainted the
+      // panel out from under the box. Backspace was worse — it deleted the selected part.
+      const { modal } = withCopper();
+      auto(modal); // so a shortcut that DID fire would visibly re-plan, not merely repaint
+      modal.selectTool("led");
+      tapFlat(modal, { x: 1, y: 0.5 }); // select the LED placed by the fixture
+      expect(modal.selected).toBeTruthy();
+      const leds = modal.circuit.leds.length;
+      const box = modal.overlay.querySelector(".el-net-new");
+
+      for (const key of ["P", "W", "R", "Backspace", "Delete"]) {
+        (globalThis as any).document.dispatch("keydown", { key, target: box });
+      }
+      expect(modal.circuit.leds, "a shortcut fired from inside a text box").toHaveLength(leds);
+      expect(modal.circuit.leds[0].flip, "R turned the LED round while it was being typed").toBeUndefined();
+
+      // And the same keys outside a box still do their job.
+      (globalThis as any).document.dispatch("keydown", { key: "r" });
+      expect(modal.circuit.leds[0].flip).toBeTypeOf("boolean");
+    });
+
+    it("does not greet a freshly opened editor with copper it calls out of date", () => {
+      // Opening the page is not an edit. Under Manual an edit is what marks the copper stale, and an
+      // editor that said "out of date" before the author touched anything teaches them to ignore the line.
+      const { modal } = openOn(grid2x2());
+      expect(modal.stale).toBe(false);
+      expect(modal.statusEl.textContent).not.toContain("out of date");
+      expect(modal.overlay.querySelector(".el-route").classList.contains("is-stale")).toBe(false);
+    });
+
+    it("plans nothing at all by default, whatever the edit — Manual is where the editor starts", () => {
+      // The default the author meets: a part placed, a pad wired, a part moved, and the copper on screen is
+      // still the copper they last asked for. Routing arrives when they press Route and at no other time.
+      const { modal } = withCopper();
+      expect(modal.autoRoute).toBe(false);
+      const kept = modal.routed;
+      const run = modal.routed.traces[0];
+      modal.selectTool("resistor");
+      tapFlat(modal, run.pts[Math.floor(run.pts.length / 2)]);
+      expect(modal.circuit.resistors, "the edit did not land").toHaveLength(1);
+      expect(modal.routed, "a placement re-planned the copper on its own").toBe(kept);
+      expect(modal.stale).toBe(true);
+      expect(modal.statusEl.textContent).toContain("out of date");
+
+      press(modal, "el-route");
+      expect(modal.routed).not.toBe(kept);
+      expect(modal.stale).toBe(false);
+    });
+
+    it("waits for Route when an LED or the battery joins the rails, whatever the segment says", () => {
+      // PWR and GND are nets like any other now: a part landing on them is a net assignment, and one made
+      // by placing defers exactly as one made in the pads panel does. Under Auto, where a placement DOES
+      // normally plan on the spot — that is what makes this the segment-independent half of the rule.
+      const { modal } = withCopper();
+      auto(modal);
+      const kept = modal.routed;
+      modal.selectTool("led");
+      tapFlat(modal, { x: 0.5, y: 1 }); // a second hinge
+      expect(modal.circuit.leds, "the edit did not land").toHaveLength(2);
+      expect(modal.routed, "placing an LED re-planned the rails").toBe(kept);
+      expect(modal.stale).toBe(true);
+      expect(modal.statusEl.textContent).toContain("out of date");
+
+      press(modal, "el-route");
+      expect(modal.stale).toBe(false);
+      expect(modal.routed).not.toBe(kept);
     });
 
     it("leaves the copper alone under Manual, and says the drawing is out of date", () => {
@@ -738,10 +916,12 @@ describe("view/electronics-modal", () => {
 
   it("turns the selected LED round on R, and fixes that orientation", () => {
     const { modal } = openOn(grid2x2());
+    auto(modal); // the router's own output is what this test is about
     modal.selectTool("battery");
     tapFlat(modal, { x: 0.5, y: 0.5 });
     modal.selectTool("led");
     tapFlat(modal, modal.gaps[0].point);
+    route(modal);
 
     const before = modal.routed.pads[0];
     (globalThis as any).document.dispatch("keydown", { key: "r" });
@@ -805,6 +985,7 @@ describe("view/electronics-modal", () => {
     tapFlat(modal, { x: 0.5, y: 0.5 });
     modal.selectTool("led");
     tapFlat(modal, modal.gaps[0].point);
+    route(modal);
 
     // Strips view: copper, no frame.
     expect(modal.svg.innerHTML).toContain("el-tape");
@@ -978,6 +1159,7 @@ describe("view/electronics-modal", () => {
       tapFlat(modal, { x: 0.5, y: 0.5 });
       modal.selectTool("led");
       tapFlat(modal, modal.gaps[0].point);
+      route(modal);
       expect(modal.routed.traces.length).toBeGreaterThan(0);
 
       // Somewhere on a run of copper.
@@ -1005,10 +1187,12 @@ describe("view/electronics-modal", () => {
       // footprint's own pad, and it must not move when the tape does.
       const measure = (): number => {
         const { modal } = openOn(grid2x2());
+        auto(modal); // the router's own output is what this test is about
         modal.selectTool("battery");
         tapFlat(modal, { x: 0.5, y: 0.5 });
         modal.selectTool("led");
         tapFlat(modal, modal.gaps[0].point);
+        route(modal);
         const run = modal.routed.traces[0];
         modal.selectTool("resistor");
         tapFlat(modal, run.pts[Math.floor(run.pts.length / 2)]);
@@ -1032,10 +1216,12 @@ describe("view/electronics-modal", () => {
       // land copper, not tape. The canvas has to draw them or it shows a rail with a hole in it and no way
       // for the current to get across — a circuit that cannot work, drawn as though it does.
       const { modal } = openOn(grid2x2());
+      auto(modal); // the router's own output is what this test is about
       modal.selectTool("battery");
       tapFlat(modal, { x: 0.5, y: 0.5 });
       modal.selectTool("led");
       tapFlat(modal, modal.gaps[0].point);
+      route(modal);
       const before = modal.routed.traces.length;
       const run = modal.routed.traces.find((t: any) => t.net === "pwr");
       modal.selectTool("switch");
@@ -1057,10 +1243,12 @@ describe("view/electronics-modal", () => {
       // first: the tap meant to add landed on the one already there and took it off. It now selects, as
       // tapping an LED does, and Delete is what removes it.
       const { modal } = openOn(grid2x2());
+      auto(modal); // the router's own output is what this test is about
       modal.selectTool("battery");
       tapFlat(modal, { x: 0.5, y: 0.5 });
       modal.selectTool("led");
       tapFlat(modal, modal.gaps[0].point);
+      route(modal);
       const run = modal.routed.traces[0];
       const at = run.pts[Math.floor(run.pts.length / 2)];
 
@@ -1090,6 +1278,7 @@ describe("view/electronics-modal", () => {
       tapFlat(modal, { x: 0.5, y: 0.5 });
       modal.selectTool("led");
       tapFlat(modal, modal.gaps[0].point);
+      route(modal);
       expect(modal.routed.traces.length).toBeGreaterThan(0);
       const run = modal.routed.traces[0];
       return { modal, edits, at: run.pts[Math.floor(run.pts.length / 2)] };
@@ -1113,6 +1302,7 @@ describe("view/electronics-modal", () => {
       tapFlat(modal, { x: 0.5, y: 0.5 });
       modal.selectTool("led");
       tapFlat(modal, modal.gaps[0].point);
+      route(modal);
       const before = modal.routed.traces;
       expect(before.length).toBeGreaterThan(0);
 
@@ -1197,6 +1387,7 @@ describe("view/electronics-modal", () => {
       tapFlat(modal, { x: 0.5, y: 0.5 });
       modal.selectTool("led");
       tapFlat(modal, modal.gaps[0].point);
+      route(modal);
       const run = modal.routed.traces[0];
       const on = run.pts[Math.floor(run.pts.length / 2)];
       modal.selectPlaceMode("free");
@@ -1654,6 +1845,7 @@ describe("view/electronics-modal", () => {
 
     it("selects a placed part when it is tapped again, and removes it on Delete", () => {
       const { modal, at } = withRails();
+      auto(modal); // the router's own output is what this test is about
       modal.selectPlaceMode("free");
       pick(modal, "C_1206");
       tapFlat(modal, at);
@@ -1675,6 +1867,7 @@ describe("view/electronics-modal", () => {
       // of the part already there -- a target sized to the pattern rather than to the part -- so the second
       // tap deleted the first and the circuit never held two of anything.
       const { modal } = withRails();
+      auto(modal); // the router's own output is what this test is about
       modal.selectPlaceMode("free");
       pick(modal, "C_1206");
       const run = modal.routed.traces.find((t: any) => t.net === "pwr");
@@ -1719,6 +1912,7 @@ describe("view/electronics-modal", () => {
       // break with 4.3mm of copper each side, and no run is that long any more. It must be refused and
       // reported — not dropped in silence, and not squeezed in over another part.
       const { modal } = withRails();
+      auto(modal); // the router's own output is what this test is about
       const run = modal.routed.traces.find((t: any) => t.net === "pwr");
       const spots = [0.2, 0.5, 0.8].map((u) => alongRun(run, u));
       // Not across a fold: this test is about a RAIL running out of room, so every part here has to be
@@ -1790,6 +1984,7 @@ describe("view/electronics-modal", () => {
       // A switch is a part the rail steps ACROSS, so which way round it sits decides which side its idle
       // throw is stranded on. The router picks one; R overrules it, and R again gives the decision back.
       const { modal } = withRails();
+      auto(modal); // the router's own output is what this test is about
       modal.selectPlaceMode("free");
       pick(modal, "SW_SPDT");
       const run = modal.routed.traces.find((t: any) => t.net === "pwr");
@@ -1811,6 +2006,7 @@ describe("view/electronics-modal", () => {
       // In line with the rail there is no idle terminal to strand, so the turn is the swap of its two ends
       // -- which is what a polarised part needs and what the drawing has to follow.
       const { modal } = withRails();
+      auto(modal); // the router's own output is what this test is about
       modal.selectPlaceMode("free");
       pick(modal, "C_1206");
       const run = modal.routed.traces.find((t: any) => t.net === "pwr");
@@ -1841,6 +2037,12 @@ describe("view/electronics-modal", () => {
       }));
     }
 
+    /** The terminals of the LIBRARY parts — the battery's own two left out, since every fixture here
+     *  places a battery and these assertions are about the pads the author wired by hand. */
+    function padTerminals(modal: any): any[] {
+      return (modal.circuit.terminals ?? []).filter((t: any) => t.part !== -1);
+    }
+
     /** Put a placed part's pad on a net, through the pad panel — by typing the name, as the author does. */
     function wirePad(modal: any, pad: string, netName: string): void {
       const box = modal.overlay.querySelectorAll(".el-pad-net").find((p: any) => p.dataset.pad === pad);
@@ -1869,14 +2071,85 @@ describe("view/electronics-modal", () => {
       return [modal.gaps[1].point, modal.gaps[2].point];
     }
 
-    /** The parts list, as it reads: designator, and how many of its pads are on a net. */
+    /** The parts list, as it reads: designator, and how many of its pads are on a net.
+     *
+     *  The battery's own row (BT1, always first) is left out: every fixture here places a battery, and
+     *  these tests are about the LIBRARY parts below it. The battery row has its own tests. */
     function partRows(modal: any): { tag: string; wired: string; active: boolean }[] {
+      return allPartRows(modal).filter((r) => r.tag !== "BT1");
+    }
+
+    /** Every row the parts list draws, the battery's included. */
+    function allPartRows(modal: any): { tag: string; wired: string; active: boolean }[] {
       return modal.overlay.querySelectorAll(".el-placed-row").map((row: any) => ({
         tag: row.children.find((c: any) => c.className.includes("el-placed-tag")).textContent,
         wired: row.children.find((c: any) => c.className.includes("el-placed-wired")).textContent,
         active: row.classList.contains("is-active"),
       }));
     }
+
+    describe("when a pad is put on a net", () => {
+      it("does not re-plan the copper, even under Auto — the Route button says when", () => {
+        // The reported annoyance: a net is wired one pad at a time, and the router fired on each of them.
+        // A full plan is most of a second, so putting the two pads of a net on it cost two plans, the
+        // first of which describes a net with one terminal on it and is thrown away by the second click.
+        const { modal, at } = withRails();
+        auto(modal); // the router's own output is what this test is about
+        expect(modal.autoRoute, "this test is about the Auto default").toBe(true);
+        addNet(modal, "SIG");
+        placeAndSelect(modal, "C_1206", at);
+        const kept = modal.routed;
+
+        wirePad(modal, "1", "SIG");
+        expect(padTerminals(modal), "the assignment did not land").toHaveLength(1);
+        expect(modal.routed, "wiring a pad re-planned the copper").toBe(kept);
+        expect(modal.stale).toBe(true);
+        expect(modal.statusEl.textContent).toContain("out of date");
+
+        wirePad(modal, "2", "SIG"); // the second pad, the one that makes a run — still no plan
+        expect(modal.routed).toBe(kept);
+
+        modal.overlay.querySelector(".el-route").dispatch("click", {});
+        expect(modal.stale).toBe(false);
+        expect(modal.routed, "Route did not plan the wired net").not.toBe(kept);
+      });
+
+      it("plans nothing for a net that is only renamed, recoloured or declared", () => {
+        // These change no copper at all, so they neither re-plan nor claim the drawing is out of date --
+        // an "out of date" the author cannot have caused teaches them to ignore the caption.
+        const { modal } = withRails();
+        const kept = modal.routed;
+        addNet(modal, "SIG");
+        expect(modal.routed).toBe(kept);
+        expect(modal.stale, "declaring an empty net cannot have staled the copper").toBe(false);
+
+        const chip = modal.overlay.querySelectorAll(".el-net")
+          .find((r: any) => r.children.some((c: any) => c.className.includes("el-net-name") && c.value === "SIG"));
+        const name = chip.children.find((c: any) => c.className.includes("el-net-name"));
+        name.value = "SDA";
+        name.dispatch("change", {});
+        expect(modal.circuit.nets.some((n: any) => n.name === "SDA")).toBe(true);
+        expect(modal.routed).toBe(kept);
+        expect(modal.stale).toBe(false);
+      });
+
+      it("marks the copper out of date when a net is deleted", () => {
+        // The other half of the rule: deleting a net unwires every pad on it, so the copper on screen is
+        // wiring a net that no longer exists. Not re-planned -- the author says when -- but said out loud.
+        const { modal, at } = withRails();
+        addNet(modal, "SIG");
+        placeAndSelect(modal, "C_1206", at);
+        wirePad(modal, "1", "SIG");
+        modal.overlay.querySelector(".el-route").dispatch("click", {});
+        expect(modal.stale).toBe(false);
+
+        const chip = modal.overlay.querySelectorAll(".el-net")
+          .find((r: any) => r.children.some((c: any) => c.className.includes("el-net-name") && c.value === "SIG"));
+        chip.children.find((c: any) => c.className.includes("el-net-del")).dispatch("click", {});
+        expect(modal.circuit.nets.some((n: any) => n.name === "SIG")).toBe(false);
+        expect(modal.stale).toBe(true);
+      });
+    });
 
     describe("what the router could not do", () => {
       it("says so when a net has only one pad on it, the commonest authoring slip", () => {
@@ -1887,6 +2160,9 @@ describe("view/electronics-modal", () => {
         addNet(modal, "SIG");
         placeAndSelect(modal, "C_1206", at);
         wirePad(modal, "1", "SIG");
+        // Wiring a pad does not route -- the author says when -- and the faults are the router's, so they
+        // are read off the plan the Route button makes rather than off the one from before the assignment.
+        modal.overlay.querySelector(".el-route").dispatch("click", {});
 
         expect(modal.routed.netFaults.map((f: any) => f.kind)).toContain("single-terminal-net");
         expect(modal.statusEl.textContent).toContain("netlist fault");
@@ -1952,12 +2228,89 @@ describe("view/electronics-modal", () => {
         placeAndSelect(modal, "R_1206", b!);
         expect(partRows(modal)).toHaveLength(2);
 
-        // Back to the first part from the list alone -- no hunting for it on the canvas.
-        modal.overlay.querySelectorAll(".el-placed-row")[0].dispatch("click", {});
+        // Back to the first part from the list alone -- no hunting for it on the canvas. Row 0 is the
+        // battery's, which is a part in this list too, so the first library part is the one after it.
+        modal.overlay.querySelectorAll(".el-placed-row")[1].dispatch("click", {});
         expect(modal.selected).toEqual({ kind: "part", index: 0 });
         expect(modal.overlay.querySelector(".el-pad-part").textContent).toContain("C_1206");
         const pick = modal.overlay.querySelectorAll(".el-pad-net").find((p: any) => p.dataset.pad === "1");
         expect(pick.value, "the first part's assignment is not readable again").toBe("SIG");
+      });
+
+      it("lists the battery as a part of its own, first, with both terminals wired", () => {
+        // It is the part every other part is wired back to, and it had no row at all: the only trace of
+        // it in the sidebar was the two greyed rows the router derived under PWR and GND.
+        const { modal, at } = withRails();
+        placeAndSelect(modal, "C_1206", at);
+        expect(allPartRows(modal).map((r) => r.tag)).toEqual(["BT1", "C1"]);
+        expect(allPartRows(modal)[0]!.wired).toBe("2/2");
+      });
+
+      it("offers the battery's two terminals, reading PWR and GND", () => {
+        const { modal } = withRails();
+        modal.overlay.querySelectorAll(".el-placed-row")[0].dispatch("click", {}); // BT1
+        expect(modal.selected).toEqual({ kind: "part", index: -1 });
+        expect(modal.overlay.querySelector(".el-pad-part").textContent).toContain("Battery");
+        const rows = modal.overlay.querySelectorAll(".el-pad-net")
+          .map((box: any) => [box.dataset.pad, box.value]);
+        expect(rows).toEqual([["+", "PWR"], ["−", "GND"]]);
+      });
+
+      it("runs copper to the battery on a circuit with no hinge LED to bus", () => {
+        // The reported defect, from a board of two free-standing LED parts wired to PWR and GND: both nets
+        // routed between the parts and NOTHING reached the battery. With no hinge LED there is no bus, and
+        // the bus is what used to be the battery's only connection — so the netlist has to reach it.
+        const { modal } = openOn(grid2x2());
+        modal.selectTool("battery");
+        tapFlat(modal, { x: 0.5, y: 0.5 });
+        modal.selectPlaceMode("free");
+        placeAndSelect(modal, "LED_1206", { x: 1.5, y: 0.5 });
+        wirePad(modal, "1", "PWR");
+        wirePad(modal, "2", "GND");
+        placeAndSelect(modal, "LED_1206", { x: 1.5, y: 1.5 });
+        wirePad(modal, "1", "PWR");
+        wirePad(modal, "2", "GND");
+        route(modal);
+
+        expect(modal.circuit.leds, "this is the netlist case: no hinge LED, so no bus").toHaveLength(0);
+        const faces = flatFaces(grid2x2());
+        const term = batteryTerminals(
+          faces[modal.circuit.battery.face].centroid,
+          patternDiag(faces),
+          faces[modal.circuit.battery.face].poly,
+          modal.tapeW(),
+        );
+        const near = modal.routed.traces
+          .filter((t: any) => t.net === "pwr")
+          .flatMap((t: any) => t.pts)
+          .some((p: any) => Math.hypot(p.x - term.pwr.x, p.y - term.pwr.y) < modal.tapeW());
+        expect(near, "no PWR copper reaches the battery's + terminal").toBe(true);
+        const nearGnd = modal.routed.traces
+          .filter((t: any) => t.net === "gnd")
+          .flatMap((t: any) => t.pts)
+          .some((p: any) => Math.hypot(p.x - term.gnd.x, p.y - term.gnd.y) < modal.tapeW());
+        expect(nearGnd, "no GND copper reaches the battery's − terminal").toBe(true);
+        expect(modal.routed.netFaults, "the battery was reported rather than routed").toEqual([]);
+      });
+
+      it("reports a battery terminal left behind by a battery that is gone", () => {
+        // Nothing should leave one — taking the battery off takes its terminals with it — but a file can
+        // arrive holding one, and a terminal nothing can place must be said out loud rather than dropped.
+        const { modal } = withRails();
+        modal.circuit.battery = null;
+        route(modal);
+        const fault = modal.routed.netFaults.find((f: any) => f.part === -1);
+        expect(fault?.why).toContain("no battery on this side");
+      });
+
+      it("takes the battery's terminals off the circuit when the battery comes off the sheet", () => {
+        const { modal } = withRails();
+        expect(modal.circuit.terminals.some((t: any) => t.part === -1)).toBe(true);
+        modal.selectTool("battery");
+        tapFlat(modal, { x: 0.5, y: 0.5 }); // the face it is on: a second tap takes it off
+        expect(modal.circuit.battery).toBeNull();
+        expect(modal.circuit.terminals.some((t: any) => t.part === -1)).toBe(false);
+        expect(allPartRows(modal).map((r) => r.tag)).not.toContain("BT1");
       });
 
       it("says how many of each part's pads are on a net, and marks one with none", () => {
@@ -2010,9 +2363,12 @@ describe("view/electronics-modal", () => {
       });
 
       it("is not shown at all until something is placed", () => {
-        const { modal, at } = withRails();
+        // Nothing on the sheet at all, so not even the battery's row: `withRails` places one, which is
+        // itself a part in this list now, so the empty case has to be an untouched pattern.
+        const { modal } = openOn(grid2x2());
         expect(modal.overlay.querySelector(".el-placed").hidden).toBe(true);
-        placeAndSelect(modal, "C_1206", at);
+        modal.selectTool("battery");
+        tapFlat(modal, { x: 0.5, y: 0.5 });
         expect(modal.overlay.querySelector(".el-placed").hidden).toBe(false);
       });
     });
@@ -2037,7 +2393,7 @@ describe("view/electronics-modal", () => {
         const id = modal.circuit.nets[0].id;
         placeAndSelect(modal, "C_1206", at);
         wirePad(modal, "1", "PWR");
-        expect(modal.circuit.terminals).toEqual([{ part: 0, pad: "1", net: id }]);
+        expect(padTerminals(modal)).toEqual([{ part: 0, pad: "1", net: id }]);
 
         const box = modal.overlay.querySelector(".el-net-name");
         box.value = "VCC";
@@ -2047,7 +2403,7 @@ describe("view/electronics-modal", () => {
         // would fail every time the model gains a field rather than when the rename breaks.
         expect(modal.circuit.nets[0].id).toBe(id);
         expect(modal.circuit.nets[0].name).toBe("VCC");
-        expect(modal.circuit.terminals, "the rename unwired the pad").toEqual([
+        expect(padTerminals(modal), "the rename unwired the pad").toEqual([
           { part: 0, pad: "1", net: id },
         ]);
       });
@@ -2057,7 +2413,7 @@ describe("view/electronics-modal", () => {
         addNet(modal, "PWR");
         placeAndSelect(modal, "C_1206", at);
         wirePad(modal, "1", "PWR");
-        expect(modal.circuit.terminals).toHaveLength(1);
+        expect(padTerminals(modal)).toHaveLength(1);
 
         const before = modal.circuit.nets.length;
         const doomed = modal.circuit.nets.find((n: any) => n.name === "PWR").id;
@@ -2069,8 +2425,12 @@ describe("view/electronics-modal", () => {
         // "no nets left" was never the right assertion -- it only passed before those existed.
         expect(modal.circuit.nets).toHaveLength(before - 1);
         expect(modal.circuit.nets.map((n: any) => n.id)).not.toContain(doomed);
-        expect(modal.circuit.terminals, "a terminal was left pointing at a deleted net").toHaveLength(0);
-        expect(modal.statusEl.textContent).toContain("unwired 1 pad");
+        // The battery's own terminal on the OTHER rail survives, as it should: only the deleted net's
+        // pads come off.
+        expect(padTerminals(modal), "a terminal was left pointing at a deleted net").toHaveLength(0);
+        expect((modal.circuit.terminals ?? []).map((t: any) => t.net)).not.toContain(doomed);
+        // Two: the capacitor's pad, and the battery's own `+`, which is on PWR like any other terminal.
+        expect(modal.statusEl.textContent).toContain("unwired 2 pads");
       });
 
       it("offers a part's terminals by name, and not its mounting pegs", () => {
@@ -2110,7 +2470,7 @@ describe("view/electronics-modal", () => {
         expect(made, "typing a new name did not declare the net").toBeTruthy();
         expect(modal.circuit.nets).toHaveLength(before + 1);
         // Wired to the net it just made, not merely alongside it.
-        expect(modal.circuit.terminals).toEqual([{ part: 0, pad: "1", net: made.id }]);
+        expect(padTerminals(modal)).toEqual([{ part: 0, pad: "1", net: made.id }]);
         // And it is a net like any other: coloured, and offered to every row after it.
         expect(made.color).toBeTruthy();
         expect(made.id).not.toBe("");
@@ -2127,7 +2487,7 @@ describe("view/electronics-modal", () => {
         wirePad(modal, "1", "gnd");
 
         expect(modal.circuit.nets).toHaveLength(n);
-        expect(modal.circuit.terminals[0].net).toBe(
+        expect(padTerminals(modal)[0].net).toBe(
           modal.circuit.nets.find((x: any) => x.name === "GND").id,
         );
       });
@@ -2140,14 +2500,14 @@ describe("view/electronics-modal", () => {
         placeAndSelect(modal, "C_1206", at);
         wirePad(modal, "1", "PWR");
         wirePad(modal, "1", "GND");
-        expect(modal.circuit.terminals).toHaveLength(1);
-        expect(modal.circuit.terminals[0].net).toBe(modal.circuit.nets[1].id);
+        expect(padTerminals(modal)).toHaveLength(1);
+        expect(padTerminals(modal)[0].net).toBe(modal.circuit.nets[1].id);
 
         // And "—" takes it off entirely.
         const pick = modal.overlay.querySelectorAll(".el-pad-net").find((p: any) => p.dataset.pad === "1");
         pick.value = "";
         pick.dispatch("change", {});
-        expect(modal.circuit.terminals).toHaveLength(0);
+        expect(padTerminals(modal)).toHaveLength(0);
       });
 
       it("renumbers the terminals when a part below them is deleted", () => {
@@ -2166,7 +2526,7 @@ describe("view/electronics-modal", () => {
         placeAndSelect(modal, "R_1206", alongRun(run, 0.75));
         wirePad(modal, "2", "PWR");
         expect(modal.circuit.parts.map((p: any) => p.component)).toEqual(["C_1206", "R_1206"]);
-        expect(modal.circuit.terminals).toEqual([
+        expect(padTerminals(modal)).toEqual([
           { part: 0, pad: "1", net },
           { part: 1, pad: "2", net },
         ]);
@@ -2178,7 +2538,8 @@ describe("view/electronics-modal", () => {
 
         expect(modal.circuit.parts.map((p: any) => p.component)).toEqual(["R_1206"]);
         // The capacitor's terminal went with it, and the resistor's came down to index 0 -- still its own.
-        expect(modal.circuit.terminals).toEqual([{ part: 0, pad: "2", net }]);
+        // The battery's is untouched: it is addressed by -1, which is never above a deleted part's index.
+        expect(padTerminals(modal)).toEqual([{ part: 0, pad: "2", net }]);
       });
 
       it("carries the nets and the terminals through to the controller", () => {
@@ -2251,6 +2612,7 @@ describe("view/electronics-modal", () => {
       // questions you look at a footprint to answer. Every terminal is now the pad that will actually be
       // cut: its own outline, in copper with the mask opening over it.
       const { modal, at } = withRails();
+      auto(modal); // the router's own output is what this test is about
       modal.selectPlaceMode("free");
       pick(modal, "C_1206");
       tapFlat(modal, at);
@@ -2294,6 +2656,7 @@ describe("view/electronics-modal", () => {
       // and they have to be designated as one set. A part called R1 here and R2 in the cut file would be
       // worse than no label at all.
       const { modal } = withRails();
+      auto(modal); // the router's own output is what this test is about
       const mid = (t: any): { x: number; y: number } => t.pts[Math.floor(t.pts.length / 2)];
       // The ROOMIEST run of each net, not the first one in the list. A part needs its own gap of run to sit
       // in, and when `TAPE_MM` fell to 1.5 on 2026-08-28 the replan left the first GND run too short for the
@@ -2399,6 +2762,7 @@ describe("view/electronics-modal", () => {
       // knows to fit.
       const svgs: string[] = [];
       const { modal, at } = withRails();
+      auto(modal); // the router's own output is what this test is about
       (globalThis as any).URL = { createObjectURL: () => "blob:mock", revokeObjectURL: () => {} };
       (globalThis as any).Blob = class {
         constructor(parts: any[]) {
@@ -2448,6 +2812,7 @@ describe("view/electronics-modal", () => {
     // preserves orientation. Only the editor and the cut files reflect, so only a test that goes through
     // `tp()` can see it. That is why this one is in the view file.
     const { modal } = openOn(grid2x2());
+    auto(modal); // the router's own output is what this test is about
     const f = modal.faces;
     modal.circuit = {
       ...modal.circuit,
@@ -2577,6 +2942,7 @@ describe("view/electronics-modal", () => {
       // The second half is the half that matters, and it is what svg-pcb's shipped ratsnest cannot do —
       // its lines come from the declared netlist alone and stay on screen however much copper you lay.
       const { modal } = openOn(grid2x2());
+      auto(modal); // the router's own output is what this test is about
 
       // A net whose two pads are on faces the router cannot join: no battery, no copper, nothing reached.
       modal.circuit = {
@@ -2612,6 +2978,7 @@ describe("view/electronics-modal", () => {
       const { modal } = openOn(grid2x2());
       modal.selectTool("led");
       tapFlat(modal, modal.gaps[0].point);
+      route(modal);
       expect(modal.routed.unreachable).toContain(0);
       expect(modal.svg.innerHTML).toContain("el-led-orphan");
       expect(modal.svg.innerHTML).toContain("el-led-selected");
@@ -2706,6 +3073,7 @@ describe("view/electronics-modal", () => {
       tapFlat(modal, { x: 0.5, y: 0.5 });
       modal.selectTool("led");
       tapFlat(modal, modal.gaps[0].point);
+      route(modal);
       expect(modal.routed.traces.length).toBeGreaterThan(0);
       const pwr = batteryTerminals(
         modal.faces[0].centroid, patternDiag(modal.faces), modal.faces[0].poly, modal.tapeW(),

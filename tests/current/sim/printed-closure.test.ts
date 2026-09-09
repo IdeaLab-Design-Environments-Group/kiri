@@ -132,6 +132,42 @@ describe("sim/printed closure follows the tiles", () => {
     expect(sawFreeSide).toBe(true);
   });
 
+  it("a face paved with finer tiles opens a narrower gap, so it closes sooner", () => {
+    // Detail splits a face into 4^d tiles by midpoint subdivision -- a similarity, so the tile that
+    // meets the hinge has 1/2^d of the face's inradius and opens 1/2^d of the gap. Without this the
+    // sim drew small tiles and kept folding to the angle the big ones allowed, straight through them.
+    const m = printedModel();
+    const c = m.creases;
+    const faces = Math.max(...Array.from(c.face1).concat(Array.from(c.face2))) + 1;
+    applyPrintedClosure(m, { gapFrac: TILE_INSET_FRAC, thickFrac: TILE_THICK_FRAC });
+    const whole = hinges(m).map((i) => c.thetaMax![i]);
+    applyPrintedClosure(m, {
+      gapFrac: TILE_INSET_FRAC,
+      thickFrac: TILE_THICK_FRAC,
+      subdivDepths: new Array(faces).fill(1),
+    });
+    const split = hinges(m).map((i) => c.thetaMax![i]);
+    for (let k = 0; k < whole.length; k++) {
+      expect(split[k]).toBeLessThan(whole[k]);
+      // Halving both inradii halves g exactly, so the limit is 2*atan(tan(theta/2)/2).
+      expect(split[k]).toBeCloseTo(2 * Math.atan(Math.tan(whole[k] / 2) / 2), 6);
+    }
+  });
+
+  it("all-zero depths are the same tiles as no depths at all", () => {
+    const m = printedModel();
+    const c = m.creases;
+    const faces = Math.max(...Array.from(c.face1).concat(Array.from(c.face2))) + 1;
+    applyPrintedClosure(m, { gapFrac: TILE_INSET_FRAC, thickFrac: TILE_THICK_FRAC });
+    const plain = hinges(m).map((i) => c.thetaMax![i]);
+    applyPrintedClosure(m, {
+      gapFrac: TILE_INSET_FRAC,
+      thickFrac: TILE_THICK_FRAC,
+      subdivDepths: new Array(faces).fill(0),
+    });
+    expect(hinges(m).map((i) => c.thetaMax![i])).toEqual(plain);
+  });
+
   it("folds to the pattern's own angles as closely as the vinyl sheet does", { timeout: 60000 }, () => {
     const fold = loadExample("house.fkld");
     const worstError = (printed: boolean): number => {

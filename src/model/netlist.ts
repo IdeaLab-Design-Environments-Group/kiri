@@ -11,7 +11,15 @@
  * own tape width convert between them, exactly as `toFlat` does in the router. Getting this wrong yields
  * pad positions that look plausible and are the wrong size, which has caught this codebase out before.
  */
-import type { Circuit, PlacedPart, Terminal, Vec2 } from "./electronics.js";
+import {
+  BATTERY_GND_PAD,
+  BATTERY_PART,
+  BATTERY_PWR_PAD,
+  type Circuit,
+  type PlacedPart,
+  type Terminal,
+  type Vec2,
+} from "./electronics.js";
 import {
   isTerminal, nearestTerminalMm, padAt, terminals, type Footprint,
 } from "./footprint.js";
@@ -209,6 +217,9 @@ export function resolveNetlist(
   tapeMm: number,
   /** Nets the bus has already laid copper for — see above. Their ids are `Trace2D.net`. */
   railNets: ReadonlySet<string> = new Set(),
+  /** Where the battery's two terminals are, from `batteryTerminals`. Absent when there is no battery on
+   *  this side, which makes a terminal naming one a fault rather than a point. */
+  batteryPads?: { pwr: Vec2; gnd: Vec2 },
 ): Netlist {
   const faults: NetlistFault[] = [];
   const parts = circuit.parts ?? [];
@@ -237,9 +248,59 @@ export function resolveNetlist(
   for (const n of circuit.nets ?? []) points.set(n.id, []);
 
   const seen = new Set<string>();
+  /** Nets the battery is on. The bus reaches these at the battery itself — see the battery branch below. */
+  const batteryNets = new Set<string>();
   for (const t of circuit.terminals ?? []) {
     if (!byId.has(t.net)) {
       faults.push({ kind: "no-such-net", why: `no net "${t.net}"`, net: t.net, part: t.part, pad: t.pad });
+      continue;
+    }
+    // The battery, which is not in `parts` and has no footprint: its two terminals are the squares the
+    // sheet draws, and `batteryPads` is where they are.
+    //
+    // Skipped only where the BUS is already laying a rail for that net. `planRoutes` runs its two rails
+    // out of these very squares, so routing the net to them again would be a second piece of tape along
+    // copper that is already there. Everywhere else the battery is an ordinary point and the netlist
+    // connects it like any other terminal: a circuit of parts with no hinge LED in it lays no bus at all,
+    // and without this its battery sat on the sheet with the nets routed around it and nothing reaching
+    // it — copper wired to no power, drawn as though it worked. A terminal the author has moved onto some
+    // third net routes here too, for the same reason.
+    if (t.part === BATTERY_PART) {
+      if (railNets.has(t.net)) {
+        batteryNets.add(t.net);
+        continue;
+      }
+      const at = batteryPads && (t.pad === BATTERY_PWR_PAD
+        ? batteryPads.pwr
+        : t.pad === BATTERY_GND_PAD ? batteryPads.gnd : undefined);
+      if (!at) {
+        faults.push({
+          kind: "no-such-part",
+          why: batteryPads
+            ? `the battery has no terminal "${t.pad}"`
+            : `a terminal is on the battery, and there is no battery on this side`,
+          part: t.part,
+          pad: t.pad,
+          net: t.net,
+        });
+        continue;
+      }
+      const batKey = `${t.part}:${t.pad}`;
+      if (seen.has(batKey)) {
+        faults.push({
+          kind: "duplicate-terminal",
+          why: `the battery's "${t.pad}" is on more than one net`,
+          part: t.part,
+          pad: t.pad,
+          net: t.net,
+        });
+        continue;
+      }
+      seen.add(batKey);
+      // A full tape width: the terminal square is a little over a tape across, so a run landing in the
+      // middle of it has nothing to narrow for — unlike a chip pad, whose neighbour is a fraction of a
+      // millimetre away.
+      points.get(t.net)!.push({ part: t.part, pad: t.pad, at, padWidth: tapeW });
       continue;
     }
     const part = parts[t.part];
@@ -320,7 +381,9 @@ export function resolveNetlist(
   const nets: ResolvedNet[] = [];
   for (const n of circuit.nets ?? []) {
     const pts = points.get(n.id)!;
-    if (pts.length < 2 && !(pts.length === 1 && railNets.has(n.id))) {
+    // A net the battery is on is never short of terminals: the bus lays a rail from the battery to it,
+    // which is a connection the netlist does not have to make and cannot see in `points`.
+    if (pts.length < 2 && !(pts.length === 1 && railNets.has(n.id)) && !batteryNets.has(n.id)) {
       faults.push({
         kind: "single-terminal-net",
         why:

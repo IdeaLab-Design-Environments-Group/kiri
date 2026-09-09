@@ -6,16 +6,20 @@
  * Commands keep those mutations small, named, and testable while staying in the
  * model layer.
  */
-import type {
-  Circuit,
-  Led,
-  Net,
-  PartFlip,
-  PlacedPart,
-  Resistor,
-  Switch,
-  Terminal,
+import {
+  BATTERY_GND_PAD,
+  BATTERY_PART,
+  BATTERY_PWR_PAD,
+  type Circuit,
+  type Led,
+  type Net,
+  type PartFlip,
+  type PlacedPart,
+  type Resistor,
+  type Switch,
+  type Terminal,
 } from "./electronics.js";
+import { GND_NET_ID, PWR_NET_ID } from "./net-palette.js";
 import type { ManualWire } from "./manual-wire.js";
 
 export interface CircuitCommand {
@@ -54,12 +58,35 @@ export function appendLegacyPart(kind: Exclude<PartListKind, "part">, point: Res
   return { apply: (c) => ({ ...c, [field]: [...legacyItems(c, kind), point] }) };
 }
 
+/**
+ * Put the battery on this face, or take it off the face it is already on.
+ *
+ * Its two terminals come and go with it. They are seeded on PWR and GND, which is not a guess about the
+ * author's circuit the way a placed part's pads would be: a battery's `+` IS the PWR rail and its `−` IS
+ * GND — that is what the bus router does with it, and what the sheet draws. Storing them is what puts the
+ * battery in the parts list with pads the author can read, and re-point, like any other part's.
+ *
+ * Seeded only into a circuit that has declared those two nets. A file from before the netlist existed has
+ * no `nets` at all, and a terminal naming a net that is not there is a fault, not a wiring.
+ */
 export function toggleBattery(face: number): CircuitCommand {
   return {
-    apply: (c) => ({
-      ...c,
-      battery: c.battery?.face === face ? null : { face },
-    }),
+    apply: (c) => {
+      const off = c.battery?.face === face;
+      const others = (c.terminals ?? []).filter((t) => t.part !== BATTERY_PART);
+      const declared = new Set((c.nets ?? []).map((n) => n.id));
+      const seeded = declared.has(PWR_NET_ID) && declared.has(GND_NET_ID)
+        ? [
+          { part: BATTERY_PART, pad: BATTERY_PWR_PAD, net: PWR_NET_ID },
+          { part: BATTERY_PART, pad: BATTERY_GND_PAD, net: GND_NET_ID },
+        ]
+        : [];
+      return {
+        ...c,
+        battery: off ? null : { face },
+        terminals: off ? others : [...others, ...seeded],
+      };
+    },
   };
 }
 

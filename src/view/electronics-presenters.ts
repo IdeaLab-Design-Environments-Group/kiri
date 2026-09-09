@@ -15,12 +15,16 @@ import type { Circuit } from "../model/electronics.js";
 import type { RoutedCircuit } from "../model/electronics-routing.js";
 import type { Vec2 } from "../model/electronics.js";
 import { GND_NET_ID, PWR_NET_ID, netColour } from "../model/net-palette.js";
+import { BATTERY_GND_PAD, BATTERY_PART, BATTERY_PWR_PAD } from "../model/electronics.js";
 import { designators } from "../model/part-render.js";
 import { terminals } from "../model/footprint.js";
 import { PART_BY_ID } from "./electronics-palette.js";
 import { ERRORS } from "../model/wire-rules.js";
 
 const isZero = (p: Vec2): boolean => p.x === 0 && p.y === 0;
+
+/** The battery's two terminals, in the order the panel lists them. */
+const BATTERY_TERMINALS = [BATTERY_PWR_PAD, BATTERY_GND_PAD];
 
 /**
  * One row under a net in the panel.
@@ -53,14 +57,27 @@ export interface NetRow {
  *
  * Nothing is claimed for copper that did not arrive: an unreachable LED, or a plan that has not run,
  * contributes no rows. A row saying PWR where the tape never reached is worse than no row.
+ *
+ * The battery is the one member read off the plan rather than off the live circuit, through
+ * {@link RoutedCircuit.battery}. Which rail each of its two terminals is on is not a routing outcome —
+ * they ARE PWR and GND, drawn as such on the sheet — but a battery with nothing to light routes to no
+ * traces at all, so gating it on `traces` left a circuit the author had just routed reading
+ * `PWR 0 · GND 0`: the battery is not unwired, there is simply nothing yet for it to reach. Taking it
+ * from the plan is also what keeps the row honest while the copper is out of date — it says what was
+ * routed, like every other row here, rather than what has been placed since.
  */
 export function derivedNetRows(circuit: Circuit, routed: RoutedCircuit): NetRow[] {
   const nets = circuit.nets ?? [];
   const have = new Set(nets.map((n) => n.id));
   if (!have.has(PWR_NET_ID) || !have.has(GND_NET_ID)) return [];
-  if (!routed.traces.length) return []; // nothing has been routed; claim nothing
+  // Nothing routed and no battery in the plan: claim nothing.
+  if (!routed.traces.length && !routed.battery) return [];
   const rows: NetRow[] = [];
-  if (circuit.battery) {
+  // Only where the author has none of their own. A battery placed now carries two stored terminals, and
+  // those are the rows to show — theirs, with an × on them. The derived pair stays for a circuit saved
+  // before the battery had terminals, which would otherwise lose the rails it has always shown.
+  const stored = (circuit.terminals ?? []).some((t) => t.part === BATTERY_PART);
+  if (routed.battery && !stored) {
     rows.push({ net: PWR_NET_ID, label: "Battery +", derived: true });
     rows.push({ net: GND_NET_ID, label: "Battery −", derived: true });
   }
@@ -86,7 +103,7 @@ export function netPanelRows(circuit: Circuit, routed: RoutedCircuit): NetRow[] 
   const tags = designators(circuit.parts ?? []);
   const stored = (circuit.terminals ?? []).map((t) => ({
     net: t.net,
-    label: `${tags[t.part] ?? `part ${t.part}`} · ${t.pad}`,
+    label: `${t.part === BATTERY_PART ? "BT1" : tags[t.part] ?? `part ${t.part}`} · ${t.pad}`,
     derived: false,
     part: t.part,
     pad: t.pad,
@@ -227,7 +244,7 @@ export function buildPartRows(
   const parts = circuit.parts ?? [];
   const tags = designators(parts);
   const stored = circuit.terminals ?? [];
-  return parts.map((part, i) => {
+  const rows = parts.map((part, i) => {
     const comp = PART_BY_ID.get(part.component);
     const pads = comp ? terminals(comp.footprint).length : 0;
     const on = stored.filter((t) => t.part === i).length;
@@ -247,11 +264,46 @@ export function buildPartRows(
       title: `${tag} — ${comp?.note || part.component}`,
     };
   });
+  const battery = batteryPartRow(circuit, selected);
+  // First, and above the parts: it is the one thing every other part is wired back to, and a list that
+  // buried it under R7 would read as though it were another component that happened to be placed.
+  return battery ? [battery, ...rows] : rows;
 }
 
-/** The header count above the parts list. */
+/**
+ * The battery's row in the parts list, or null when there is no battery on this side.
+ *
+ * The battery is a part in every sense the panel cares about — it sits on the sheet, it has two terminals,
+ * and they are on nets — but it is not in {@link Circuit.parts}, so it had no row and no pads panel, and
+ * the only trace of it in the sidebar was the two greyed rows the router derived under PWR and GND. It is
+ * addressed by {@link BATTERY_PART}, which is what its terminals carry.
+ */
+function batteryPartRow(
+  circuit: Circuit,
+  selected: { kind: string; index: number } | null,
+): PartPanelRow | null {
+  if (!circuit.battery) return null;
+  const on = (circuit.terminals ?? []).filter((t) => t.part === BATTERY_PART).length;
+  return {
+    index: BATTERY_PART,
+    tag: "BT1",
+    note: "Battery",
+    wired: {
+      on,
+      pads: BATTERY_TERMINALS.length,
+      text: `${on}/${BATTERY_TERMINALS.length}`,
+      title: `${on} of ${BATTERY_TERMINALS.length} terminals on a net`,
+    },
+    unassigned: on === 0,
+    active: selected?.kind === "part" && selected.index === BATTERY_PART,
+    title: "BT1 — the battery, + on PWR and − on GND",
+  };
+}
+
+/** The header count above the parts list. The battery is one of the rows, so it is one of the count —
+ *  a header reading 2 over three rows is a header nobody trusts again. */
 export function partsTally(circuit: Circuit): { text: string; title: string } {
-  const n = (circuit.parts ?? []).length;
+  const n = (circuit.parts ?? []).length + (circuit.battery ? 1 : 0);
   return { text: String(n), title: `${n} part${n === 1 ? "" : "s"} placed` };
 }
 
@@ -293,14 +345,19 @@ export function buildPadRows(
   circuit: Circuit,
   selected: { kind: string; index: number } | null,
 ): PadPanel | null {
+  const isBattery = selected?.kind === "part" && selected.index === BATTERY_PART;
   const part = selected?.kind === "part" ? (circuit.parts ?? [])[selected.index] : undefined;
   const comp = part ? PART_BY_ID.get(part.component) : undefined;
-  if (!selected || !part || !comp) return null;
+  if (!selected || (isBattery ? !circuit.battery : !part || !comp)) return null;
   const nets = circuit.nets ?? [];
   const stored = circuit.terminals ?? [];
-  const pads = terminals(comp.footprint);
+  // The battery's two terminals are named rather than read from a footprint: it has none. They are the
+  // two squares the canvas draws, and `+` and `−` are what it draws on them.
+  const pads: [string, ...unknown[]][] = isBattery
+    ? BATTERY_TERMINALS.map((name) => [name])
+    : terminals(comp!.footprint) as never;
   return {
-    heading: `${comp.id} pads`,
+    heading: isBattery ? "Battery terminals" : `${comp!.id} pads`,
     suggestions: nets.map((n) => n.name),
     rows: pads.map(([padName], i) => {
       const on = stored.find((t) => t.part === selected.index && t.pad === padName)?.net ?? "";
@@ -312,7 +369,7 @@ export function buildPadRows(
         // The net's own colour, so a glance down the column groups the pads without reading a word of
         // it. Null when the pad is on nothing, so the names stay aligned rather than shifting.
         colour: net ? netColour(net, at) : null,
-        padTitle: `Pad ${padName}`,
+        padTitle: isBattery ? `The battery's ${padName} terminal` : `Pad ${padName}`,
         last: i === pads.length - 1,
       };
     }),
@@ -443,11 +500,15 @@ export function statusLine(input: StatusInput): string {
   else if (!input.autoRoute) msg += " · routing on request";
   const sel = input.selected;
   const picked = input.picked;
-  if (sel && picked) {
+  if (sel?.kind === "part" && sel.index === BATTERY_PART) {
+    // Its own line: the battery has no orientation to turn and is not removed with Delete — it comes off
+    // by tapping the tile it is on, as it always has — so the part hint below would be wrong twice.
+    msg += " · Battery selected — its two terminals are in the pads panel";
+  } else if (sel && picked) {
     const what = sel.kind === "led"
       ? "LED"
       : sel.kind === "part"
-        ? PART_BY_ID.get((circuit.parts ?? [])[sel.index]!.component)?.note ?? "Part"
+        ? PART_BY_ID.get((circuit.parts ?? [])[sel.index]?.component ?? "")?.note ?? "Part"
         : sel.kind === "resistor" ? "Resistor" : "Switch";
     msg += ` · ${what} ${sel.index + 1} selected — R to turn it round, Delete to remove`;
     msg += picked.flip !== undefined

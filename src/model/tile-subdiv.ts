@@ -26,11 +26,11 @@ export const MAX_TILE_GAP = 0.45;
  */
 export const TILE_THICK_FRAC = 0.018;
 /**
- * Detail "level" (the slider/menu value) → actual subdivision cap = level + DETAIL_OFFSET. So level 0
- * gives 1 subdivision deep, and the 0–4 slider spans caps 1–5. Shared by sim + export.
+ * Default detail LEVEL — and the level IS the subdivision cap, so the default is **no subdivision**:
+ * one tile per face, gaps only along the joints the pattern itself has. That is the base layout the
+ * sample designs are drawn and read against, and anything the slider does is measured from it. The
+ * 0–4 slider therefore spans caps 0–4, splitting only the faces that fold hardest (`foldDepths`).
  */
-export const DETAIL_OFFSET = 1;
-/** Default detail LEVEL (the slider value). With the offset this is a cap of `DETAIL_OFFSET` (= 2). */
 export const DEFAULT_MAX_SUBDIV = 0;
 /** Below this peak fold angle (rad) the whole model reads as flat → no subdivision anywhere. */
 export const MIN_FOLD = 0.05;
@@ -77,3 +77,79 @@ function subdivide(tri: BaryTri, depth: number): BaryTri[] {
 }
 
 const mid = (a: Bary, b: Bary): Bary => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2];
+
+/**
+ * Ceiling on how many sub-tiles one printed model may be split into. A face's sub-tile count is
+ * 4^depth, so a few thousand faces at the top detail level asks for millions of prisms — enough to
+ * stall the viewport and blow the vertex buffer. `fitDepths` steps the cap down until the plan fits,
+ * so the Detail slider degrades to a coarser split on a heavy mesh instead of hanging on it.
+ */
+export const MAX_PRINTED_TILES = 60000;
+
+/** How many sub-tiles a depth plan produces. */
+const planSize = (depths: number[]): number => depths.reduce((n, d) => n + 4 ** d, 0);
+
+/** {@link foldDepths}, with the cap stepped down until the plan fits within `budget` sub-tiles. */
+export function fitDepths(scores: number[], cap: number, budget = MAX_PRINTED_TILES): number[] {
+  for (let c = Math.max(0, Math.floor(cap)); c > 0; c--) {
+    const depths = foldDepths(scores, c);
+    if (planSize(depths) <= budget) return depths;
+  }
+  return scores.map(() => 0);
+}
+
+/** One printed tile: where it sits on its parent face, and which of its own edges open a gap. */
+export interface SubTile {
+  /** Index of the parent face in the net. */
+  face: number;
+  /** The tile's three corners, in the parent face's barycentric coordinates. */
+  bary: BaryTri;
+  /** Per tile edge [AB, BC, CA]: true = a joint between two tiles, so its midpoint pinches inward. */
+  pinch: [boolean, boolean, boolean];
+}
+
+/**
+ * Which parent edge a sub-edge lies on (0 = AB, 1 = BC, 2 = CA), or −1 for one interior to the face.
+ * Each edge is the locus where the weight of the corner opposite it vanishes, and midpoint
+ * subdivision only ever halves those weights, so the zeros are exact.
+ */
+function parentEdgeOf(p: Bary, q: Bary): number {
+  if (p[2] === 0 && q[2] === 0) return 0; // AB
+  if (p[0] === 0 && q[0] === 0) return 1; // BC
+  if (p[1] === 0 && q[1] === 0) return 2; // CA
+  return -1;
+}
+
+/**
+ * The printed tile layout at a given detail cap: each face split by how hard it folds, with the gap
+ * flags each sub-tile needs.
+ *
+ * A sub-edge on the parent's boundary inherits that edge's flag — it is the same joint (or the same
+ * merged flat facet) it always was. A sub-edge INTERIOR to the face is a new joint: the face has
+ * been printed as several tiles, and they part along it. That is what the split buys — a face that
+ * folds hard is paved with small tiles that can follow the curve, instead of one rigid plate.
+ *
+ * The per-face `depths` come back with the tiles because the closure limit needs them: a sub-tile of
+ * a face split `d` times is that face scaled by 1/2^d, so the gap it opens at a hinge — and with it
+ * how far the print can fold — shrinks by the same factor (`applyPrintedClosure`).
+ */
+export function planSubTiles(
+  scores: number[],
+  parentPinch: readonly (readonly boolean[])[],
+  cap: number,
+  budget = MAX_PRINTED_TILES,
+): { depths: number[]; tiles: SubTile[] } {
+  const depths = fitDepths(scores, cap, budget);
+  const out: SubTile[] = [];
+  for (let f = 0; f < depths.length; f++) {
+    const parent = parentPinch[f] ?? [true, true, true];
+    for (const bary of subdivBary(depths[f])) {
+      const pinch = [0, 1, 2].map((k) => {
+        const e = parentEdgeOf(bary[k], bary[(k + 1) % 3]);
+        return e < 0 ? true : parent[e] === true;
+      }) as [boolean, boolean, boolean];
+      out.push({ face: f, bary, pinch });
+    }
+  }
+  return { depths, tiles: out };
+}

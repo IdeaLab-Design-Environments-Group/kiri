@@ -1,8 +1,8 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import type { FoldDrive, FoldNet, FoldScene, FoldSolver, SimMaterial } from "../sim/index.js";
+import type { BarHingeModel, FoldDrive, FoldNet, FoldScene, FoldSolver, SimMaterial } from "../sim/index.js";
 import { applyPrintedClosure, FoldRunner, FOLD_REACHED_EPS, meanTensileStrain } from "../sim/index.js";
-import { DEFAULT_MAX_SUBDIV, MAX_TILE_GAP, MIN_TILE_GAP, TILE_INSET_FRAC, TILE_THICK_FRAC } from "../model/tile-subdiv.js";
+import { DEFAULT_MAX_SUBDIV, MAX_TILE_GAP, MIN_TILE_GAP, planSubTiles, TILE_INSET_FRAC, TILE_THICK_FRAC } from "../model/tile-subdiv.js";
 import type { AnchoredMesh } from "../model/trace-anchor.js";
 import { GND_COLOUR, PWR_COLOUR } from "../model/net-palette.js";
 import { SVGPCB_COLOURS } from "../model/part-render.js";
@@ -150,8 +150,11 @@ export class SimCanvas implements SimView {
   private thickPos: Float32Array | null = null;
   private thickAttr: THREE.BufferAttribute | null = null;
   private thickMesh: THREE.Mesh | null = null;
+  /** Per printed tile, its PARENT net face's three vertex indices (a face may pave several tiles). */
   private tileFaces: number[] | null = null;
-  private tileDetail = DEFAULT_MAX_SUBDIV; // max adaptive subdivision; shared with the STL export (export only)
+  /** Per printed tile, its three corners in the parent face's barycentric coords (9 floats each). */
+  private tileBary: Float32Array | null = null;
+  private tileDetail = DEFAULT_MAX_SUBDIV; // Detail level: how far a hard-folding face is split up
   private tileInset = TILE_INSET_FRAC; // gap: tile shrink toward centroid (the "Gap" slider); shared with export
   private tileT = 0; // one-sided extrude thickness (model units)
   private tileSign: Float32Array | null = null; // per-face ±1: extrude side, made consistent across mixed winding
@@ -589,11 +592,6 @@ export class SimCanvas implements SimView {
     // One-sided: the full tile thickness extrudes to ONE side of the hinge plane (the +normal face);
     // the cloth surface mesh stays at the plane as the backing.
     this.tileT = diag * TILE_THICK_FRAC;
-    // The closure limit is a property of THESE tiles, so it is re-derived here rather than only when
-    // the scene was built. That is what makes the Gap slider a fabrication control: widening the gap
-    // between the tiles lets the model fold further, instead of only looking as though it should.
-    applyPrintedClosure(this.fold.model, { gapFrac: this.tileInset, thickFrac: TILE_THICK_FRAC });
-
     if (this.thickMesh) { // rebuild just this layer — drop the previous tile mesh first
       this.group.remove(this.thickMesh);
       this.thickGeo?.dispose();
@@ -601,9 +599,8 @@ export class SimCanvas implements SimView {
       this.thickMesh = null;
     }
 
-    this.tileFaces = net.faces.flat();
-    const ff = this.tileFaces;
-    const nTris = ff.length / 3;
+    const ff = net.faces.flat();
+    const nFaces = ff.length / 3;
     const r = this.fold.model.rest;
     // Per-tile extrude side: pin every tile to ONE side vs the mesh's mean (flat) normal so mixed
     // winding doesn't flip some tiles. Plus per-tile pinch flags (`isPinch`) for the foldable layout.
@@ -632,24 +629,49 @@ export class SimCanvas implements SimView {
       // no tile behind it scallops the outline the SVG export cuts straight. Two faces = a real joint.
       return (edgeFaces.get(key) ?? 0) >= 2; // interior fold (M/V) or a true slit → hinge between tiles
     };
-    this.tileSign = new Float32Array(nTris);
-    this.tileEdgePinch = [];
+    // Per-FACE extrude side: pin every tile to ONE side vs the mesh's mean (flat) normal so mixed
+    // winding doesn't flip some tiles. Sub-tiles are coplanar with their parent, so they inherit it.
     let mx = 0, my = 0, mz = 0;
     const nrm: number[][] = [];
+    const facePinch: boolean[][] = [];
     for (let f = 0; f < ff.length; f += 3) {
       const ia = ff[f], ib = ff[f + 1], ic = ff[f + 2], a = ia * 3, b = ib * 3, c = ic * 3;
       const nx = (r[b + 1] - r[a + 1]) * (r[c + 2] - r[a + 2]) - (r[b + 2] - r[a + 2]) * (r[c + 1] - r[a + 1]);
       const ny = (r[b + 2] - r[a + 2]) * (r[c] - r[a]) - (r[b] - r[a]) * (r[c + 2] - r[a + 2]);
       const nz = (r[b] - r[a]) * (r[c + 1] - r[a + 1]) - (r[b + 1] - r[a + 1]) * (r[c] - r[a]);
       nrm.push([nx, ny, nz]); mx += nx; my += ny; mz += nz;
-      this.tileEdgePinch.push([isPinch(ia, ib), isPinch(ib, ic), isPinch(ic, ia)]); // edges AB, BC, CA
+      facePinch.push([isPinch(ia, ib), isPinch(ib, ic), isPinch(ic, ia)]); // edges AB, BC, CA
     }
+    const faceSign = new Float32Array(nFaces);
     for (let i = 0; i < nrm.length; i++) {
-      this.tileSign[i] = nrm[i][0] * mx + nrm[i][1] * my + nrm[i][2] * mz >= 0 ? 1 : -1;
+      faceSign[i] = nrm[i][0] * mx + nrm[i][1] * my + nrm[i][2] * mz >= 0 ? 1 : -1;
     }
 
+    // THE DETAIL SLIDER. At its default (0) every face is one tile — the base layout, gaps only at
+    // the pattern's own joints. Turn it up and the faces that fold hard are paved with several
+    // smaller tiles, while flat ones stay a single plate — `planSubTiles` decides the split from the pattern's own fold angles, the same
+    // rule (and the same module) the STL export prices its tiles by. The split is coplanar and adds
+    // no crease to the solver: the physics is the net's, only the printed layout gets finer.
+    const { depths, tiles } = planSubTiles(faceFoldScores(this.fold.model, nFaces), facePinch, this.tileDetail);
+    // The closure limit is a property of THESE tiles, so it is re-derived here, from the split that
+    // was just chosen as well as from the Gap: finer tiles open narrower gaps and so close sooner.
+    // That is what makes both sliders fabrication controls rather than looks — the model folds as far
+    // as the tiles on screen actually allow, and no further.
+    applyPrintedClosure(this.fold.model, { gapFrac: this.tileInset, thickFrac: TILE_THICK_FRAC, subdivDepths: depths });
+    this.tileFaces = [];
+    this.tileBary = new Float32Array(tiles.length * 9);
+    this.tileEdgePinch = [];
+    this.tileSign = new Float32Array(tiles.length);
+    tiles.forEach((tile, i) => {
+      const f = tile.face * 3;
+      this.tileFaces!.push(ff[f], ff[f + 1], ff[f + 2]);
+      for (let k = 0; k < 3; k++) this.tileBary!.set(tile.bary[k], i * 9 + k * 3);
+      this.tileEdgePinch!.push(tile.pinch);
+      this.tileSign![i] = faceSign[tile.face];
+    });
+
     // Each tile is a 6-gon prism (3 corners + 3 edge midpoints): top fan (6 tris) + 6 side quads (12).
-    this.thickPos = new Float32Array(nTris * 18 * 3 * 3);
+    this.thickPos = new Float32Array(tiles.length * 18 * 3 * 3);
     this.thickGeo = new THREE.BufferGeometry();
     this.thickAttr = new THREE.BufferAttribute(this.thickPos, 3);
     this.thickAttr.setUsage(THREE.DynamicDrawUsage);
@@ -666,12 +688,12 @@ export class SimCanvas implements SimView {
     this.updatePrintedTiles();
   }
 
-  /** Set the fold-adaptive detail cap (shared with the export) and rebuild the printed tiles. */
-  setTileDetail(cap: number): void {
-    const v = Math.max(0, Math.floor(cap));
+  /** Set the fold-adaptive detail level (shared with the export) and rebuild the printed tiles. */
+  setTileDetail(level: number): void {
+    const v = Math.max(0, Math.floor(level));
     if (v === this.tileDetail) return;
     this.tileDetail = v;
-    if (this.material === "printed" && this.net) this.buildPrintedTiles(this.net);
+    this.rebuildTiles();
   }
 
   /** Set the inter-tile gap (shrink-toward-centroid fraction, shared with the export) and rebuild. */
@@ -679,7 +701,24 @@ export class SimCanvas implements SimView {
     const v = Math.min(MAX_TILE_GAP, Math.max(MIN_TILE_GAP, frac));
     if (v === this.tileInset) return;
     this.tileInset = v;
-    if (this.material === "printed" && this.net) this.buildPrintedTiles(this.net);
+    this.rebuildTiles();
+  }
+
+  /**
+   * Re-lay the printed tiles after a Detail or Gap change, and wake the fold.
+   *
+   * Both sliders move the closure limit, so the pose that was settled a moment ago is no longer the
+   * one these tiles allow — a frozen fold would sit at the old angle and the change would look like
+   * it did nothing (or, folding further, leave the tiles interpenetrating). Waking it lets the
+   * solver settle onto the new limit, which is the point of moving the slider.
+   */
+  private rebuildTiles(): void {
+    if (this.material !== "printed" || !this.net) return;
+    this.buildPrintedTiles(this.net);
+    this.frozen = false;
+    this.settledFrames = 0;
+    this.framesAtTarget = 0;
+    this.prevPos = this.fold?.model.position.slice() ?? null;
   }
 
   /**
@@ -690,17 +729,27 @@ export class SimCanvas implements SimView {
    * hidden by the cloth backing).
    */
   private updatePrintedTiles(): void {
-    const faces = this.tileFaces, pinchFlags = this.tileEdgePinch, out = this.thickPos;
-    if (!faces || !pinchFlags || !out || !this.fold) return;
+    const faces = this.tileFaces, bary = this.tileBary, pinchFlags = this.tileEdgePinch, out = this.thickPos;
+    if (!faces || !bary || !pinchFlags || !out || !this.fold) return;
     const p = this.fold.model.position;
     const t = this.tileT, inset = this.tileInset, sign = this.tileSign;
     type V = [number, number, number];
     let o = 0;
     const push = (v: V): void => { out[o++] = v[0]; out[o++] = v[1]; out[o++] = v[2]; };
     for (let f = 0, fi = 0; f < faces.length; f += 3, fi++) {
-      const A: V = [p[faces[f] * 3], p[faces[f] * 3 + 1], p[faces[f] * 3 + 2]];
-      const B: V = [p[faces[f + 1] * 3], p[faces[f + 1] * 3 + 1], p[faces[f + 1] * 3 + 2]];
-      const C: V = [p[faces[f + 2] * 3], p[faces[f + 2] * 3 + 1], p[faces[f + 2] * 3 + 2]];
+      // Corners are barycentric over the PARENT face, read from its live folded vertices: an
+      // undivided tile is (1,0,0)/(0,1,0)/(0,0,1), i.e. the face itself, and a sub-tile follows the
+      // same plane as it moves. No sub-vertex is stored, so nothing can drift out of that plane.
+      const i0 = faces[f] * 3, i1 = faces[f + 1] * 3, i2 = faces[f + 2] * 3, w = fi * 9;
+      const corner = (k: number): V => {
+        const wa = bary[w + k * 3], wb = bary[w + k * 3 + 1], wc = bary[w + k * 3 + 2];
+        return [
+          p[i0] * wa + p[i1] * wb + p[i2] * wc,
+          p[i0 + 1] * wa + p[i1 + 1] * wb + p[i2 + 1] * wc,
+          p[i0 + 2] * wa + p[i1 + 2] * wb + p[i2 + 2] * wc,
+        ];
+      };
+      const A = corner(0), B = corner(1), C = corner(2);
       const ux = B[0] - A[0], uy = B[1] - A[1], uz = B[2] - A[2];
       const vx = C[0] - A[0], vy = C[1] - A[1], vz = C[2] - A[2];
       let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
@@ -777,6 +826,7 @@ export class SimCanvas implements SimView {
     this.thickGeo?.dispose();
     this.thickGeo = null;
     this.thickPos = null;
+    this.tileBary = null;
     this.thickAttr = null;
     this.thickMesh = null;
     this.tileFaces = null;
@@ -790,6 +840,26 @@ export class SimCanvas implements SimView {
 }
 
 /** AKDE uniform pyramid: N lateral tris + 6N molecule tris = 7N faces. */
+/**
+ * Per-face fold score for the adaptive tile split: the sharpest design fold angle on any crease of
+ * that face. `designTheta` — the pattern's own angle, before the tile-thickness closure clipped it —
+ * is preferred, so dragging the Gap slider (which re-derives the clip) cannot also re-lay-out the
+ * tiles. Seam hinges are excluded: they join two panels rather than bend either one.
+ */
+function faceFoldScores(model: BarHingeModel, faceCount: number): number[] {
+  const scores = new Array<number>(faceCount).fill(0);
+  const c = model.creases;
+  const theta = c.designTheta ?? c.targetTheta;
+  const scored = c.count - (model.seamCreases ?? 0);
+  for (let i = 0; i < scored; i++) {
+    const t = Math.abs(theta[i]);
+    const f1 = c.face1[i], f2 = c.face2[i];
+    if (f1 >= 0 && f1 < faceCount) scores[f1] = Math.max(scores[f1], t);
+    if (f2 >= 0 && f2 < faceCount) scores[f2] = Math.max(scores[f2], t);
+  }
+  return scores;
+}
+
 function isUniformPyramidShell(net: FoldNet): boolean {
   const N = net.meta.N;
   return N > 0 && net.faces.length === 7 * N;

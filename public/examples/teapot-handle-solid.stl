@@ -1,0 +1,282 @@
+solid teapot_handle_solid
+  facet normal 0.000000 1.000000 0.000000
+    outer loop
+      vertex -21 2.0000000000000027 62.5
+      vertex -21 2.0000000000000027 53.5
+      vertex -26 2.000000000000003 53.5
+    endloop
+  endfacet
+  facet normal -0.000000 -1.000000 0.000000
+    outer loop
+      vertex -21 -1.9999999999999973 62.5
+      vertex -26 -1.999999999999997 53.5
+      vertex -21 -1.9999999999999973 53.5
+    endloop
+  endfacet
+  facet normal 0.000000 1.000000 -0.000000
+    outer loop
+      vertex -21 2.0000000000000027 62.5
+      vertex -26 2.000000000000003 53.5
+      vertex -41.5 2.000000000000005 53.5
+    endloop
+  endfacet
+  facet normal -0.000000 -1.000000 0.000000
+    outer loop
+      vertex -21 -1.9999999999999973 62.5
+      vertex -41.5 -1.999999999999995 53.5
+      vertex -26 -1.999999999999997 53.5
+    endloop
+  endfacet
+  facet normal 0.000000 1.000000 0.000000
+    outer loop
+      vertex -36 2.0000000000000044 22.5
+      vertex -31 2.000000000000004 22.5
+      vertex -31 2.000000000000004 13.5
+    endloop
+  endfacet
+  facet normal -0.000000 -1.000000 0.000000
+    outer loop
+      vertex -36 -1.9999999999999956 22.5
+      vertex -31 -1.9999999999999962 13.5
+      vertex -31 -1.9999999999999962 22.5
+    endloop
+  endfacet
+  facet normal 0.000000 1.000000 -0.000000
+    outer loop
+      vertex -41.5 2.000000000000005 22.5
+      vertex -36 2.0000000000000044 22.5
+      vertex -31 2.000000000000004 13.5
+    endloop
+  endfacet
+  facet normal -0.000000 -1.000000 0.000000
+    outer loop
+      vertex -41.5 -1.999999999999995 22.5
+      vertex -31 -1.9999999999999962 13.5
+      vertex -36 -1.9999999999999956 22.5
+    endloop
+  endfacet
+  facet normal 0.000000 1.000000 0.000000
+    outer loop
+      vertex -41.5 2.000000000000005 22.5
+      vertex -31 2.000000000000004 13.5
+      vertex -36 2.0000000000000044 13.5
+    endloop
+  endfacet
+  facet normal -0.000000 -1.000000 -0.000000
+    outer loop
+      vertex -41.5 -1.999999999999995 22.5
+      vertex -36 -1.9999999999999956 13.5
+      vertex -31 -1.9999999999999962 13.5
+    endloop
+  endfacet
+  facet normal 0.000000 1.000000 0.000000
+    outer loop
+      vertex -41.5 2.000000000000005 22.5
+      vertex -36 2.0000000000000044 13.5
+      vertex -50.5 2.000000000000006 13.5
+    endloop
+  endfacet
+  facet normal -0.000000 -1.000000 -0.000000
+    outer loop
+      vertex -41.5 -1.999999999999995 22.5
+      vertex -50.5 -1.9999999999999938 13.5
+      vertex -36 -1.9999999999999956 13.5
+    endloop
+  endfacet
+  facet normal 0.000000 1.000000 0.000000
+    outer loop
+      vertex -41.5 2.000000000000005 53.5
+      vertex -41.5 2.000000000000005 22.5
+      vertex -50.5 2.000000000000006 13.5
+    endloop
+  endfacet
+  facet normal -0.000000 -1.000000 0.000000
+    outer loop
+      vertex -41.5 -1.999999999999995 53.5
+      vertex -50.5 -1.9999999999999938 13.5
+      vertex -41.5 -1.999999999999995 22.5
+    endloop
+  endfacet
+  facet normal 0.000000 1.000000 0.000000
+    outer loop
+      vertex -41.5 2.000000000000005 53.5
+      vertex -50.5 2.000000000000006 13.5
+      vertex -50.5 2.000000000000006 62.5
+    endloop
+  endfacet
+  facet normal -0.000000 -1.000000 0.000000
+    outer loop
+      vertex -41.5 -1.999999999999995 53.5
+      vertex -50.5 -1.9999999999999938 62.5
+      vertex -50.5 -1.9999999999999938 13.5
+    endloop
+  endfacet
+  facet normal 0.000000 1.000000 -0.000000
+    outer loop
+      vertex -41.5 2.000000000000005 53.5
+      vertex -50.5 2.000000000000006 62.5
+      vertex -26 2.000000000000003 62.5
+    endloop
+  endfacet
+  facet normal -0.000000 -1.000000 -0.000000
+    outer loop
+      vertex -41.5 -1.999999999999995 53.5
+      vertex -26 -1.999999999999997 62.5
+      vertex -50.5 -1.9999999999999938 62.5
+    endloop
+  endfacet
+  facet normal 0.000000 1.000000 0.000000
+    outer loop
+      vertex -41.5 2.000000000000005 53.5
+      vertex -26 2.000000000000003 62.5
+      vertex -21 2.0000000000000027 62.5
+    endloop
+  endfacet
+  facet normal -0.000000 -1.000000 -0.000000
+    outer loop
+      vertex -41.5 -1.999999999999995 53.5
+      vertex -21 -1.9999999999999973 62.5
+      vertex -26 -1.999999999999997 62.5
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 -1.000000
+    outer loop
+      vertex -26 2.000000000000003 53.5
+      vertex -21 2.0000000000000027 53.5
+      vertex -21 -1.6999999999999973 53.5
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 -1.000000
+    outer loop
+      vertex -26 2.000000000000003 53.5
+      vertex -21 -1.6999999999999973 53.5
+      vertex -26 -1.6999999999999968 53.5
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 -1.000000
+    outer loop
+      vertex -41.5 2.000000000000005 53.5
+      vertex -26 2.000000000000003 53.5
+      vertex -26 -1.6999999999999968 53.5
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 -1.000000
+    outer loop
+      vertex -41.5 2.000000000000005 53.5
+      vertex -26 -1.6999999999999968 53.5
+      vertex -41.5 -1.6999999999999948 53.5
+    endloop
+  endfacet
+  facet normal 1.000000 0.000000 0.000000
+    outer loop
+      vertex -41.5 2.000000000000005 22.5
+      vertex -41.5 2.000000000000005 53.5
+      vertex -41.5 -1.6999999999999948 53.5
+    endloop
+  endfacet
+  facet normal 1.000000 0.000000 0.000000
+    outer loop
+      vertex -41.5 2.000000000000005 22.5
+      vertex -41.5 -1.6999999999999948 53.5
+      vertex -41.5 -1.6999999999999948 22.5
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 1.000000
+    outer loop
+      vertex -36 2.0000000000000044 22.5
+      vertex -41.5 2.000000000000005 22.5
+      vertex -41.5 -1.6999999999999948 22.5
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 1.000000
+    outer loop
+      vertex -36 2.0000000000000044 22.5
+      vertex -41.5 -1.6999999999999948 22.5
+      vertex -36 -1.6999999999999955 22.5
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 1.000000
+    outer loop
+      vertex -31 2.000000000000004 22.5
+      vertex -36 2.0000000000000044 22.5
+      vertex -36 -1.6999999999999955 22.5
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 1.000000
+    outer loop
+      vertex -31 2.000000000000004 22.5
+      vertex -36 -1.6999999999999955 22.5
+      vertex -31 -1.6999999999999962 22.5
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 -1.000000
+    outer loop
+      vertex -36 2.0000000000000044 13.5
+      vertex -31 2.000000000000004 13.5
+      vertex -31 -1.6999999999999962 13.5
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 -1.000000
+    outer loop
+      vertex -36 2.0000000000000044 13.5
+      vertex -31 -1.6999999999999962 13.5
+      vertex -36 -1.6999999999999955 13.5
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 -1.000000
+    outer loop
+      vertex -50.5 2.000000000000006 13.5
+      vertex -36 2.0000000000000044 13.5
+      vertex -36 -1.6999999999999955 13.5
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 -1.000000
+    outer loop
+      vertex -50.5 2.000000000000006 13.5
+      vertex -36 -1.6999999999999955 13.5
+      vertex -50.5 -1.6999999999999937 13.5
+    endloop
+  endfacet
+  facet normal -1.000000 0.000000 0.000000
+    outer loop
+      vertex -50.5 2.000000000000006 62.5
+      vertex -50.5 2.000000000000006 13.5
+      vertex -50.5 -1.9999999999999938 13.5
+    endloop
+  endfacet
+  facet normal -1.000000 0.000000 0.000000
+    outer loop
+      vertex -50.5 2.000000000000006 62.5
+      vertex -50.5 -1.9999999999999938 13.5
+      vertex -50.5 -1.9999999999999938 62.5
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 1.000000
+    outer loop
+      vertex -26 2.000000000000003 62.5
+      vertex -50.5 2.000000000000006 62.5
+      vertex -50.5 -1.6999999999999937 62.5
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 1.000000
+    outer loop
+      vertex -26 2.000000000000003 62.5
+      vertex -50.5 -1.6999999999999937 62.5
+      vertex -26 -1.6999999999999968 62.5
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 1.000000
+    outer loop
+      vertex -21 2.0000000000000027 62.5
+      vertex -26 2.000000000000003 62.5
+      vertex -26 -1.6999999999999968 62.5
+    endloop
+  endfacet
+  facet normal 0.000000 0.000000 1.000000
+    outer loop
+      vertex -21 2.0000000000000027 62.5
+      vertex -26 -1.6999999999999968 62.5
+      vertex -21 -1.6999999999999973 62.5
+    endloop
+  endfacet
+endsolid teapot_handle_solid

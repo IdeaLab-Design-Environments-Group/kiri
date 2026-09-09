@@ -102,6 +102,17 @@ export class AppController {
     // Electronics tool: the modal authors a Circuit; we store it and the next render
     // plans the routes and pushes the preview back (single-render path).
     this.electronics.onEdit((circuit) => this.updateCircuit(circuit));
+    // One material for the whole app. The editor's Build toggle and the sim's Vinyl/3D-printed tabs write
+    // the same state, because they are not two views of one sheet: the printed build has a hinge gap cut
+    // between its tiles and the vinyl build does not, and that gap is what a component bridges and what the
+    // crease strain is measured across. Routing for one and folding the other would be routing for neither.
+    this.electronics.onMaterialChange((material) => this.store.update({ simMaterial: material }));
+    // "Folded form": the same 3D sim the model page opens, on the material the editor is laid out for, with
+    // the planned copper already on it (`setTraces` below runs on every render).
+    this.electronics.onOpenForm(() => {
+      this.electronics.close();
+      void this.sim.open();
+    });
 
     // Model changes → re-render every view (fires once immediately with state).
     this.store.subscribe((state) => this.render(state));
@@ -128,6 +139,8 @@ export class AppController {
     // The sim's Gap slider is the one gap in the build: the Electronics tool lays components on the same
     // tiles that get printed, so it re-derives its tiles and gaps whenever that slider moves.
     this.electronics.setTileGap(state.simTileGap);
+    // …and the material, so the editor draws and routes the build the sim folds.
+    this.electronics.setMaterial(state.simMaterial);
     this.sim.setTraces(this.tracesForSim(simObject));
   }
 
@@ -213,6 +226,25 @@ export class AppController {
     } catch (err) {
       const { msg, kind } = statusFromError(err, "create");
       this.store.setStatus(msg, kind);
+    }
+  }
+
+  /**
+   * Load one of the bundled examples by slug, as the Examples page asks for it.
+   *
+   * The same path `loadSample` takes — these are FKLD files in the same folder — so a model chosen from
+   * the page arrives in exactly the state the bundled sample does, viewer included. Failures are reported
+   * on the status line rather than thrown: the page has already navigated back to the model by the time
+   * this resolves, and an unhandled rejection there would be a blank viewer with no explanation.
+   */
+  async loadExample(slug: string): Promise<void> {
+    const name = `${slug}.fkld`;
+    try {
+      const model = await fetchSample(`./examples/${name}`, name);
+      this.apply(model);
+      if (model.kind === "fold") this.viewer.show(model.object, model.name);
+    } catch {
+      this.store.setStatus(`Could not load ${name} (serve over http to read the examples).`, "bad");
     }
   }
 

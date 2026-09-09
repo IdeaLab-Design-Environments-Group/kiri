@@ -276,6 +276,17 @@ export interface RoutedCircuit {
   /** Everything wrong with the netlist itself, as opposed to the routing of it. Always an array. */
   netFaults: NetlistFault[];
   /**
+   * Whether the circuit this plan was made for had a battery on it.
+   *
+   * The only thing on the sheet whose net membership is not a routing outcome: a battery's two terminals
+   * ARE PWR and GND, drawn as such, whatever the router does with them. It is recorded here rather than
+   * read off the live circuit because that is the question anything reporting on the copper is actually
+   * asking — *was there a battery in the plan I am looking at* — and the live circuit answers a different
+   * one whenever the plan is out of date. A battery alone routes to no traces at all, so `traces` cannot
+   * stand in for it. Optional: a plan object from before this field reads as no battery, the safe way.
+   */
+  battery?: boolean;
+  /**
    * LEDs that could not be **seated** on their hinge, as indices into `circuit.leds`.
    *
    * A subset of {@link unreachable}, separated because the two are different faults with different fixes
@@ -395,7 +406,7 @@ export function planRoutes(
     );
     return {
       traces: only.traces, pads, unreachable, unseated: [], resistors: [], switches: [], parts: [],
-      nets: only.nets, netFaults: only.faults,
+      nets: only.nets, netFaults: only.faults, battery: !!circuit.battery,
     };
   }
 
@@ -439,10 +450,12 @@ export function planRoutes(
     // No LEDs to bus, which does not mean nothing to route: with nets declared, a circuit of parts and no
     // LEDs is an ordinary circuit and the whole point of not needing a rail. Returning early here left a
     // netlist-only circuit with no copper at all.
-    const only = routeDeclaredNets(circuit, faces, gaps, tapeW, [], sheet, tapeMm);
+    // The battery's squares go over: with no bus there is no rail out of them, so the netlist is what has
+    // to reach the battery — see `netlist.ts`, the `BATTERY_PART` branch.
+    const only = routeDeclaredNets(circuit, faces, gaps, tapeW, [], sheet, tapeMm, term);
     return {
       traces: only.traces, pads, unreachable, unseated: [], resistors: [], switches: [], parts: [],
-      nets: only.nets, netFaults: only.faults,
+      nets: only.nets, netFaults: only.faults, battery: !!circuit.battery,
     };
   }
 
@@ -465,10 +478,12 @@ export function planRoutes(
     // No LEDs to bus, which does not mean nothing to route: with nets declared, a circuit of parts and no
     // LEDs is an ordinary circuit and the whole point of not needing a rail. Returning early here left a
     // netlist-only circuit with no copper at all.
-    const only = routeDeclaredNets(circuit, faces, gaps, tapeW, [], sheet, tapeMm);
+    // The battery's squares go over: with no bus there is no rail out of them, so the netlist is what has
+    // to reach the battery — see `netlist.ts`, the `BATTERY_PART` branch.
+    const only = routeDeclaredNets(circuit, faces, gaps, tapeW, [], sheet, tapeMm, term);
     return {
       traces: only.traces, pads, unreachable, unseated: [], resistors: [], switches: [], parts: [],
-      nets: only.nets, netFaults: only.faults,
+      nets: only.nets, netFaults: only.faults, battery: !!circuit.battery,
     };
   }
 
@@ -1184,7 +1199,7 @@ export function planRoutes(
   // LEDs and the battery, which are pinned to hinges and faces and have nowhere else to go, while a net is
   // free to take any path across the material. Handing the nets the immovable copper as an obstacle is the
   // only ordering that can honour the no-overlap condition for both at once.
-  const netted = routeDeclaredNets(circuit, faces, gaps, tapeW, busTraces, sheet, tapeMm);
+  const netted = routeDeclaredNets(circuit, faces, gaps, tapeW, busTraces, sheet, tapeMm, term);
 
   return {
     traces: [...busTraces, ...netted.traces],
@@ -1196,6 +1211,7 @@ export function planRoutes(
     parts: placedParts,
     nets: netted.nets,
     netFaults: netted.faults,
+    battery: !!circuit.battery,
   };
 }
 
@@ -1234,6 +1250,9 @@ function routeDeclaredNets(
   bus: Trace2D[],
   sheet: SheetSpec = DEFAULT_SHEET,
   tapeMm: number = TAPE_MM,
+  /** The battery's two terminal squares, so the netlist can route to them where the bus is not already
+   *  running a rail out of them — see `netlist.ts`, the `BATTERY_PART` branch. */
+  batteryPads?: { pwr: Vec2; gnd: Vec2 },
 ): { traces: Trace2D[]; nets: RoutedNet[]; faults: NetlistFault[] } {
   if (!circuit.nets?.length) return { traces: [], nets: [], faults: [] };
   // Widths carried over, not dropped. A rail pinches to about a third of the tape where it passes an LED,
@@ -1244,7 +1263,8 @@ function routeDeclaredNets(
     pts: t.pts,
     ...(t.widths ? { widths: t.widths } : t.width !== undefined ? { widths: t.pts.map(() => t.width!) } : {}),
   }));
-  const { nets, faults, fields, pads } = resolveNetlist(circuit, tapeW, tapeMm, new Set(rails.map((r) => r.net)));
+  const { nets, faults, fields, pads } =
+    resolveNetlist(circuit, tapeW, tapeMm, new Set(rails.map((r) => r.net)), batteryPads);
   if (!nets.length) return { traces: [], nets: [], faults };
   // The bus goes over as `rails` and NOT also as `obstacles`. Passed twice it arrives twice — once tagged
   // with the net it is a rail for and once anonymously — and the anonymous copy is not excluded from a

@@ -72,6 +72,19 @@ vi.mock("../../src/view/electronics-modal.js", () => ({
   },
 }));
 
+vi.mock("../../src/view/examples-page.js", () => ({
+  ExamplesPage: class ExamplesPage {
+    mountTrigger = vi.fn(() => state.viewCalls.push("examples.mountTrigger"));
+    onPick = vi.fn();
+  },
+}));
+
+vi.mock("../../src/view/tutorials-page.js", () => ({
+  TutorialsPage: class TutorialsPage {
+    mountTrigger = vi.fn(() => state.viewCalls.push("tutorials.mountTrigger"));
+  },
+}));
+
 vi.mock("../../src/view/header-actions.js", () => ({
   HeaderActions: class HeaderActions {
     element = { id: "header-actions" };
@@ -126,6 +139,8 @@ describe("main.ts", () => {
       "export.mountTrigger",
       "patternEditor.mountTrigger",
       "electronics.mountTrigger",
+      "examples.mountTrigger",
+      "tutorials.mountTrigger",
       "header.appendActionButtons",
     ]);
   });

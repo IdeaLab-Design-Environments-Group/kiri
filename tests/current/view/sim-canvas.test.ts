@@ -21,6 +21,9 @@ class MockObject3D {
   clear = vi.fn(() => {
     this.children = [];
   });
+  remove = vi.fn((item: any) => {
+    this.children = this.children.filter((c) => c !== item);
+  });
 }
 
 class MockScene extends MockObject3D {
@@ -94,6 +97,7 @@ class MockBufferGeometry {
 }
 
 class MockMaterial {
+  dispose = vi.fn();
   constructor(public options: any) {}
 }
 
@@ -185,6 +189,66 @@ function makeScene({ pinned = false }: { pinned?: boolean } = {}) {
     model,
     solver,
   } as any;
+}
+
+/**
+ * Two right triangles sharing the diagonal, folded on it — the smallest scene the printed-tile
+ * layer will draw. `rest` is the flat pattern (what the tiles are sized from) and the crease carries
+ * a real fold angle, which is what the Detail split is scored by.
+ */
+function makePrintedScene() {
+  const position = new Float32Array([
+    0, 0, 0,
+    1, 0, 0,
+    1, 1, 0,
+    0, 1, 0,
+  ]);
+  const model = {
+    numNodes: 4,
+    position,
+    rest: position.slice(),
+    velocity: new Float32Array(position.length),
+    driven: new Uint8Array(4),
+    fixed: new Uint8Array(4),
+    beams: { count: 0, n0: new Int32Array(0), n1: new Int32Array(0), rest: new Float32Array(0), k: new Float32Array(0) },
+    creases: {
+      count: 1,
+      n1: new Int32Array([1]),
+      n2: new Int32Array([3]),
+      n3: new Int32Array([0]),
+      n4: new Int32Array([2]),
+      face1: new Int32Array([0]),
+      face2: new Int32Array([1]),
+      k: new Float32Array([1]),
+      targetTheta: new Float32Array([1.0]), // well past MIN_FOLD, so the faces score as folding hard
+      assignment: ["M"],
+    },
+  } as any;
+  const solver = { foldPercent: 0, step: vi.fn(), enableCollision: vi.fn() } as any;
+  return {
+    material: "printed",
+    net: {
+      faces: [[0, 1, 2], [0, 2, 3]],
+      edges: [
+        { a: 0, b: 2, assignment: "M", faces: [0, 1] },
+        { a: 0, b: 1, assignment: "B", faces: [0] },
+        { a: 1, b: 2, assignment: "B", faces: [0] },
+        { a: 2, b: 3, assignment: "B", faces: [1] },
+        { a: 0, b: 3, assignment: "B", faces: [1] },
+      ],
+      meta: { s: 10, H: 8, rApex: 1 },
+    },
+    model,
+    solver,
+  } as any;
+}
+
+const makeContainer = (): any => ({ clientWidth: 500, clientHeight: 400, appendChild: vi.fn() });
+
+/** The printed tiles are the last layer `setScene`/`buildPrintedTiles` adds to the group. */
+function tileCount(canvas: any): number {
+  const mesh = canvas.group.children[canvas.group.children.length - 1];
+  return mesh.geometry.getAttribute("position").array.length / (18 * 3 * 3); // 6-gon prism per tile
 }
 
 describe("view/sim-canvas", () => {
@@ -294,6 +358,34 @@ describe("view/sim-canvas", () => {
     // With no beams the stretch is 0 for every frame of this, so nothing but `held` ever changes.
     expect(seen[0]).toBe(true); // holding while it folds
     expect(seen.at(-1)).toBe(false); // and it says so when it lets go
+  });
+
+  it("splits the printed tiles when Detail is turned up, and puts them back when it is turned down", async () => {
+    // The Detail slider had no effect at all: `tileDetail` was stored and the tile builder never read
+    // it, so every level drew one tile per face. The default level still must -- that is the base
+    // layout the sample designs are read against -- and only turning it up splits anything. Both
+    // faces here fold on the shared crease, so the split applies to both.
+    const { SimCanvas } = await import("../../../src/view/sim-canvas.js");
+    const canvas = new SimCanvas(makeContainer()) as any;
+    canvas.setScene(makePrintedScene());
+    expect(tileCount(canvas)).toBe(2); // default: one tile per face
+
+    canvas.setTileDetail(2);
+    expect(tileCount(canvas)).toBe(2 * 4 ** 2); // the level IS the subdivision cap
+
+    canvas.setTileDetail(0);
+    expect(tileCount(canvas)).toBe(2);
+  });
+
+  it("keeps a re-split fold live, so the new closure limit is actually settled onto", async () => {
+    // Detail moves the closure limit (finer tiles, narrower gaps). A frozen fold would hold the pose
+    // the old tiles allowed and the slider would look inert -- or leave the tiles interpenetrating.
+    const { SimCanvas } = await import("../../../src/view/sim-canvas.js");
+    const canvas = new SimCanvas(makeContainer()) as any;
+    canvas.setScene(makePrintedScene());
+    canvas.frozen = true;
+    canvas.setTileDetail(3);
+    expect(canvas.frozen).toBe(false);
   });
 
   it("colours the overlay from the layout's own palettes, not from copies of them", async () => {

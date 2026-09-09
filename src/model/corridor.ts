@@ -396,9 +396,31 @@ const edgeKeyOf = (a: number, b: number): string => (a < b ? `${a}_${b}` : `${b}
 function creaseRefused(g: GapEdge, tapeW: number, tapeMm: number, sheet: SheetSpec): boolean {
   if (sheet.strainLimit == null) return false;
   if (g.dihedral == null) return false;
-  const mmPerUnit = tapeW > 0 ? tapeMm / tapeW : 0;
-  const hingeMm = Math.hypot(g.legB.x - g.legA.x, g.legB.y - g.legA.y) * mmPerUnit;
+  const hingeMm = measuredHingeMm(g, tapeW, tapeMm);
+  if (hingeMm == null) return false; // no bending member stated: no strain to be over the limit
   return overStrainLimit(hingeMm, g.dihedral, sheet);
+}
+
+/**
+ * The bend zone this crossing is charged against, in millimetres, or null where the pattern does not
+ * state one.
+ *
+ * The 3D-PRINTED build measures it: `legA` and `legB` are the two tiles' pinched edge midpoints, so the
+ * strip of bare substrate between them is the member that takes the bend, and it is as wide as the gap
+ * that was cut. A VINYL sheet is not cut at a crease at all -- it is scored, the two legs coincide, and
+ * the pattern says nothing whatever about how wide the zone that bends is. The strain model has no width
+ * to run on, and a width is not something to invent here: it is a property of the sheet and the score,
+ * which is a {@link SheetSpec} question.
+ *
+ * So this is exactly the position of a crease with no recorded fold angle, and it is answered the same
+ * way -- fall back to the classification the strain model replaced: a mountain costs full price, anything
+ * else costs nothing. That is a weaker model, and callers should say so rather than let a vinyl plan pass
+ * for a strain-priced one.
+ */
+function measuredHingeMm(g: GapEdge, tapeW: number, tapeMm: number): number | null {
+  const mmPerUnit = tapeW > 0 ? tapeMm / tapeW : 0;
+  const w = Math.hypot(g.legB.x - g.legA.x, g.legB.y - g.legA.y) * mmPerUnit;
+  return w > 0 ? w : null;
 }
 
 function creaseBand(
@@ -411,10 +433,10 @@ function creaseBand(
   // A cut is severed material, not a fold: it is always the worst thing a trace can cross, so it takes the top
   // band outright rather than being handed to the strain model, which has no dihedral to work from.
   if (g.assignment === "C") return cap;
-  if (g.dihedral == null) return g.assignment === "M" ? cap : 0;
-  const mmPerUnit = tapeW > 0 ? tapeMm / tapeW : 0;
-  const hingeMm = Math.hypot(g.legB.x - g.legA.x, g.legB.y - g.legA.y) * mmPerUnit;
-  return strainBand(hingeMm, g.dihedral, sheet, undefined, cap);
+  const hingeMm = g.dihedral == null ? null : measuredHingeMm(g, tapeW, tapeMm);
+  // Either unknown -- no recorded fold, or no cut hinge to measure -- puts this back on the classification.
+  if (hingeMm == null) return g.assignment === "M" ? cap : 0;
+  return strainBand(hingeMm, g.dihedral!, sheet, undefined, cap);
 }
 
 /** The largest tensile strain any crease in this pattern carries, for {@link traceformCreaseFraction}. */
@@ -422,15 +444,12 @@ function patternEpsMax(gaps: GapEdge[], tapeW: number, tapeMm: number, sheet: Sh
   let max = 0;
   for (const g of gaps) {
     if (g.dihedral == null) continue;
-    const eps = foldStrain(hingeMmOf(g, tapeW, tapeMm), g.dihedral, sheet);
+    const hingeMm = measuredHingeMm(g, tapeW, tapeMm);
+    if (hingeMm == null) continue; // nothing measurable to grade against -- see `measuredHingeMm`
+    const eps = foldStrain(hingeMm, g.dihedral, sheet);
     if (eps > max) max = eps;
   }
   return max;
-}
-
-function hingeMmOf(g: GapEdge, tapeW: number, tapeMm: number): number {
-  const mmPerUnit = tapeW > 0 ? tapeMm / tapeW : 0;
-  return Math.hypot(g.legB.x - g.legA.x, g.legB.y - g.legA.y) * mmPerUnit;
 }
 
 /**
@@ -443,12 +462,12 @@ function creaseFraction(
   g: GapEdge, tapeW: number, tapeMm: number, sheet: SheetSpec, epsMax = 0,
 ): number {
   if (g.assignment === "C") return 1;
-  if (g.dihedral == null) return g.assignment === "M" ? 1 : 0;
-  const hingeMm = hingeMmOf(g, tapeW, tapeMm);
+  const hingeMm = g.dihedral == null ? null : measuredHingeMm(g, tapeW, tapeMm);
+  if (hingeMm == null) return g.assignment === "M" ? 1 : 0;
   if (epsMax > 0) {
-    return traceformCreaseFraction(hingeMm, g.dihedral, epsMax, sheet);
+    return traceformCreaseFraction(hingeMm, g.dihedral!, epsMax, sheet);
   }
-  return creaseCostFraction(hingeMm, g.dihedral, sheet);
+  return creaseCostFraction(hingeMm, g.dihedral!, sheet);
 }
 
 /**

@@ -1,16 +1,21 @@
 /**
  * **View** — the "Electronics" trigger + modal: a 2D flat-pattern interface for
- * laying out LEDs and the battery, with their copper tape auto-routed live.
+ * laying out LEDs and the battery, and planning their copper tape.
  *
  * The user clicks a gap to drop an LED bridging two tiles (or a tile to place the battery), and the modal
- * emits the authored {@link Circuit} via `onEdit`. Copper is re-planned on every edit by default, so the
- * tape follows the components as they are placed.
+ * emits the authored {@link Circuit} via `onEdit`.
  *
- * **Routing can be put on request** — the Route group's Auto/Manual segment, and the Route button beside
- * it. A full plan is most of a second, and an author placing a dozen parts pays it a dozen times for
- * plans that every following placement supersedes. With Manual set, an edit repaints the parts, leaves the
- * copper as it was, and says so: the Route button goes amber and the status line reads *copper is out of
- * date*. See {@link autoRoute} and {@link replan}.
+ * **Routing happens when the author asks for it, and at no other time.** The Route button is what plans
+ * copper; every edit until then repaints the parts, leaves the copper as it was, and says so — the Route
+ * button goes amber and the status line reads *copper is out of date*. A full plan is most of a second,
+ * and an author placing a dozen parts used to pay it a dozen times for plans each following edit
+ * superseded; worse, the board re-routed itself under their hands on edits — a pad put on a net, a part
+ * dropped on a tile — that were half a thought. See {@link autoRoute}, {@link Replan} and {@link replan}.
+ *
+ * The Route group's Auto/Manual segment is the way back to live routing for an author who wants it:
+ * under Auto, an edit that moves copper re-plans it on the spot. **Wiring a net is not one of those
+ * edits in either mode** — assigning a pad, deleting a net, and placing the two parts that join the
+ * bus's own rails (an LED, the battery: PWR and GND are nets like any other here) always wait for Route.
  *
  * Polarity is the router's to decide, not the author's: it reports which pad it landed PWR on, and the
  * preview draws that, so the pad colours say which way round to fit each component.
@@ -24,6 +29,7 @@ import {
   type Led,
   type TilePoly,
   type Vec2,
+  BATTERY_PART,
   flatFaces,
   flatPoints,
   dist2,
@@ -81,6 +87,11 @@ import { DEFAULT_SHEET, type SheetSpec } from "../model/fold-strain.js";
 import { placement } from "../model/parts.js";
 import { type Footprint, terminals } from "../model/footprint.js";
 import type { Component } from "../model/footprint.js";
+import type { SimMaterial } from "../sim/index.js";
+import {
+  batteryParts, carrierFrameParts, centreOf, closedPath, fmt, inRing, isZero,
+  ratsnestParts, substrateParts,
+} from "./electronics-draw.js";
 import { R_1206, SW_SPDT } from "../model/library.js";
 import {
   defaultElectronicsDesign,
@@ -159,9 +170,26 @@ import { TILE_INSET_FRAC } from "../model/tile-subdiv.js";
 import { type ManualWire, type WireContext, manualTraces } from "../model/manual-wire.js";
 import { WireTool, type WireHost } from "./wire-tool.js";
 // The scene emitter, for the ratsnest overlay — see the note at its use in `draw()`.
-import { sceneSvg, type SceneItem } from "./pcb-scene.js";
 import type { FoldFile } from "../model/fold-file.js";
 import { HOME, currentRoute, goToRoute, onRouteChange } from "./route.js";
+
+/**
+ * Whether a key event landed in something the author is typing into.
+ *
+ * The editor's shortcuts are registered on `document` — they have to be, because the canvas is not
+ * focusable and a shortcut that needs you to click the drawing first is a shortcut nobody finds — and the
+ * sidebar is full of text boxes. Without this, every letter typed into one also ran the shortcut of the
+ * same name.
+ *
+ * Read off the target's own tag rather than through `matches()` or `closest()`: those are DOM methods the
+ * headless DOM these tests run in does not implement, and the question here is one tag deep.
+ */
+function isTyping(target: unknown): boolean {
+  const el = target as { tagName?: string; isContentEditable?: boolean } | null;
+  if (!el) return false;
+  const tag = (el.tagName ?? "").toUpperCase();
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable === true;
+}
 
 /** The page this editor lives at. `#/electronics`, and the Back button is the way out. */
 const ROUTE = "electronics";
@@ -249,6 +277,23 @@ const PART_PICK_FLOOR_MM = 2;
  */
 const SELECT_RING_FLOOR_MM = 1.7;
 
+/**
+ * What an edit does to the copper plan, decided by the edit rather than by the Auto/Manual segment.
+ *
+ * - `auto` — plan if Auto is on. Placing, moving and turning parts: the copper is what the tape follows,
+ *   so under Auto it is worth re-planning to see it.
+ * - `now` — plan whatever the mode. Clear all, so far: leaving copper on a canvas with nothing under it
+ *   to explain it is worse than the wait.
+ * - `later` — never plan here; mark the copper stale so the Route button goes amber and the status line
+ *   says so. **Every net edit that changes what the copper should be** is this: wiring a pad to a net is
+ *   half a thought — the second pad of a pair is what makes a run — and re-planning on the first one
+ *   spent most of a second on a plan the very next assignment throws away. The author says when, with
+ *   the Route button.
+ * - `none` — the copper is unaffected, so there is nothing to plan and nothing to call stale. Renaming a
+ *   net, recolouring it, declaring an empty one.
+ */
+type Replan = "auto" | "now" | "later" | "none";
+
 /** How the copper is shown, matching the two ways it can be cut.
  *
  *  `strips` is the copper as separate pieces. `carrier` is the 3-layer build: one piece of copper cut as a
@@ -297,15 +342,23 @@ export class ElectronicsModal {
   /**
    * Whether copper re-plans itself on every edit.
    *
-   * On, as it always was. Off, an edit repaints the parts and leaves the copper alone: a full plan is
-   * ~0.75s, and paying it for each of a dozen placements — every one of which is going to be superseded by
-   * the next — is most of the time spent laying out a board. It is view state and deliberately not part of
-   * the {@link Circuit}: it says when this editor does its arithmetic, not anything about the board.
+   * **Off by default.** A full plan is ~0.75s, and paying it for each of a dozen placements — every one of
+   * which is going to be superseded by the next — is most of the time spent laying out a board. Worse, it
+   * arrives unasked: dropping a part wires its pads to PWR and GND, and the board re-routed itself under
+   * the author's hands on an edit that was half a thought. So an edit repaints the parts, leaves the
+   * copper as it was, and says it is out of date; the Route button is what plans.
+   *
+   * On, an edit that changes where copper should run re-plans it on the spot, as it used to. Wiring a net
+   * is not one of those edits in either mode — see {@link Replan}.
+   *
+   * It is view state and deliberately not part of the {@link Circuit}: it says when this editor does its
+   * arithmetic, not anything about the board.
    */
-  private autoRoute = true;
+  private autoRoute = false;
   private readonly placeButtons = new Map<PlaceMode, HTMLButtonElement>();
   private readonly mirrorButtons = new Map<keyof Mirror, HTMLButtonElement>();
   private readonly sideButtons = new Map<Side, HTMLButtonElement>();
+  private readonly buildButtons = new Map<SimMaterial, HTMLButtonElement>();
   /** The library picker — one control for the whole library, so a part added to it costs no toolbar room. */
   private readonly partSelect: HTMLSelectElement;
   /** Narrows the picker. At this many footprints the list is longer than the screen and the names are things
@@ -377,6 +430,20 @@ export class ElectronicsModal {
    *  here and the gaps an LED bridges are the same geometry the printed build is cut at, so this has to
    *  track that slider or the placement surface disagrees with what gets printed. */
   private tileGap = TILE_INSET_FRAC;
+  /**
+   * Which build the copper is being laid on — the app-wide material, shared with the 3D sim's own tabs.
+   *
+   * It is not a display option. The two builds are different sheets: the printed one is rigid tiles with a
+   * bare hinge gap cut between them, and that gap is both what a component bridges and the bending member
+   * the crease strain is computed from. The vinyl one is a single scored sheet with nothing cut away, so
+   * there is no gap to bridge and no measured hinge to price — see `corridor.ts › measuredHingeMm`.
+   * "Vinyl" matches the store's default, so the editor opens on the same material the 3D sim does.
+   */
+  private material: SimMaterial = "vinyl";
+  /** Notified when the Build toggle moves, so the controller can share it with the sim. */
+  private materialHandler: (m: SimMaterial) => void = () => {};
+  /** Asked for the folded form of the current build (the 3D sim, in this material, copper on). */
+  private formHandler: () => void = () => {};
   /** What the cursor's last tap picked up — an LED or a part on a rail — or null. */
   private selected: Selection | null = null;
   /** Whether that selection was PICKED — the author tapped something already on the sheet — rather than
@@ -564,6 +631,12 @@ export class ElectronicsModal {
       btn.addEventListener("click", () => this.toggleMirror(axis));
       this.mirrorButtons.set(axis, btn);
     }
+    for (const btn of this.overlay.querySelectorAll<HTMLButtonElement>(".el-build")) {
+      const m: SimMaterial = btn.dataset.material === "printed" ? "printed" : "vinyl";
+      btn.addEventListener("click", () => this.selectMaterial(m, "user"));
+      this.buildButtons.set(m, btn);
+    }
+    this.overlay.querySelector(".el-form")!.addEventListener("click", () => this.formHandler());
     for (const btn of this.overlay.querySelectorAll<HTMLButtonElement>(".el-face")) {
       const side: Side = btn.dataset.side === "outside" ? "outside" : "inside";
       btn.addEventListener("click", () => this.selectSide(side));
@@ -581,10 +654,15 @@ export class ElectronicsModal {
     this.svg.addEventListener("wheel", (e) => this.onWheel(e), { passive: false });
     // `X` is a held modifier of the wire tool, so its release matters as much as its press.
     document.addEventListener("keyup", (e) => {
-      if (!this.overlay.hidden) this.wire.onKey(e);
+      if (!this.overlay.hidden && !isTyping(e.target)) this.wire.onKey(e);
     });
     document.addEventListener("keydown", (e) => {
       if (this.overlay.hidden) return;
+      // Not while the author is typing. These are document-level shortcuts and the sidebar is full of text
+      // boxes: typing "PWR" into a net name pressed R halfway through, which turned whatever was selected
+      // round and repainted the panel out from under the box — the name vanished mid-word. Backspace was
+      // worse: it deleted the selected part while you were clearing a name.
+      if (isTyping(e.target)) return;
       if (this.wire.onKey(e)) return this.renderStatus();
       if (e.key === "Escape") {
         // Escape puts the parts menu away and stops there. It used to leave the editor, which was right
@@ -635,7 +713,10 @@ export class ElectronicsModal {
     // redraw the picker when it lands, so a search can turn up the parts that cannot be placed and say
     // why. Held so a caller — a test, mostly — can wait for the library to be whole.
     this.libraryReady = loadRestOfLibrary().then(() => this.fillPalette());
-    this.emit(); // ask the controller for a fresh plan now that we're showing
+    // Ask the controller for a fresh plan now that we're showing. `"none"`: putting the page up is not an
+    // edit, and under Manual an edit is what marks the copper out of date — an editor that greeted the
+    // author with "copper is out of date" before they had touched anything would be crying wolf.
+    this.emit("none");
   }
 
   /** Take the editor page down, and the model page back. */
@@ -723,13 +804,65 @@ export class ElectronicsModal {
     if (!this.overlay.hidden) this.render();
   }
 
-  /** Derive the drawn/clickable geometry from the current pattern and gap. */
+  /**
+   * The inter-tile gap this build actually has.
+   *
+   * The printed build's is the sim's Gap slider. The vinyl build has none: a vinyl sheet is scored at a
+   * crease, not cut, so the two sides stay joined and there is nothing between them. Zero is not a
+   * degenerate case here — `tilePolys` returns the whole faces, `gapGraph` puts both leg pads on the
+   * crease itself, and the router reads that as "no measured bending member" and prices the crease by its
+   * assignment instead of by strain.
+   */
+  private buildGap(): number {
+    return this.material === "printed" ? this.tileGap : 0;
+  }
+
+  /** Derive the drawn/clickable geometry from the current pattern, build and gap. */
   private rebuildGeometry(): void {
     const fold = this.fold;
+    const gap = this.buildGap();
     this.faces = fold ? flatFaces(fold) : [];
-    this.tiles = fold ? tilePolys(fold, this.faces, this.tileGap) : [];
-    this.gaps = fold ? gapGraph(fold, this.faces, this.tileGap).gaps : [];
+    this.tiles = fold ? tilePolys(fold, this.faces, gap) : [];
+    this.gaps = fold ? gapGraph(fold, this.faces, gap).gaps : [];
     this.points = fold ? flatPoints(fold) : [];
+  }
+
+  /**
+   * Switch the build the copper is laid on.
+   *
+   * Everything placed survives: a component is stored as the faces it sits on or straddles, never as a
+   * point, so it re-lands on the same crease of the other build. The copper does not survive as planned —
+   * the two builds price creases differently — so it is re-planned, which is the whole point of the switch.
+   *
+   * `from` keeps the store and the toggle from arguing: a click has to tell the controller, an update
+   * arriving FROM the controller must not tell it straight back.
+   */
+  private selectMaterial(m: SimMaterial, from: "user" | "store"): void {
+    if (m === this.material) return;
+    this.material = m;
+    this.rebuildGeometry();
+    this.syncButtons();
+    if (from === "user") this.materialHandler(m);
+    if (!this.overlay.hidden) {
+      this.render();
+      this.renderNets();
+      this.renderStatus();
+    }
+  }
+
+  /** Set the build from the store (the 3D sim's tabs write the same value). */
+  setMaterial(m: SimMaterial): void {
+    this.selectMaterial(m, "store");
+  }
+
+  /** Notified when the Build toggle moves, so one material serves the editor and the sim alike. */
+  onMaterialChange(handler: (m: SimMaterial) => void): void {
+    this.materialHandler = handler;
+  }
+
+  /** Notified when Folded form is pressed — the controller opens the 3D sim on this build. */
+  onOpenForm(handler: () => void): void {
+    this.formHandler = handler;
   }
 
   /** Set the size the pattern is printed and cut at. Re-plans: the tape is the same 3.25mm of copper
@@ -1054,7 +1187,7 @@ export class ElectronicsModal {
     // Clear means clear, in every mode. Left to `replan` with Auto off, the copper for the circuit that
     // was just thrown away would stay on the canvas with nothing under it to explain it — and the plan has
     // to be forced from INSIDE `emit`, which is where an edit under Manual is marked stale.
-    this.emit(true);
+    this.emit("now");
   }
 
   /** Reflect active state on the toggle-ish toolbar buttons. */
@@ -1081,6 +1214,10 @@ export class ElectronicsModal {
     for (const [s, btn] of this.sideButtons) {
       btn.classList.toggle("is-active", s === this.side);
       btn.setAttribute("aria-pressed", s === this.side ? "true" : "false");
+    }
+    for (const [m, btn] of this.buildButtons) {
+      btn.classList.toggle("is-active", m === this.material);
+      btn.setAttribute("aria-pressed", m === this.material ? "true" : "false");
     }
   }
 
@@ -1235,7 +1372,12 @@ export class ElectronicsModal {
       this.runCommand(appendLed(led));
       this.select({ kind: "led", index: this.circuit.leds.length - 1 });
     }
-    this.emit();
+    // Everything reaching here — the battery, and an LED whichever way it was placed — is a part whose
+    // whole effect on the copper is that it joins the PWR and GND rails: the router bridges a hinge LED
+    // onto them and a free one lands with its two pads defaulted to them. That is a net assignment made
+    // by placing rather than by typing, so it defers exactly as one made in the pads panel does — the two
+    // rails are nets like any other, and the Route button says when. See {@link Replan}.
+    this.emit("later");
   }
 
   /** Where the router put each placed library part. Defensive against an older plan object that predates
@@ -1589,7 +1731,7 @@ export class ElectronicsModal {
     const colour = (raw ?? "").trim();
     if (!colour) return;
     this.runCommand(recolourNetCommand(id, colour));
-    this.emit();
+    this.emit("none"); // a colour is how the net is drawn, not where its copper runs
   }
 
   /**
@@ -1678,9 +1820,11 @@ export class ElectronicsModal {
     }
   }
 
-  /** Select a placed part from the list, exactly as clicking it on the canvas does. */
+  /** Select a placed part from the list, exactly as clicking it on the canvas does. The battery is in
+   *  that list too, addressed by {@link BATTERY_PART}, and it is selectable only from there — tapping it
+   *  on the canvas is what takes it off the sheet. */
   private selectPart(index: number): void {
-    if (!(this.circuit.parts ?? [])[index]) return;
+    if (index === BATTERY_PART ? !this.circuit.battery : !(this.circuit.parts ?? [])[index]) return;
     this.select({ kind: "part", index }, "picked");
     this.renderSidebar();
     this.render();
@@ -1838,7 +1982,7 @@ export class ElectronicsModal {
     }
     this.runCommand(addNetCommand(this.mintNet(name)));
     this.netNew.value = "";
-    this.emit();
+    this.emit("none"); // a net with no pads on it yet has no copper to plan
   }
 
   /** Rename a net in place, keeping its id — and so keeping every pad already on it. */
@@ -1854,7 +1998,7 @@ export class ElectronicsModal {
       return;
     }
     this.runCommand(renameNetCommand(id, name));
-    this.emit();
+    this.emit("none"); // the id is what the terminals hold, so the runs are the same runs
   }
 
   /** Whether a name is already in use, ignoring the net being renamed. Case-insensitive: two nets called
@@ -1870,8 +2014,10 @@ export class ElectronicsModal {
     const on = this.netTerminals().filter((t) => t.net === id).length;
     const net = this.nets().find((n) => n.id === id);
     this.openNets.delete(id);
+    // `"later"` even when the net had no pads on it: the two costs are not symmetric. A false "out of
+    // date" is one press of Route; copper left claiming to wire a net that is gone is a cut file.
     this.runCommand(deleteNetCommand(id));
-    this.emit();
+    this.emit("later");
     // After the emit, not before: `render()` rewrites the status line from the circuit, so a message set
     // first is overwritten by the redraw it triggers.
     if (net) {
@@ -1891,8 +2037,11 @@ export class ElectronicsModal {
     // Open the branch the pad lands on, so the row that just appeared is one the author can see. A tree
     // that silently gains a hidden child is a tree that looks like nothing happened.
     if (net) this.openNets.add(net);
+    // Never re-planned here, whatever the Auto/Manual segment says — see {@link Replan}. A net is wired
+    // one pad at a time and the router has nothing to build until the second one lands, so routing on
+    // each assignment plans a board the next click supersedes.
     this.runCommand(assignPadCommand(part, pad, net));
-    this.emit();
+    this.emit("later");
   }
 
   /**
@@ -2000,6 +2149,9 @@ export class ElectronicsModal {
   private rotateSelected(): void {
     const sel = this.selected;
     const part = this.partSelection();
+    // The battery has no orientation: its two terminals are placed by the router at the width it plans at,
+    // and there is nothing about it for R to turn.
+    if (part?.index === BATTERY_PART) return;
     if (part) {
       // A part standing on the sheet turns; a part sitting in a rail flips.
       //
@@ -2089,7 +2241,7 @@ export class ElectronicsModal {
   /** Draw the edit, then notify the controller so it stores the circuit.
    *  The redraw must happen here: the controller does not push anything back, so an edit that only
    *  emitted would update `this.circuit` and never appear on screen. */
-  private emit(replanned = false): void {
+  private emit(replan: Replan = "auto"): void {
     // The canvas first, because `render()` re-plans and the nets panel reads the plan: the battery's and
     // each hinge-LED's rows are derived from `this.routed` (see {@link derivedRows}). Painted first, the
     // panel showed the plan from BEFORE this edit — one behind, so a freshly placed LED contributed
@@ -2097,12 +2249,16 @@ export class ElectronicsModal {
     // With Auto off `render()` will not re-plan, so the edit is recorded as staleness instead. Set before
     // rendering, because the status line the render paints is where the author is told about it.
     //
-    // `replanned` is for the edits that must not be deferred whatever the mode — Clear all, so far. They
-    // plan here rather than before the call, because marking the edit stale is this function's job and a
-    // plan made outside it would be marked stale a line later.
-    if (replanned) this.forceReplan();
-    else if (!this.autoRoute) this.stale = true;
-    this.render();
+    // `"now"` is for the edits that must not be deferred whatever the mode — Clear all, so far. They plan
+    // here rather than before the call, because marking the edit stale is this function's job and a plan
+    // made outside it would be marked stale a line later.
+    // `"later"` and `"none"` skip `render()`'s re-plan by drawing through `draw()` instead: the mode is
+    // the edit's own, so Auto cannot re-plan behind it.
+    if (replan === "now") this.forceReplan();
+    else if (replan === "later") this.stale = true;
+    else if (replan === "auto" && !this.autoRoute) this.stale = true;
+    if (replan === "auto") this.render();
+    else this.draw();
     this.renderNets();
     this.editHandler(cloneCircuit(this.circuit));
   }
@@ -2401,20 +2557,10 @@ export class ElectronicsModal {
   private draw(): void {
     this.applyViewBox(); // keep the current pan/zoom window across re-renders
 
-    const parts: string[] = [];
-    // Cloth backing (the full flat faces) under everything — the fabric the tiles sit on.
-    for (const f of this.faces) {
-      if (f.poly.length < 3) continue;
-      const d = "M " + f.poly.map((p, k) => (k === 0 ? "" : "L ") + ptStr(this.tp(p))).join(" ") + " Z";
-      parts.push(`<path d="${d}" class="el-cloth" />`);
-    }
-    // Gray rigid tiles (the 3D-printed inset polygons, flat at 0% fold) — what gets cut. The empty
-    // diamonds between them are the gaps an LED bridges.
-    for (const t of this.tiles) {
-      if (t.ring.length < 3) continue;
-      const d = "M " + t.ring.map((p, k) => (k === 0 ? "" : "L ") + ptStr(this.tp(p))).join(" ") + " Z";
-      parts.push(`<path d="${d}" class="el-tile" />`);
-    }
+    // The sheet the copper goes on, for the build on screen — see `electronics-sheet.ts`.
+    const parts: string[] = substrateParts(
+      this.material, this.faces, this.tiles, this.gaps, (p) => this.tp(p),
+    );
     // In carrier view, the frame and its tabs — the single piece of copper the traces arrive on.
     if (this.viewMode === "carrier" && this.allTraces().length) {
       parts.push(...this.carrierParts());
@@ -2445,8 +2591,6 @@ export class ElectronicsModal {
       const ring = stripOutline(t, this.tapeW(), this.routed.pads);
       if (ring.length < 3) continue;
       const outer = ring.map((p) => this.tp(p));
-      const sub = (r: Vec2[]): string =>
-        "M " + r.map((p, k) => (k === 0 ? "" : "L ") + ptStr(p)).join(" ") + " Z";
       // Any window falling inside this strip rides on its path, so `evenodd` reads it as a hole rather than
       // as more copper. A separate path would simply lie on top and hide nothing.
       const mine = windows.filter((n) => inRing(centreOf(n), outer));
@@ -2456,7 +2600,7 @@ export class ElectronicsModal {
       // what `net-palette.ts` says colour lives on the model to prevent. An inline style outranks the class.
       const paint = fill ? ` style="fill:${fill}"` : "";
       parts.push(
-        `<path d="${[sub(outer), ...mine.map(sub)].join(" ")}" class="${cls}"${paint} fill-rule="evenodd" />`,
+        `<path d="${[outer, ...mine].map(closedPath).join(" ")}" class="${cls}"${paint} fill-rule="evenodd" />`,
       );
     }
     // Copper the author drew by hand: over the planned tape, under the parts. Drawn as the outline that
@@ -2465,8 +2609,7 @@ export class ElectronicsModal {
     for (const t of manualTraces(this.wireContext())) {
       const ring = stripOutline(t, this.tapeW(), this.routed.pads);
       if (ring.length < 3) continue;
-      const d = "M " + ring.map((p, k) => (k === 0 ? "" : "L ") + ptStr(this.tp(p))).join(" ") + " Z";
-      parts.push(`<path d="${d}" class="el-tape el-wire-copper" />`);
+      parts.push(`<path d="${closedPath(ring.map((p) => this.tp(p)))}" class="el-tape el-wire-copper" />`);
     }
     // Every part, drawn from its own footprint by the same code the cut files use: each terminal as the pad
     // that will actually be cut, in copper and mask, with the part's designator beside it. Drawn as the real
@@ -2523,48 +2666,11 @@ export class ElectronicsModal {
         parts.push(this.selectionRing(a, b, "el-led-selected"));
       }
     });
-    // The ratsnest: one line per connection the netlist asked for and the router could not lay. A net that
-    // lost a pad otherwise looks on the canvas exactly like one that did not — the only sign was a count in
-    // the sidebar and a sentence in the status line, neither of which says WHERE.
-    //
-    // Drawn as `kind: "wire"`, which `pcb-scene.ts` reserves for previews and forbids for committed copper.
-    // That is right here and the distinction matters: this is a connection that does not exist, it reaches
-    // no cut file, and it must never read as tape. Hence dashed, and hence a stroked centreline rather than
-    // the `stripOutline` every real run is drawn with.
-    const rats: SceneItem[] = [];
-    for (const n of this.routed.nets ?? []) {
-      for (const [a, b] of n.ratsnest ?? []) {
-        const p = this.tp(a), q = this.tp(b);
-        rats.push({
-          kind: "wire",
-          d: `M ${ptStr(p)} L ${ptStr(q)}`,
-          cls: "el-ratsnest",
-          // One screen pixel, left to `vector-effect` in the stylesheet — a ratsnest is an annotation and
-          // should not thin out as the pattern is zoomed away from.
-          width: 1,
-        });
-      }
-    }
-    if (rats.length) parts.push(sceneSvg(rats));
-
-    // Battery: two terminal squares — PWR (+) red and GND (−) dark — so each net leaves its own pad.
-    if (this.circuit.battery) {
-      const f = this.faces[this.circuit.battery.face];
-      if (f) {
-        const term = this.defaultTerminals(f.centroid, f.poly);
-        // The size the router settled on, which may be smaller than the wanted one where the tile is tight —
-        // the drawn pad and the planned pad have to be the same pad.
-        const rSq = term.half * this.scale();
-        const sq = (p: Vec2, cls: string, sign: string): void => {
-          const c = this.tp(p);
-          parts.push(
-            `<rect x="${fmt(c.x - rSq)}" y="${fmt(c.y - rSq)}" width="${fmt(2 * rSq)}" height="${fmt(2 * rSq)}" rx="${fmt(rSq * 0.22)}" class="${cls}" />`,
-          );
-          parts.push(`<text x="${fmt(c.x)}" y="${fmt(c.y)}" class="el-batt-sign" font-size="${fmt(rSq * 1.5)}">${sign}</text>`);
-        };
-        sq(term.gnd, "el-batt el-batt-gnd", "−");
-        sq(term.pwr, "el-batt el-batt-pwr", "+");
-      }
+    parts.push(...ratsnestParts(this.routed.nets, (p) => this.tp(p)));
+    const battFace = this.circuit.battery ? this.faces[this.circuit.battery.face] : null;
+    if (battFace) {
+      const term = this.defaultTerminals(battFace.centroid, battFace.poly);
+      parts.push(...batteryParts(term, term.half * this.scale(), (p) => this.tp(p)));
     }
     // Two groups, and the split is what makes drawing a wire feel like drawing rather than waiting. The
     // static half is everything above: the pattern, the plan and the parts, repainted wholesale on an edit
@@ -2760,22 +2866,7 @@ export class ElectronicsModal {
       keepOff: this.keepOff(), mirror: this.mirror, sheetMm: this.sheetMm, pads: this.routed.pads,
       resistors: this.routed.resistors, switches: this.routed.switches, parts: this.routedParts(),
     });
-    const ring = (r: { x0: number; y0: number; x1: number; y1: number }): string => {
-      const c = [
-        { x: r.x0, y: r.y0 }, { x: r.x1, y: r.y0 }, { x: r.x1, y: r.y1 }, { x: r.x0, y: r.y1 },
-      ];
-      return "M " + c.map((p, i) => (i === 0 ? "" : "L ") + ptStr(p)).join(" ") + " Z";
-    };
-    const parts: string[] = [
-      // The frame: outer edge with the window as a hole, so it reads as a border rather than a filled sheet.
-      `<path d="${ring(out.frame.outer)} ${ring(out.frame.window)}" class="el-carrier" fill-rule="evenodd" />`,
-    ];
-    for (const path of out.tabPaths) {
-      if (path.length < 2) continue;
-      const d = "M " + path.map((p, i) => (i === 0 ? "" : "L ") + ptStr(p)).join(" ");
-      parts.push(`<path d="${d}" class="el-carrier-tab" fill="none" stroke-width="${fmt(this.tapeW() * this.scale())}" />`);
-    }
-    return parts;
+    return carrierFrameParts(out.frame, out.tabPaths, this.tapeW() * this.scale());
   }
 
   /** Pads and battery terminals — the spots a carrier tab must not grip, since a tab there sits under the
@@ -2905,23 +2996,3 @@ function padMinOf(sh: ResistorShape): number {
   return Number.isFinite(m) ? m : 0;
 }
 
-const isZero = (p: Vec2): boolean => p.x === 0 && p.y === 0;
-const fmt = (n: number): string => (Number.isFinite(n) ? String(Math.round(n * 1000) / 1000) : "0");
-const ptStr = (p: Vec2): string => `${fmt(p.x)} ${fmt(p.y)}`;
-
-/** The average of a ring's corners — good enough to say which strip a small window sits in. */
-function centreOf(ring: Vec2[]): Vec2 {
-  let x = 0, y = 0;
-  for (const p of ring) { x += p.x; y += p.y; }
-  return { x: x / ring.length, y: y / ring.length };
-}
-
-/** Winding containment, matching the export's. */
-function inRing(p: Vec2, ring: Vec2[]): boolean {
-  let w = false;
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-    const a = ring[i]!, b = ring[j]!;
-    if ((a.y > p.y) !== (b.y > p.y) && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) w = !w;
-  }
-  return w;
-}

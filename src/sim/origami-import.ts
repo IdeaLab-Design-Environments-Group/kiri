@@ -99,6 +99,13 @@ export interface PrintedTiles {
   gapFrac: number;
   /** Tile height as a fraction of the flat pattern's bounding-box diagonal. */
   thickFrac: number;
+  /**
+   * Per face, how many times the Detail setting midpoint-splits it into printed tiles (see
+   * `tile-subdiv.ts › planSubTiles`). Midpoint subdivision is a similarity, so the tile that meets a
+   * crease on a face split `d` times has 1/2^d of that face's inradius and opens 1/2^d of the gap.
+   * Omitted ⇒ one tile per face.
+   */
+  subdivDepths?: number[];
 }
 export const DEFAULT_PRINTED_TILES: PrintedTiles = { gapFrac: TILE_INSET_FRAC, thickFrac: TILE_THICK_FRAC };
 
@@ -1017,7 +1024,9 @@ export function buildSceneFromFold(
  *  - **t** = `thickFrac` · (flat pattern's bbox diagonal) — what `sim-canvas` extrudes each tile by.
  *  - **g** = `gapFrac` · (r₁ + r₂), the two tiles' inradii. Each tile pulls its edge midpoint in by
  *    `gapFrac` of its own inradius (`updatePrintedTiles`), and the two pull apart from the shared
- *    hinge, so the gap they open between them is the sum.
+ *    hinge, so the gap they open between them is the sum. Where Detail has paved a face with several
+ *    smaller tiles, r is that face's inradius over 2^depth — the tile that actually meets the hinge.
+ *    Turning Detail up therefore closes the fold down, which is true of the real print.
  *
  * Which creases get a limit follows the same rule the renderer pinches by:
  *
@@ -1052,12 +1061,18 @@ export function applyPrintedClosure(model: BarHingeModel, tiles: PrintedTiles = 
   const design = c.designTheta;
   const thetaMax = c.thetaMax;
   const seam = c.seamPeer3;
+  const depths = tiles.subdivDepths;
+  /** Linear shrink of the tiles paving face `f`: 2^(split depth), 1 when it is a single tile. */
+  const split = (f: number): number => (depths && f >= 0 && f < depths.length ? 2 ** depths[f] : 1);
   for (let i = 0; i < c.count; i++) {
     const a = c.assignment[i];
     if (seam && seam[i] >= 0) thetaMax[i] = Math.PI; // taped joint, not a tile pair — no tile limit
     else if (a === "F") thetaMax[i] = 0; // one fused tile: no gap, nothing to fold about
     else {
-      const g = gapFrac * (inradius(rest, c.n3[i], c.n4[i], c.n1[i]) + inradius(rest, c.n3[i], c.n4[i], c.n2[i]));
+      const g = gapFrac * (
+        inradius(rest, c.n3[i], c.n4[i], c.n1[i]) / split(c.face1[i])
+        + inradius(rest, c.n3[i], c.n4[i], c.n2[i]) / split(c.face2[i])
+      );
       thetaMax[i] = printedThetaMax(g, t);
     }
     c.targetTheta[i] = TILE_COLLIDE_SIGN * design[i] > thetaMax[i] ? TILE_COLLIDE_SIGN * thetaMax[i] : design[i];
