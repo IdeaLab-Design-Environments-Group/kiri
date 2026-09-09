@@ -12,10 +12,11 @@ import {
   bendRadiusMm,
   closureFraction,
   creaseCostFraction,
-  fatigueFraction,
+  thresholdFraction,
   foldStrain,
   maxTraceWidthMm,
   minWebMm,
+  outerFibreMm,
   type SheetSpec,
 } from "../../../src/model/fold-strain.js";
 
@@ -41,7 +42,10 @@ describe("model/fold-strain", () => {
   describe("the strain", () => {
     it("is the outer fibre over the bend radius", () => {
       const eps = foldStrain(HINGE, 90);
-      const fibre = DEFAULT_SHEET.substrateMm / 2 + DEFAULT_SHEET.foilMm;
+      // Spelled out rather than taken from `outerFibreMm`, so that this pins the arithmetic the module
+      // claims: half the 0.4 mm hinge member, the tape's 0.035 mm of adhesive, its 0.050 mm of copper.
+      const fibre = 0.4 / 2 + 0.035 + 0.05;
+      expect(fibre).toBeCloseTo(outerFibreMm(DEFAULT_SHEET), 12);
       expect(eps).toBeCloseTo(fibre / bendRadiusMm(HINGE, 90), 12);
     });
 
@@ -87,45 +91,51 @@ describe("model/fold-strain", () => {
     });
 
     it("charges the mountain for fatigue and the valley nothing", () => {
-      expect(fatigueFraction(HINGE, 120)).toBeGreaterThan(0);
-      expect(fatigueFraction(HINGE, -120)).toBe(0);
+      expect(thresholdFraction(HINGE, 120)).toBeGreaterThan(0);
+      expect(thresholdFraction(HINGE, -120)).toBe(0);
     });
 
     it("saturates once the copper is past its fatigue strain rather than running away", () => {
-      expect(fatigueFraction(HINGE, 120)).toBe(1);
-      expect(fatigueFraction(HINGE, 179)).toBe(1);
+      expect(thresholdFraction(HINGE, 120)).toBe(1);
+      expect(thresholdFraction(HINGE, 179)).toBe(1);
     });
 
     it("charges a gentle fold in proportion, which is what the old M/V letter could not do", () => {
       // A shallow mountain on a wide hinge is under the limit and is priced below a full crossing --
       // the case the class rule charged full price for.
-      const gentle = fatigueFraction(40, 20);
+      const gentle = thresholdFraction(40, 20);
       expect(gentle).toBeGreaterThan(0);
       expect(gentle).toBeLessThan(1);
-      expect(fatigueFraction(40, 30)).toBeGreaterThan(gentle);
+      expect(thresholdFraction(40, 30)).toBeGreaterThan(gentle);
     });
 
     it("lets a thinner sheet cross a fold the thicker one could not", () => {
       // Below the knee, where the term has not saturated -- which is the only place a sheet property can
       // still make a difference, and the reason the knee is pinned in its own test below.
       const thin: SheetSpec = { ...DEFAULT_SHEET, substrateMm: 0.05 };
-      expect(fatigueFraction(HINGE, 30, thin)).toBeLessThan(fatigueFraction(HINGE, 30));
-      expect(fatigueFraction(HINGE, 30, thin)).toBeGreaterThan(0);
+      // 10 degrees, not 30: the fibre distance grew by 21% when the tape's own thickness was taken from
+      // its datasheet, so both sheets saturate by 30 degrees now and the comparison had nothing left to
+      // see. Under the knee it still holds, which is the claim.
+      expect(thresholdFraction(HINGE, 10, thin)).toBeLessThan(thresholdFraction(HINGE, 10));
+      expect(thresholdFraction(HINGE, 10, thin)).toBeGreaterThan(0);
     });
 
     it("saturates past a knee that the sheet thickness sets, and the knee is low", () => {
-      // Worth recording plainly, because it bounds what this model can buy. Strain is
-      // (h/2 + t)·theta/w, so on a 0.4mm sheet over a 5mm hinge the copper is past 1% by about 12
-      // degrees of fold -- which means nearly every real mountain on these patterns is charged full
-      // price, exactly as the class rule charged it. Thinning the sheet to 0.05mm moves the knee out to
-      // about 48 degrees. So sheet thickness is a real lever here and a short one: it moves where the
-      // ceiling starts, not how high it is.
+      // Worth recording plainly, because it bounds what this model can buy. Strain is c·theta/w with
+      // c = h/2 + a + t, so on a 0.4mm member over a 5mm hinge the copper reaches the threshold at
+      // **31 degrees** of fold, and on a 0.05mm member at **79 degrees**.
+      //
+      // Both numbers have moved twice. They were 13 and 48 when the foil was 0.035mm with no adhesive
+      // term; the datasheet took them to 11 and 27; and deriving the threshold from the foil's own
+      // elongation at break (3%, `thresholdStrainFor`) took them to 31 and 79. The last move is the one
+      // that matters: a knee at 31 degrees sits inside the corpus's own fold angles (median 18.9), so
+      // the price now discriminates between creases instead of saturating on nearly all of them.
       const knee = (spec: SheetSpec): number => {
-        for (let deg = 1; deg < 180; deg++) if (fatigueFraction(HINGE, deg, spec) >= 1) return deg;
+        for (let deg = 1; deg < 180; deg++) if (thresholdFraction(HINGE, deg, spec) >= 1) return deg;
         return 180;
       };
-      expect(knee(DEFAULT_SHEET)).toBeLessThan(20);
-      expect(knee({ ...DEFAULT_SHEET, substrateMm: 0.05 })).toBeGreaterThan(40);
+      expect(knee(DEFAULT_SHEET)).toBe(31);
+      expect(knee({ ...DEFAULT_SHEET, substrateMm: 0.05 })).toBe(79);
     });
   });
 
@@ -152,7 +162,7 @@ describe("model/fold-strain", () => {
     it("catches the valley that fatigue lets through", () => {
       // A valley is never in tension, so fatigue alone would carry copper over a fold shut flat against
       // itself for free -- with the two banks of copper face to face.
-      expect(fatigueFraction(HINGE, -175)).toBe(0);
+      expect(thresholdFraction(HINGE, -175)).toBe(0);
       expect(creaseCostFraction(HINGE, -175)).toBeCloseTo(closureFraction(175), 12);
       expect(creaseCostFraction(HINGE, -175)).toBeGreaterThan(0.8);
     });
@@ -188,10 +198,12 @@ describe("model/fold-strain", () => {
     });
 
     it("does not bind on the sheets this system prints, which is worth stating out loud", () => {
-      // Recorded rather than asserted as a design goal: on 0.4mm of PLA the bound is two orders of
-      // magnitude above 3.25mm tape, so the roll governs. A sheet thin enough to bring it down would
-      // change that, which is exactly why the check exists.
-      expect(maxTraceWidthMm(10)).toBeGreaterThan(100);
+      // Recorded rather than asserted as a design goal: on a 0.4mm member the bound is 76.6mm against
+      // 3.25mm tape, so the roll governs by 23x. It was 223mm until the foil went from 0.035 to the
+      // datasheet's 0.050mm -- the bound goes as the cube of the foil, so that one correction took two
+      // thirds of it. A sheet thin enough to bring it down would change that, which is why this exists.
+      expect(maxTraceWidthMm(10)).toBeCloseTo(76.58, 1);
+      expect(maxTraceWidthMm(10)).toBeGreaterThan(10 * TAPE_MM);
       const foil: SheetSpec = { ...DEFAULT_SHEET, substrateMm: 0.05 };
       expect(maxTraceWidthMm(10, foil)).toBeLessThan(TAPE_MM);
     });
@@ -233,7 +245,11 @@ describe("model/fold-strain", () => {
       // grades to twice the flat price at the pattern's worst crossing -- which, on a two-tile pattern,
       // the only crossing is.
       expect(creasePrice(twoTiles("M", 180))).toBe(2000);
-      expect(creasePrice(twoTiles("M", 30))).toBeGreaterThanOrEqual(1000);
+      // 45 degrees, not 30: on this hinge 30 degrees is 2.5% strain, which is under the 3% threshold the
+      // foil's ductility now sets, so it is priced as survivable rather than floored at the full price.
+      // That is the threshold doing its job -- the floor is for crossings that are actually past it.
+      expect(creasePrice(twoTiles("M", 45))).toBeGreaterThanOrEqual(1000);
+      expect(creasePrice(twoTiles("M", 30))).toBeLessThan(1000);
     });
 
     it("charges a gentle mountain less, which the rule it replaces could not", () => {
@@ -278,9 +294,12 @@ describe("model/fold-strain", () => {
       // The film is 0.02mm, and it was 0.05mm until 2026-08-28. The bound goes as the cube of the substrate,
       // so it is a steep function of that number, and when `TAPE_MM` fell from 3.25 to 1.5 the roll dropped
       // below what 0.05mm of film can carry — the sheet stopped governing and the demonstration stopped
-      // demonstrating. Swept on this hinge: 0.05mm now yields the roll exactly, 0.03mm gives 0.377 and
-      // 0.02mm gives 0.112 against the roll's 0.923. Thinner tape means the sheet has to be thinner still
-      // before it is the binding constraint, which is the coupling working, not failing.
+      // demonstrating.
+      //
+      // Reading the tape's datasheet moved this again, in the other direction: the bound also goes as the
+      // cube of the FOIL, and the foil went 0.035 -> 0.050mm, so it fell by 2.9x. 0.05mm of film now
+      // yields 0.598 rather than exactly the roll's 0.923. The sheet starts governing on a thicker film
+      // than it used to, which is the same coupling reporting a stiffer tape.
       const fold = twoTiles("M", 90);
       const faces = flatFaces(fold);
       const roll = tapeWidthFor(faces);
@@ -288,7 +307,8 @@ describe("model/fold-strain", () => {
       expect(film).toBeLessThan(roll);
       // And the roll really is what governs on a sheet anyone would print on, which is the first sentence
       // of this comment stated as an assertion rather than as a claim.
-      expect(tapeWidthFor(faces, undefined, { ...DEFAULT_SHEET, substrateMm: 0.05 })).toBe(roll);
+      expect(tapeWidthFor(faces, undefined, { ...DEFAULT_SHEET, substrateMm: 0.05 })).toBeLessThan(roll);
+      expect(tapeWidthFor(faces, undefined, { ...DEFAULT_SHEET, substrateMm: 0.1 })).toBe(roll);
       expect(tapeWidthFor(faces, undefined, DEFAULT_SHEET)).toBe(roll);
     });
 
@@ -308,10 +328,10 @@ describe("model/fold-strain", () => {
       const faces = flatFaces(fold);
       const { gaps } = gapGraph(fold, faces);
       const leds = [ledOf(gaps[0]!.faceA, gaps[0]!.faceB), ledOf(gaps[1]!.faceA, gaps[1]!.faceB)];
-      const copper = (fatigueStrain: number): number => {
+      const copper = (routingThresholdStrain: number): number => {
         const r = planRoutes(faces, gaps, { leds, battery: { face: 0 } }, undefined, {
           ...DEFAULT_SHEET,
-          fatigueStrain,
+          routingThresholdStrain,
         });
         let len = 0;
         for (const t of r.traces) {

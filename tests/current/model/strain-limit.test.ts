@@ -1,7 +1,7 @@
 /**
  * Strain as a LIMIT rather than a price.
  *
- * `fatigueStrain` makes a crease dear to cross. `strainLimit` makes it impossible: copper may not use that
+ * `routingThresholdStrain` makes a crease dear to cross. `strainLimit` makes it impossible: copper may not use that
  * hinge, and an LED reachable only across one is reported unreachable rather than wired with tape that
  * will crack. The two are deliberately separate settings — the first is what the router optimises against,
  * the second is a refusal — and the limit is OFF by default for the reason measured below.
@@ -61,10 +61,16 @@ describe("model/strain-limit", () => {
   it("scales with the sheet: a thinner substrate passes creases a thicker one is refused", () => {
     // The coupling made load-bearing. Same pattern, same limit, different sheet — and the thin sheet
     // strains its copper less, so fewer creases are out of bounds.
+    //
+    // The limit is 5%, not the 1% this used to use. At 1% every crease on house.fkld is refused on both
+    // sheets — 12 and 12 — so the comparison had nothing to see. That is not a regression in the
+    // coupling: it is what the corpus looks like against a 1% threshold once the fibre distance includes
+    // the tape's own 0.085mm, and it is the same fact `_strain-audit.ts` reports as 88% of tensile
+    // creases over threshold.
     const { faces, gaps, tapeW } = on("house.fkld");
     const refusedOn = (substrateMm: number): number =>
       buildCorridor(faces, gaps, patternDiag(faces) * FOLD_PENALTY_FRAC, tapeW, {
-        ...limited(0.01),
+        ...limited(0.05),
         substrateMm,
       }).refused.size;
     expect(refusedOn(0.05)).toBeLessThan(refusedOn(0.8));

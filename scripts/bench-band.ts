@@ -68,7 +68,7 @@ function score(name: string, bandCap: number, sheet = DEFAULT_SHEET) {
               tension++;
               const hingeMm = Math.hypot(g.legB.x - g.legA.x, g.legB.y - g.legA.y) * mmPerUnit;
               const deg = g.dihedral ?? 180;
-              if (foldStrain(hingeMm, deg, sheet) > sheet.fatigueStrain) fatiguing++;
+              if (foldStrain(hingeMm, deg, sheet) > sheet.routingThresholdStrain) fatiguing++;
               worst = Math.max(worst, strainBand(hingeMm, deg, sheet, undefined, 99));
             }
           }

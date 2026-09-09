@@ -153,7 +153,10 @@ describe("model/crease-price", () => {
       const flat = crossings("church.fkld", 12, 0, 0);
       const banded = crossings("church.fkld", 12, 0, STRAIN_BAND_CAP);
       expect(flat.tension).toBe(17);
-      expect(banded.tension).toBe(14);
+      // 11, and it was 14 while eps_f was the chosen 1%. The ordering got STRONGER when the threshold was
+      // derived from the foil's ductility: at 1% almost every crossing capped to the same band and the
+      // search had nothing to order, and at 3% the bands separate. Same code, better-founded constant.
+      expect(banded.tension).toBe(11);
       // The same trade the price makes, bought a different way: fewer crossings, more copper.
       expect(banded.tension).toBeLessThan(flat.tension);
       expect(banded.len).toBeGreaterThan(flat.len);
@@ -161,7 +164,7 @@ describe("model/crease-price", () => {
 
     it("adds nothing on top of the crease price on the shipped sheet", { timeout: 60000 }, () => {
       // Not a disappointment — it is the saturation result stated a second way. At 0.4mm the copper passes
-      // its fatigue strain at about 7 degrees of fold, so every crossing on these patterns is already lost
+      // the threshold at about 15 degrees of fold, so most crossings on these patterns are already lost
       // and every band caps to the same value. With nothing to choose between, the search falls back on
       // cost and plans identically. The bands only have something to say on a sheet thin enough that some
       // folds are survivable; see `scripts/bench-band.ts`.
