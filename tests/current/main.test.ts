@@ -137,7 +137,6 @@ describe("main.ts", () => {
     expect(state.viewCalls).toEqual([
       "sim.mountTrigger",
       "export.mountTrigger",
-      "patternEditor.mountTrigger",
       "electronics.mountTrigger",
       "examples.mountTrigger",
       "tutorials.mountTrigger",
