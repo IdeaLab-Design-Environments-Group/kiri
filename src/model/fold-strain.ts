@@ -38,16 +38,25 @@
  *
  * ## Why the sign is the whole story
  *
- * Nakaya et al., "4D Leaf Circuits" (SCF '25) measured a trace over a **mountain** fold rising in
- * resistance and fracturing inside a hundred folding cycles, while the same trace on a **valley** stayed
- * flat. The geometry does not distinguish them — |ε| is the same either way — so a model taking |θ| would
- * flatten that result away and charge both alike.
+ * Nakaya et al., "4D Leaf Circuits" (SCF '25) folded samples 0-180 degrees for 100 cycles and measured a
+ * trace over a **mountain** fold rising sharply in resistance and fracturing, while the same trace on a
+ * **valley** rose and then held a plateau. The geometry does not distinguish them — |ε| is the same either
+ * way — so a model taking |θ| would flatten that result away and charge both alike.
  *
  * What distinguishes them is which way the copper is loaded. On a mountain the copper is on the convex
  * side and goes into **tension**, which opens cracks and drives them across the trace. On a valley it is
  * on the concave side and goes into **compression**, which wrinkles and can delaminate the foil but does
- * not part it — the trace keeps conducting. So tension is charged against {@link SheetSpec.routingThresholdStrain}
- * and compression is not charged at all.
+ * not part it. So tension is charged against {@link SheetSpec.routingThresholdStrain} and compression is
+ * not charged at all.
+ *
+ * **Zero cost is a decision about which failure is priced, not a claim that compression is harmless**, and
+ * the difference matters to anyone reading a number out of this module. The same paper's static bending
+ * test (n = 10, radii 1-10 mm) reports that "the sheet resistance increased as the bending curvature got
+ * larger" and that inward bending — the compressive, valley case — "showed lower and more stable
+ * resistance than outward bending". *Lower and more stable is not zero*, and in their cycling test
+ * resistance rose "for both mountain and valley conditions". Compression degrades conductivity; tension
+ * severs the conductor. This module prices the second and ignores the first, so a design that must hold a
+ * **resistance** budget rather than merely stay connected is outside what this cost models.
  *
  * Compression is not free forever, though: a valley folded back on itself brings the two banks of copper
  * face to face and can short across. That is what the old `> 170 degrees` test was reaching for, and
@@ -457,6 +466,14 @@ export function strainBand(
  *     fatiguing (eps >= eps_f)      1 + min(1, eps/epsMax) -- **floored** at the flat rule's full price,
  *                                   so a shallow-but-fatiguing mountain is never a bargain, and **graded**
  *                                   above it, so among crossings the pattern forces the gentler one wins.
+ *
+ * **`epsMax` is the worst tensile strain in THIS pattern** (`corridor.ts > patternEpsMax`), not a material
+ * constant, so the graded term is a rank within the pattern rather than an absolute severity. Three
+ * consequences worth knowing before quoting a cost anywhere: the worst crease of every pattern scores
+ * exactly 2.0 by construction, whatever its strain; costs are therefore **not comparable across
+ * patterns**; and the grading is non-local, since editing one fold angle re-scales every other crease's
+ * price. It is bounded in [1, 2] on purpose -- it breaks ties among crossings the layout forces, and can
+ * never make a fatiguing crossing compete with a survivable one.
  *     closure                       max with {@link closureFraction} -- a crease folded back on itself
  *                                   can short.  A fabrication hazard, not a strain one.
  *

@@ -220,6 +220,36 @@ export interface CorridorBridge {
   price: number;
   /** Maximised along the route, like a crease's `band`. */
   band: number;
+  /**
+   * What the hop is. Absent reads as `"bridge"`: tape spanning a narrow opening in the flat sheet. A
+   * `"jump"` spans no material at all — it links the two lips of one cut that the folded artifact brings
+   * back together (`fold-adjacency.ts`), and is soldered across by hand once the sheet is folded, so its
+   * flat length is never charged and it carries no strain band.
+   */
+  kind?: "bridge" | "jump";
+  /** For a jump: index into `FoldAdjacency.pairs` of the seam it crosses. */
+  pair?: number;
+}
+
+/**
+ * One rejoin across a cut: copper ends at a solder land on each lip, and the two lands are joined by hand
+ * after folding. `a` sits on one lip's face and `b` on the other, in the flat pattern; `pair` says which
+ * seam of `FoldAdjacency.pairs` they straddle. A jump is never part of a {@link Trace2D}: a trace is a
+ * planar polyline and every planar rule (`spans-cut`, crossings, clearance) is right to refuse copper
+ * across a cut. `dirA`/`dirB` are the lip directions at each end, kept so the folded overlay can draw a
+ * ribbon without recomputing adjacency.
+ */
+export interface Jump {
+  a: Vec2;
+  b: Vec2;
+  net: string;
+  pair: number;
+  /** Drawn by the author with the Jump tool, or emitted by the router. */
+  source: "drawn" | "routed";
+  /** The `ManualJump.id` a drawn jump came from. */
+  id?: string;
+  dirA?: Vec2;
+  dirB?: Vec2;
 }
 
 /** Unordered key for the edge between two vertex ids. */

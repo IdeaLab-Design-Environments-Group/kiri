@@ -157,16 +157,17 @@ const ALLOWED_CYCLES: string[] = [];
  * under 1200. Raising one to make a commit pass is the failure mode this rule exists to catch.
  */
 const SIZE_BUDGETS: Record<string, number> = {
-  // 3,099 -> 2,974. Net fall, but it went UP by 16 in one commit when seven calls with ten and
-  // eleven positional arguments each became named-object calls through ElectronicsDesignAdapter.
-  // Recorded rather than quietly re-baselined: that is the one shape of raise worth allowing, and
-  // it should be argued for in the commit message every time.
-  "view/electronics-modal.ts": 2974,
-  // 3,636 -> 1,692 as the geometry, scoring, widths, landings, corridor and part
-  // fitting moved out. What is left is planRoutes and the bus it lays; getting under
-  // the limit means splitting that function, not moving more helpers.
-  "model/electronics-routing.ts": 1692,
-    "model/copper-svg-export.ts": 1862,
+  // 3,099 -> 2,836 as the part drawings (selectionRing, ledPads, partShapeOf, drawnParts,
+  // padLabelsFit, renderScale and the four constants they read) moved to
+  // view/electronics-modal-parts.ts as free functions taking a PartDrawContext. It went UP by 16 in
+  // one commit when seven calls with ten and eleven positional arguments each became named-object
+  // calls through ElectronicsDesignAdapter. Recorded rather than quietly re-baselined: that is the
+  // one shape of raise worth allowing, and it should be argued for in the commit message every time.
+  "view/electronics-modal.ts": 2835,
+  // 1,862 -> 1,361 as the part geometry (partShape and everything it places) and the ring predicates
+  // (centreOf, pointInRing) moved to part-shapes.ts, and the carrier's annotation layer to
+  // copper-svg-annotation.ts. What is left is the cutting itself: strip outlines, the frame, its tabs.
+  "model/copper-svg-export.ts": 1361,
   "pipeline/unfold.ts": 1252,
 };
 

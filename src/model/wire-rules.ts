@@ -42,14 +42,21 @@ import { toFlat, type WireContext } from "./manual-wire.js";
 import { bridgeSpanFor } from "./tape-width.js";
 
 /**
- * What can be wrong with a hand-drawn wire.
+ * What can be wrong with a hand-drawn wire, or with a jump.
  *
- * The first four are errors — the wire cannot be made, or makes something else not work. The last four are
+ * The first five are errors — the wire cannot be made, or makes something else not work. The next four are
  * warnings: the wire can be built, and building it costs something the author should know about.
+ *
+ * The last three are a **jump's** faults, read by `jump-rules.ts › checkJump` rather than by
+ * {@link checkWire}, and they live in this registry rather than one of their own because the author sees
+ * one list of things wrong with the copper and does not care which reading found them. The severity split
+ * below is over the whole union, so a jump kind cannot be added without being given a severity.
  */
 export type WireFaultKind =
   | "off-body" | "spans-cut" | "over-led" | "crosses-net" | "too-close"  // errors: not buildable
-  | "unweedable" | "fold-fatigue" | "acute-join" | "dangling";           // warnings: allowed, costly
+  | "unweedable" | "fold-fatigue" | "acute-join" | "dangling"            // warnings: allowed, costly
+  | "jump-not-adjacent" | "jump-land-clash"                              // errors: not buildable
+  | "jump-unanchored";                                                   // warning: allowed, costly
 
 /** One thing wrong with one wire, and the point on the pattern to show the author. */
 export interface WireFault {
@@ -62,16 +69,29 @@ export interface WireFault {
   net?: string;
   /** Index into `circuit.leds`, where the fault is about one chip. */
   led?: number;
+  /**
+   * The `Jump.id` this fault is about, where it is a jump's fault rather than a wire's.
+   *
+   * A jump carries no polyline for the author to click, so a jump fault has nothing corresponding to the
+   * wire whose vertices {@link WireFault.at} points into. Its own field rather than reusing an existing
+   * one: `net` is the *other* net in a two-net fault, and a jump has a net of its own.
+   */
+  jump?: string;
 }
 
 /** Faults that make the wire unbuildable. A circuit carrying one of these must not be cut. */
 export const ERRORS: ReadonlySet<WireFaultKind> = new Set<WireFaultKind>([
   "off-body", "spans-cut", "over-led", "crosses-net", "too-close",
+  // A jump whose ends are not two lips of one cut joins nothing the folding brings together, and a jump
+  // whose land sits on another net's copper shorts it the moment the wire is soldered on.
+  "jump-not-adjacent", "jump-land-clash",
 ]);
 
 /** Faults that are buildable but cost something — a weaker sheet, a harder weed, a shorter fold life. */
 export const WARNINGS: ReadonlySet<WireFaultKind> = new Set<WireFaultKind>([
-  "unweedable", "fold-fatigue", "acute-join", "dangling",
+  // `jump-unanchored` is the jump's `dangling`: an end resting on no face is a normal thing to have on a
+  // canvas mid-edit, and refusing to cut the sheet over one would be the checker overreaching.
+  "unweedable", "fold-fatigue", "acute-join", "dangling", "jump-unanchored",
 ]);
 
 /**
@@ -83,6 +103,7 @@ export const WARNINGS: ReadonlySet<WireFaultKind> = new Set<WireFaultKind>([
 export const ALL_WIRE_FAULT_KINDS: readonly WireFaultKind[] = [
   "off-body", "spans-cut", "over-led", "crosses-net", "too-close",
   "unweedable", "fold-fatigue", "acute-join", "dangling",
+  "jump-not-adjacent", "jump-land-clash", "jump-unanchored",
 ];
 
 /** Whether this wire can be built: no {@link ERRORS} among its faults. Warnings do not block. */

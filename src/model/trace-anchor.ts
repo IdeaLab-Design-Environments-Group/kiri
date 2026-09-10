@@ -13,6 +13,7 @@
  */
 import { type FlatFace, type Vec2, pointInFace } from "./electronics.js";
 import type { PadPair, Trace2D } from "./electronics-routing.js";
+import type { Jump } from "./trace-types.js";
 
 /** A point of the flat pattern, expressed against the mesh: a triangle and the weights inside it. */
 export interface AnchorPoint {
@@ -33,7 +34,19 @@ export interface AnchoredMesh {
    * The fixed names are the pieces this file draws itself; anything else is a net id off a
    * {@link Trace2D}, since a circuit may now carry any number of named nets rather than two rails.
    */
-  kind: "pwr" | "gnd" | "led-pwr" | "led-gnd" | "led-body" | "batt-pwr" | "batt-gnd" | "mark" | (string & {});
+  kind:
+    | "pwr" | "gnd" | "led-pwr" | "led-gnd" | "led-body" | "batt-pwr" | "batt-gnd" | "mark"
+    /**
+     * The ribbon of a jump: the wire the author solders across a cut once the sheet is folded.
+     *
+     * It exists only here. In the flat pattern a jump has no copper between its ends — the two lips are
+     * hundreds of units apart and every planar rule is right to refuse tape across them — so nothing draws
+     * it as a run. Folded, the two lips are the same edge, and the quad spanning them is a real, short
+     * thing lying on the model. Drawing it is what makes the rejoin visible as a rejoin rather than as two
+     * unexplained lands that happen to share a net.
+     */
+    | "jump"
+    | (string & {});
   /** Corners in threes: one triangle per three entries. */
   tris: AnchorPoint[];
 }
@@ -79,6 +92,10 @@ export function anchorOverlay(
   terminals: { pwr: Vec2; gnd: Vec2; half: number } | null,
   tapeW: number,
   faces: FlatFace[],
+  /** The jumps to draw as ribbons across their seams — see {@link jumpRibbon}. Their solder lands are
+   *  ordinary {@link Trace2D}s and arrive in `traces`; empty by default, so a caller that knows of no
+   *  jumps gets exactly the overlay it got before they existed. */
+  jumps: Jump[] = [],
 ): AnchoredMesh[] {
   const out: AnchoredMesh[] = [];
 
@@ -109,7 +126,72 @@ export function anchorOverlay(
     marks(out, terminals.pwr, terminals.gnd, terminals.half, faces);
   }
 
+  for (const j of jumps) {
+    const tris = jumpRibbon(j, tapeW, faces);
+    if (tris.length) out.push({ kind: "jump", tris });
+  }
+
   return out;
+}
+
+/**
+ * The quad spanning one jump, at tape width, or nothing if either end is off the material.
+ *
+ * A jump's two ends lie on two lips that the fold brings together, so the quad's own two short edges lie
+ * ALONG those lips: `a ± dirA·half` and `b ± dirB·half`, where the directions are the lip directions the
+ * router (or the jump tool) recorded. Folded, those four corners are two coincident pairs and the quad
+ * collapses onto the seam, which is exactly what a soldered wire across a closed cut looks like. This is
+ * also why the file needs no adjacency of its own: the correspondence is carried on the jump.
+ *
+ * Corners are wound `a+ → b+ → b− → a−` so the ring respects that correspondence. Winding it the other way
+ * would pair the plus side of one lip with the minus side of the other and fold the quad into a bowtie.
+ *
+ * A jump with no directions recorded is skipped rather than guessed at — a ribbon drawn across a direction
+ * we invented would be a wire lying somewhere the author is not going to solder one.
+ */
+function jumpRibbon(j: Jump, tapeW: number, faces: FlatFace[]): AnchorPoint[] {
+  if (!j.dirA || !j.dirB) return [];
+  const half = tapeW / 2;
+  const dA = scaled(j.dirA, half), dB = scaled(j.dirB, half);
+  if (!dA || !dB) return [];
+  // Each end's own face owns both of its corners. The corners sit ON the lip, which is a boundary of the
+  // pattern, and `pushQuad` drops a quad with any corner off the material — so they are nudged a hair
+  // inward first, the same move `corridor.ts` makes for its own on-edge nodes.
+  const fa = faceUnder(j.a, faces), fb = faceUnder(j.b, faces);
+  if (!fa || !fb) return [];
+  const tris: AnchorPoint[] = [];
+  pushQuad(
+    tris,
+    [
+      nudgeInto({ x: j.a.x + dA.x, y: j.a.y + dA.y }, fa),
+      nudgeInto({ x: j.b.x + dB.x, y: j.b.y + dB.y }, fb),
+      nudgeInto({ x: j.b.x - dB.x, y: j.b.y - dB.y }, fb),
+      nudgeInto({ x: j.a.x - dA.x, y: j.a.y - dA.y }, fa),
+    ],
+    faces,
+  );
+  return tris;
+}
+
+/** `d` as a direction of length `n`, or null when it has no direction at all. */
+function scaled(d: Vec2, n: number): Vec2 | null {
+  const L = Math.hypot(d.x, d.y);
+  if (L < 1e-12) return null;
+  return { x: (d.x / L) * n, y: (d.y / L) * n };
+}
+
+/** The face a jump's end sits on — the one that owns both of that end's corners. */
+function faceUnder(p: Vec2, faces: FlatFace[]): FlatFace | null {
+  const fi = pointInFace(faces, p);
+  return fi >= 0 ? faces[fi] ?? null : null;
+}
+
+/** `p`, moved a hair toward the face's centroid — off its boundary line and unambiguously inside it. */
+function nudgeInto(p: Vec2, f: FlatFace): Vec2 {
+  const dx = f.centroid.x - p.x, dy = f.centroid.y - p.y;
+  const d = Math.hypot(dx, dy);
+  if (d < 1e-12) return p;
+  return { x: p.x + dx * 1e-6, y: p.y + dy * 1e-6 };
 }
 
 const isOrigin = (p: Vec2): boolean => p.x === 0 && p.y === 0;

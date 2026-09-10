@@ -568,6 +568,9 @@ describe("model/wire-rules", () => {
       "fold-fatigue": "warning",
       "acute-join": "warning",
       "dangling": "warning",
+      "jump-not-adjacent": "error",
+      "jump-land-clash": "error",
+      "jump-unanchored": "warning",
     };
     const all = Object.keys(severity) as WireFaultKind[];
     expect([...ALL_WIRE_FAULT_KINDS].sort()).toEqual([...all].sort());

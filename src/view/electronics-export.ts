@@ -14,6 +14,7 @@ import type { FoldFile } from "../model/fold-file.js";
 import type { Vec2 } from "../model/electronics.js";
 import type { Trace2D } from "../model/electronics-routing.js";
 import type { LedPads, Mirror, PlacedPartMark } from "../model/copper-svg-export.js";
+import type { Jump } from "../model/trace-types.js";
 import type { ElectronicsDesignAdapter } from "../model/electronics-design.js";
 
 /** Everything a cutting file is built from, gathered by the modal for one side. */
@@ -34,6 +35,8 @@ export interface ExportRequest {
   keepOff?: Vec2[];
   /** Drawn wires on neither rail, which the strips file cannot carry — see {@link stripsExport}. */
   unlayeredWires?: number;
+  /** The jumps on this side, whose lands are already in {@link traces} — see {@link carrierExport}. */
+  jumps?: Jump[];
 }
 
 /**
@@ -77,7 +80,7 @@ export function stripsExport(req: ExportRequest): ExportResult {
   const out = req.design.strips({
     fold: req.fold, traces: req.traces, tapeW: req.tapeW, baseName: `kiri-${req.side}`, pads: req.pads,
     mirror: req.mirror, sheetMm: req.sheetMm, resistors: req.resistors, switches: req.switches,
-    parts: req.parts,
+    parts: req.parts, jumps: req.jumps,
   });
   const { pwr, gnd } = out.counts;
   let message =
@@ -109,9 +112,9 @@ export function carrierExport(req: ExportRequest): ExportResult {
   const out = req.design.carrier({
     fold: req.fold, traces: req.traces, tapeW: req.tapeW, baseName: `kiri-${req.side}`,
     keepOff: req.keepOff, mirror: req.mirror, sheetMm: req.sheetMm, pads: req.pads,
-    resistors: req.resistors, switches: req.switches, parts: req.parts,
+    resistors: req.resistors, switches: req.switches, parts: req.parts, jumps: req.jumps,
   });
-  const { traces, tabs } = out.counts;
+  const { traces, tabs, jumps } = out.counts;
   let message =
     `Exported ${out.filename} — one frame holding ${traces} trace${traces === 1 ? "" : "s"}, ` +
     `${tabs} tab${tabs === 1 ? "" : "s"} to snip, ${mm(out.widthMm)}mm wide${mirrorNote(req.mirror)}`;
@@ -134,5 +137,13 @@ export function carrierExport(req: ExportRequest): ExportResult {
       ` and ${out.unclosedCuts === 1 ? "is" : "are"} drawn as ${out.unclosedCuts === 1 ? "a line" : "lines"}`;
   }
   if (out.tooNarrow) message += " — too narrow to cut; scale the pattern up before cutting";
+  // The one thing on the sheet that is not finished when the cutting is. A jump's two lands are cut with
+  // the rest of the copper and look like any other stub of tape, so without this the file hands someone a
+  // circuit that is open until they find the `J`s themselves.
+  if (jumps > 0) {
+    message +=
+      ` — ${jumps} jump${jumps === 1 ? "" : "s"} to solder by hand: join each pair of J-labelled lands` +
+      ` with wire once the sheet is folded`;
+  }
   return { filename: out.filename, svg: out.svg, message };
 }

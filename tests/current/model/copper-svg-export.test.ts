@@ -14,6 +14,9 @@ import { COMPONENTS } from "../../../src/model/footprints.generated.js";
 import { padAt, padNamed, padSize } from "../../../src/model/footprint.js";
 import { PCB_COLOURS } from "../../../src/model/part-render.js";
 import { flatFaces, gapGraph, ledOf, type Circuit, type Led, type Vec2 } from "../../../src/model/electronics.js";
+import { foldAdjacency } from "../../../src/model/fold-adjacency.js";
+import { jumpLabels, jumpLandTraces } from "../../../src/model/manual-jump.js";
+import type { Jump } from "../../../src/model/trace-types.js";
 import {
   batteryTerminals,
   patternDiag,
@@ -204,7 +207,7 @@ describe("model/copper-svg-export", () => {
   it("produces nothing to cut when nothing is planned", () => {
     const { fold, tapeW } = planned("house.fkld");
     const out = buildCopperSvgExport(fold, [], tapeW);
-    expect(out.counts).toEqual({ pwr: 0, gnd: 0 });
+    expect(out.counts).toEqual({ pwr: 0, gnd: 0, jumps: 0 });
     expect(out.svg).toContain("<svg");
   });
 
@@ -1321,5 +1324,95 @@ describe("model/copper-svg-export LEDs", () => {
       fold, traces, tapeW, "k", pads.map((p) => ({ ...p, component: "NOT_A_PART" })),
     ).svg;
     expect(svg).not.toContain('<g id="parts"');
+  });
+});
+
+/**
+ * One drawn jump across a house seam: the two lips of one cut, met in the middle.
+ *
+ * The `Jump` is built by hand rather than through `resolveJump`, because what is under test here is the
+ * export, not the resolution — and a literal says exactly which pair the two ends are on, which is what
+ * the label is numbered from. Each end is the midpoint of its lip, stepped a quarter of a tape width
+ * toward its face's centroid so it sits on material rather than exactly on the boundary.
+ */
+function housejump(net = "gnd") {
+  const { fold, faces, traces, tapeW, keepOff, pads } = planned("house.fkld");
+  const adjacency = foldAdjacency(fold, faces);
+  expect(adjacency.pairs.length).toBeGreaterThan(0);
+  const pair = adjacency.pairs[0]!;
+  const on = (lip: [Vec2, Vec2], face: number): Vec2 => {
+    const mid = { x: (lip[0].x + lip[1].x) / 2, y: (lip[0].y + lip[1].y) / 2 };
+    const c = faces[face]!.centroid;
+    const dx = c.x - mid.x, dy = c.y - mid.y;
+    const L = Math.hypot(dx, dy) || 1;
+    const step = tapeW * 0.25;
+    return { x: mid.x + (dx / L) * step, y: mid.y + (dy / L) * step };
+  };
+  const jump: Jump = {
+    a: on(pair.lipA, pair.faceA), b: on(pair.lipB, pair.faceB), net, pair: 0, source: "drawn",
+  };
+  const lands = jumpLandTraces([jump], tapeW, faces);
+  expect(lands).toHaveLength(2);
+  return { fold, faces, tapeW, keepOff, pads, jump, lands, traces: [...traces, ...lands] };
+}
+
+describe("model/copper-svg-export: jumps", () => {
+  it("cuts a jump's lands as copper and marks the pair on the annotation layer", { timeout: 20_000 }, () => {
+    // The wire itself is not on this sheet and never will be: it is soldered across the cut once the
+    // pattern is folded. What the file has to carry is the two lands it is soldered to — ordinary copper,
+    // cut with everything else — and the fact that those two lands go together, which nothing about their
+    // shape says.
+    const { fold, tapeW, keepOff, pads, jump, traces } = housejump();
+    const plain = buildCopperSvgExport(fold, traces, tapeW, "k", pads);
+    const withJump = buildCopperSvgExport(fold, traces, tapeW, "k", pads, undefined, undefined, [], [], [], [jump]);
+    // The lands are `gnd` traces and are cut as `gnd` strips — no branch anywhere for a jump.
+    expect(plain.counts.gnd).toBe(
+      buildCopperSvgExport(fold, traces.slice(0, -2), tapeW, "k", pads).counts.gnd + 2,
+    );
+    // The strips file has no annotation layer, so a jump changes nothing there but the count.
+    expect(withJump.svg).toBe(plain.svg);
+    expect(withJump.counts.jumps).toBe(1);
+    expect(plain.counts.jumps).toBe(0);
+
+    const carrier = buildCopperCarrierExport(
+      fold, traces, tapeW, "k", keepOff, undefined, undefined, pads, [], [], [], [jump],
+    );
+    expect(carrier.counts.jumps).toBe(1);
+    const ann = carrier.svg.slice(carrier.svg.indexOf('<g id="annotation"'));
+    // `J1` at both ends: the name someone holding the folded sheet is looking for, twice.
+    expect([...ann.matchAll(/>J1</g)]).toHaveLength(2);
+    // A ring on each land, and the dashed link that says the two belong together.
+    expect([...ann.matchAll(/<circle[^>]*fill="none"/g)].length).toBeGreaterThanOrEqual(2);
+    expect(ann).toContain("stroke-dasharray");
+  });
+
+  it("keeps the jump marks out of the cut", { timeout: 20_000 }, () => {
+    // An annotation cut along a land would sever the land it marks. Same rule as the parts layer.
+    const { fold, tapeW, keepOff, pads, jump, traces } = housejump();
+    const carrier = buildCopperCarrierExport(
+      fold, traces, tapeW, "k", keepOff, undefined, undefined, pads, [], [], [], [jump],
+    );
+    const cut = cutLayer(carrier.svg);
+    expect(cut).not.toContain("stroke-dasharray");
+    expect(cut).not.toContain(">J1<");
+  });
+
+  it("is byte-identical to the file built before jumps existed when none is passed", { timeout: 20_000 }, () => {
+    // The parameter is appended and defaulted, so every existing caller keeps the file it had. Checked on
+    // the same traces, lands included: it is the `jumps` argument that draws the marks, nothing else.
+    const { fold, tapeW, keepOff, pads, jump, traces } = housejump();
+    const args = [fold, traces, tapeW, "k", keepOff, undefined, undefined, pads] as const;
+    const bare = buildCopperCarrierExport(...args);
+    expect(buildCopperCarrierExport(...args, [], [], [], []).svg).toBe(bare.svg);
+    expect(buildCopperCarrierExport(...args, [], [], [], [jump]).svg).not.toBe(bare.svg);
+    expect(bare.counts.jumps).toBe(0);
+  });
+
+  it("gives two jumps across one seam the same label, and two seams different ones", () => {
+    // The label names the SEAM, not the jump: someone soldering is looking for the two lands marked J1,
+    // of which there may be four. Ordered by `pair`, which `FoldAdjacency.pairs` fixes.
+    const p = { x: 0, y: 0 };
+    const j = (pair: number, net: string): Jump => ({ a: p, b: p, net, pair, source: "drawn" });
+    expect(jumpLabels([j(3, "gnd"), j(3, "pwr"), j(1, "gnd")])).toEqual(["J2", "J2", "J1"]);
   });
 });

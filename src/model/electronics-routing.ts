@@ -59,8 +59,9 @@ import {
   type SheetSpec,
 } from "./fold-strain.js";
 import { CALIBRATED_DEMAND, tapeMmForDemand, traceDemand } from "./tape-demand.js";
-import { resolveNetlist, type NetlistFault } from "./netlist.js";
-import { planNets, type RoutedNet } from "./net-routing.js";
+// The netlist half of the router, which owns the declared nets end to end — see `net-routing.ts`.
+import { routeDeclaredNets } from "./net-routing.js";
+import type { FoldAdjacency } from "./fold-adjacency.js";
 import { type Box, type Footprint, type Pad, padAt, padSize } from "./footprint.js";
 import {
   add,
@@ -127,7 +128,15 @@ export type {
 } from "./trace-types.js";
 
 export { crossesAny, patternDiag, ptKey, segsCross } from "./trace-geometry.js";
+
+/**
+ * And the plan itself, which moved to `routed-circuit.ts` so that naming a {@link RoutedCircuit} no longer
+ * means importing the router either. Re-exported for the same reason as everything above.
+ */
+export { EMPTY_ROUTE, type RoutedCircuit } from "./routed-circuit.js";
+import type { RoutedCircuit } from "./routed-circuit.js";
 import { type Target, nearestTour, tourOf, twoOpt } from "./led-tour.js";
+import { seatLedLegs } from "./led-legs.js";
 import { asTree, dodgeChips, junctions, straighten } from "./trace-shaping.js";
 import {
   SWITCH_GAP_MM,
@@ -246,65 +255,6 @@ export {
   type PlanKey,
 } from "./route-metrics.js";
 
-/** One continuous strip of copper tape: a centreline polyline plus which net it carries. */
-export interface RoutedCircuit {
-  traces: Trace2D[];
-  /** Index-aligned with `circuit.leds` (including unroutable ones, which get zeroed pads). */
-  pads: PadPair[];
-  /**
-   * Indices of LEDs that got no copper: no battery, no gap left under them, no path across the material
-   * to their tiles — or a part that cannot be seated on the hinge they sit on (see {@link seatLed}).
-   * Their entry in {@link pads} is zeroed. Reported rather than drawn wrong, like any other part that
-   * does not fit.
-   */
-  unreachable: number[];
-  /** Where each resistor ended up: the two ends of the break its leads bridge. */
-  resistors: PartSpan[];
-  /** Likewise each switch: the break between its second pin and its third. */
-  switches: PartSpan[];
-  /**
-   * Likewise every other library part, each carrying the id it was placed from so whatever draws it can
-   * look its footprint up. Always an array — `[]` when the circuit has none.
-   */
-  parts: PartPlacement[];
-  /**
-   * How each declared net fared — the copper laid for it and any terminals it could not reach.
-   *
-   * Empty on a circuit with no `nets`, which is every file saved before the netlist existed.
-   */
-  nets: RoutedNet[];
-  /** Everything wrong with the netlist itself, as opposed to the routing of it. Always an array. */
-  netFaults: NetlistFault[];
-  /**
-   * Whether the circuit this plan was made for had a battery on it.
-   *
-   * The only thing on the sheet whose net membership is not a routing outcome: a battery's two terminals
-   * ARE PWR and GND, drawn as such, whatever the router does with them. It is recorded here rather than
-   * read off the live circuit because that is the question anything reporting on the copper is actually
-   * asking — *was there a battery in the plan I am looking at* — and the live circuit answers a different
-   * one whenever the plan is out of date. A battery alone routes to no traces at all, so `traces` cannot
-   * stand in for it. Optional: a plan object from before this field reads as no battery, the safe way.
-   */
-  battery?: boolean;
-  /**
-   * LEDs that could not be **seated** on their hinge, as indices into `circuit.leds`.
-   *
-   * A subset of {@link unreachable}, separated because the two are different faults with different fixes
-   * and were indistinguishable to the author. An unreachable LED sits on a tile the copper cannot get to:
-   * the answer is to move it, or to bridge by hand. An unseated one is on a hinge its own package does not
-   * fit — its two pads, stepped off the hinge by the tape's width, do not land on their own tiles — and the
-   * answer is a smaller package or a coarser sheet. Measured on `akde-square-pyramid`, where 8 of 12 LEDs
-   * fail this way and none fail the other; reported as "unreachable" it reads as a routing failure and
-   * sends the author looking in the wrong place entirely.
-   */
-  unseated: number[];
-}
-
-/** Where a placed library part ended up. */
-export const EMPTY_ROUTE: RoutedCircuit = {
-  traces: [], pads: [], unreachable: [], unseated: [], resistors: [], switches: [], parts: [], nets: [], netFaults: [],
-};
-
 /** How much dearer it is to travel through a hinge that has an LED on it than an empty one. Large enough to
  *  route around whenever there is any alternative, finite so that a dead-end tile stays reachable. */
 /**
@@ -389,6 +339,14 @@ export function planRoutes(
    */
   bandCap: number = STRAIN_BAND_CAP,
   graded: boolean = true,
+  /**
+   * Which cuts the folded artifact rejoins, so a **declared net** may cross one — `fold-adjacency.ts`.
+   *
+   * Reaches {@link routeDeclaredNets} and nothing else: the bus is planned jump-free (D9 / P4, and the
+   * comment at its corridor says so where it happens). Null by default, and null is bit-identical to the
+   * router before jumps existed.
+   */
+  adjacency: FoldAdjacency | null = null,
 ): RoutedCircuit {
   // **New parameters APPEND. Never insert one.** Every optional parameter here has a default, so an
   // inserted one leaves every existing call compiling while it silently receives the wrong argument —
@@ -402,11 +360,12 @@ export function planRoutes(
     // Still route the netlist: it does not need a battery, and a circuit may be nothing but nets.
     const only = routeDeclaredNets(
       circuit, faces, gaps, tapeWidthFor(faces, sheetMm, sheet, circuit), [], sheet,
-      tapeMmFor(faces, sheetMm, sheet, circuit),
+      tapeMmFor(faces, sheetMm, sheet, circuit), undefined, adjacency,
     );
     return {
       traces: only.traces, pads, unreachable, unseated: [], resistors: [], switches: [], parts: [],
       nets: only.nets, netFaults: only.faults, battery: !!circuit.battery,
+      ...(only.jumps.length ? { jumps: only.jumps } : {}),
     };
   }
 
@@ -452,10 +411,11 @@ export function planRoutes(
     // netlist-only circuit with no copper at all.
     // The battery's squares go over: with no bus there is no rail out of them, so the netlist is what has
     // to reach the battery — see `netlist.ts`, the `BATTERY_PART` branch.
-    const only = routeDeclaredNets(circuit, faces, gaps, tapeW, [], sheet, tapeMm, term);
+    const only = routeDeclaredNets(circuit, faces, gaps, tapeW, [], sheet, tapeMm, term, adjacency);
     return {
       traces: only.traces, pads, unreachable, unseated: [], resistors: [], switches: [], parts: [],
       nets: only.nets, netFaults: only.faults, battery: !!circuit.battery,
+      ...(only.jumps.length ? { jumps: only.jumps } : {}),
     };
   }
 
@@ -464,6 +424,7 @@ export function planRoutes(
   // used to happen, and is what put copper outside the body. Better to report them honestly.
   // The crossing penalty is the pattern's bounding-box diagonal, as in the paper: larger than any single step
   // in the graph, so a crease is crossed only when nothing else reaches the tile.
+  // No adjacency: bus rails stay jump-free; see D9 / P4.
   const corridor = buildCorridor(
     faces, gaps, patternDiag(faces) * creasePenaltyFrac, tapeW, sheet, tapeMm, bandCap, graded);
   const reach = reachableFaces(corridor, battery.face);
@@ -480,10 +441,11 @@ export function planRoutes(
     // netlist-only circuit with no copper at all.
     // The battery's squares go over: with no bus there is no rail out of them, so the netlist is what has
     // to reach the battery — see `netlist.ts`, the `BATTERY_PART` branch.
-    const only = routeDeclaredNets(circuit, faces, gaps, tapeW, [], sheet, tapeMm, term);
+    const only = routeDeclaredNets(circuit, faces, gaps, tapeW, [], sheet, tapeMm, term, adjacency);
     return {
       traces: only.traces, pads, unreachable, unseated: [], resistors: [], switches: [], parts: [],
       nets: only.nets, netFaults: only.faults, battery: !!circuit.battery,
+      ...(only.jumps.length ? { jumps: only.jumps } : {}),
     };
   }
 
@@ -1199,7 +1161,7 @@ export function planRoutes(
   // LEDs and the battery, which are pinned to hinges and faces and have nowhere else to go, while a net is
   // free to take any path across the material. Handing the nets the immovable copper as an obstacle is the
   // only ordering that can honour the no-overlap condition for both at once.
-  const netted = routeDeclaredNets(circuit, faces, gaps, tapeW, busTraces, sheet, tapeMm, term);
+  const netted = routeDeclaredNets(circuit, faces, gaps, tapeW, busTraces, sheet, tapeMm, term, adjacency);
 
   return {
     traces: [...busTraces, ...netted.traces],
@@ -1212,165 +1174,7 @@ export function planRoutes(
     nets: netted.nets,
     netFaults: netted.faults,
     battery: !!circuit.battery,
+    ...(netted.jumps.length ? { jumps: netted.jumps } : {}),
   };
-}
-
-/**
- * Whether a strip of tape laid from `a` to `b` stays on the material.
- *
- * Both edges are checked, not just the centreline. Tape has width, so a run tracking the boundary keeps its
- * centre on the material while half the strip hangs off it — which is what put copper outside the shape.
- *
- * Top-level and exported rather than a closure in the router, so that anything else needing to know
- * whether copper fits on the sheet — a hand-drawn wire, for one — asks this rather than growing a second
- * reading of the same question. Two readings of one footprint have already disagreed in this codebase
- * once, over the coin cell, and the cost was a cut file that contradicted its own drawing.
- */
-/**
- * Route the nets the author declared, keeping them clear of the bus and of each other.
- *
- * Separated from {@link planRoutes} so the netlist path can be read on its own, and so a circuit with no
- * nets pays nothing for it beyond one length check.
- *
- * The bus copper is handed over as a set of already-laid polylines, which {@link planNets} treats exactly
- * as it treats an earlier net's copper: nothing may come within a tape width of it. That is what keeps the
- * no-overlap guarantee true of the whole sheet rather than only of the netlist.
- *
- * It is also handed over **tagged with the net each run is a rail for**, which is a different claim and the
- * one that joins a netlist to a battery. A declared net sharing an id with a rail — `pwr`, `gnd` — taps
- * that rail rather than avoiding it, so a pad wired to PWR is wired to the battery's positive terminal and
- * not merely to the other pads that happen to be on PWR. Every other rail stays an obstacle to it. Until
- * this existed a lone pad on PWR was reported a `single-terminal-net` fault and got no copper at all.
- */
-function routeDeclaredNets(
-  circuit: Circuit,
-  faces: FlatFace[],
-  gaps: GapEdge[],
-  tapeW: number,
-  bus: Trace2D[],
-  sheet: SheetSpec = DEFAULT_SHEET,
-  tapeMm: number = TAPE_MM,
-  /** The battery's two terminal squares, so the netlist can route to them where the bus is not already
-   *  running a rail out of them — see `netlist.ts`, the `BATTERY_PART` branch. */
-  batteryPads?: { pwr: Vec2; gnd: Vec2 },
-): { traces: Trace2D[]; nets: RoutedNet[]; faults: NetlistFault[] } {
-  if (!circuit.nets?.length) return { traces: [], nets: [], faults: [] };
-  // Widths carried over, not dropped. A rail pinches to about a third of the tape where it passes an LED,
-  // and handing the clearance gate a bare polyline made every net keep a full tape width from copper that
-  // narrow — room given away for nothing.
-  const rails = bus.map((t) => ({
-    net: t.net,
-    pts: t.pts,
-    ...(t.widths ? { widths: t.widths } : t.width !== undefined ? { widths: t.pts.map(() => t.width!) } : {}),
-  }));
-  const { nets, faults, fields, pads } =
-    resolveNetlist(circuit, tapeW, tapeMm, new Set(rails.map((r) => r.net)), batteryPads);
-  if (!nets.length) return { traces: [], nets: [], faults };
-  // The bus goes over as `rails` and NOT also as `obstacles`. Passed twice it arrives twice — once tagged
-  // with the net it is a rail for and once anonymously — and the anonymous copy is not excluded from a
-  // net's own clearance test, so every tap is refused by the very rail it is trying to reach.
-  const routed = planNets(nets, faces, gaps, tapeW, [], sheet, tapeMm, rails, fields, pads);
-  return { traces: routed.traces, nets: routed.nets, faults };
-}
-
-/**
- * The copper under each LED leg.
- *
- * Laid as an extension of the run that already ends on the pad, not as a strip of its own. As its own
- * run it doubled the strip count — one LED came out as four runs rather than two — and a second strip
- * lying against the first is also what produced the self-overlap and the acute joins the router is
- * measured on. A leg is the last inch of the rail, so it is the same piece of tape.
- *
- * A leg is `padW` long and sits **outboard** of the copper end the rail arrives at: the two nets stop
- * `gap` apart so the chip's body has bare pattern under it, which puts every millimetre of both legs
- * past where the rail stops. So the leg's own copper is not something routing produces — it is part of
- * seating the part, like the switch's lands, and it is laid whether or not the route happened to arrive
- * in a shape that covers it.
- *
- * It had to become unconditional. `landPads` squares an approach into the axis where it can, and where it
- * can it lays exactly this rectangle as part of the rail, so nothing is added; but it only ever sees a pad
- * a run *ends* at, and it refuses a bend that would fold back or reach off the shape. Over the six bundled
- * patterns that left most legs partly or wholly off their own copper — measured on a 19x19 grid over each
- * leg, the worst leg on a pattern held 24-42% of its area, and the best 91%, scattered by which landings
- * happened to square rather than by anything about the part. With the land laid every leg sits on copper
- * along its whole length, and what is left uncovered is only the overhang across the axis that
- * {@link landingWidth} deliberately leaves (see its floor).
- *
- * Skipped where the rail already runs down the leg — that is `landPads` having done it — so a squared
- * landing stays one continuous strip of tape rather than gaining a second one lying exactly on top.
- */
-function seatLedLegs(laid: Trace2D[], targets: Target[], pads: PadPair[]): Trace2D[] {
-  // Worked on a copy: `laid` is the routed set and the caller still holds it.
-  const runs: Trace2D[] = laid.map((t) => ({ ...t, pts: [...t.pts] }));
-  for (const t of targets) {
-    const pair = pads[t.slot];
-    if (!pair?.component) continue;
-    for (const net of ["pwr", "gnd"] as const) {
-      const own = net === "pwr" ? pair.pwr : pair.gnd;
-      const mate = net === "pwr" ? pair.gnd : pair.pwr;
-      const axis = unit(sub(own, mate));
-      const anchor = add(own, scale(axis, t.reach));
-      const already = runs.some(
-        (r) =>
-          r.net === net &&
-          r.pts.some(
-            (p, i) =>
-              i > 0 &&
-              ((near(p, own) && near(r.pts[i - 1]!, anchor)) ||
-                (near(p, anchor) && near(r.pts[i - 1]!, own))),
-          ),
-      );
-      if (already) continue;
-      // Extend the run that already ends on this pad rather than laying a second strip beside it — but
-      // only where the leg carries on the way the run was already going.
-      //
-      // The leg points outboard, away from the other pad. A run that arrived at the pad FROM outboard has
-      // already laid that copper, and appending the leg folds it back along itself: the strip doubles up,
-      // and the outline's miter at a 180-degree reversal throws a long spike out past the pad and into the
-      // bare gap the chip body has to sit on. That spike was copper across the LED's own terminals —
-      // measured before this guard, every LED on house, church and puffin had copper in its body gap,
-      // covering up to 12 of 19 samples across it.
-      const host = runs.find((r) => r.net === net && (near(r.pts[0]!, own) || near(r.pts[r.pts.length - 1]!, own)));
-      if (host) {
-        const atEnd = near(host.pts[host.pts.length - 1]!, own);
-        const prev = atEnd ? host.pts[host.pts.length - 2] : host.pts[1];
-        // Which way the run was travelling as it arrived, against the way the leg goes.
-        const came = prev ? unit(sub(own, prev)) : axis;
-        const carriesOn = came.x * axis.x + came.y * axis.y > 0;
-        if (carriesOn) {
-          if (atEnd) host.pts.push(anchor);
-          else host.pts.unshift(anchor);
-          continue;
-        }
-        // The run already covers the leg, but it arrives at an ANGLE to the LED's axis, and a strip's end
-        // is squared off across its own direction — so one corner of that cap swings round and pokes into
-        // the bare gap the chip body sits on. Measured on house: the gnd run reached about a third of the
-        // way across five of the six gaps. Bringing the last stretch onto the axis turns the cap square to
-        // the gap instead, and squares the pad onto the tape at the same time.
-        if (prev && Math.abs(came.x * axis.x + came.y * axis.y) < 0.999) {
-          // Outboard of the pad, the side the run is already coming from — inboard would lay copper
-          // straight across the gap, which is the very thing this is here to stop.
-          const along = anchor;
-          if (atEnd) host.pts.splice(host.pts.length - 1, 0, along);
-          else host.pts.splice(1, 0, along);
-        }
-      } else {
-        // A separate strip from the pad outboard along the leg, where no run ENDS on this pad.
-        //
-        // It looks redundant when a run already passes through the pad, and guarding on that does cut the
-        // strip count hard — puffin at twelve LEDs goes 25 runs to 14. But it is not redundant, and the
-        // measurement says so: a run that merely passes the pad is narrowed by {@link landingWidth} to
-        // keep the two nets apart under the chip, which caps it at 1.14mm beneath a 1.70mm pad. Guarding
-        // the stub took GND coverage from 96-100% down to 30-99%, LEDs at 42%, 50%, 30%. The stub lands
-        // END-ON, which is exempt from that narrowing, and full-width copper under the leg is the whole
-        // reason the chip lights.
-        //
-        // So the extra strips are bought, not accidental: strip count against pad coverage, and coverage
-        // is the one that decides whether the circuit works.
-        runs.push({ net, pts: [own, anchor] });
-      }
-    }
-  }
-  return runs;
 }
 

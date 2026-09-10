@@ -30,6 +30,7 @@ export function shellMarkup(): string {
                 <span class="el-seg">
                   <button type="button" class="el-tool" data-tool="battery" title="Place the battery — click a tile">Battery</button>
                   <button type="button" class="el-tool" data-tool="wire" title="Draw copper by hand — tap to lay a vertex, tap the last one (or Enter) to finish, Backspace to take one back, X+tap to drop one, Delete to remove the selected wire">Wire</button>
+                  <button type="button" class="el-tool" data-tool="jump" title="Join the two lips of one cut — tap a lip, then tap the highlighted lip it folds onto, and the two solder lands are marked J1. Escape abandons a half-drawn jump, Delete removes the selected one">Jump</button>
                 </span>
               </span>
               <span class="el-group el-parts">

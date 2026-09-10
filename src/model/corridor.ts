@@ -22,6 +22,8 @@ import {
   pointInFace,
 } from "./electronics.js";
 import type { Corridor, CorridorBridge } from "./trace-types.js";
+import { addJumpLinks } from "./corridor-jumps.js";
+import type { FoldAdjacency } from "./fold-adjacency.js";
 import {
   DEFAULT_SHEET,
   creaseCostFraction,
@@ -514,6 +516,16 @@ export function buildCorridor(
    * severity rather than merely detect it.
    */
   graded: boolean = true,
+  /**
+   * Which cuts the folded artifact rejoins — `fold-adjacency.ts`. Given, the corridor gains a **jump**
+   * across each pair: a hop the builder solders by hand once the sheet is folded, priced by
+   * `corridor-jumps.ts › JUMP_TOLL_DIAGS` and charged nothing for its flat length.
+   *
+   * **Null by default, and null must stay bit-identical to no adjacency at all.** Every caller that has
+   * not opted in — the two-rail bus at `electronics-routing.ts`, every pinned routing test — gets the
+   * corridor it always got.
+   */
+  adjacency: FoldAdjacency | null = null,
 ): Corridor {
   const epsMax = graded ? patternEpsMax(gaps, tapeW, tapeMm, sheet) : 0;
   const mids = new Map<number, Vec2[]>();
@@ -521,6 +533,7 @@ export function buildCorridor(
   const point = new Map<string, Vec2>();
   const cost = new Map<string, number>();
   const band = new Map<string, number>();
+  const chords = new Map<number, Set<string>>();
 
   // Crossing penalties, after Nakaya et al., "4D Leaf Circuits" (SCF '25), Algorithm 1.
   //
@@ -648,9 +661,17 @@ export function buildCorridor(
     }
   }
 
+  // The corridor object is assembled here rather than at the return so that {@link addJumpLinks} can
+  // register its lip nodes through it — and it must run *before* the chord loop below, or those nodes
+  // would sit on their lips with no chord to the rest of their tile. Every field is a live map the loop
+  // below keeps filling.
+  const c: Corridor = { mids, faceOf, point, chords, cost, band, refused, bridges };
+  if (adjacency && adjacency.pairs.length > 0) {
+    addJumpLinks(c, faces, adjacency, bboxDiag(faces), bandCap);
+  }
+
   // A chord is only a way through if it stays on the tile. Concave faces have pairs of edge midpoints whose
   // straight line leaves the material, and taking one would put copper off the body.
-  const chords = new Map<number, Set<string>>();
   faces.forEach((f, fi) => {
     const list = mids.get(fi) ?? [];
     const ok = new Set<string>();
@@ -668,7 +689,7 @@ export function buildCorridor(
   for (const key of gapKeys) {
     if (!point.has(key)) continue;
   }
-  return { mids, faceOf, point, chords, cost, band, refused, bridges };
+  return c;
 }
 
 /** How finely a lip is scanned for the stretch of it that faces the other lip within reach. */
@@ -909,6 +930,23 @@ export function searchCorridor(
       const k = b.to;
       const m = c.point.get(k);
       if (!m || c.refused.has(k)) continue;
+      // A jump is not copper in the plane, so none of the planar readings apply to it: it crosses no
+      // other net's tape (there is nothing between its ends to cross), it sweeps no terminal, and its
+      // flat length is not a length the builder lays. Priced flat and carrying no band.
+      //
+      // Exclusivity, not tolling, is what keeps two nets off one land: a toll multiplies the step, and
+      // this step is zero, so any toll on it is zero too. A lip node another net has taken is refused.
+      if (b.kind === "jump") {
+        if (blocked.has(k) && !mine?.has(k)) continue;
+        const w = best + cost(k, 0) + b.price;
+        if (pack(worst, w) < pack(worstOf.get(k) ?? Infinity, dist.get(k) ?? Infinity)) {
+          dist.set(k, w);
+          worstOf.set(k, worst);
+          prev.set(k, at);
+          heap.push(k, pack(worst, w));
+        }
+        continue;
+      }
       const cuts = theirs ? crossesAny(here, m, theirs) : false;
       if (cuts && strict) continue;
       const w = best + cost(k, Math.sqrt(dist2(here, m))) * (cuts ? TERMINAL_TOLL : 1) + b.price;
