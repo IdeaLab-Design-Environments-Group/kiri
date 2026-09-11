@@ -17,9 +17,9 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 /** The editor's whole shell — header, toolbar, canvas and sidebar — as one HTML string. */
 export function shellMarkup(): string {
   return `
-      <div class="el-page-inner" role="region" aria-label="Electronics editor">
+      <div class="el-page-inner" role="region" aria-label="electronics editor">
         <header class="el-page-header">
-          <button type="button" class="el-back sim-modal-close" aria-label="Back to the model">← Model</button>
+          <button type="button" class="el-back sim-modal-close" aria-label="back to the model">← Model</button>
           <span class="el-page-title">Electronics</span>
         </header>
         <div class="el-body">
@@ -28,20 +28,19 @@ export function shellMarkup(): string {
               <span class="el-group">
                 <span class="el-group-label">Place</span>
                 <span class="el-seg">
-                  <button type="button" class="el-tool" data-tool="battery" title="Place the battery — click a tile">Battery</button>
-                  <button type="button" class="el-tool" data-tool="wire" title="Draw copper by hand — tap to lay a vertex, tap the last one (or Enter) to finish, Backspace to take one back, X+tap to drop one, Delete to remove the selected wire">Wire</button>
-                  <button type="button" class="el-tool" data-tool="jump" title="Join the two lips of one cut — tap a lip, then tap the highlighted lip it folds onto, and the two solder lands are marked J1. Escape abandons a half-drawn jump, Delete removes the selected one">Jump</button>
+                  <button type="button" class="el-tool" data-tool="battery" title="place the battery — click a tile">battery</button>
+                  <button type="button" class="el-tool" data-tool="wire" title="draw copper by hand — tap to lay a vertex, tap the last one (or Enter) to finish, Backspace to take one back, X+tap to drop one, Delete to remove the selected wire">wire</button>
                 </span>
               </span>
               <span class="el-group el-parts">
-                <label class="el-group-label el-part-label" for="el-part">Part</label>
+                <label class="el-group-label el-part-label" for="el-part">part</label>
                 <span class="el-part-picker">
                   <span class="el-part-fields">
-                    <input type="search" id="el-part-search" class="el-part-search" placeholder="Search by name or package" aria-label="Search the component library" autocomplete="off">
+                    <input type="search" id="el-part-search" class="el-part-search" placeholder="search by name or package" aria-label="search the component library" autocomplete="off">
                     <span class="el-part-menu-wrap">
-                      <button type="button" class="el-part-trigger" aria-haspopup="listbox" aria-expanded="false" title="Pick a library part, then click either rail to place it. The copper is broken there, so the tape does not short the part out"></button>
-                      <div class="el-part-menu" role="listbox" aria-label="Component library" hidden></div>
-                      <select id="el-part" class="el-part" aria-hidden="true" tabindex="-1" title="Pick a library part, then click either rail to place it. The copper is broken there, so the tape does not short the part out"></select>
+                      <button type="button" class="el-part-trigger" aria-haspopup="listbox" aria-expanded="false" title="pick a library part, then click either rail to place it. The copper is broken there, so the tape does not short the part out"></button>
+                      <div class="el-part-menu" role="listbox" aria-label="component library" hidden></div>
+                      <select id="el-part" class="el-part" aria-hidden="true" tabindex="-1" title="pick a library part, then click either rail to place it. The copper is broken there, so the tape does not short the part out"></select>
                     </span>
                   </span>
                   <span class="el-part-count" aria-live="polite"></span>
@@ -52,39 +51,39 @@ export function shellMarkup(): string {
               <span class="el-group el-place-modes">
                 <span class="el-group-label">Seat</span>
                 <span class="el-seg">
-                  <button type="button" class="el-place" data-place="gap" title="Across a fold: the component bridges the hinge between two tiles, a pad on each side">Across a fold</button>
-                  <button type="button" class="el-place" data-place="free" title="On a tile: the component stands where you put it, and its pads are wired by nets or by hand-drawn copper">On a tile</button>
+                  <button type="button" class="el-place" data-place="gap" title="across a fold: the component bridges the hinge between two tiles, a pad on each side">across a fold</button>
+                  <button type="button" class="el-place" data-place="free" title="on a tile: the component stands where you put it, and its pads are wired by nets or by hand-drawn copper">on a tile</button>
                 </span>
               </span>
               <span class="el-group el-build-modes">
                 <span class="el-group-label">Build</span>
                 <span class="el-seg">
-                  <button type="button" class="el-build" data-material="vinyl" title="Vinyl / paper: one continuous sheet, scored at the creases. Nothing is cut away, so the copper may run anywhere and a crease is priced by its assignment">Vinyl</button>
+                  <button type="button" class="el-build" data-material="vinyl" title="vinyl / paper: one continuous sheet, scored at the creases. Nothing is cut away, so the copper may run anywhere and a crease is priced by its assignment">vinyl</button>
                   <button type="button" class="el-build" data-material="printed" title="3D-printed: rigid tiles with a bare hinge gap between them. The gaps are what an LED bridges, and their measured width is what the crease strain is computed from">3D-printed</button>
                 </span>
               </span>
               <span class="el-group el-face-modes">
                 <span class="el-group-label">Side</span>
                 <span class="el-seg">
-                  <button type="button" class="el-face" data-side="inside" title="Edit the inside face's copper — its own circuit, independent of the outside">Inside</button>
-                  <button type="button" class="el-face" data-side="outside" title="Edit the outside face's copper — its own circuit, independent of the inside">Outside</button>
+                  <button type="button" class="el-face" data-side="inside" title="edit the inside face's copper — its own circuit, independent of the outside">inside</button>
+                  <button type="button" class="el-face" data-side="outside" title="edit the outside face's copper — its own circuit, independent of the inside">outside</button>
                 </span>
               </span>
               <span class="el-group el-group-end">
-                <button type="button" class="el-clear" title="Remove all LEDs, the battery and routes">Clear all</button>
+                <button type="button" class="el-clear" title="remove all LEDs, the battery and routes">clear all</button>
               </span>
             </div>
           </div>
           <div class="el-workspace">
-            <aside class="el-side" aria-label="Nets and pads">
+            <aside class="el-side" aria-label="nets and pads">
               <div class="el-side-sect">
                 <div class="el-side-head">
                   <span class="el-side-title">Nets</span>
                   <span class="el-side-tally" aria-live="polite"></span>
-                  <button type="button" class="el-net-add" aria-label="New net" title="Declare a net. Names are yours — PWR, GND, SDA — and a pad is wired by putting it on one">+</button>
+                  <button type="button" class="el-net-add" aria-label="new net" title="declare a net. Names are yours — PWR, GND, SDA — and a pad is wired by putting it on one">+</button>
                 </div>
-                <input type="text" class="el-net-new" placeholder="New net name" aria-label="New net name" autocomplete="off">
-                <div class="el-net-list" role="tree" aria-label="Declared nets"></div>
+                <input type="text" class="el-net-new" placeholder="new net name" aria-label="new net name" autocomplete="off">
+                <div class="el-net-list" role="tree" aria-label="declared nets"></div>
               </div>
               <div class="el-side-sect el-placed" hidden>
                 <div class="el-side-head">
@@ -101,48 +100,48 @@ export function shellMarkup(): string {
               </div>
             </aside>
             <div class="el-canvas-wrap">
-              <svg class="el-svg" xmlns="${SVG_NS}" aria-label="Electronics flat-pattern canvas"></svg>
+              <svg class="el-svg" xmlns="${SVG_NS}" aria-label="electronics flat-pattern canvas"></svg>
             </div>
-            <aside class="el-tools" aria-label="View and output">
+            <aside class="el-tools" aria-label="view and output">
               <div class="el-side-sect el-view-modes">
                 <div class="el-side-head"><span class="el-side-title">Copper</span></div>
                 <span class="el-seg">
-                  <button type="button" class="el-view" data-view="traces" title="Show the copper as separate strips">Strips</button>
-                  <button type="button" class="el-view" data-view="carrier" title="Show the copper as one carrier frame holding every trace in place">Carrier</button>
+                  <button type="button" class="el-view" data-view="traces" title="show the copper as separate strips">strips</button>
+                  <button type="button" class="el-view" data-view="carrier" title="show the copper as one carrier frame holding every trace in place">carrier</button>
                 </span>
               </div>
               <div class="el-side-sect el-route-modes">
                 <div class="el-side-head"><span class="el-side-title">Route</span></div>
                 <span class="el-seg">
-                  <button type="button" class="el-auto" data-auto="on" title="Re-plan the copper on every edit that moves it. Wiring a net still waits for Route">Auto</button>
-                  <button type="button" class="el-auto" data-auto="off" title="The default: leave the copper alone while you place and wire things. The canvas keeps showing the last plan until you press Route">Manual</button>
+                  <button type="button" class="el-auto" data-auto="on" title="re-plan the copper on every edit that moves it. Wiring a net still waits for Route">auto</button>
+                  <button type="button" class="el-auto" data-auto="off" title="the default: leave the copper alone while you place and wire things. The canvas keeps showing the last plan until you press Route">manual</button>
                 </span>
-                <button type="button" class="el-route" title="Re-plan the copper now">Route</button>
+                <button type="button" class="el-route" title="re-plan the copper now">route</button>
               </div>
               <div class="el-side-sect el-mirror-modes">
                 <div class="el-side-head"><span class="el-side-title">Mirror</span></div>
                 <span class="el-seg">
-                  <button type="button" class="el-mirror" data-axis="x" title="Mirror the cut left-right — for cutting through the backing or laying the tape adhesive side up" aria-pressed="false">⇄ Left-right</button>
-                  <button type="button" class="el-mirror" data-axis="y" title="Mirror the cut top-bottom" aria-pressed="false">⇅ Top-bottom</button>
+                  <button type="button" class="el-mirror" data-axis="x" title="mirror the cut left-right — for cutting through the backing or laying the tape adhesive side up" aria-pressed="false">⇄ Left-right</button>
+                  <button type="button" class="el-mirror" data-axis="y" title="mirror the cut top-bottom" aria-pressed="false">⇅ Top-bottom</button>
                 </span>
               </div>
               <div class="el-side-sect el-export-sect">
                 <div class="el-side-head"><span class="el-side-title">Export</span></div>
-                <button type="button" class="el-export" data-side="inside" title="Download the inside's copper as separate strips to cut">Strips — Inside</button>
-                <button type="button" class="el-export" data-side="outside" title="Download the outside's copper as separate strips to cut">Strips — Outside</button>
-                <button type="button" class="el-export-carrier" data-side="inside" title="Download the inside's carrier frame: align it, stick the traces down, snip the tabs">Carrier — Inside</button>
-                <button type="button" class="el-export-carrier" data-side="outside" title="Download the outside's carrier frame: align it, stick the traces down, snip the tabs">Carrier — Outside</button>
+                <button type="button" class="el-export" data-side="inside" title="download the inside's copper as separate strips to cut">strips — Inside</button>
+                <button type="button" class="el-export" data-side="outside" title="download the outside's copper as separate strips to cut">strips — Outside</button>
+                <button type="button" class="el-export-carrier" data-side="inside" title="download the inside's carrier frame: align it, stick the traces down, snip the tabs">carrier — Inside</button>
+                <button type="button" class="el-export-carrier" data-side="outside" title="download the outside's carrier frame: align it, stick the traces down, snip the tabs">carrier — Outside</button>
               </div>
               <div class="el-side-sect el-form-sect">
                 <div class="el-side-head"><span class="el-side-title">Form</span></div>
-                <button type="button" class="el-form" title="Fold this build in 3D with the copper on it — the same simulation the model page opens, in the material selected here">Folded form</button>
+                <button type="button" class="el-form" title="fold this build in 3D with the copper on it — the same simulation the model page opens, in the material selected here">folded form</button>
               </div>
               <div class="el-side-sect el-view-group">
                 <div class="el-side-head"><span class="el-side-title">Zoom</span></div>
                 <span class="el-seg">
-                  <button type="button" class="el-zoom-out" title="Zoom out" aria-label="Zoom out">−</button>
-                  <button type="button" class="el-zoom-in" title="Zoom in" aria-label="Zoom in">+</button>
-                  <button type="button" class="el-fit" title="Fit to screen">Fit</button>
+                  <button type="button" class="el-zoom-out" title="zoom out" aria-label="zoom out">−</button>
+                  <button type="button" class="el-zoom-in" title="zoom in" aria-label="zoom in">+</button>
+                  <button type="button" class="el-fit" title="fit to screen">fit</button>
                 </span>
               </div>
             </aside>

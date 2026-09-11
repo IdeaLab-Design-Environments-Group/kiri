@@ -35,24 +35,24 @@ const FIXED_PLACEMENT = new Set<Footprint>([BAT_COIN_20]);
 
 export const PART_GROUPS: { label: string; match: RegExp }[] = [
   { label: "LEDs", match: /^LED/ },
-  { label: "Resistors", match: /^R_/ },
-  { label: "Capacitors", match: /^CP?_/ },
-  { label: "Inductors", match: /^L_/ },
-  { label: "Crystals & oscillators", match: /^(Crystal|ECS_|Osc)/ },
-  { label: "Diodes & transistors", match: /^(Diode|SOD|SOT|TO[-_]|Q_|Bridge)/ },
-  { label: "Switches & buttons", match: /^(Switch|SW_|Button|Jumper|Potentiometer)/ },
-  { label: "Microcontrollers & modules", match: /^(ESP32|ESP_WROOM|RaspberryPi|SeeedStudio|Module_|Microchip_)/ },
-  { label: "Sensors", match: /^(Sensor_|ST_VL|Mic_MEMS)/ },
-  { label: "Motor drivers", match: /^MotorDriver/ },
-  { label: "Analog & logic ICs", match: /^(Amplifier|OpAmp|Comparator|LevelShifter|Multiplexer)/ },
-  { label: "Headers & sockets", match: /^(PinHeader|PinSocket|Header)/ },
-  { label: "Connectors & terminals", match: /^(Conn|TerminalBlock|MicroSD)/ },
-  { label: "Power", match: /^(Battery|BAT_)|PWRJack/ },
+  { label: "resistors", match: /^R_/ },
+  { label: "capacitors", match: /^CP?_/ },
+  { label: "inductors", match: /^L_/ },
+  { label: "crystals & oscillators", match: /^(Crystal|ECS_|Osc)/ },
+  { label: "diodes & transistors", match: /^(Diode|SOD|SOT|TO[-_]|Q_|Bridge)/ },
+  { label: "switches & buttons", match: /^(Switch|SW_|Button|Jumper|Potentiometer)/ },
+  { label: "microcontrollers & modules", match: /^(ESP32|ESP_WROOM|RaspberryPi|SeeedStudio|Module_|Microchip_)/ },
+  { label: "sensors", match: /^(Sensor_|ST_VL|Mic_MEMS)/ },
+  { label: "motor drivers", match: /^MotorDriver/ },
+  { label: "analog & logic ICs", match: /^(Amplifier|OpAmp|Comparator|LevelShifter|Multiplexer)/ },
+  { label: "headers & sockets", match: /^(PinHeader|PinSocket|Header)/ },
+  { label: "connectors & terminals", match: /^(Conn|TerminalBlock|MicroSD)/ },
+  { label: "power", match: /^(Battery|BAT_)|PWRJack/ },
   { label: "IC packages", match: /^(QFN|TQFP|TSOT|TSSOP|SOIC|SSOP|HSOP|HTSSOP|VFLGA|WSON|SMD_)/ },
-  { label: "Not yet shelved", match: /^/ },
+  { label: "not yet shelved", match: /^/ },
 ];
 
-export const UNSHELVED = "Not yet shelved";
+export const UNSHELVED = "not yet shelved";
 
 export function shelfFor(id: string): string {
   return PART_GROUPS.find((g) => g.match.test(id))!.label;

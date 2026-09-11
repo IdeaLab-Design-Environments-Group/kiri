@@ -45,12 +45,12 @@ export interface ExampleModel {
 export const EXAMPLE_MODELS: ExampleModel[] = [
   {
     slug: "bat",
-    title: "Bat",
+    title: "bat",
     intro: "A body, two ears and two wings — the most cut-heavy of the set, and the best test of a fold.",
     parts: [
       {
         slug: "bat-body",
-        title: "Body",
+        title: "body",
         blurb: "The trunk the ears and wings hang off. Nearly every edge is cut: a dense shell that "
           + "closes from an almost fully severed sheet.",
         faces: 180,
@@ -58,7 +58,7 @@ export const EXAMPLE_MODELS: ExampleModel[] = [
       },
       {
         slug: "bat-ear-left",
-        title: "Ear, left",
+        title: "ear, left",
         blurb: "A small cone. Twenty-four tiles is about the floor for a shape that still reads as "
           + "curved once it is up.",
         faces: 24,
@@ -66,7 +66,7 @@ export const EXAMPLE_MODELS: ExampleModel[] = [
       },
       {
         slug: "bat-ear-right",
-        title: "Ear, right",
+        title: "ear, right",
         blurb: "The mirror of the left. Kirigamized separately, so the two patterns can be compared "
           + "against each other for symmetry.",
         faces: 24,
@@ -74,7 +74,7 @@ export const EXAMPLE_MODELS: ExampleModel[] = [
       },
       {
         slug: "bat-wing-left",
-        title: "Wing, left",
+        title: "wing, left",
         blurb: "A wide, thin membrane: many faces held by comparatively few cuts, which is what lets it "
           + "stay in one piece across its span.",
         faces: 253,
@@ -82,7 +82,7 @@ export const EXAMPLE_MODELS: ExampleModel[] = [
       },
       {
         slug: "bat-wing-right",
-        title: "Wing, right",
+        title: "wing, right",
         blurb: "The other wing, at the same face count — the pair folds to a matching sweep.",
         faces: 253,
         cuts: 103,
@@ -91,12 +91,12 @@ export const EXAMPLE_MODELS: ExampleModel[] = [
   },
   {
     slug: "clock",
-    title: "Clock",
+    title: "clock",
     intro: "A cased desk clock: a ring to stand on and a body to hold the movement.",
     parts: [
       {
         slug: "clock-base",
-        title: "Base",
+        title: "base",
         blurb: "Twenty tiles, every edge cut. The simplest pattern here, and the one to open first to "
           + "see how a sheet becomes a ring.",
         faces: 20,
@@ -104,7 +104,7 @@ export const EXAMPLE_MODELS: ExampleModel[] = [
       },
       {
         slug: "clock-case",
-        title: "Case",
+        title: "case",
         blurb: "The drum the face sits in. Cut throughout, so it folds from a sheet that is more slit "
           + "than material.",
         faces: 192,
@@ -114,12 +114,12 @@ export const EXAMPLE_MODELS: ExampleModel[] = [
   },
   {
     slug: "desk-lamp",
-    title: "Desk lamp",
+    title: "desk lamp",
     intro: "Two halves of a lamp — the weighted foot and the shade over it.",
     parts: [
       {
         slug: "desk-lamp-base",
-        title: "Base",
+        title: "base",
         blurb: "A hundred and twenty tiles with only seventy-eight cuts: much of it folds rather than "
           + "opens, which is what keeps the foot stiff.",
         faces: 120,
@@ -127,7 +127,7 @@ export const EXAMPLE_MODELS: ExampleModel[] = [
       },
       {
         slug: "desk-lamp-shade",
-        title: "Shade",
+        title: "shade",
         blurb: "The same face count, fully cut. The contrast with the base is the clearest example here "
           + "of what a cut buys you: curvature.",
         faces: 120,
@@ -137,19 +137,19 @@ export const EXAMPLE_MODELS: ExampleModel[] = [
   },
   {
     slug: "drums",
-    title: "Drum kit",
+    title: "drum kit",
     intro: "Three shells at three sizes, so a pattern can be watched as the same form scales.",
     parts: [
       {
         slug: "drums-bass",
-        title: "Bass drum",
+        title: "bass drum",
         blurb: "The largest shell: a wide cylinder whose pattern is a long band of tiles.",
         faces: 154,
         cuts: 104,
       },
       {
         slug: "drums-tom-high",
-        title: "Tom, high",
+        title: "tom, high",
         blurb: "The small tom. Nearly the bass drum's pattern at a shorter span — the same shape, fewer "
           + "tiles around.",
         faces: 144,
@@ -157,7 +157,7 @@ export const EXAMPLE_MODELS: ExampleModel[] = [
       },
       {
         slug: "drums-tom-low",
-        title: "Tom, low",
+        title: "tom, low",
         blurb: "The deeper tom, two cuts more than the high one: the depth is what the extra cuts buy.",
         faces: 144,
         cuts: 100,
@@ -166,33 +166,33 @@ export const EXAMPLE_MODELS: ExampleModel[] = [
   },
   {
     slug: "guitar",
-    title: "Guitar",
+    title: "guitar",
     intro: "A guitar in four pieces — the two bouts of the body, the neck between them, and the head.",
     parts: [
       {
         slug: "guitar-headstock",
-        title: "Headstock",
+        title: "headstock",
         blurb: "The flat head with its taper. Ninety tiles, cut almost throughout.",
         faces: 90,
         cuts: 88,
       },
       {
         slug: "guitar-neck",
-        title: "Neck",
+        title: "neck",
         blurb: "Forty tiles: a long, gently curved strip, and the quickest of the four to cut.",
         faces: 40,
         cuts: 38,
       },
       {
         slug: "guitar-upper-bout",
-        title: "Upper bout",
+        title: "upper bout",
         blurb: "The shoulder of the body, where the neck meets it.",
         faces: 100,
         cuts: 98,
       },
       {
         slug: "guitar-lower-bout",
-        title: "Lower bout",
+        title: "lower bout",
         blurb: "The wide half of the body — the largest single curve in the model.",
         faces: 130,
         cuts: 128,
@@ -201,12 +201,12 @@ export const EXAMPLE_MODELS: ExampleModel[] = [
   },
   {
     slug: "teapot",
-    title: "Teapot",
+    title: "teapot",
     intro: "The Utah teapot, taken apart: the body it is famous for, plus a spout and a handle.",
     parts: [
       {
         slug: "teapot-body",
-        title: "Body",
+        title: "body",
         blurb: "Two hundred and seventy-six tiles, and the doubly curved surface the whole pipeline was "
           + "written for. Its flat pattern is a pair of spirals.",
         faces: 276,
@@ -214,14 +214,14 @@ export const EXAMPLE_MODELS: ExampleModel[] = [
       },
       {
         slug: "teapot-spout",
-        title: "Spout",
+        title: "spout",
         blurb: "Sixteen tiles. Small, sharply curved, and a good check that a tight radius still unrolls.",
         faces: 16,
         cuts: 16,
       },
       {
         slug: "teapot-handle-solid",
-        title: "Handle",
+        title: "handle",
         blurb: "The handle as a solid loop: thirty-eight tiles, thirty-two of them cut apart.",
         faces: 38,
         cuts: 32,
@@ -230,19 +230,19 @@ export const EXAMPLE_MODELS: ExampleModel[] = [
   },
   {
     slug: "thermometer",
-    title: "Thermometer",
+    title: "thermometer",
     intro: "A bulb and the tube above it — a sphere and a long cylinder, side by side.",
     parts: [
       {
         slug: "thermometer-bulb",
-        title: "Bulb",
+        title: "bulb",
         blurb: "A sphere, cut through: the pattern opens into petals and closes back into a ball.",
         faces: 144,
         cuts: 142,
       },
       {
         slug: "thermometer-tube",
-        title: "Tube",
+        title: "tube",
         blurb: "Two hundred and seventy-six tiles held by only a hundred and two cuts — a developable "
           + "surface needs far less opening than the bulb beneath it.",
         faces: 276,

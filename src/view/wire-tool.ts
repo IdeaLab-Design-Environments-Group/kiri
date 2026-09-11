@@ -36,7 +36,8 @@ import {
   type WireVertex,
 } from "../model/manual-wire.js";
 import { checkWire, type WireFault } from "../model/wire-rules.js";
-import { dist, netOf, snapVertex } from "./wire-snap.js";
+import { terminals } from "../model/footprint.js";
+import { footprintById } from "../model/library.js";
 import { ptStr, sceneSvg, type SceneItem } from "./pcb-scene.js";
 
 /**
@@ -359,9 +360,67 @@ export class WireTool {
 
   // ---- hit-testing and snapping -------------------------------------------
 
-  /** Where a tap attaches — {@link snapVertex}, shared with the jump tool; see `wire-snap.ts`. */
+  /**
+   * Where a tap actually attaches: a part terminal, then an LED leg, then a battery terminal, then nowhere.
+   *
+   * The order is a **priority, not a tie-break** — a pad anywhere within the radius wins over an LED leg
+   * that happens to be nearer. Wiring to a part's pad is the deliberate act; landing on a leg of the chip
+   * beside it is the accident, and letting proximity decide would make the accident the common case on a
+   * dense pattern.
+   *
+   * What comes back is the SYMBOLIC vertex and never a baked coordinate. That is the whole reason a wire
+   * follows a part that moves: a `{kind:"pad"}` re-resolves through {@link resolveVertex} every time it is
+   * drawn, and a `{x, y}` copied off it at snap time would stay behind the moment the author nudged the part.
+   *
+   * There is no grid. kiri's patterns are arbitrary polygons and the hinge lattice is the real structure, so
+   * a grid would snap to a spacing that means nothing on the sheet.
+   */
   private snap(at: Vec2): WireVertex {
-    return snapVertex(at, this.host.context(), this.host.snapRadiusFlat());
+    const r = this.host.snapRadiusFlat();
+    for (const tier of this.snapTargets()) {
+      const best = this.nearestVertex(tier, at, r);
+      if (best) return best;
+    }
+    return { kind: "free", x: at.x, y: at.y };
+  }
+
+  /** Everything a wire can attach to, in snap priority order: pads, then LED legs, then battery terminals. */
+  private snapTargets(): WireVertex[][] {
+    const c = this.host.context().circuit;
+    const pads: WireVertex[] = [];
+    (c.parts ?? []).forEach((part, i) => {
+      const fp = footprintById(part.component);
+      if (!fp) return;
+      // `terminals`, not every pad: a mounting peg is a pad in the footprint file and carries no signal, so
+      // a wire to one would be copper run to a hole. `padPosition` refuses it downstream anyway.
+      for (const [name] of terminals(fp)) pads.push({ kind: "pad", part: i, pad: name });
+    });
+    const legs: WireVertex[] = [];
+    (c.leds ?? []).forEach((_, i) => {
+      legs.push({ kind: "led", led: i, leg: 0 });
+      legs.push({ kind: "led", led: i, leg: 1 });
+    });
+    const batt: WireVertex[] = c.battery
+      ? [{ kind: "battery", side: "pwr" }, { kind: "battery", side: "gnd" }]
+      : [];
+    return [pads, legs, batt];
+  }
+
+  /** The nearest of these vertices to `at` within `r`, by where each one currently resolves. */
+  private nearestVertex(list: WireVertex[], at: Vec2, r: number): WireVertex | null {
+    const ctx = this.host.context();
+    let best: WireVertex | null = null;
+    let bestD = r;
+    for (const v of list) {
+      const p = resolveVertex(v, ctx);
+      if (!p) continue; // dangling: the part is gone, or the hinge under the chip is
+      const d = dist(p, at);
+      if (d <= bestD) {
+        bestD = d;
+        best = v;
+      }
+    }
+    return best;
   }
 
   /**
@@ -429,9 +488,28 @@ export class WireTool {
     return `w${n}`;
   }
 
-  /** Which net a run of vertices is drawn on — {@link netOf}, shared with the jump tool. */
+  /**
+   * Which net a run of vertices is drawn on, where the geometry says so.
+   *
+   * Worth the trouble because of what the alternative costs: an unnamed wire resolves its net to its own
+   * id, differs from every other net by construction, and so is charged with a `crosses-net` ERROR for
+   * every run it crosses (see {@link ManualWire.net}). A wire the author drew from one pad of a net to
+   * another is not crossing anything, and should not be reported as unbuildable for it.
+   *
+   * Read in the order the vertices were laid, first answer wins. A battery terminal names its rail outright;
+   * a pad names a net only when the netlist assigns it one. An LED's leg names nothing on purpose: which leg
+   * carries which rail is the router's decision — it flips LEDs to clear crossings — so reading a net off
+   * one would make the wire depend on the plan it is meant to constrain.
+   */
   private netOf(pts: WireVertex[]): string | undefined {
-    return netOf(pts, this.host.circuit());
+    const c = this.host.circuit();
+    for (const v of pts) {
+      if (v.kind === "battery") return v.side;
+      if (v.kind !== "pad") continue;
+      const t = (c.terminals ?? []).find((t) => t.part === v.part && t.pad === v.pad);
+      if (t) return t.net;
+    }
+    return undefined;
   }
 
   /**
@@ -597,6 +675,10 @@ export class WireTool {
  */
 function onWire(placed: (Placed | null)[]): Vec2[] {
   return placed.filter((p): p is Placed => !!p && !p.dangling).map((p) => p.at);
+}
+
+function dist(a: Vec2, b: Vec2): number {
+  return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
 /** Distance from `p` to the segment `ab` — how near a tap has to be to land on a wire's body. */

@@ -36,7 +36,7 @@ export class ExportModal {
     this.trigger = document.createElement("button");
     this.trigger.type = "button";
     this.trigger.className = "sim-trigger";
-    this.trigger.textContent = "Export";
+    this.trigger.textContent = "export";
     this.trigger.disabled = true;
     this.trigger.addEventListener("click", () => this.open());
 
@@ -44,10 +44,10 @@ export class ExportModal {
     this.overlay.className = "sim-overlay";
     this.overlay.hidden = true;
     this.overlay.innerHTML = `
-      <div class="sim-modal" role="dialog" aria-modal="true" aria-label="Export pattern and mesh">
+      <div class="sim-modal" role="dialog" aria-modal="true" aria-label="export pattern and mesh">
         <header class="sim-modal-header">
           <span class="sim-modal-title">Export — SVG (cut + score) · STL (3D-printed tiles)</span>
-          <button type="button" class="sim-modal-close" aria-label="Close">×</button>
+          <button type="button" class="sim-modal-close" aria-label="close">×</button>
         </header>
         <div class="sim-modal-body">
           <div class="export-previews">
@@ -58,20 +58,20 @@ export class ExportModal {
         </div>
         <footer class="sim-modal-footer">
           <span class="sim-status"></span>
-          <button type="button" class="export-zip-btn">Cut + score (zip)</button>
-          <button type="button" class="export-combined-btn">Single SVG</button>
-          <label class="export-stl-height-label" title="Printable sheet size — longest dimension of the flat pattern.">Size
+          <button type="button" class="export-zip-btn">cut + score (zip)</button>
+          <button type="button" class="export-combined-btn">single SVG</button>
+          <label class="export-stl-height-label" title="printable sheet size — longest dimension of the flat pattern.">size
             <input type="number" class="export-stl-size" min="1" step="1" />
             <span>mm</span>
           </label>
-          <label class="export-stl-height-label">Tile height
+          <label class="export-stl-height-label">tile height
             <input type="number" class="export-stl-height" min="0" step="0.1" />
             <span class="export-stl-unit">units</span>
           </label>
-          <label class="export-stl-height-label" title="More subdivision on harder-folding faces. Level 0 = one tile per face; 4 splits the sharpest folds 4 deep.">Detail
+          <label class="export-stl-height-label" title="more subdivision on harder-folding faces. Level 0 = one tile per face; 4 splits the sharpest folds 4 deep.">detail
             <input type="number" class="export-stl-detail" min="0" max="4" step="1" />
           </label>
-          <button type="button" class="export-stl-btn">Tiles (STL)</button>
+          <button type="button" class="export-stl-btn">tiles (STL)</button>
         </footer>
       </div>
     `;
@@ -163,7 +163,7 @@ export class ExportModal {
     this.previews.both.innerHTML = this.payload.previews.both;
     this.zipBtn.disabled = this.combinedBtn.disabled = false;
     this.statusEl.textContent =
-      "Black = Cut, blue = Score. Import the zip's two SVGs (registered, in mm) and set the layer ops.";
+      "black = Cut, blue = Score. Import the zip's two SVGs (registered, in mm) and set the layer ops.";
   }
 
   close(): void {

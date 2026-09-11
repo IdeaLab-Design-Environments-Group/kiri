@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { KEYS, parseFkld, serializeFkld } from "@dayangac/fkld";
 import { angleDefects } from "../../../src/pipeline/curvature.js";
-import { DRIVEN_KEY, LIP_PEER_KEY, emitFkld } from "../../../src/pipeline/emit.js";
+import { DRIVEN_KEY, emitFkld } from "../../../src/pipeline/emit.js";
 import { buildTopology } from "../../../src/pipeline/mesh.js";
 import { planCuts } from "../../../src/pipeline/plan-cuts.js";
 import { placeSheet } from "../../../src/pipeline/route-seams.js";
@@ -170,121 +170,5 @@ describe("emitFkld — tuck annotation (octahedron)", () => {
       }
     }
     expect(annotated).toBeGreaterThan(0);
-  });
-});
-
-// --- lip-peer key (fkld:edges_lipPeer) --------------------------------------
-
-type LipPeer = ([number, 0 | 1] | null)[];
-
-/**
- * Independent oracle for the emitted key: weld the foldedForm goal frame at
- * 1e-3 × span (the algorithm `sim/origami-import.ts#buildSeams` uses) and pair
- * the one-face "C" edges whose welded endpoint classes coincide.
- * TODO: switch to `lipPairsFromGoalFrame` from src/model/fold-adjacency.ts
- * once that module lands (P0-E) — it is not on disk yet.
- */
-function weldedLipPairs(fkld: FoldFile, tolRel = 1e-3): { pairs: [number, number][]; cls: number[]; tol: number } {
-  const goal = (fkld.file_frames as { vertices_coords: number[][] }[])[0].vertices_coords;
-  const lo = [Infinity, Infinity, Infinity];
-  const hi = [-Infinity, -Infinity, -Infinity];
-  for (const g of goal) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], g[k]); hi[k] = Math.max(hi[k], g[k]); }
-  const span = Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]);
-  const tol = tolRel * span;
-
-  const parent = goal.map((_, i) => i);
-  const find = (x: number): number => (parent[x] === x ? x : (parent[x] = find(parent[x])));
-  for (let i = 0; i < goal.length; i++) {
-    for (let j = i + 1; j < goal.length; j++) {
-      const d = Math.hypot(goal[i][0] - goal[j][0], goal[i][1] - goal[j][1], goal[i][2] - goal[j][2]);
-      if (d <= tol) parent[find(i)] = find(j);
-    }
-  }
-  const cls = goal.map((_, i) => find(i));
-
-  const edges = fkld.edges_vertices as [number, number][];
-  const assign = fkld.edges_assignment as string[];
-  const faceCount = new Map<string, number>();
-  for (const f of fkld.faces_vertices as number[][]) {
-    for (let i = 0; i < f.length; i++) {
-      const a = f[i];
-      const b = f[(i + 1) % f.length];
-      const k = a < b ? `${a}_${b}` : `${b}_${a}`;
-      faceCount.set(k, (faceCount.get(k) ?? 0) + 1);
-    }
-  }
-  const byClassPair = new Map<string, number[]>();
-  edges.forEach(([a, b], e) => {
-    if (assign[e] !== "C") return;
-    const k = a < b ? `${a}_${b}` : `${b}_${a}`;
-    if (faceCount.get(k) !== 1) return;
-    const [ca, cb] = [cls[a], cls[b]].sort((x, y) => x - y);
-    const key = `${ca}_${cb}`;
-    byClassPair.set(key, [...(byClassPair.get(key) ?? []), e]);
-  });
-  const pairs: [number, number][] = [];
-  for (const group of byClassPair.values()) {
-    if (group.length === 2) pairs.push([group[0], group[1]]);
-  }
-  return { pairs, cls, tol };
-}
-
-const unordered = (a: number, b: number): string => (a < b ? `${a}_${b}` : `${b}_${a}`);
-
-describe.each([
-  ["cube", makeCube()],
-  ["octahedron", makeOctahedron()],
-])("emitFkld — fkld:edges_lipPeer (%s)", (_name, mesh) => {
-  const { fkld } = emitFor(mesh);
-  const peer = fkld[LIP_PEER_KEY] as LipPeer;
-  const edges = fkld.edges_vertices as [number, number][];
-  const assign = fkld.edges_assignment as string[];
-
-  it("is parallel to edges_vertices and symmetric on C edges only", () => {
-    expect(peer.length).toBe(edges.length);
-    let paired = 0;
-    peer.forEach((entry, e) => {
-      if (entry === null) return;
-      paired++;
-      const [p, aligned] = entry;
-      expect(assign[e]).toBe("C");
-      expect([0, 1]).toContain(aligned);
-      expect(p).not.toBe(e);
-      expect(peer[p]).not.toBeNull();
-      expect(peer[p]![0]).toBe(e);
-      expect(peer[p]![1]).toBe(aligned);
-    });
-    expect(paired).toBeGreaterThan(0);
-  });
-
-  it("pairs exactly the goal-frame weld's pairs", () => {
-    const mine = new Set<string>();
-    peer.forEach((entry, e) => { if (entry !== null) mine.add(unordered(e, entry[0])); });
-    const theirs = new Set(weldedLipPairs(fkld).pairs.map(([a, b]) => unordered(a, b)));
-    expect([...mine].sort()).toEqual([...theirs].sort());
-  });
-
-  it("`aligned` names the vertices that meet in the goal frame", () => {
-    const goal = (fkld.file_frames as { vertices_coords: number[][] }[])[0].vertices_coords;
-    const { tol } = weldedLipPairs(fkld);
-    const dist = (u: number, v: number): number =>
-      Math.hypot(goal[u][0] - goal[v][0], goal[u][1] - goal[v][1], goal[u][2] - goal[v][2]);
-    let crossedFails = 0;
-    peer.forEach((entry, e) => {
-      if (entry === null || entry[0] < e) return;
-      const [p, aligned] = entry;
-      const mate = (i: 0 | 1): number => edges[p][aligned === 1 ? i : (1 - i) as 0 | 1];
-      expect(dist(edges[e][0], mate(0))).toBeLessThanOrEqual(tol);
-      expect(dist(edges[e][1], mate(1))).toBeLessThanOrEqual(tol);
-      // the crossed reading must not also hold, or the ordering carries nothing
-      const crossed = Math.max(dist(edges[e][0], mate(1)), dist(edges[e][1], mate(0)));
-      if (crossed > tol) crossedFails++;
-    });
-    expect(crossedFails).toBeGreaterThan(0);
-  });
-
-  it("survives parseFkld(serializeFkld(...))", () => {
-    const round = parseFkld(serializeFkld(fkld)) as FoldFile;
-    expect(round[LIP_PEER_KEY]).toEqual(peer);
   });
 });

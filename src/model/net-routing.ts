@@ -55,24 +55,18 @@
  * the answer is a jumper, a different placement, or a different circuit, and saying so is more use than
  * quietly crossing two nets and letting the short be discovered after the copper is laid.
  */
-import type { Circuit, FlatFace, GapEdge, Vec2 } from "./electronics.js";
+import type { FlatFace, GapEdge, Vec2 } from "./electronics.js";
+import { pointInFace } from "./electronics.js";
 // Imported from the modules that own each concern rather than from the router's facade: net routing is
 // reached BY the router, so importing the router back would close a cycle.
-import { FOLD_PENALTY_FRAC, TAPE_MM } from "./tape-width.js";
+import { FOLD_PENALTY_FRAC, MIN_LAND_FRAC, TAPE_MM, weedGapFor } from "./tape-width.js";
 import { STRAIN_BAND_CAP } from "./fold-strain.js";
 import { buildCorridor, searchCorridor } from "./corridor.js";
 import { patternDiag, ptKey } from "./trace-geometry.js";
-import type { Corridor, Jump, PadField, Trace2D } from "./trace-types.js";
-import type { FoldAdjacency } from "./fold-adjacency.js";
-// The author's own jumps, and the solder lands every jump puts on the sheet. Model-side and cycle-free:
-// `manual-jump.ts` reads the corridor and the adjacency, neither of which reads this file back.
-import { jumpLandTraces, manualJumps } from "./manual-jump.js";
-import { DEFAULT_SHEET, type SheetSpec } from "./fold-strain.js";
-import { resolveNetlist, type NetPoint, type NetlistFault, type PadObstacle, type ResolvedNet } from "./netlist.js";
-// The clearance gate and the leg layer, split out of this file: what a leg is judged against, and how one
-// is built. Both are leaves — neither imports back — so the router keeps its place at the top of the stack.
-import { type Laid, padClearanceFor, weedFloorFor } from "./net-clearance.js";
-import { type LegRules, faceOfPoint, layPath } from "./net-legs.js";
+import { narrowedTo } from "./pad-landing.js";
+import type { Corridor, PadField, Trace2D } from "./trace-types.js";
+import { DEFAULT_SHEET, minWebMm, type SheetSpec } from "./fold-strain.js";
+import type { NetPoint, PadObstacle, ResolvedNet } from "./netlist.js";
 
 /** How a net fared. */
 export interface RoutedNet {
@@ -114,25 +108,12 @@ export interface RoutedNet {
    * actually laid.
    */
   ratsnest?: [Vec2, Vec2][];
-  /** The seam rejoins this net's own routes take, if any — see {@link NetRouting.jumps}. Absent when it
-   *  took none, so a net routed without an adjacency carries nothing new. */
-  jumps?: Jump[];
 }
 
 export interface NetRouting {
   nets: RoutedNet[];
   /** Every net's copper, flattened — what the cut files and the canvas take. */
   traces: Trace2D[];
-  /**
-   * Every seam rejoin the router took, across all nets — the wires the builder solders once the sheet is
-   * folded (`corridor-jumps.ts`).
-   *
-   * Always present and empty by default: with no adjacency the corridor has no jump to take, so this is
-   * `[]` for every caller that has not asked for one. The lands themselves are ordinary copper and reach
-   * the caller in `traces`, so nothing downstream needs a branch for a jump to draw or cut the sheet — it
-   * needs one only to *say* there is a wire still to be soldered.
-   */
-  jumps: Jump[];
   /**
    * How many orderings were tried before this plan was kept.
    *
@@ -167,6 +148,17 @@ const MAX_ORDERS = 4;
 const RIPUP_TRIES = 6;
 
 /**
+ * The face a terminal sits on, or -1.
+ *
+ * A pad just outside every face — a part nudged over a tile edge — has no way into the corridor graph, so
+ * it is stranded rather than snapped to the nearest tile. Snapping would move the user's part without
+ * saying so, and the copper would then be laid to somewhere the part is not.
+ */
+function faceOfPoint(faces: FlatFace[], p: Vec2): number {
+  return pointInFace(faces, p);
+}
+
+/**
  * Join one net's points into a tree, nearest-first.
  *
  * A minimum spanning tree on straight-line distance, which is a deliberate approximation: the true cost is
@@ -174,51 +166,329 @@ const RIPUP_TRIES = 6;
  * corridor search is the expensive part. Straight-line ordering picks nearly the same tree on the patterns
  * this app produces, where pads that are close on the sheet are close through the tiling too.
  */
-function spanningEdges(points: NetPoint[], joined: [number, number][] = []): [number, number][] {
-  // A pair the author already joined by hand enters the tree with its mate and costs nothing, and no edge
-  // is emitted for it: the copper across that seam is the jump, not a run. Empty is the tree this built
-  // before jumps existed, edge for edge.
-  const mates = new Map<number, number[]>();
-  for (const [i, j] of joined) {
-    mates.set(i, [...(mates.get(i) ?? []), j]);
-    mates.set(j, [...(mates.get(j) ?? []), i]);
-  }
-  const inTree: number[] = [];
-  const rest = new Set(points.map((_, i) => i));
-  const admit = (i: number): void => {
-    if (!rest.has(i)) return;
-    rest.delete(i);
-    inTree.push(i);
-    for (const m of mates.get(i) ?? []) admit(m);
-  };
+function spanningEdges(points: NetPoint[]): [number, number][] {
+  const inTree = [0];
   const out: [number, number][] = [];
-  admit(0);
-  while (rest.size) {
+  const rest = points.map((_, i) => i).slice(1);
+  while (rest.length) {
     let best = Infinity, bi = 0, bj = 0;
     for (const i of inTree) {
-      for (const j of rest) {
+      for (let k = 0; k < rest.length; k++) {
+        const j = rest[k]!;
         const d = Math.hypot(points[i]!.at.x - points[j]!.at.x, points[i]!.at.y - points[j]!.at.y);
-        if (d < best) { best = d; bi = i; bj = j; }
+        if (d < best) { best = d; bi = i; bj = k; }
       }
     }
-    out.push([bi, bj]);
-    admit(bj);
+    const j = rest.splice(bj, 1)[0]!;
+    out.push([bi, j]);
+    inTree.push(j);
   }
   return out;
 }
 
+/** Distance between two segments, in the plane. */
 /**
- * Two points of one net the author has already joined across a seam — a drawn jump, as the router sees it.
+ * Where two segments come closest, and how close — the distance plus both parameters.
  *
- * The only way an author's jump changes a route. `planRoutes` does not read `Circuit.jumps` for its
- * geometry any more than it reads `Circuit.wires` for theirs: what reaches the router is the *claim* that
- * these two places are connected, and the tree is built knowing it, so the net spends no copper going the
- * long way round for a connection that already exists.
+ * **Replaces a `min` over four point-to-segment projections, which was wrong for segments that cross.**
+ * That identity holds only for *disjoint* segments: measured, `(-10,0)-(10,0)` against `(0,-10)-(0,10)`
+ * came back as **10** where the true distance is **0**. So the clearance gate this module's header calls
+ * the one thing standing between the router and a short could pass a genuine crossing whenever both
+ * segments were long relative to the crossing angle.
+ *
+ * `t` and `u` are what let the caller read each run's width *at the closest approach* rather than taking
+ * the widest point of a whole segment — which matters: a leg out of a chip's pin runs from pad width to
+ * tape width in one segment, and the conservative reading would refuse every such leg on the tape width it
+ * only reaches once it is clear of the part.
  */
-export interface PreJoin {
-  net: string;
-  a: Vec2;
-  b: Vec2;
+function nearestOn(
+  p: Vec2, q: Vec2, r: Vec2, s: Vec2,
+): { d: number; t: number; u: number } {
+  const dx = q.x - p.x, dy = q.y - p.y;
+  const ex = s.x - r.x, ey = s.y - r.y;
+  const fx = p.x - r.x, fy = p.y - r.y;
+  const a = dx * dx + dy * dy, b = dx * ex + dy * ey, c = ex * ex + ey * ey;
+  const d = dx * fx + dy * fy, e = ex * fx + ey * fy;
+  const den = a * c - b * b;
+
+  let t: number, u: number;
+  if (den > 1e-18) {
+    // Not parallel: the unconstrained closest approach, then clamped back onto both segments.
+    t = Math.max(0, Math.min(1, (b * e - c * d) / den));
+    u = Math.max(0, Math.min(1, (a * e - b * d) / den));
+    // Clamping `t` can move the true closest point on the other segment, so `u` is re-solved against the
+    // clamped `t` and re-clamped. Without this a near-parallel pair reads its distance at the wrong place.
+    u = c > 1e-18 ? Math.max(0, Math.min(1, (b * t + e) / c)) : 0;
+    t = a > 1e-18 ? Math.max(0, Math.min(1, (b * u - d) / a)) : 0;
+  } else {
+    // Parallel or degenerate: no unique solution, so project each endpoint and keep the nearest pairing.
+    t = 0;
+    u = c > 1e-18 ? Math.max(0, Math.min(1, e / c)) : 0;
+    const alt = a > 1e-18 ? Math.max(0, Math.min(1, -d / a)) : 0;
+    const at = (tt: number, uu: number): number =>
+      Math.hypot(p.x + dx * tt - (r.x + ex * uu), p.y + dy * tt - (r.y + ey * uu));
+    if (at(alt, 0) < at(t, u)) { t = alt; u = 0; }
+  }
+  return {
+    d: Math.hypot(p.x + dx * t - (r.x + ex * u), p.y + dy * t - (r.y + ey * u)),
+    t,
+    u,
+  };
+}
+
+/** The distance alone — {@link nearestOn} for callers that do not care where. */
+function segSegDist(p: Vec2, q: Vec2, r: Vec2, s: Vec2): number {
+  return nearestOn(p, q, r, s).d;
+}
+
+/**
+ * Is the leg `a`-`b` clear of every polyline in `lines`, by at least `min`?
+ *
+ * Clearance, not merely non-crossing, and the difference is the whole condition. Two runs can approach to
+ * nothing and never *cross*: they meet at a point, or run alongside each other, and a segment-intersection
+ * test reports both as fine. Laid as tape they are one piece of copper. Measured on the first version of
+ * this router, two nets that crossed nowhere came to a centreline distance of 0.0000 against a 0.0997 tape
+ * — a dead short that a crossing count could not see.
+ *
+ * `min` is a whole tape width: each strip reaches half a width either side of its centreline, so centres a
+ * width apart are two strips just touching, and anything less is overlap.
+ */
+function clearOf(
+  a: Vec2, b: Vec2, lines: Laid[], weed: number, wa: number, wb: number, full: number,
+): boolean {
+  return hitBy(a, b, lines, weed, wa, wb, full) === null;
+}
+
+/**
+ * The nearest distance from the segment `a`-`b` to a closed polygon; 0 if the segment is inside it.
+ *
+ * Edge to edge, not centre to centre: a pad is a rectangle with a long axis, and a circle round its centre
+ * either lets copper onto the ends of it or refuses copper that had room beside it, depending on which
+ * radius you pick. Pads here run from a 0603's 0.8mm to a terminal block's 4mm, so that choice is worth up
+ * to a pad's own length.
+ */
+function segToPoly(a: Vec2, b: Vec2, poly: Vec2[]): number {
+  if (poly.length < 2) return Infinity;
+  let d = Infinity;
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i]!, q = poly[(i + 1) % poly.length]!;
+    d = Math.min(d, segSegDist(a, b, p, q));
+    if (d === 0) return 0;
+  }
+  // A segment lying wholly inside the pad touches none of its edges, and every distance above is to the
+  // rim. Winding on either endpoint catches it.
+  return inPoly(a, poly) || inPoly(b, poly) ? 0 : d;
+}
+
+/** Whether a point is inside a closed polygon, by the crossing rule. */
+function inPoly(p: Vec2, poly: Vec2[]): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i]!, b = poly[j]!;
+    if ((a.y > p.y) !== (b.y > p.y) && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+/**
+ * Whether this pad is, electrically, one of `mine` — its net, or a duplicate sitting on one of my own pads.
+ *
+ * The second case is not a nicety. `footprint.ts` measured it on `SeeedStudio_XIAO_ESP32C3`: 37 terminals
+ * of which 14 pairs are coincident, so pad `1_1` is the same piece of metal as pad `1`. Treated as foreign
+ * it refuses every leg to pad 1 — a net blocked from its own pad by a copy of it.
+ */
+function padIsMine(pad: PadObstacle, mine: string, own: Vec2[]): boolean {
+  if (pad.net === mine) return true;
+  return own.some((q) => segToPoly(q, q, pad.outline) < 1e-9);
+}
+
+/**
+ * The pad this leg would run over, or `null` if it clears them all — KiCad's clearance, in one test.
+ *
+ * A net's own pads are let through: its legs land on them, so measured against them every leg is a
+ * violation. Every other pad is metal that must not be touched — another net's, which shorts two nets
+ * together, and an **unwired** one, which shorts into a part nobody wired and is the case that had nothing
+ * at all refusing it.
+ *
+ * The margin is the copper's own half-width where it passes, plus {@link PAD_CLEARANCE_MM}. Widths are read
+ * per segment because a leg squeezing between two pins is far narrower there than the tape — see
+ * {@link padCapAt}, which is what makes that squeeze possible rather than merely permitted.
+ */
+function padHitBy(
+  a: Vec2, b: Vec2, pads: PadObstacle[], mine: string, gap: number, wa: number, wb: number,
+  own: Vec2[] = [],
+): PadObstacle | null {
+  for (const pad of pads) {
+    if (padIsMine(pad, mine, own)) continue;
+    if (segToPoly(a, b, pad.outline) < Math.max(wa, wb) / 2 + gap) return pad;
+  }
+  return null;
+}
+
+/**
+ * The widest copper may be at `p` before it touches a pad that is not this net's.
+ *
+ * **This is what makes pad clearance affordable.** The gate above refuses a leg whose copper overlaps a
+ * foreign pad; on its own that is expensive, because the tape is 3.25mm and an SMD part's pads are 2mm
+ * apart — a leg reaching one pin of a chip is wider than the room beside its neighbour, so it is refused
+ * and the terminal is reported stranded. Measured over four patterns and five parts before this existed:
+ * 29 terminals of 80 stranded, against 21 with no pad gate at all.
+ *
+ * So the leg is narrowed to fit instead. `2 · (room − clearance)` is the width whose edge lands exactly a
+ * clearance short of the nearest foreign pad, which is the same shape of rule `landingWidthFor` already
+ * applies for a part's own pitch — and the floor is that function's floor, so copper never pinches to
+ * something too thin to carry or to cut. Below the floor there is genuinely no room and the gate refuses.
+ */
+function padCapAt(
+  p: Vec2, pads: PadObstacle[], mine: string, gap: number, tapeW: number, own: Vec2[],
+): number {
+  let room = Infinity;
+  for (const pad of pads) {
+    if (padIsMine(pad, mine, own)) continue;
+    room = Math.min(room, segToPoly(p, p, pad.outline));
+    if (room <= gap) break;
+  }
+  if (!Number.isFinite(room)) return tapeW;
+  return Math.max(tapeW * MIN_LAND_FRAC, Math.min(tapeW, 2 * (room - gap)));
+}
+
+/** Copper already on the sheet, and whose it is. `null` for the bus and for hand-drawn wire — immovable,
+ *  so there is nothing to blame and nothing that could be routed later instead. */
+interface Laid {
+  net: string | null;
+  pts: Vec2[];
+  /**
+   * This run's width at each of its points, index-aligned with `pts`.
+   *
+   * Absent means full tape width everywhere, which is what every run was assumed to be before the gate
+   * could read a width at all.
+   */
+  widths?: number[];
+  /**
+   * The net this run is a bus rail for, when it is one.
+   *
+   * Separate from `net`, which is about blame: a rail cannot be routed later and so can never be blamed,
+   * but a declared net that shares its id may TAP it — see {@link tapPoint}. So the id is carried here,
+   * where the clearance gate reads it to know which run is the net's own copper, and `net` stays null.
+   */
+  rail?: string;
+}
+
+/**
+ * Which net's copper the leg `a`-`b` comes too close to, or null when it is clear of all of them.
+ *
+ * The same test {@link clearOf} makes, reporting *who* rather than *whether*. Nothing used to record that,
+ * and without it a stranded terminal is a dead end: the router knows a net could not be reached and has no
+ * idea which net to route later so that it could be. See {@link planNets}.
+ */
+function blamedFor(
+  a: Vec2, b: Vec2, lines: Laid[], weed: number, wa: number, wb: number, full: number,
+): string | null {
+  return hitBy(a, b, lines, weed, wa, wb, full)?.net ?? null;
+}
+
+/**
+ * The run the leg `a`-`b` comes too close to, or null when it is clear of all of them.
+ *
+ * **The one reading of the distance, and it has to be separate from {@link blamedFor}.** That function
+ * used to be it, returning `line.net` on a hit and `null` when clear — and `null` is also what a hit on
+ * immovable copper returns, because the bus and a hand-drawn wire have no net to blame. So `clearOf`,
+ * defined as `blamedFor(...) === null`, read "blocked by something unblamable" as "clear" and let it
+ * through. Measured: a wall laid exactly along a route the router had just chosen did not move it by a
+ * millimetre — the obstacle list the header calls the no-overlap guarantee was inert for every entry that
+ * had no net, which is every entry it is ever given.
+ *
+ * Whether a leg is clear and whose fault it is if not are two questions. They are answered here once, and
+ * the two callers read the answer differently.
+ */
+function hitBy(
+  a: Vec2, b: Vec2, lines: Laid[], weed: number,
+  /** The probe leg's own widths, index-aligned with the leg it came from — see {@link widthAt}. */
+  wa: number, wb: number,
+  /** Full tape width, for a run that carries no widths of its own. */
+  full: number,
+): Laid | null {
+  for (const line of lines) {
+    for (let i = 1; i < line.pts.length; i++) {
+      const near = nearestOn(a, b, line.pts[i - 1]!, line.pts[i]!);
+      // Each run's width AT THE CLOSEST APPROACH, not the widest point of either segment. A leg out of a
+      // chip's pin runs from pad width to tape width in a single segment, so the conservative reading takes
+      // the tape width and refuses every such leg — which is the bug this whole change exists to fix.
+      const mine = wa + (wb - wa) * near.t;
+      const theirs = widthAt(line.widths, i, near.u, full);
+      if (near.d < gapNeeded(mine, theirs, weed)) return line;
+    }
+  }
+  return null;
+}
+
+/**
+ * The narrowest web of bare substrate the sheet can be weeded to, in pattern units.
+ *
+ * What is left between two runs is a beam of substrate lifted out with tweezers, and its tear strength goes
+ * with its cross-section: halve the thickness and the same web tears at half the pull. {@link minWebMm} is
+ * that floor, and on a thin film — around 0.15mm, where the web wants more than 3.25mm — it is what holds
+ * the nets apart.
+ *
+ * **This used to return `max(tapeW, webUnits)` and be the whole clearance rule.** That constant was the
+ * bug: it held every pair of runs a full tape width apart no matter how narrow either of them actually
+ * was, so two legs tapering onto adjacent pins of a 2.54mm-pitch part could never both be laid, whatever
+ * their widths. The width half of the question now lives in {@link gapNeeded}, and this supplies only the
+ * floor — which is why the `max(tapeW, ...)` is gone from here rather than merely moved: `gapNeeded`
+ * contributes the tape width itself whenever the runs are that wide.
+ */
+/**
+ * How much bare sheet to keep between a run's edge and a pad it is not landing on, in millimetres.
+ *
+ * **KiCad's own default clearance**, and here for the same reason KiCad has it: the requirement is not "do
+ * not overlap" but "do not overlap once everything has moved a little" — the tape is cut on one machine,
+ * laid by hand, and the part soldered by eye.
+ *
+ * Deliberately NOT the weed floor that separates two runs (`weedFloorFor`). That floor is what the cutter
+ * can weed out between two CUTS, and a pad is drawn, never cut — there is no web to lift there. Used as the
+ * pad margin it costs reach for nothing: measured over four patterns and five parts, a weed's worth of
+ * margin stranded 32 terminals of 80 where zero margin stranded 28.
+ */
+const PAD_CLEARANCE_MM = 0.2;
+
+/** That clearance in this pattern's units. */
+function padClearanceFor(tapeW: number, tapeMm: number): number {
+  return tapeMm > 0 ? (PAD_CLEARANCE_MM * tapeW) / tapeMm : 0;
+}
+
+function weedFloorFor(tapeW: number, tapeMm: number, sheet: SheetSpec): number {
+  if (!(tapeW > 0)) return tapeW;
+  return weedGapFor(tapeW, tapeMm, sheet);
+}
+
+/**
+ * How far apart the CENTRELINES of two runs must be, given how wide each of them is where they meet.
+ *
+ * `max((wA + wB) / 2, weed)`. The first term is the two runs just touching; the second is the substrate
+ * floor, for a sheet so thin that the web wants more room than the copper does.
+ *
+ * **Bit-identical to the old constant for two full-width runs** — `(tapeW + tapeW) / 2` is `tapeW` — which
+ * is what makes this a generalisation rather than a re-plan: every recorded reach figure survives untouched
+ * and the rule only relaxes where copper is genuinely narrower than the tape. That property is worth
+ * protecting; there is a test for it.
+ *
+ * **Known conservatism.** The strictly-correct rule is `(wA + wB) / 2 + weed` — two runs just touching
+ * leave no web at all, and this permits that, exactly as the constant always did. The additive form is
+ * stricter for *every* pair and would re-baseline reach on every pattern, which would hide a bug fix inside
+ * a behaviour change. It is a separate decision, to be made with its own measurement.
+ */
+function gapNeeded(wA: number, wB: number, weed: number): number {
+  return Math.max((wA + wB) / 2, weed);
+}
+
+/** A run's width a fraction `t` along the segment ending at `i`, or `full` when it never said. */
+function widthAt(widths: number[] | undefined, i: number, t: number, full: number): number {
+  if (!widths || !widths.length) return full;
+  const a = widths[i - 1] ?? widths[widths.length - 1] ?? full;
+  const b = widths[i] ?? a;
+  return a + (b - a) * t;
 }
 
 /**
@@ -275,6 +545,90 @@ function claim(pts: Vec2[], into: Set<string>): void {
 }
 
 /**
+ * A leg's width at each of its points, narrowed at either end that lands on a real pad rather than on a
+ * tap point out on the rail.
+ *
+ * One point narrows, not several: `outlineStrip` draws a straight taper across whatever segment separates
+ * two differently-sized points on its own, the same way the bus already narrows onto an LED's legs, so
+ * there is nothing to interpolate here — only which end, if either, gets its pad's own width instead of
+ * the tape's.
+ *
+ * Returns `undefined` when neither end narrows, so a leg with two bare `NetPoint`s (`padWidth` unset — the
+ * shape every hand-built test fixture is) comes out with no `widths` at all and renders exactly as before.
+ */
+/**
+ * Split any stretch of a leg that passes near a part, so its width can follow the metal instead of being
+ * interpolated across a whole corridor hop.
+ *
+ * {@link legWidths} gives a width per POINT and `outlineStrip` tapers linearly between them, so the width
+ * profile is only as good as the point spacing. A leg out of a chip's pin runs pad → corridor node, and a
+ * corridor node is a face centre — millimetres away. Measured on the reported circuit: three points over
+ * 24.96mm carrying 1.20mm, 3.03mm and 1.00mm, which `outlineStrip` drew as a wedge some 3mm wide across four
+ * neighbouring pins. That is what "the wire goes to the closest pin" looked like on screen.
+ *
+ * No new constant decides where the taper ends: {@link narrowedTo} already returns the full tape width once a
+ * point is past a field's `reach`, so densifying and asking it per point makes the profile follow the part's
+ * own pitch. Only stretches actually near a field are split, so an ordinary leg between two bare pads is
+ * untouched and still comes back with no `widths` at all.
+ */
+function densifyNearFields(pts: Vec2[], tapeW: number, fields: PadField[]): Vec2[] {
+  if (!fields.length || pts.length < 2) return pts;
+  const step = tapeW / 2;
+  const out: Vec2[] = [pts[0]!];
+  for (let i = 1; i < pts.length; i++) {
+    const a = out[out.length - 1]!, b = pts[i]!;
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    // Only where it can matter: a segment whose closest approach to some field is beyond that field's reach
+    // has one width along its whole length and nothing to interpolate.
+    const near = fields.some((f) => ptSegDist(f.at, a, b) <= f.reach + tapeW);
+    if (near && len > step) {
+      // Capped, so a long leg across a crowded board cannot turn into thousands of points.
+      const n = Math.min(Math.ceil(len / step), 64);
+      for (let k = 1; k < n; k++) {
+        out.push({ x: a.x + ((b.x - a.x) * k) / n, y: a.y + ((b.y - a.y) * k) / n });
+      }
+    }
+    out.push(b);
+  }
+  return out;
+}
+
+/** Distance from a point to a segment. */
+function ptSegDist(p: Vec2, a: Vec2, b: Vec2): number {
+  const ax = b.x - a.x, ay = b.y - a.y, l2 = ax * ax + ay * ay;
+  const t = l2 < 1e-18 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * ax + (p.y - a.y) * ay) / l2));
+  return Math.hypot(p.x - (a.x + ax * t), p.y - (a.y + ay * t));
+}
+
+function legWidths(
+  pts: Vec2[], tapeW: number, startPad?: number, endPad?: number,
+  /** The metal near this leg — see `electronics-routing.ts › PadField`. */
+  fields: PadField[] = [],
+  /** Every foreign pad this leg has to squeeze past — see {@link padCapAt}. */
+  cap?: (p: Vec2) => number,
+): number[] | undefined {
+  const start = startPad !== undefined && startPad < tapeW ? startPad : null;
+  const end = endPad !== undefined && endPad < tapeW ? endPad : null;
+  // Every point, not only the two ends. A pad's own field is centred on the pad, so an endpoint narrows
+  // because it stands at distance zero from its own field, and an interior point still over the part
+  // narrows for the same reason by the same rule — which collapses the old endpoint special case and the
+  // "stay narrow while crossing the part" requirement into one thing rather than adding a second.
+  //
+  // It had to stop being an endpoint rule. `pts[1]` is a corridor node — a face centre, typically
+  // millimetres away — so copper reached full tape width within a millimetre of a 1.6mm pin and blanketed
+  // its neighbours. That is what "the wire goes to the closest pin" looks like on screen.
+  // Two narrowings, and they answer different questions. `fields` is the part's OWN pitch — how wide copper
+  // may be while standing over the part it is reaching for. `cap` is the room left by every pad this leg is
+  // not landing on, which is what lets it thread between two pins instead of being refused for touching one.
+  const ws = pts.map((p) => Math.min(narrowedTo(tapeW, p, fields), cap ? cap(p) : tapeW));
+  if (start !== null) ws[0] = Math.min(ws[0] ?? tapeW, start);
+  if (end !== null) ws[ws.length - 1] = Math.min(ws[ws.length - 1] ?? tapeW, end);
+  // Nothing narrowed anywhere: no `widths` at all, so a leg between two ordinary pads renders exactly as it
+  // always has and every reader of `Trace2D` that has never heard of `widths` keeps working.
+  return ws.some((w) => w < tapeW) ? ws : undefined;
+}
+
+/**
  * The lines a ratsnest should draw for one net: each stranded terminal joined to where it belongs.
  *
  * To the nearest point on the net's OWN copper where the net laid any, because that is the connection the
@@ -312,6 +666,99 @@ function ratsnestFor(net: ResolvedNet, stranded: number[], laid: Trace2D[]): [Ve
 }
 
 /** Route one net against a corridor, kept clear of `theirs` — every other net's copper laid so far. */
+/** Everything a leg is judged against, gathered so `layLeg` takes one argument rather than nine. */
+interface LegRules {
+  others: Laid[];
+  clearance: number;
+  tapeW: number;
+  fields: PadField[];
+  pads: PadObstacle[];
+  padGap: number;
+  netId: string;
+  /** This net's own pad centres — see {@link padIsMine}. */
+  own: Vec2[];
+  faces: FlatFace[];
+}
+
+/**
+ * How far to the side a refused leg will step, and in how many tries.
+ *
+ * The corridor's only nodes are the midpoints of a face's own edges — one per edge — so inside a tile a leg
+ * is a straight chord and the search has no way to go round anything. A pad on that chord is therefore not
+ * something the search can avoid, and without this the leg is simply refused and its terminal reported
+ * stranded. One bend, at increasing offsets either side of the straight approach, is enough for the case
+ * this exists for: a leg arriving across the pins either side of the one it lands on, which needs to come
+ * in from a clear direction rather than to find a winding path.
+ */
+const DETOUR_STEPS = 6;
+const DETOUR_STEP_TAPES = 0.6;
+
+/** Whether a whole path clears every other net AND every pad that is not this net's. */
+function pathOk(
+  pts: Vec2[], widths: number[] | undefined, r: LegRules,
+): { ok: true } | { ok: false; cuts: string | null } {
+  const wAt = (k: number): number => widths?.[k] ?? r.tapeW;
+  for (let k = 1; k < pts.length; k++) {
+    const a = pts[k - 1]!, b = pts[k]!;
+    const cuts = blamedFor(a, b, r.others, r.clearance, wAt(k - 1), wAt(k), r.tapeW);
+    if (cuts !== null || !clearOf(a, b, r.others, r.clearance, wAt(k - 1), wAt(k), r.tapeW)) {
+      return { ok: false, cuts };
+    }
+    // And the pads, which the check above cannot see: it measures against other nets' RUNS.
+    const over = padHitBy(a, b, r.pads, r.netId, r.padGap, wAt(k - 1), wAt(k), r.own);
+    // Blame the net that owns the pad where there is one. An unwired pin belongs to nobody, and saying so
+    // is more honest than naming whatever else its part is wired to.
+    if (over) return { ok: false, cuts: over.net };
+  }
+  return { ok: true };
+}
+
+/**
+ * Lay one leg from `a` to `b` through `mid`, narrowed to fit past the pads and bent aside if it still will
+ * not go.
+ *
+ * The straight approach is tried first, so a leg with room takes the path it always did. Only a refused one
+ * pays for the detours.
+ */
+function layLeg(
+  a: Vec2, b: Vec2, mid: Vec2[],
+  padWidthA: number | undefined, padWidthB: number | undefined,
+  r: LegRules,
+): { ok: true; pts: Vec2[]; widths?: number[] } | { ok: false; cuts: string | null } {
+  const cap = (p: Vec2): number => padCapAt(p, r.pads, r.netId, r.padGap, r.tapeW, r.own);
+  const build = (way: Vec2[]): { pts: Vec2[]; widths?: number[] } => {
+    // Densified first, so the width profile follows the part's own pitch rather than being smeared across a
+    // corridor hop — and so the gate judges exactly the copper the blade will cut.
+    const pts = densifyNearFields([a, ...way, b], r.tapeW, r.fields);
+    const widths = legWidths(pts, r.tapeW, padWidthA, padWidthB, r.fields, cap);
+    return { pts, ...(widths ? { widths } : {}) };
+  };
+
+  const straight = build(mid);
+  const first = pathOk(straight.pts, straight.widths, r);
+  if (first.ok) return { ok: true, ...straight };
+
+  // The last hop is the one that lands on the pad, so that is the one to bend: a waypoint offset square to
+  // it brings the leg in from the side instead of straight down the row.
+  const from = mid.length ? mid[mid.length - 1]! : a;
+  const dx = b.x - from.x, dy = b.y - from.y;
+  const L = Math.hypot(dx, dy);
+  if (L > 1e-9) {
+    const px = -dy / L, py = dx / L;
+    for (let step = 1; step <= DETOUR_STEPS; step++) {
+      const off = step * DETOUR_STEP_TAPES * r.tapeW;
+      for (const sign of [1, -1]) {
+        const w = { x: from.x + dx / 2 + px * sign * off, y: from.y + dy / 2 + py * sign * off };
+        // A waypoint off the material is no waypoint: copper cannot be laid where there is no sheet.
+        if (faceOfPoint(r.faces, w) < 0) continue;
+        const bent = build([...mid, w]);
+        if (pathOk(bent.pts, bent.widths, r).ok) return { ok: true, ...bent };
+      }
+    }
+  }
+  return { ok: false, cuts: first.cuts };
+}
+
 function routeOne(
   net: ResolvedNet,
   faces: FlatFace[],
@@ -330,10 +777,6 @@ function routeOne(
   pads: PadObstacle[],
   /** How near a run's edge may come to a pad that is not its own — see {@link PAD_CLEARANCE_MM}. */
   padGap: number,
-  /** Which cuts the folded artifact rejoins, so a leg may cross one; `null` keeps every leg on the sheet. */
-  adjacency: FoldAdjacency | null,
-  /** Pairs of this net's own point indices the author has already joined — see {@link PreJoin}. */
-  joined: [number, number][],
 ): {
   traces: Trace2D[];
   stranded: number[];
@@ -344,12 +787,9 @@ function routeOne(
   blame: string[];
   /** Whether this net had a bus rail to tap, and whether the tap leg reached it. */
   tapped: "none" | "laid" | "failed";
-  /** The seam rejoins its legs took. Empty without an adjacency. */
-  jumps: Jump[];
 } {
   const traces: Trace2D[] = [];
   const stranded: number[] = [];
-  const jumps: Jump[] = [];
   const used = new Set<string>();
   const lines: Trace2D[] = [];
   const blame: string[] = [];
@@ -370,7 +810,7 @@ function routeOne(
   // tree edge that happens to touch it.
   faceOf.forEach((f, i) => { if (f < 0) stranded.push(i); });
 
-  for (const [i, j] of spanningEdges(net.points, joined)) {
+  for (const [i, j] of spanningEdges(net.points)) {
     if (faceOf[i]! < 0 || faceOf[j]! < 0) { if (!stranded.includes(j)) stranded.push(j); continue; }
     const a = net.points[i]!.at, b = net.points[j]!.at;
     // `searchCorridor` plain: no crossing exclusion, no per-leg clearance test.
@@ -406,21 +846,16 @@ function routeOne(
     // belongs to nobody's search. Left unchecked it is a crossing the guarantee would not have caught.
     // Densified first, so the width profile follows the part's own pitch rather than being smeared across a
     // corridor hop — and so the clearance gate below judges exactly the copper the blade will cut.
-    // `layPath`, not `layLeg`: where the chosen route crosses a seam the folded artifact rejoins, the run
-    // is cut at that cut and the hop comes back as a jump rather than as copper over a hole. With no
-    // adjacency there is no such hop and this lays the one leg it always did.
-    const leg = layPath(c, a, b, mid, net.points[i]!.padWidth, net.points[j]!.padWidth, rules, adjacency);
+    const leg = layLeg(a, b, mid, net.points[i]!.padWidth, net.points[j]!.padWidth, rules);
     if (!leg.ok) {
       if (!stranded.includes(j)) stranded.push(j);
       accuse(leg.cuts);
       continue;
     }
-    for (const trace of leg.traces) {
-      claim(trace.pts, used);
-      lines.push(trace);
-      traces.push(trace);
-    }
-    jumps.push(...leg.jumps);
+    claim(leg.pts, used);
+    const trace: Trace2D = { net: net.id, pts: leg.pts, ...(leg.widths ? { widths: leg.widths } : {}) };
+    lines.push(trace);
+    traces.push(trace);
   }
 
   // The tap. One more leg, from a pad onto the net's own rail — routed through the same corridor and held
@@ -440,21 +875,20 @@ function routeOne(
         : searchCorridor(c, from, onto, blocked, new Map(), null, false, a, null, used, null);
     if (from !== onto && !mid.length) continue;
     // Only the pad end tapers — `tap.at` lands on the rail itself, which is already the tape's own width.
-    const tapLeg = layPath(c, a, tap.at, mid, net.points[tap.from]!.padWidth, undefined, rules, adjacency);
+    const tapLeg = layLeg(a, tap.at, mid, net.points[tap.from]!.padWidth, undefined, rules);
     if (!tapLeg.ok) {
       accuse(tapLeg.cuts);
       continue;
     }
-    for (const trace of tapLeg.traces) {
-      claim(trace.pts, used);
-      lines.push(trace);
-      traces.push(trace);
-    }
-    jumps.push(...tapLeg.jumps);
+    const pts = tapLeg.pts, widths = tapLeg.widths;
+    claim(pts, used);
+    const trace: Trace2D = { net: net.id, pts, ...(widths ? { widths } : {}) };
+    lines.push(trace);
+    traces.push(trace);
     tapped = "laid";
     break;
   }
-  return { traces, stranded, used, lines, blame, tapped, jumps };
+  return { traces, stranded, used, lines, blame, tapped };
 }
 
 /**
@@ -531,40 +965,10 @@ export function planNets(
    *  pattern. See `corridor.ts › buildCorridor`. */
   bandCap: number = STRAIN_BAND_CAP,
   graded: boolean = true,
-  /**
-   * Which cuts the folded artifact rejoins, so a net may cross one — `fold-adjacency.ts`.
-   *
-   * **Null by default, and null is the router that was here before**: with no adjacency the corridor gains
-   * no jump link, no path can be split, and every net comes out byte for byte as it did. Appended, never
-   * inserted — see the note in `planRoutes`.
-   */
-  adjacency: FoldAdjacency | null = null,
-  /** Points the author has already joined across a seam, per net — see {@link PreJoin}. */
-  prejoined: PreJoin[] = [],
 ): NetRouting {
-  if (!nets.length) return { nets: [], traces: [], orders: 0, jumps: [] };
+  if (!nets.length) return { nets: [], traces: [], orders: 0 };
   const c = buildCorridor(
-    faces, gaps, patternDiag(faces) * FOLD_PENALTY_FRAC, tapeW, sheet, tapeMm, bandCap, graded, adjacency);
-  // A drawn jump's two ends, as indices into the net's own point list. The ends are points on the net —
-  // `routeDeclaredNets` puts them there — so this is a lookup and not a snap: the nearest point to a land
-  // centre is that land centre.
-  const joinedIn = (n: ResolvedNet): [number, number][] => {
-    const near = (p: Vec2): number => {
-      let bi = -1, bd = Infinity;
-      n.points.forEach((q, i) => {
-        const d = Math.hypot(q.at.x - p.x, q.at.y - p.y);
-        if (d < bd) { bd = d; bi = i; }
-      });
-      return bi;
-    };
-    const out: [number, number][] = [];
-    for (const j of prejoined) {
-      if (j.net !== n.id) continue;
-      const a = near(j.a), b = near(j.b);
-      if (a >= 0 && b >= 0 && a !== b) out.push([a, b]);
-    }
-    return out;
-  };
+    faces, gaps, patternDiag(faces) * FOLD_PENALTY_FRAC, tapeW, sheet, tapeMm, bandCap, graded);
   const clearance = weedFloorFor(tapeW, tapeMm, sheet);
   const padGap = padClearanceFor(tapeW, tapeMm);
 
@@ -580,8 +984,6 @@ export function planNets(
   const attempt = (order: number[]): {
     nets: RoutedNet[];
     stranded: number;
-    /** How many seam rejoins this plan needs. Second in the ordering — see {@link better}. */
-    jumps: number;
     copper: number;
     /** Per net index, the nets that stood in the way of what it could not reach. */
     blame: Map<number, string[]>;
@@ -606,12 +1008,10 @@ export function planNets(
     ];
     const out: RoutedNet[] = new Array(nets.length);
     const blame = new Map<number, string[]>();
-    let stranded = 0, copper = 0, jumped = 0;
+    let stranded = 0, copper = 0;
     for (const idx of order) {
       const n = nets[idx]!;
-      const r = routeOne(
-        n, faces, c, blocked, laid, clearance, owner, tapeW, fields, pads, padGap, adjacency, joinedIn(n));
-      jumped += r.jumps.length;
+      const r = routeOne(n, faces, c, blocked, laid, clearance, owner, tapeW, fields, pads, padGap);
       for (const k of r.used) {
         blocked.add(k);
         if (!owner.has(k)) owner.set(k, n.id);
@@ -634,9 +1034,6 @@ export function planNets(
       const inTheWay = r.blame
         .map((id) => nets.find((x) => x.id === id)?.name)
         .filter((x): x is string => !!x);
-      // Only where the pattern actually has a rejoined cut. Offering a jump on a pattern with none would
-      // send the author looking for a seam that is not there.
-      const jumpHint = adjacency?.pairs.length ? ", or let a jump rejoin it across a seam" : "";
       const tapWhy =
         r.tapped === "failed"
           ? `"${n.name}" could not be joined to the ${n.name} rail without crossing other copper. ` +
@@ -650,7 +1047,6 @@ export function planNets(
         traces: r.traces,
         stranded: r.stranded,
         railTap: r.tapped,
-        ...(r.jumps.length ? { jumps: r.jumps } : {}),
         ...(rats.length ? { ratsnest: rats } : {}),
         ...(tapWhy && !r.stranded.length ? { why: tapWhy } : {}),
         ...(r.stranded.length
@@ -661,30 +1057,18 @@ export function planNets(
                   ? `without crossing ${inTheWay.length === 1 ? inTheWay[0] : inTheWay.join(" or ")}. `
                   : `without crossing another net. `) +
                 `Copper tape is single-sided, so there is no layer to cross on: move a part, or bridge ` +
-                `this net by hand${jumpHint}.` + (tapWhy ? ` ${tapWhy}` : ""),
+                `this net by hand.` + (tapWhy ? ` ${tapWhy}` : ""),
             }
           : {}),
       };
     }
-    return { nets: out, stranded, jumps: jumped, copper, blame };
+    return { nets: out, stranded, copper, blame };
   };
 
-  /**
-   * Which of two plans to keep: fewest terminals stranded, then fewest jumps, then least copper.
-   *
-   * Jumps sit **between** the two because a jump is a real cost the author pays with a soldering iron and
-   * copper is not — a plan that saves a millimetre of tape by asking for a second hand-soldered wire is
-   * the wrong trade — while a terminal that cannot be reached at all is worse than any amount of either.
-   * With no adjacency every plan has zero jumps and this is the two-key ordering it has always been.
-   */
   const better = (
-    a: { stranded: number; jumps: number; copper: number },
-    b: { stranded: number; jumps: number; copper: number } | null,
-  ): boolean =>
-    !b ||
-    a.stranded < b.stranded ||
-    (a.stranded === b.stranded &&
-      (a.jumps < b.jumps || (a.jumps === b.jumps && a.copper < b.copper)));
+    a: { stranded: number; copper: number },
+    b: { stranded: number; copper: number } | null,
+  ): boolean => !b || a.stranded < b.stranded || (a.stranded === b.stranded && a.copper < b.copper);
 
   /**
    * Move `victim` in front of `blocker`, which is what ripping a net up amounts to here.
@@ -703,7 +1087,7 @@ export function planNets(
 
   const byId = new Map(nets.map((n, i) => [n.id, i]));
   const seen = new Set<string>();
-  let best: { nets: RoutedNet[]; stranded: number; jumps: number; copper: number } | null = null;
+  let best: { nets: RoutedNet[]; stranded: number; copper: number } | null = null;
   let queue: number[][] = [];
   for (let rot = 0; rot < Math.min(MAX_ORDERS, hardest.length); rot++) {
     queue.push([...hardest.slice(rot), ...hardest.slice(0, rot)]);
@@ -739,91 +1123,5 @@ export function planNets(
     }
   }
   const chosen = best!.nets;
-  return {
-    nets: chosen,
-    traces: chosen.flatMap((n) => n.traces),
-    orders: seen.size,
-    jumps: chosen.flatMap((n) => n.jumps ?? []),
-  };
-}
-
-/**
- * Route the nets the author declared, keeping them clear of the bus and of each other.
- *
- * Separated from `planRoutes` so the netlist path can be read on its own, and so a circuit with no nets
- * pays nothing for it beyond one length check. It lives here rather than beside the bus router because
- * everything it does is netlist routing: resolve the circuit's nets, hand them to {@link planNets}, and
- * hand back what came out.
- *
- * The bus copper is handed over as a set of already-laid polylines, which {@link planNets} treats exactly
- * as it treats an earlier net's copper: nothing may come within a tape width of it. That is what keeps the
- * no-overlap guarantee true of the whole sheet rather than only of the netlist.
- *
- * It is also handed over **tagged with the net each run is a rail for**, which is a different claim and the
- * one that joins a netlist to a battery. A declared net sharing an id with a rail — `pwr`, `gnd` — taps
- * that rail rather than avoiding it, so a pad wired to PWR is wired to the battery's positive terminal and
- * not merely to the other pads that happen to be on PWR. Every other rail stays an obstacle to it. Until
- * this existed a lone pad on PWR was reported a `single-terminal-net` fault and got no copper at all.
- *
- * ## Jumps
- *
- * With an `adjacency` the nets may cross a cut the folded artifact rejoins. Two things follow, and they
- * are separate. The author's **drawn** jumps go in as {@link PreJoin}s — the claim that those two places
- * are already connected — together with their land centres as points of the net, so a leg is routed *onto*
- * the land instead of the net paying to go round a seam the author has already bridged. The router's own
- * jumps come back out, and their **lands are added to the copper here**, because a land is ordinary tape
- * and everything downstream — the canvas, the strips, the carrier — should see it as such.
- */
-export function routeDeclaredNets(
-  circuit: Circuit,
-  faces: FlatFace[],
-  gaps: GapEdge[],
-  tapeW: number,
-  bus: Trace2D[],
-  sheet: SheetSpec = DEFAULT_SHEET,
-  tapeMm: number = TAPE_MM,
-  /** The battery's two terminal squares, so the netlist can route to them where the bus is not already
-   *  running a rail out of them — see `netlist.ts`, the `BATTERY_PART` branch. */
-  batteryPads?: { pwr: Vec2; gnd: Vec2 },
-  /** Which cuts the folded artifact rejoins. `null` routes exactly as this did before jumps existed. */
-  adjacency: FoldAdjacency | null = null,
-): { traces: Trace2D[]; nets: RoutedNet[]; faults: NetlistFault[]; jumps: Jump[] } {
-  if (!circuit.nets?.length) return { traces: [], nets: [], faults: [], jumps: [] };
-  // Widths carried over, not dropped. A rail pinches to about a third of the tape where it passes an LED,
-  // and handing the clearance gate a bare polyline made every net keep a full tape width from copper that
-  // narrow — room given away for nothing.
-  const rails = bus.map((t) => ({
-    net: t.net,
-    pts: t.pts,
-    ...(t.widths ? { widths: t.widths } : t.width !== undefined ? { widths: t.pts.map(() => t.width!) } : {}),
-  }));
-  const { nets, faults, fields, pads } =
-    resolveNetlist(circuit, tapeW, tapeMm, new Set(rails.map((r) => r.net)), batteryPads);
-  if (!nets.length) return { traces: [], nets: [], faults, jumps: [] };
-  // The author's own jumps, resolved once. Only the ones that landed on a rejoined cut count: a jump whose
-  // ends sit on no pair is a fault the rules report (`jump-rules.ts`), not a connection to plan around.
-  const drawn = adjacency
-    ? manualJumps({ faces, gaps, circuit, tapeW, adjacency }).filter((j) => j.pair >= 0)
-    : [];
-  const prejoined: PreJoin[] = drawn.map((j) => ({ net: j.net, a: j.a, b: j.b }));
-  // Each end of a drawn jump becomes a terminal of its net, so the tree routes copper onto the land rather
-  // than to wherever the nearest pad happens to be. `part: -1` because no part owns it.
-  const withLands = nets.map((n) => {
-    const ends = drawn.filter((j) => j.net === n.id).flatMap((j) => [j.a, j.b]);
-    return ends.length
-      ? { ...n, points: [...n.points, ...ends.map((at) => ({ part: -1, pad: "jump", at }))] }
-      : n;
-  });
-  // The bus goes over as `rails` and NOT also as `obstacles`. Passed twice it arrives twice — once tagged
-  // with the net it is a rail for and once anonymously — and the anonymous copy is not excluded from a
-  // net's own clearance test, so every tap is refused by the very rail it is trying to reach.
-  const routed = planNets(
-    withLands, faces, gaps, tapeW, [], sheet, tapeMm, rails, fields, pads,
-    STRAIN_BAND_CAP, true, adjacency, prejoined);
-  return {
-    traces: [...routed.traces, ...jumpLandTraces(routed.jumps, tapeW, faces)],
-    nets: routed.nets,
-    faults,
-    jumps: routed.jumps,
-  };
+  return { nets: chosen, traces: chosen.flatMap((n) => n.traces), orders: seen.size };
 }

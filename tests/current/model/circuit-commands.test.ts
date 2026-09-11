@@ -1,19 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { BATTERY_PART, type Circuit } from "../../../src/model/electronics.js";
 import {
-  appendJump,
   appendPlacedPart,
   assignPad,
   cloneCircuit,
   cycleLedFlip,
   editCircuit,
-  moveJumpEnd,
-  removeJump,
   removeSelectedPart,
-  renetJump,
   toggleBattery,
 } from "../../../src/model/circuit-commands.js";
-import type { ManualJump } from "../../../src/model/manual-jump.js";
 
 describe("circuit commands", () => {
   it("appends parts without dropping the existing circuit shape", () => {
@@ -133,98 +128,12 @@ describe("circuit commands", () => {
     expect(next.terminals).toEqual([{ part: 0, pad: "1", net: "new" }]);
   });
 
-  it("appends and removes a jump, and leaves the circuit it was given alone", () => {
-    // Every command is pure, which is the whole undo mechanism: the page holds the circuit from before and
-    // puts it back. A command that edited in place would take the history with it.
-    const circuit: Circuit = { leds: [], battery: null };
-    const jump: ManualJump = {
-      id: "j1",
-      a: { kind: "free", x: 0, y: 0 },
-      b: { kind: "free", x: 10, y: 0 },
-      net: "gnd",
-    };
-
-    const added = editCircuit(circuit, appendJump(jump));
-    expect(added.jumps).toEqual([jump]);
-    expect(circuit.jumps).toBeUndefined();
-
-    const removed = editCircuit(added, removeJump("j1"));
-    expect(removed.jumps).toEqual([]);
-    expect(added.jumps).toEqual([jump]);
-  });
-
-  it("re-anchors one end of a jump and touches nothing else", () => {
-    const circuit: Circuit = {
-      leds: [],
-      battery: null,
-      jumps: [{
-        id: "j1",
-        a: { kind: "free", x: 0, y: 0 },
-        b: { kind: "free", x: 10, y: 0 },
-        net: "gnd",
-      }],
-    };
-
-    const moved = editCircuit(circuit, moveJumpEnd("j1", "b", { kind: "pad", part: 2, pad: "1" }));
-
-    expect(moved.jumps![0]).toEqual({
-      id: "j1",
-      a: { kind: "free", x: 0, y: 0 },
-      b: { kind: "pad", part: 2, pad: "1" },
-      net: "gnd",
-    });
-    expect(circuit.jumps![0]!.b).toEqual({ kind: "free", x: 10, y: 0 });
-  });
-
-  it("puts a jump on a net and takes it off again", () => {
-    const circuit: Circuit = {
-      leds: [],
-      battery: null,
-      jumps: [{ id: "j1", a: { kind: "free", x: 0, y: 0 }, b: { kind: "free", x: 10, y: 0 } }],
-    };
-
-    const named = editCircuit(circuit, renetJump("j1", "gnd"));
-    expect(named.jumps![0]!.net).toBe("gnd");
-
-    // Cleared back to no field at all, not to an empty string: the fallback is the jump's own id.
-    const cleared = editCircuit(named, renetJump("j1", ""));
-    expect(cleared.jumps![0]!.net).toBeUndefined();
-    expect("net" in cleared.jumps![0]!).toBe(false);
-  });
-
-  it("deletes the jumps anchored to a removed part, and reindexes the rest", () => {
-    // A one-ended jump cannot be re-attached the way a half-dangling wire can, so it goes with the part.
-    const circuit: Circuit = {
-      leds: [],
-      battery: null,
-      parts: [
-        { component: "R_1206", x: 0, y: 0, free: true },
-        { component: "R_1206", x: 5, y: 0, free: true },
-        { component: "R_1206", x: 9, y: 0, free: true },
-      ],
-      jumps: [
-        { id: "j1", a: { kind: "pad", part: 1, pad: "1" }, b: { kind: "free", x: 3, y: 3 } },
-        { id: "j2", a: { kind: "free", x: 1, y: 1 }, b: { kind: "free", x: 2, y: 2 } },
-        { id: "j3", a: { kind: "pad", part: 2, pad: "1" }, b: { kind: "pad", part: 0, pad: "1" } },
-      ],
-    };
-
-    const next = editCircuit(circuit, removeSelectedPart({ kind: "part", index: 1 }));
-
-    expect(next.jumps!.map((j) => j.id)).toEqual(["j2", "j3"]);
-    // The pad above the hole moved down with the part; the pad below it did not.
-    expect(next.jumps![1]!.a).toEqual({ kind: "pad", part: 1, pad: "1" });
-    expect(next.jumps![1]!.b).toEqual({ kind: "pad", part: 0, pad: "1" });
-    expect(circuit.jumps).toHaveLength(3);
-  });
-
   it("clones store payloads without sharing known mutable fields", () => {
     const circuit: Circuit = {
       leds: [{ a: 0, b: 1, component: "LED_0603" }],
       battery: { face: 0 },
       parts: [{ component: "C_1206", x: 1, y: 2, free: true, rot: 90 }],
       wires: [{ id: "w1", pts: [{ kind: "free", x: 0, y: 0 }] }],
-      jumps: [{ id: "j1", a: { kind: "free", x: 0, y: 0 }, b: { kind: "free", x: 1, y: 1 } }],
     };
 
     const cloned = cloneCircuit(circuit);
@@ -239,6 +148,5 @@ describe("circuit commands", () => {
     expect(cloned.leds).not.toBe(circuit.leds);
     expect(cloned.parts![0]).not.toBe(circuit.parts![0]);
     expect(cloned.wires![0].pts[0]).not.toBe(circuit.wires![0].pts[0]);
-    expect(cloned.jumps![0].a).not.toBe(circuit.jumps![0].a);
   });
 });

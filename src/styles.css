@@ -1624,48 +1624,6 @@ body.is-electronics .app-legend {
   pointer-events: none;
 }
 
-/* A jump: the hand-soldered rejoin across a cut. Dashed like the ratsnest above, because neither is copper
-   in the plane and neither reaches a cut file — but violet rather than blue, because the two mean opposite
-   things. A ratsnest is a connection the router FAILED to make; a jump is one that will exist as soon as
-   the sheet is folded. The lands at each end are real copper and are drawn as tape by the copper layer;
-   the ring here only marks where to put the iron, so it is unfilled and takes the same hairline stroke. */
-.el-jump {
-  fill: none;
-  stroke: #8b5cf6;
-  stroke-opacity: 0.9;
-  stroke-dasharray: 5 3;
-  vector-effect: non-scaling-stroke;
-  pointer-events: none;
-}
-/* The lip the half-drawn jump will fold onto, highlighted between the two taps. Solid where `.el-jump`
-   is dashed, and drawn at the tape's own width rather than a hairline: it is a stretch of the sheet's
-   boundary to aim the second tap at, not a link between two points, and on a pattern where the peer lip
-   is three hundred units away there is nothing else on the canvas that says which edge it is. */
-.el-jump-peer {
-  fill: none;
-  stroke: #8b5cf6;
-  stroke-opacity: 0.45;
-  stroke-linecap: round;
-  pointer-events: none;
-}
-.el-jump-land {
-  fill: none;
-  stroke: #8b5cf6;
-  vector-effect: non-scaling-stroke;
-  pointer-events: none;
-}
-/* Haloed for the same reason the designators are: the label sits beside the land on whatever the pattern
-   happens to be there — tape, tile or bare cloth — and violet on the light sheet is thin without it. */
-.el-jump-label {
-  fill: #6d28d9;
-  paint-order: stroke;
-  stroke: rgba(255, 255, 255, 0.85);
-  stroke-width: 2;
-  stroke-linejoin: round;
-  vector-effect: non-scaling-stroke;
-  pointer-events: none;
-}
-
 .el-wire-copper { fill: #c07a00; }
 /* The wire tool's own overlay: the wire being drawn, its handles and its faults. Repainted on every
    pointer move while the rest of the canvas stands still, so nothing in here may cost a re-plan.

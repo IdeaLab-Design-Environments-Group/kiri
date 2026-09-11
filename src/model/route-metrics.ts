@@ -13,7 +13,7 @@
  * {@link PlanKey} compared by {@link lexLess}: worst fault first, and the first entry that differs decides.
  */
 import type { Vec2 } from "./electronics.js";
-import type { Jump, PadPair, Trace2D } from "./trace-types.js";
+import type { PadPair, Trace2D } from "./trace-types.js";
 import {
   cross,
   isOrigin,
@@ -92,47 +92,6 @@ export function countNetCrossings(traces: Trace2D[]): number {
           if (segsCross(A.pts[a - 1]!, A.pts[a]!, B.pts[b - 1]!, B.pts[b]!)) n++;
         }
       }
-    }
-  }
-  return n;
-}
-
-/**
- * Unordered pairs of jumps of DIFFERENT nets that share a land — the jump-side reading of a short.
- *
- * A land is where the soldered wire meets the sheet, and it is copper. Two lands of different nets closer
- * than a tape width are one blob of solder away from being the same node, so each such pair is counted once,
- * against either end of either jump: `a`'s end may clash with the other jump's `b` just as readily as with
- * its `a`. Same-net pairs never count — a jump joins one net to itself across a seam, and its land lying
- * beside another land of that same net is the ordinary way two jumps rejoin one net, exactly as
- * `jump-land-clash` in `jump-rules.ts` reads it.
- *
- * **Why this is not in {@link PlanKey}, and why {@link countNetCrossings} does not see jumps.** A jump has
- * no copper in the plane between its ends: the wire leaves the sheet at one land and comes back at the
- * other, so there is nothing for a planar crossing test to intersect and charging one would be inventing a
- * fault. Nor can two jumps cross each other in 3D, because each lip node is exclusive — the corridor refuses
- * an occupied jump node at search time, so two jumps never share an end to begin with. What is left is the
- * lands, and those are blamed three ways already: `jump-land-clash` catches a drawn one, `claim`/`owner`
- * carry the blame for which net holds each land, and the corridor's exclusivity keeps the search from laying
- * a clash in the first place. So this metric exists for scripts and tests that want the number after the
- * fact. **It must never be fed into `PlanKey`**, which stays the 5-tuple it has always been.
- *
- * Distance is Euclidean in the flat pattern, and the comparison is strict `<`: lands exactly `tapeW` apart
- * are clean, matching {@link gapNeeded}'s callers, which fault on `d < need` and let equality through.
- *
- * O(n²) in the number of jumps, deliberately — a sheet carries a handful of them, and a grid would cost more
- * to explain than it saves.
- */
-export function countJumpClashes(jumps: Jump[], tapeW: number): number {
-  let n = 0;
-  for (let i = 0; i < jumps.length; i++) {
-    for (let j = i + 1; j < jumps.length; j++) {
-      const A = jumps[i]!, B = jumps[j]!;
-      if (A.net === B.net) continue; // one net rejoining itself across a seam is the point of a jump
-      const shared = [A.a, A.b].some((p) =>
-        [B.a, B.b].some((q) => len(sub(q, p)) < tapeW),
-      );
-      if (shared) n++;
     }
   }
   return n;

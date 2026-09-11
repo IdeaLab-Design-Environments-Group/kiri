@@ -29,12 +29,12 @@ interface ToolSpec {
 }
 
 const TOOLS: ToolSpec[] = [
-  { tool: "M", label: "Mountain", key: "1" },
-  { tool: "V", label: "Valley", key: "2" },
-  { tool: "B", label: "Border", key: "3" },
-  { tool: "C", label: "Cut", key: "4" },
-  { tool: "F", label: "Facet", key: "5" },
-  { tool: "E", label: "Erase", key: "0" },
+  { tool: "M", label: "mountain", key: "1" },
+  { tool: "V", label: "valley", key: "2" },
+  { tool: "B", label: "border", key: "3" },
+  { tool: "C", label: "cut", key: "4" },
+  { tool: "F", label: "facet", key: "5" },
+  { tool: "E", label: "erase", key: "0" },
 ];
 
 const PRESETS: Record<string, (g: PatternGrid) => void> = {
@@ -75,17 +75,17 @@ export class PatternEditorModal {
     this.trigger = document.createElement("button");
     this.trigger.type = "button";
     this.trigger.className = "sim-trigger";
-    this.trigger.textContent = "Pattern editor";
+    this.trigger.textContent = "pattern editor";
     this.trigger.addEventListener("click", () => this.open());
 
     this.overlay = document.createElement("div");
     this.overlay.className = "sim-overlay";
     this.overlay.hidden = true;
     this.overlay.innerHTML = `
-      <div class="sim-modal pe-modal" role="dialog" aria-modal="true" aria-label="Crease pattern editor">
+      <div class="sim-modal pe-modal" role="dialog" aria-modal="true" aria-label="crease pattern editor">
         <header class="sim-modal-header">
           <span class="sim-modal-title">Pattern editor — draw a crease pattern → FKLD</span>
-          <button type="button" class="sim-modal-close" aria-label="Close">×</button>
+          <button type="button" class="sim-modal-close" aria-label="close">×</button>
         </header>
         <div class="sim-modal-body pe-body">
           <div class="pe-toolbar">
@@ -106,16 +106,16 @@ export class PatternEditorModal {
               <span class="pe-label">Preset</span>
               <select class="pe-preset">
                 <option value="">— choose —</option>
-                <option value="blank">Blank</option>
-                <option value="accordion">Accordion (M/V pleats)</option>
-                <option value="waterbomb">Waterbomb grid</option>
-                <option value="cut">Cut window</option>
+                <option value="blank">blank</option>
+                <option value="accordion">accordion (M/V pleats)</option>
+                <option value="waterbomb">waterbomb grid</option>
+                <option value="cut">cut window</option>
               </select>
-              <button type="button" class="pe-clear">Clear</button>
+              <button type="button" class="pe-clear">clear</button>
             </span>
           </div>
           <div class="pe-canvas-wrap">
-            <svg class="pe-svg" xmlns="${SVG_NS}" aria-label="Crease pattern canvas"></svg>
+            <svg class="pe-svg" xmlns="${SVG_NS}" aria-label="crease pattern canvas"></svg>
           </div>
           <p class="pe-legend">
             <span class="pe-key pe-key-M">—— mountain</span>
@@ -128,8 +128,8 @@ export class PatternEditorModal {
         </div>
         <footer class="sim-modal-footer">
           <span class="sim-status pe-status"></span>
-          <button type="button" class="pe-download">Download .fkld</button>
-          <button type="button" class="export-trigger pe-use">Use this pattern ▶</button>
+          <button type="button" class="pe-download">download .fkld</button>
+          <button type="button" class="export-trigger pe-use">use this pattern ▶</button>
         </footer>
       </div>
     `;

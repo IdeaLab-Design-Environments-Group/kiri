@@ -23,12 +23,12 @@ export function installResizableLayout(
   gutter.className = "col-resizer";
   gutter.setAttribute("role", "separator");
   gutter.setAttribute("aria-orientation", "vertical");
-  gutter.title = "Drag to resize · double-click to reset";
+  gutter.title = "drag to resize · double-click to reset";
 
   const collapse = document.createElement("button");
   collapse.type = "button";
   collapse.className = "col-collapse";
-  collapse.title = "Hide panel";
+  collapse.title = "hide panel";
   collapse.setAttribute("aria-label", "Hide panel");
   collapse.textContent = "‹"; // ‹
   gutter.append(collapse);

@@ -127,7 +127,7 @@ describe("model/wire-export", () => {
     expect(traces).toHaveLength(1);
 
     const out = buildCopperSvgExport(ctx.fold as never, traces, ctx.tapeW);
-    expect(out.counts).toEqual({ pwr: 1, gnd: 0, jumps: 0 });
+    expect(out.counts).toEqual({ pwr: 1, gnd: 0 });
 
     // The emitted ring IS the strip outline of that trace, mapped onto the sheet — the drawn wire goes
     // through the same geometry as a routed run rather than a path of its own.
@@ -198,7 +198,7 @@ describe("model/wire-export", () => {
     expect(traces).toEqual([]);
 
     const out = buildCopperSvgExport(ctx.fold as never, traces, ctx.tapeW);
-    expect(out.counts).toEqual({ pwr: 0, gnd: 0, jumps: 0 });
+    expect(out.counts).toEqual({ pwr: 0, gnd: 0 });
     expect(ringsOf(out.svg, "pwr")).toHaveLength(0);
     expect(anchorOverlay(traces, [], null, ctx.tapeW, ctx.faces)).toEqual([]);
   });

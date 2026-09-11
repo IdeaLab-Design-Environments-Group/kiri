@@ -1,9 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { anchorOverlay, anchorTraces } from "../../../src/model/trace-anchor.js";
-import { flatFaces, gapGraph, ledOf, type Circuit, type FlatFace, type Led, type Vec2 } from "../../../src/model/electronics.js";
-import { foldAdjacency, type LipPairFlat } from "../../../src/model/fold-adjacency.js";
-import type { Jump } from "../../../src/model/trace-types.js";
+import { flatFaces, gapGraph, ledOf, type Circuit, type Led } from "../../../src/model/electronics.js";
 import {
   batteryTerminals,
   patternDiag,
@@ -167,79 +165,4 @@ describe("model/trace-anchor", () => {
     });
 
   });
-});
-
-const sub = (a: Vec2, b: Vec2): Vec2 => ({ x: a.x - b.x, y: a.y - b.y });
-const unit = (v: Vec2): Vec2 => {
-  const L = Math.hypot(v.x, v.y);
-  return { x: v.x / L, y: v.y / L };
-};
-const midOf = (l: readonly [Vec2, Vec2]): Vec2 => ({ x: (l[0].x + l[1].x) / 2, y: (l[0].y + l[1].y) / 2 });
-
-/** A point on a lip, moved `d` in from it — where a land actually sits, since a lip is the sheet's edge. */
-const inset = (l: readonly [Vec2, Vec2], f: FlatFace, d: number): Vec2 => {
-  const m = midOf(l);
-  const toC = unit(sub(f.centroid, m));
-  return { x: m.x + toC.x * d, y: m.y + toC.y * d };
-};
-
-/** Which face a corner was anchored to: the fan's first vertex plus both others belong to exactly one. */
-const faceOfTri = (faces: FlatFace[], tri: [number, number, number]): number =>
-  faces.findIndex((f) => f.verts[0] === tri[0] && f.verts.includes(tri[1]) && f.verts.includes(tri[2]));
-
-describe("model/trace-anchor › the ribbon across a jump", () => {
-  /** desk-lamp-shade's rim: a strip whose two short edges are one edge of the folded shade. */
-  function rimJump(): { faces: FlatFace[]; pair: LipPairFlat; jump: Jump } {
-    const fold = JSON.parse(readFileSync(`${EXAMPLES}desk-lamp-shade.fkld`, "utf8"));
-    const faces = flatFaces(fold);
-    const adj = foldAdjacency(fold, faces);
-    // A pair whose lips are far apart in the flat pattern is one the unfolder really did sever -- the
-    // case a jump exists for. Touching lips would prove nothing about the two faces being distinct.
-    const i = adj.pairs.findIndex((p) => {
-      const d = sub(midOf(p.lipA), midOf(p.lipB));
-      return Math.hypot(d.x, d.y) > 5 && p.faceA !== p.faceB;
-    });
-    expect(i).toBeGreaterThanOrEqual(0);
-    const pair = adj.pairs[i]!;
-    const fa = faces[pair.faceA]!, fb = faces[pair.faceB]!;
-    return {
-      faces,
-      pair,
-      jump: {
-        a: inset(pair.lipA, fa, 1),
-        b: inset(pair.lipB, fb, 1),
-        net: "n1",
-        pair: i,
-        source: "drawn",
-        dirA: unit(sub(pair.lipA[1], pair.lipA[0])),
-        dirB: unit(sub(pair.lipB[1], pair.lipB[0])),
-      },
-    };
-  }
-
-  it("spans the two lips of one cut as a single quad, one end on each face", () => {
-    const { faces, pair, jump } = rimJump();
-    const meshes = anchorOverlay([], [], null, 2, faces, [jump]);
-    const ribbons = meshes.filter((m) => m.kind === "jump");
-    expect(ribbons).toHaveLength(1);
-    // Two triangles: six corners, and they must land on the two faces the cut severed, not on one.
-    const tris = ribbons[0]!.tris;
-    expect(tris).toHaveLength(6);
-    const on = new Set(tris.map((t) => faceOfTri(faces, t.tri)));
-    expect(on.has(-1)).toBe(false);
-    expect([...on].sort((x, y) => x - y)).toEqual([pair.faceA, pair.faceB].sort((x, y) => x - y));
-  }, 20_000);
-
-  it("draws no ribbon for a jump with no lip directions recorded", () => {
-    // Without them there is no way to know which way the ribbon lies along the seam, and a guessed
-    // direction would put a wire on the model where nobody is going to solder one.
-    const { faces, jump } = rimJump();
-    const bare: Jump = { a: jump.a, b: jump.b, net: jump.net, pair: jump.pair, source: "drawn" };
-    expect(anchorOverlay([], [], null, 2, faces, [bare]).filter((m) => m.kind === "jump")).toEqual([]);
-  }, 20_000);
-
-  it("leaves the overlay untouched when no jumps are passed at all", () => {
-    const { faces } = rimJump();
-    expect(anchorOverlay([], [], null, 2, faces).some((m) => m.kind === "jump")).toBe(false);
-  }, 20_000);
 });

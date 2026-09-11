@@ -406,7 +406,7 @@ describe("view/sim-canvas", () => {
       { tri: [0, 1, 2], bary: [0, 1, 0] },
       { tri: [0, 1, 2], bary: [0, 0, 1] },
     ];
-    const kinds = ["pwr", "gnd", "led-pwr", "led-gnd", "led-body", "batt-pwr", "batt-gnd", "mark", "jump", "n3"];
+    const kinds = ["pwr", "gnd", "led-pwr", "led-gnd", "led-body", "batt-pwr", "batt-gnd", "mark", "n3"];
     canvas.setOverlay(kinds.map((kind) => ({ kind, tris: tri })) as any);
 
     const colours = ((canvas as any).overlayMeshes as any[]).map((m) => m.material.options.color);
@@ -420,7 +420,6 @@ describe("view/sim-canvas", () => {
       hex(SVGPCB_COLOURS.mask),
       hex(SVGPCB_COLOURS.mask),
       0xffffff, // the polarity marks: white on purpose, and no palette's to own
-      0x8b5cf6, // the jump ribbon: not copper at all, so not a copper colour — `.el-jump`'s violet
       0x4a8fd8, // a declared net, which the table cannot enumerate — the NET_COLOUR fallback
     ]);
   });

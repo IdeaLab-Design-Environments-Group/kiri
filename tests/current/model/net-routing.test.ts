@@ -98,8 +98,7 @@ function nearestAcross(a: { pts: Vec2[] }[], b: { pts: Vec2[] }[]): number {
 describe("model/net-routing", () => {
   it("routes nothing when there is nothing to route", () => {
     const { faces, gaps, tapeW } = load("house.fkld");
-    // `jumps` is always present and empty by default — see `NetRouting.jumps`.
-    expect(planNets([], faces, gaps, tapeW)).toEqual({ nets: [], traces: [], orders: 0, jumps: [] });
+    expect(planNets([], faces, gaps, tapeW)).toEqual({ nets: [], traces: [], orders: 0 });
   });
 
   it("joins a net's terminals, and tags every run with that net's id", () => {

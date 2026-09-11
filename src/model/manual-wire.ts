@@ -26,13 +26,14 @@ import {
   type GapEdge,
   type Vec2,
 } from "./electronics.js";
-// From the leaves that own them, not from `electronics-routing.ts`, which only re-exports them: the
-// router reaches the jump layer (`net-routing.ts` → `manual-jump.ts` → here), so importing it back would
-// close a runtime cycle (R11). Same trade the netlist and the parts modules already made.
-import { TAPE_MM } from "./tape-width.js";
-import { patternDiag } from "./trace-geometry.js";
-import { batteryTerminals, ledSeat, seatLed } from "./pad-landing.js";
-import type { Trace2D } from "./trace-types.js";
+import {
+  TAPE_MM,
+  batteryTerminals,
+  ledSeat,
+  patternDiag,
+  seatLed,
+  type Trace2D,
+} from "./electronics-routing.js";
 import { padPosition } from "./netlist.js";
 import { footprintById } from "./library.js";
 

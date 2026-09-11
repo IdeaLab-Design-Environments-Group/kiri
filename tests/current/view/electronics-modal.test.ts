@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ElectronicsModal, UNSHELVED, shelfFor } from "../../../src/view/electronics-modal.js";
 import type { FoldFile } from "../../../src/model/fold-file.js";
@@ -12,14 +11,6 @@ import { netPlacement } from "../../../src/model/parts.js";
 import { LIBRARY, componentById } from "../../../src/model/library.js";
 import { sheetFrame } from "../../../src/model/copper-svg-export.js";
 import { ERRORS } from "../../../src/model/wire-rules.js";
-import {
-  drawnParts,
-  nearestOnRail,
-  padLabelsFit,
-  partShapeOf,
-  selectionRing,
-} from "../../../src/view/electronics-modal-parts.js";
-import { foldAdjacency, type FoldAdjacency, type LipPairFlat } from "../../../src/model/fold-adjacency.js";
 import { installDom } from "./mock-dom.js";
 
 /** A 2x2 grid of unit quads: four faces, hinges between neighbours. */
@@ -446,12 +437,6 @@ describe("view/electronics-modal", () => {
           ],
           net: "n1",
           width: 2,
-        }],
-        jumps: [{
-          id: "j1",
-          a: { kind: "free", x: 7, y: 8 },
-          b: { kind: "pad", part: 0, pad: "1" },
-          net: "n1",
         }],
       };
     }
@@ -902,8 +887,8 @@ describe("view/electronics-modal", () => {
     // Two real pads, in the PCB palette's copper and mask, inside the board's copper layer.
     expect(modal.svg.innerHTML).toContain('<g id="F.Cu">');
     expect(modal.svg.innerHTML).toContain(PCB_COLOURS.mask);
-    expect(drawnParts(modal.partContext()).map((d: any) => d.component)).toEqual(["LED_1206"]);
-    expect(drawnParts(modal.partContext())[0].shape.leads).toHaveLength(2);
+    expect(modal.drawnParts().map((d: any) => d.component)).toEqual(["LED_1206"]);
+    expect(modal.drawnParts()[0].shape.leads).toHaveLength(2);
     // And nothing is left of the bespoke marker it used to be drawn as.
     expect(modal.svg.innerHTML).not.toContain("el-led-pwr");
     expect(modal.svg.innerHTML).not.toContain("el-led-gnd");
@@ -957,7 +942,7 @@ describe("view/electronics-modal", () => {
   it("says what to do when R is pressed with nothing selected", () => {
     const { modal } = openOn(grid2x2());
     (globalThis as any).document.dispatch("keydown", { key: "r" });
-    expect(modal.statusEl.textContent).toContain("Select a component first");
+    expect(modal.statusEl.textContent).toContain("select a component first");
   });
 
   it("exports the copper as a download, and says what there is to cut", () => {
@@ -1213,7 +1198,7 @@ describe("view/electronics-modal", () => {
         tapFlat(modal, run.pts[Math.floor(run.pts.length / 2)]);
         // The LED is drawn through the same list now, so pick the resistor out of it rather than
         // assuming it is alone.
-        const drawn = drawnParts(modal.partContext()).filter((d: any) => d.component === "R_1206");
+        const drawn = modal.drawnParts().filter((d: any) => d.component === "R_1206");
         expect(drawn, "no resistor drawn").toHaveLength(1);
         // Read off the shape the canvas hands the renderer, not the markup: pads are painted as their
         // true outlines now, and it is the placement this test is about.
@@ -1281,7 +1266,7 @@ describe("view/electronics-modal", () => {
       expect(modal.selected).toBeNull();
       // The parts group is still there — it holds the LED, which is drawn through it too — but the
       // resistor is not in it any more.
-      expect(drawnParts(modal.partContext()).map((d: any) => d.component)).toEqual(["LED_1206"]);
+      expect(modal.drawnParts().map((d: any) => d.component)).toEqual(["LED_1206"]);
     });
   });
 
@@ -1327,7 +1312,7 @@ describe("view/electronics-modal", () => {
       // and this asserts that by choosing the least favourable point for it.
       const spot = before[0].pts[Math.floor(before[0].pts.length / 2)];
       expect(pointInFace(modal.faces, spot)).toBeGreaterThanOrEqual(0);
-      expect(nearestOnRail(modal.routed.traces, spot)!.dist).toBeLessThan(modal.pickRadius());
+      expect(modal.nearestOnRail(spot).dist).toBeLessThan(modal.pickRadius());
 
       modal.selectPlaceMode("free");
       pick(modal, "Conn_USB_C_Socket_Molex_2171790001");
@@ -1364,7 +1349,7 @@ describe("view/electronics-modal", () => {
       // twenty-six-way part on the sheet at all.
       const drawn = modal.routedParts().find((p: any) => p.source === 0);
       expect(drawn).toBeDefined();
-      expect(partShapeOf(modal.partContext(), drawn)!.leads).toHaveLength(26);
+      expect(modal.partShapeOf(drawn).leads).toHaveLength(26);
     });
 
     it("drags a free part to a new place, committing once on release", () => {
@@ -1578,8 +1563,8 @@ describe("view/electronics-modal", () => {
       expect(shelved.sort()).toEqual(rows(modal).map((r) => r.value).sort());
       // The library's own kinds, not one shelf per part.
       const labels = groups.map((g: any) => g.getAttribute("label"));
-      expect(labels).toContain("Resistors");
-      expect(labels).toContain("Switches & buttons");
+      expect(labels).toContain("resistors");
+      expect(labels).toContain("switches & buttons");
       expect(labels.length).toBeLessThan(rows(modal).length);
     });
 
@@ -1698,7 +1683,7 @@ describe("view/electronics-modal", () => {
       const count = modal.overlay.querySelector(".el-part-count");
       expect(count.textContent).toBe(`${rows(modal).length} parts`);
       expect(modal.overlay.querySelector(".el-part-search").getAttribute("placeholder"))
-        .toBe("Search by name or package");
+        .toBe("search by name or package");
 
       search(modal, "resistor");
       expect(count.textContent).toContain(`${rows(modal).length} match`);
@@ -1745,16 +1730,16 @@ describe("view/electronics-modal", () => {
     it("opens a shelf on a click and shuts it on the next one", async () => {
       const { modal } = openOn(grid2x2());
       await modal.libraryReady;
-      const before = shelves(modal).find((sh) => sh.label.startsWith("Capacitors"))!;
+      const before = shelves(modal).find((sh) => sh.label.startsWith("capacitors"))!;
       expect(before.open, "Capacitors was already open").toBe(false);
 
       openShelf(modal, before.label);
-      const opened = shelves(modal).find((sh) => sh.label.startsWith("Capacitors"))!;
+      const opened = shelves(modal).find((sh) => sh.label.startsWith("capacitors"))!;
       expect(opened.open).toBe(true);
       expect(opened.rows).toContain("C_1206");
 
       openShelf(modal, before.label);
-      expect(shelves(modal).find((sh) => sh.label.startsWith("Capacitors"))!.open).toBe(false);
+      expect(shelves(modal).find((sh) => sh.label.startsWith("capacitors"))!.open).toBe(false);
     });
 
     it("arms the part on the row that was clicked, and puts the menu away", async () => {
@@ -1763,7 +1748,7 @@ describe("view/electronics-modal", () => {
       modal.overlay.querySelector(".el-part-trigger").dispatch("click", {});
       expect(modal.menuOpen).toBe(true);
 
-      const capacitors = shelves(modal).find((sh) => sh.label.startsWith("Capacitors"))!;
+      const capacitors = shelves(modal).find((sh) => sh.label.startsWith("capacitors"))!;
       openShelf(modal, capacitors.label);
       const row = modal.overlay.querySelectorAll(".el-part-row")
         .find((r: any) => r.dataset.id === "C_1206");
@@ -1818,7 +1803,7 @@ describe("view/electronics-modal", () => {
 
       // Click just off the copper: what gets stored is the point on the run, not where the cursor was.
       const off = { x: at.x + 0.02, y: at.y + 0.02 };
-      const snap = nearestOnRail(modal.routed.traces, off)!;
+      const snap = modal.nearestOnRail(off);
       const base = edits.length;
       tapFlat(modal, off);
 
@@ -1874,7 +1859,7 @@ describe("view/electronics-modal", () => {
       (globalThis as any).document.dispatch("keydown", { key: "Delete" });
       expect(modal.circuit.parts).toHaveLength(0);
       expect(modal.selected).toBeNull();
-      expect(drawnParts(modal.partContext()).map((d: any) => d.component)).toEqual(["LED_1206"]);
+      expect(modal.drawnParts().map((d: any) => d.component)).toEqual(["LED_1206"]);
     });
 
     it("places several of the same part on one rail, and routes every one of them", () => {
@@ -1895,7 +1880,7 @@ describe("view/electronics-modal", () => {
       // And all three are on the copper, not merely in the circuit.
       expect(modal.routedParts()).toHaveLength(3);
       expect(modal.routedParts().map((p: any) => p.source).sort()).toEqual([0, 1, 2]);
-      expect(drawnParts(modal.partContext()).filter((d: any) => d.component === "C_1206")).toHaveLength(3);
+      expect(modal.drawnParts().filter((d: any) => d.component === "C_1206")).toHaveLength(3);
       expect(modal.statusEl.textContent).not.toContain("did not fit");
     });
 
@@ -2635,7 +2620,7 @@ describe("view/electronics-modal", () => {
       const html = modal.svg.innerHTML as string;
       // The circuit's LED is drawn through this same list and group now, so read the counts off the
       // capacitor alone rather than off everything in the group.
-      const drawn = drawnParts(modal.partContext()).filter((d: any) => d.component === "C_1206");
+      const drawn = modal.drawnParts().filter((d: any) => d.component === "C_1206");
       expect(drawn).toHaveLength(1);
       // Grouped by layer across the whole board, svg-pcb's way: one copper group, one mask group, and the
       // drills punched between them and the writing. Read the pads off those rather than off a per-part
@@ -2652,7 +2637,7 @@ describe("view/electronics-modal", () => {
       expect(pins).toBe(2); // a 1206 capacitor
       expect(drawn[0].shape.leads).toHaveLength(pins);
       // Counted over the whole group, which holds the LED's two pads as well as the capacitor's.
-      const all = drawnParts(modal.partContext()).reduce((n: number, d: any) => n + terminals(d.footprint).length, 0);
+      const all = modal.drawnParts().reduce((n: number, d: any) => n + terminals(d.footprint).length, 0);
       // No stroke on the copper any more: svg-pcb fills each layer flat and lets the opaque mask cover the
       // copper, rather than holding the mask back to leave an edge showing.
       expect(groupOf("F.Cu"), "the pads still carry the kiri rim").not.toContain("stroke-width");
@@ -2695,7 +2680,7 @@ describe("view/electronics-modal", () => {
       sw: for (const t of modal.routed.traces.filter((x: any) => x.net === "gnd").sort((a: any, b: any) => runLen(b) - runLen(a))) {
         for (const p of t.pts) {
           tapFlat(modal, p);
-          if (drawnParts(modal.partContext()).some((d: any) => d.component === "SW_SPDT")) break sw;
+          if (modal.drawnParts().some((d: any) => d.component === "SW_SPDT")) break sw;
         }
       }
       modal.selectPlaceMode("free");
@@ -2709,7 +2694,7 @@ describe("view/electronics-modal", () => {
         }
       }
       // The LEDs come last, which is the order both cut files take them in — see `drawnParts`.
-      expect(drawnParts(modal.partContext()).map((d: any) => d.component))
+      expect(modal.drawnParts().map((d: any) => d.component))
         .toEqual(["R_1206", "SW_SPDT", "R_2010", "LED_1206"]);
 
       // Zoomed in far enough that the text is worth emitting at all.
@@ -2741,7 +2726,7 @@ describe("view/electronics-modal", () => {
       modal.draw();
 
       const placement = (): string[] =>
-        drawnParts(modal.partContext()).map((d: any) => JSON.stringify(d.shape.leads));
+        modal.drawnParts().map((d: any) => JSON.stringify(d.shape.leads));
       const where = placement();
       const html = (): string => modal.svg.innerHTML as string;
 
@@ -2749,7 +2734,7 @@ describe("view/electronics-modal", () => {
       const before = html();
       expect(before, "a pin name at Fit, where it is a smear").not.toContain(PCB_COLOURS.padLabel);
       expect(before, "a designator at Fit, where it is a smear").not.toContain(PCB_COLOURS.componentLabel);
-      expect(drawnParts(modal.partContext()).every((d: any) => !padLabelsFit(d.shape, modal.view.w))).toBe(true);
+      expect(modal.drawnParts().every((d: any) => !modal.padLabelsFit(d.shape))).toBe(true);
 
       // Zooming repaints the parts by itself — nothing edits the circuit.
       let designatorAt = 0, pinNamesAt = 0, zoom = 1;
@@ -2839,7 +2824,7 @@ describe("view/electronics-modal", () => {
     };
     modal.render();
 
-    const xiao = drawnParts(modal.partContext()).find((d: any) => d.component.startsWith("Module_XIAO"));
+    const xiao = modal.drawnParts().find((d: any) => d.component.startsWith("Module_XIAO"));
     expect(xiao, "the socket was not drawn at all").toBeTruthy();
     const traces = modal.routed.traces.filter((t: any) => t.net === "pwr");
     expect(traces.length, "the net laid no copper to land anywhere").toBeGreaterThan(0);
@@ -2848,7 +2833,7 @@ describe("view/electronics-modal", () => {
       .flatMap((t: any) => [t.pts[0], t.pts[t.pts.length - 1]])
       .map((p: any) => modal.tp(p));
     const reach = (name: string): number => {
-      const l = xiao!.shape.leads.find((q: any) => q.name === name)!;
+      const l = xiao.shape.leads.find((q: any) => q.name === name);
       const c = { x: (l.a.x + l.b.x) / 2, y: (l.a.y + l.b.y) / 2 };
       return Math.min(...ends.map((e: any) => Math.hypot(e.x - c.x, e.y - c.y)));
     };
@@ -2876,7 +2861,7 @@ describe("view/electronics-modal", () => {
         leds: modal.circuit.leds.map((l: any, i: number) => (i === 1 ? { ...l, component: "LED_0603" } : l)),
       };
 
-      const leds = drawnParts(modal.partContext()).filter((d: any) => d.component.startsWith("LED_"));
+      const leds = modal.drawnParts().filter((d: any) => d.component.startsWith("LED_"));
       expect(leds.map((d: any) => d.component)).toEqual(["LED_1206", "LED_0603"]);
       // A lead's segment carries the pad's own height. Read it off the footprint, not written down here.
       for (const d of leds) {
@@ -3006,7 +2991,7 @@ describe("view/electronics-modal", () => {
       for (const x of r) expect(x).toBeGreaterThanOrEqual(1.7);
       // And the floor itself, on the size that needs it: an LED_0603's legs are 1.5mm apart, so a ring at
       // three quarters of its span would be 1.1mm — drawn inside the part rather than around it.
-      const tiny = selectionRing({ x: 0, y: 0 }, { x: 1.5, y: 0 }, "el-led-selected");
+      const tiny = modal.selectionRing({ x: 0, y: 0 }, { x: 1.5, y: 0 }, "el-led-selected");
       expect(Number(/r="([\d.]+)"/.exec(tiny)![1])).toBeGreaterThanOrEqual(1.7);
     });
   });
@@ -3314,117 +3299,6 @@ describe("view/electronics-modal", () => {
   });
 
 
-  /**
-   * The jump tool, as the page wires it in. The gesture grammar itself is `jump-tool.test.ts`'s; what is
-   * checked here is only what the modal owns — the palette button, the pointer, the marks on the canvas,
-   * the status line, and keeping the jumps across the round trip to the store.
-   *
-   * On desk-lamp-shade and not on the grid, for the reason `jump-tool.test.ts` gives: the grid has no
-   * severed edges, so it has no pair of lips for a jump to join.
-   */
-  describe("joining a cut by hand", () => {
-    const EXAMPLES = new URL("../../../public/examples/", import.meta.url).pathname;
-
-    function shade(): FoldFile {
-      return JSON.parse(readFileSync(`${EXAMPLES}desk-lamp-shade.fkld`, "utf8")) as FoldFile;
-    }
-
-    /** The palette button that arms `tool`. */
-    function toolBtn(modal: any, tool: string): any {
-      return modal.overlay.querySelectorAll(".el-tool").find((b: any) => b.dataset.tool === tool);
-    }
-
-    /** The rim pair whose lips are furthest apart in the flat sheet — the case a jump exists for. */
-    function widest(adj: FoldAdjacency): LipPairFlat {
-      return [...adj.pairs].sort((p, q) =>
-        Math.hypot(q.lipA[0].x - q.lipB[0].x, q.lipA[0].y - q.lipB[0].y)
-        - Math.hypot(p.lipA[0].x - p.lipB[0].x, p.lipA[0].y - p.lipB[0].y))[0]!;
-    }
-
-    const mid = (lip: [{ x: number; y: number }, { x: number; y: number }]): { x: number; y: number } =>
-      ({ x: (lip[0].x + lip[1].x) / 2, y: (lip[0].y + lip[1].y) / 2 });
-
-    /** Open the shade with the Jump tool armed, and hand back the pair the taps are aimed at. */
-    function armedOnShade(): { modal: any; edits: unknown[]; pair: LipPairFlat } {
-      const fold = shade();
-      const { modal, edits } = openOn(fold);
-      const pair = widest(foldAdjacency(fold, flatFaces(fold)));
-      toolBtn(modal, "jump").click();
-      return { modal, edits, pair };
-    }
-
-    it("commits one jump from two taps, marks both lands J1, and the store gets it", () => {
-      const { modal, edits, pair } = armedOnShade();
-      expect(toolBtn(modal, "jump").classList.contains("is-active")).toBe(true);
-
-      tapFlat(modal, mid(pair.lipA));
-      expect(modal.circuit.jumps ?? []).toHaveLength(0); // one end down commits nothing
-      tapFlat(modal, mid(pair.lipB));
-
-      expect(modal.circuit.jumps).toHaveLength(1);
-      // The dashed link and the label at both ends, and the lands as ordinary copper beside them.
-      const svg = modal.svg.innerHTML as string;
-      expect(svg).toContain("el-jump");
-      expect(svg.split(">J1<").length - 1).toBe(2);
-      expect(svg).toContain("el-wire-copper");
-
-      // THE trap. `cloneCircuit` copies field by field and silently drops anything it does not name, so a
-      // jump missing from it would draw on the canvas and vanish the moment the circuit reached the store
-      // — and an undo, which restores what the store holds, would bring back a sheet without it.
-      const stored = edits[edits.length - 1] as any;
-      expect(stored.jumps).toHaveLength(1);
-      expect(stored.jumps[0].id).toBe(modal.circuit.jumps[0].id);
-      expect(stored.jumps[0].a).toEqual(modal.circuit.jumps[0].a);
-      // A copy, not the editor's own object: the store must not hold ends the canvas can still move.
-      expect(stored.jumps[0]).not.toBe(modal.circuit.jumps[0]);
-      expect(stored.jumps[0].a).not.toBe(modal.circuit.jumps[0].a);
-
-      expect(modal.statusEl.textContent).toContain("1 jump");
-    });
-
-    it("takes the pointer while armed, so drawing a jump never pans the canvas", () => {
-      const { modal, pair } = armedOnShade();
-      const box = (): string => modal.svg.getAttribute("viewBox") as string;
-      const before = box();
-      const at = modal.tp(mid(pair.lipA));
-      modal.svg.dispatch("pointerdown", { button: 0, clientX: at.x, clientY: at.y, pointerId: 1 });
-      modal.svg.dispatch("pointermove", { clientX: at.x + 40, clientY: at.y + 40, pointerId: 1 });
-      expect(box()).toBe(before);
-    });
-
-    it("abandons a half-drawn jump when another tool is picked", () => {
-      const { modal, pair } = armedOnShade();
-      tapFlat(modal, mid(pair.lipA));
-      expect(modal.jump.drawing()).toBe(true);
-      toolBtn(modal, "battery").click();
-      expect(modal.jump.drawing()).toBe(false);
-      expect(modal.circuit.jumps ?? []).toHaveLength(0);
-    });
-
-    it("removes the selected jump on Delete, and the store loses it too", () => {
-      const { modal, edits, pair } = armedOnShade();
-      tapFlat(modal, mid(pair.lipA));
-      tapFlat(modal, mid(pair.lipB));
-      expect(modal.circuit.jumps).toHaveLength(1);
-
-      (globalThis as any).document.dispatch("keydown", { key: "Delete" });
-      expect(modal.circuit.jumps).toHaveLength(0);
-      expect((edits[edits.length - 1] as any).jumps).toHaveLength(0);
-      expect(modal.svg.innerHTML).not.toContain("el-jump-land");
-      expect(modal.statusEl.textContent).not.toContain("1 jump");
-    });
-
-    it("is inert until it is armed — a tap on a lip with another tool up is not a jump", () => {
-      const fold = shade();
-      const { modal } = openOn(fold);
-      const pair = widest(foldAdjacency(fold, flatFaces(fold)));
-      tapFlat(modal, mid(pair.lipA));
-      tapFlat(modal, mid(pair.lipB));
-      expect(modal.circuit.jumps ?? []).toHaveLength(0);
-    });
-  });
-
-
   describe("shelving the library", () => {
     /** Every part the palette can shelve, which is the whole library — LEDs and the coin cell included. */
     const shelved = LIBRARY.map((c) => ({ id: c.id, shelf: shelfFor(c.id) }));
@@ -3451,11 +3325,11 @@ describe("view/electronics-modal", () => {
 
     it("shelves a part by what it does, not by the package it is moulded in", () => {
       // This is what the rule order buys, and it is the only reason the order is not arbitrary.
-      expect(shelfFor("Multiplexer_8_1_Texas_CD74HC4051M96_SOIC_16")).toBe("Analog & logic ICs");
-      expect(shelfFor("MotorDriver_BipolarStepper_Trinamic_TMC2226_HTSSOP_28_EP")).toBe("Motor drivers");
+      expect(shelfFor("Multiplexer_8_1_Texas_CD74HC4051M96_SOIC_16")).toBe("analog & logic ICs");
+      expect(shelfFor("MotorDriver_BipolarStepper_Trinamic_TMC2226_HTSSOP_28_EP")).toBe("motor drivers");
       expect(shelfFor("SOIC_8_3_9x4_9mm_P1_27mm")).toBe("IC packages");
       // And the pair that shares a suffix: a transistor and a package outline one letter apart.
-      expect(shelfFor("SOT_23_5")).toBe("Diodes & transistors");
+      expect(shelfFor("SOT_23_5")).toBe("diodes & transistors");
       expect(shelfFor("TSOT_23_5")).toBe("IC packages");
     });
 

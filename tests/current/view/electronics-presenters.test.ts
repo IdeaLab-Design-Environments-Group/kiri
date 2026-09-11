@@ -56,8 +56,8 @@ describe("view/electronics-presenters > derivedNetRows", () => {
   it("puts the battery on both rails once copper exists", () => {
     const c = bare({ nets: rails(), battery: { face: 0, x: 0, y: 0 } as never });
     expect(derivedNetRows(c, routedSomething({ battery: true }))).toEqual([
-      { net: PWR_NET_ID, label: "Battery +", derived: true },
-      { net: GND_NET_ID, label: "Battery −", derived: true },
+      { net: PWR_NET_ID, label: "battery +", derived: true },
+      { net: GND_NET_ID, label: "battery −", derived: true },
     ]);
   });
 
@@ -68,8 +68,8 @@ describe("view/electronics-presenters > derivedNetRows", () => {
     const c = bare({ nets: rails(), battery: { face: 0, x: 0, y: 0 } as never });
     const planned = { ...EMPTY_ROUTE, battery: true } as RoutedCircuit;
     expect(derivedNetRows(c, planned)).toEqual([
-      { net: PWR_NET_ID, label: "Battery +", derived: true },
-      { net: GND_NET_ID, label: "Battery −", derived: true },
+      { net: PWR_NET_ID, label: "battery +", derived: true },
+      { net: GND_NET_ID, label: "battery −", derived: true },
     ]);
   });
 
@@ -78,7 +78,7 @@ describe("view/electronics-presenters > derivedNetRows", () => {
     // knows nothing about it and must say nothing -- unlike the battery, whose rails are construction.
     const c = bare({ nets: rails(), leds: [{ a: 0, b: 1 }], battery: { face: 0, x: 0, y: 0 } as never });
     const planned = { ...EMPTY_ROUTE, battery: true } as RoutedCircuit;
-    expect(derivedNetRows(c, planned).map((r) => r.label)).toEqual(["Battery +", "Battery −"]);
+    expect(derivedNetRows(c, planned).map((r) => r.label)).toEqual(["battery +", "battery −"]);
   });
 
   it("says nothing about a battery the plan does not have, however the circuit reads", () => {

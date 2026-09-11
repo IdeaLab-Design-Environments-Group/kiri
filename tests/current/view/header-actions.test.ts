@@ -17,7 +17,7 @@ describe("view/header-actions", () => {
     // [Create pyramid] [Kirigamize ▶] -- "Load sample" moved into the viewer's own toolbar, where the
     // one-entry Example dropdown that loaded the same file used to be.
     expect(children.map((c) => c.tagName)).toEqual(["button", "button"]);
-    expect(children.map((c) => c.textContent)).toEqual(["Create pyramid", "Kirigamize ▶"]);
+    expect(children.map((c) => c.textContent)).toEqual(["create pyramid", "cut&fold ▶"]);
   });
 
   it("fires registered handlers and toggles disabled state", () => {

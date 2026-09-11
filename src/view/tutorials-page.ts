@@ -48,8 +48,8 @@ export class TutorialsPage {
     this.trigger = document.createElement("button");
     this.trigger.type = "button";
     this.trigger.className = "sim-trigger tut-nav";
-    this.trigger.textContent = "Tutorials";
-    this.trigger.title = "Short screen recordings of every part of Kiri";
+    this.trigger.textContent = "tutorials";
+    this.trigger.title = "short screen recordings of every part of kiri";
     this.trigger.addEventListener("click", () => this.open());
 
     this.overlay = el("div", "tut-page");
@@ -65,11 +65,11 @@ export class TutorialsPage {
     back.setAttribute("aria-label", "Back to the model");
     back.addEventListener("click", () => this.goBack());
     const title = el("span", "el-page-title");
-    title.textContent = "Kiri Tutorials";
+    title.textContent = "kiri Tutorials";
     this.search = document.createElement("input");
     this.search.type = "search";
     this.search.className = "tut-search";
-    this.search.placeholder = "Filter tutorials";
+    this.search.placeholder = "filter tutorials";
     this.search.setAttribute("aria-label", "Filter tutorials");
     this.search.addEventListener("input", () => this.applyFilter());
     this.tally = el("span", "tut-tally");

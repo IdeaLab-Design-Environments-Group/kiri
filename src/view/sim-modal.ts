@@ -50,7 +50,7 @@ export class SimModal {
     this.trigger = document.createElement("button");
     this.trigger.type = "button";
     this.trigger.className = "sim-trigger";
-    this.trigger.textContent = "Simulation & Routing";
+    this.trigger.textContent = "simulation & routing";
     this.trigger.disabled = true;
     this.trigger.addEventListener("click", () => {
       this.open().catch((err) => {
@@ -71,34 +71,34 @@ export class SimModal {
       <div class="sim-modal" role="dialog" aria-modal="true" aria-label="3D fold simulation">
         <header class="sim-modal-header">
           <span class="sim-modal-title">Simulation &amp; routing — the copper on the folded model</span>
-          <button type="button" class="sim-modal-close" aria-label="Close">×</button>
+          <button type="button" class="sim-modal-close" aria-label="close">×</button>
         </header>
         <div class="sim-modal-body">
           <div class="sim-tabs" role="tablist">
-            <button type="button" class="sim-tab is-active" data-material="vinyl" role="tab" aria-selected="true">Vinyl / paper</button>
+            <button type="button" class="sim-tab is-active" data-material="vinyl" role="tab" aria-selected="true">vinyl / paper</button>
             <button type="button" class="sim-tab" data-material="printed" role="tab" aria-selected="false">3D-printed</button>
           </div>
           <div class="sim-canvas-mount"></div>
         </div>
         <footer class="sim-modal-footer">
           <span class="sim-status"></span>
-          <span class="sim-strain" title="Mean stretch of the sheet. Paper bends, it does not stretch, so a real fold stays near 0% — a large figure means what you are looking at is not a fold the material could make."></span>
-          <label class="sim-fold-control sim-detail-control" title="Pave the harder-folding faces with more, smaller tiles. Level 0 = one tile per face; 4 splits the sharpest folds 4 deep. Finer tiles leave narrower gaps, so the model folds less far.">
-            Detail <span class="sim-detail-value">0</span>
+          <span class="sim-strain" title="mean stretch of the sheet. Paper bends, it does not stretch, so a real fold stays near 0% — a large figure means what you are looking at is not a fold the material could make."></span>
+          <label class="sim-fold-control sim-detail-control" title="pave the harder-folding faces with more, smaller tiles. Level 0 = one tile per face; 4 splits the sharpest folds 4 deep. Finer tiles leave narrower gaps, so the model folds less far.">
+            detail <span class="sim-detail-value">0</span>
             <input type="range" class="sim-detail-slider" min="0" max="4" step="1" value="0" />
           </label>
-          <label class="sim-fold-control sim-gap-control" title="Width of the bare-hinge gaps between the printed tiles (tile shrink toward its centroid). Matches the STL export.">
-            Gap <span class="sim-gap-value">16%</span>
+          <label class="sim-fold-control sim-gap-control" title="width of the bare-hinge gaps between the printed tiles (tile shrink toward its centroid). Matches the STL export.">
+            gap <span class="sim-gap-value">16%</span>
             <input type="range" class="sim-gap-slider" min="2" max="45" step="1" value="16" />
           </label>
           <label class="sim-fold-control">
-            Fold <span class="sim-fold-value">0%</span>
+            fold <span class="sim-fold-value">0%</span>
             <input type="range" class="sim-fold-slider" min="0" max="100" step="1" value="0" />
           </label>
-          <label class="sim-fold-control sim-elec-control" title="Show the copper, the LED footprints and the battery pads on the model">
+          <label class="sim-fold-control sim-elec-control" title="show the copper, the LED footprints and the battery pads on the model">
             <input type="checkbox" class="sim-elec-toggle" checked /> Electronics
           </label>
-          <button type="button" class="sim-reset-btn">Reset fold</button>
+          <button type="button" class="sim-reset-btn">reset fold</button>
         </footer>
       </div>
     `;
@@ -236,7 +236,7 @@ export class SimModal {
   async open(): Promise<void> {
     this.overlay.hidden = false;
     if (!this.canvas) {
-      this.statusEl.textContent = "Loading 3D viewer…";
+      this.statusEl.textContent = "loading 3D viewer…";
       const Canvas = await loadSimCanvas(this.reloads++);
       this.canvas = new Canvas(this.mount);
       if (this.overlay.hidden) return;
@@ -258,7 +258,7 @@ export class SimModal {
     this.cancelIdleWarm();
     const built = this.provider?.(this.material) ?? null;
     if (!built) {
-      this.statusEl.textContent = "No foldable model — load a FOLD/FKLD crease pattern, then reopen.";
+      this.statusEl.textContent = "no foldable model — load a FOLD/FKLD crease pattern, then reopen.";
       this.canvas?.stop();
       return;
     }

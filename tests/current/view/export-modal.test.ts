@@ -27,7 +27,7 @@ describe("view/export-modal", () => {
     modal.setProvider(() => null);
     modal.open();
 
-    expect(host.children[0]?.textContent).toBe("Export");
+    expect(host.children[0]?.textContent).toBe("export");
     expect(host.children[0]?.disabled).toBe(false);
 
     const overlay = document.body.children[0]!;

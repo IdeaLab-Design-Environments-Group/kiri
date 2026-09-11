@@ -78,8 +78,8 @@ export function derivedNetRows(circuit: Circuit, routed: RoutedCircuit): NetRow[
   // before the battery had terminals, which would otherwise lose the rails it has always shown.
   const stored = (circuit.terminals ?? []).some((t) => t.part === BATTERY_PART);
   if (routed.battery && !stored) {
-    rows.push({ net: PWR_NET_ID, label: "Battery +", derived: true });
-    rows.push({ net: GND_NET_ID, label: "Battery −", derived: true });
+    rows.push({ net: PWR_NET_ID, label: "battery +", derived: true });
+    rows.push({ net: GND_NET_ID, label: "battery −", derived: true });
   }
   circuit.leds.forEach((_led, i) => {
     if (routed.unreachable.includes(i)) return;
@@ -427,8 +427,6 @@ export interface StatusInput {
   wiring: boolean;
   wireFaults: readonly { kind: string; why: string }[];
   wireDrawing: boolean;
-  /** How many hand-drawn jumps the circuit carries. Optional: a caller with no jump tool has none. */
-  jumpCount?: number;
   stale: boolean;
   autoRoute: boolean;
   /** Everything placed on a rail — what {@link placedCount} counts. */
@@ -480,10 +478,6 @@ export function statusLine(input: StatusInput): string {
   // still a hand on it, not once it is copper.
   const wires = input.wireCount;
   if (wires > 0) msg += ` · ${wires} hand wire${wires === 1 ? "" : "s"}`;
-  // Said beside the wires and not among the faults: a jump is copper the author committed to soldering
-  // after folding, and the count is the number of pairs of lands they will have to find on the sheet.
-  const jumps = input.jumpCount ?? 0;
-  if (jumps > 0) msg += ` · ${jumps} jump${jumps === 1 ? "" : "s"}`;
   if (input.wiring) {
     // An error and a warning are different things and must not read alike: an ERROR means the wire
     // cannot be cut, a WARNING means it can and will cost something — a weaker sheet, a harder weed, a

@@ -27,9 +27,7 @@ import {
   type Mirror,
   type PlacedPartMark,
 } from "./copper-svg-export.js";
-import type { Jump } from "./trace-types.js";
 import type { SheetSpec } from "./fold-strain.js";
-import type { FoldAdjacency } from "./fold-adjacency.js";
 
 export interface ElectronicsDesignAdapter {
   route(input: RouteCircuitInput): RoutedCircuit;
@@ -47,9 +45,6 @@ export interface RouteCircuitInput {
   circuit: Circuit;
   sheetMm?: number;
   sheet?: SheetSpec;
-  /** Which cuts the folded artifact rejoins, so the declared nets may cross one. Absent routes without
-   *  jumps, exactly as before — see `electronics-routing.ts › planRoutes`. */
-  adjacency?: FoldAdjacency;
 }
 
 export interface TapeMeasureInput {
@@ -80,9 +75,6 @@ export interface CopperExportInput {
   resistors?: { a: Vec2; b: Vec2 }[];
   switches?: { a: Vec2; b: Vec2; flip?: boolean }[];
   parts?: PlacedPartMark[];
-  /** The jumps on this side. The carrier marks them; both files count them, since the count is the only
-   *  place a file says there is copper still to be joined by hand. */
-  jumps?: Jump[];
 }
 
 export interface CarrierExportInput extends CopperExportInput {
@@ -90,16 +82,13 @@ export interface CarrierExportInput extends CopperExportInput {
 }
 
 export const defaultElectronicsDesign: ElectronicsDesignAdapter = {
-  route: ({ faces, gaps, circuit, sheetMm, sheet, adjacency }) =>
-    planRoutes(faces, gaps, circuit, sheetMm, sheet, undefined, undefined, undefined, adjacency ?? null),
+  route: ({ faces, gaps, circuit, sheetMm, sheet }) => planRoutes(faces, gaps, circuit, sheetMm, sheet),
   tapeWidth: ({ faces, sheetMm, sheet, circuit }) => tapeWidthFor(faces, sheetMm, sheet, circuit),
   tapeMm: ({ faces, sheetMm, sheet, circuit }) => tapeMmFor(faces, sheetMm, sheet, circuit),
   batteryTerminals: ({ centre, diag, poly, tapeW }) => batteryTerminals(centre, diag, poly, tapeW),
   patternDiag,
-  strips: ({ fold, traces, tapeW, baseName, pads, mirror, sheetMm, resistors, switches, parts, jumps }) =>
-    buildCopperSvgExport(fold, traces, tapeW, baseName, pads, mirror, sheetMm, resistors, switches, parts, jumps),
-  carrier: ({ fold, traces, tapeW, baseName, keepOff, mirror, sheetMm, pads, resistors, switches, parts, jumps }) =>
-    buildCopperCarrierExport(
-      fold, traces, tapeW, baseName, keepOff, mirror, sheetMm, pads, resistors, switches, parts, jumps,
-    ),
+  strips: ({ fold, traces, tapeW, baseName, pads, mirror, sheetMm, resistors, switches, parts }) =>
+    buildCopperSvgExport(fold, traces, tapeW, baseName, pads, mirror, sheetMm, resistors, switches, parts),
+  carrier: ({ fold, traces, tapeW, baseName, keepOff, mirror, sheetMm, pads, resistors, switches, parts }) =>
+    buildCopperCarrierExport(fold, traces, tapeW, baseName, keepOff, mirror, sheetMm, pads, resistors, switches, parts),
 };

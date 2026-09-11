@@ -36,7 +36,7 @@
 import { KEYS, validateEdgeCutTypes, validateMoleculeArrays } from "@dayangac/fkld";
 import { computeTheta, computeW } from "@kirigami/model/geometry.js";
 import type { FoldFile } from "../model/fold-file.js";
-import { edgeKey, edgeLength } from "./mesh.js";
+import { edgeLength } from "./mesh.js";
 import {
   PipelineError,
   type CutPlan,
@@ -48,47 +48,6 @@ import {
 
 /** Per-vertex driven flag key (consumed by src/sim/fold-adapter.ts). */
 export const DRIVEN_KEY = "fkld:vertices_driven";
-
-/**
- * Per-edge lip peer key: `[peerEdge, aligned] | null` parallel to
- * `edges_vertices`, non-null exactly on the two "C" edges of one cut's lips.
- * `aligned = 1` means the two edges are stored in the same direction relative
- * to the lip correspondence `lipA[i] ↔ lipB[i]` — i.e. `edges_vertices[e][i]`
- * meets `edges_vertices[peer][i]` when the sheet folds; `0` means crossed.
- *
- * Fold adjacency (`src/model/fold-adjacency.ts`) is the consumer and carries
- * its own copy of this string: `model/` may not import `pipeline/`, the same
- * precedent as `DRIVEN_KEY` / `src/sim/fold-adapter.ts`.
- *
- * Unregistered `fkld:` extension, exactly like `DRIVEN_KEY`: it is not in
- * fkld's `KEY_LIST`, but `isFkldKey` (node_modules/@dayangac/fkld/lib/spec.js
- * :102) accepts any key in the `fkld:` namespace, so it round-trips through
- * parse/serialize unvalidated.
- */
-export const LIP_PEER_KEY = "fkld:edges_lipPeer";
-
-/**
- * Lip-peer array for `LIP_PEER_KEY` (see there). Edges are looked up by
- * unordered vertex-pair key as `route-seams.ts` classifies them; a lip whose
- * edge is absent (one side demoted to a vent bound, `unfold.ts` ~675-702)
- * leaves both entries null rather than half a pairing.
- */
-export function lipPeerArray(sheet: Sheet): ([number, 0 | 1] | null)[] {
-  const peer = new Array<[number, 0 | 1] | null>(sheet.edges.length).fill(null);
-  const byKey = new Map<string, number>();
-  sheet.edges.forEach((e, i) => byKey.set(edgeKey(e.a, e.b), i));
-  for (const lip of sheet.lips) {
-    const eA = byKey.get(edgeKey(lip.lipA[0], lip.lipA[1]));
-    const eB = byKey.get(edgeKey(lip.lipB[0], lip.lipB[1]));
-    if (eA === undefined || eB === undefined) continue;
-    const firstA = sheet.edges[eA].a === lip.lipA[0];
-    const firstB = sheet.edges[eB].a === lip.lipB[0];
-    const aligned = firstA === firstB ? 1 : 0;
-    peer[eA] = [eB, aligned];
-    peer[eB] = [eA, aligned];
-  }
-  return peer;
-}
 
 export interface EmitOptions {
   creator?: string;
@@ -161,9 +120,6 @@ export function emitFkld(sheet: Sheet, opts: EmitOptions): FoldFile {
     }
   }
 
-  // --- fold adjacency: which two C edges are one cut's lips -----------------
-  const lipPeer = lipPeerArray(sheet);
-
   const file: FoldFile = {
     file_spec: 1.2,
     file_creator: opts.creator ?? "Kiri",
@@ -193,7 +149,6 @@ export function emitFkld(sheet: Sheet, opts: EmitOptions): FoldFile {
       sheet: { ...sheet.sheetRect },
     },
     [DRIVEN_KEY]: driven,
-    [LIP_PEER_KEY]: lipPeer,
     file_frames: [
       {
         frame_classes: ["foldedForm"],
@@ -215,19 +170,6 @@ export function emitFkld(sheet: Sheet, opts: EmitOptions): FoldFile {
   });
   if (!molRes.ok) {
     throw new PipelineError("emit", `molecule validation failed: ${molRes.errors[0]?.message}`, molRes.errors);
-  }
-
-  for (let e = 0; e < nE; e++) {
-    const entry = lipPeer[e];
-    if (entry === null) continue;
-    const [p, aligned] = entry;
-    if (edges_assignment[e] !== "C" || edges_assignment[p] !== "C") {
-      throw new PipelineError("emit", `lip peer on non-cut edge ${e}→${p} (${edges_assignment[e]}/${edges_assignment[p]})`);
-    }
-    const back = lipPeer[p];
-    if (back === null || back[0] !== e || back[1] !== aligned) {
-      throw new PipelineError("emit", `lip peer is not symmetric at edge ${e} (peer ${p})`);
-    }
   }
 
   return file;

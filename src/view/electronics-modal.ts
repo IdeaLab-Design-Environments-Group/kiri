@@ -71,8 +71,10 @@ import {
   buildCopperCarrierExport,
   buildCopperSvgExport,
   frameMirrored,
+  type ResistorShape,
   mirrorPoint,
   partShape,
+  resistorShape,
   stripOutline,
   switchShape,
 } from "../model/copper-svg-export.js";
@@ -88,9 +90,8 @@ import type { Component } from "../model/footprint.js";
 import type { SimMaterial } from "../sim/index.js";
 import {
   batteryParts, carrierFrameParts, centreOf, closedPath, fmt, inRing, isZero,
-  jumpParts, ratsnestParts, substrateParts,
+  ratsnestParts, substrateParts,
 } from "./electronics-draw.js";
-import { sceneSvg } from "./pcb-scene.js";
 import { R_1206, SW_SPDT } from "../model/library.js";
 import {
   defaultElectronicsDesign,
@@ -105,6 +106,8 @@ import {
   OFFERED,
   PART_BY_ID,
   PART_GROUPS,
+  ledPart,
+  ledPitch,
   loadRestOfLibrary,
   matches,
   paletteCount,
@@ -117,17 +120,6 @@ import {
   carrierExport,
   stripsExport,
 } from "./electronics-export.js";
-import {
-  type PartDrawContext,
-  drawnParts,
-  freeParts,
-  ledPads,
-  nearestOnRail,
-  padLabelsFit,
-  partShapeOf,
-  renderScale,
-  selectionRing,
-} from "./electronics-modal-parts.js";
 import { shellMarkup } from "./electronics-shell.js";
 import {
   type NetPanelRow,
@@ -177,10 +169,6 @@ import {
 import { TILE_INSET_FRAC } from "../model/tile-subdiv.js";
 import { type ManualWire, type WireContext, manualTraces } from "../model/manual-wire.js";
 import { WireTool, type WireHost } from "./wire-tool.js";
-import { JumpTool, type JumpHost } from "./jump-tool.js";
-import { EMPTY_ADJACENCY, foldAdjacency, type FoldAdjacency } from "../model/fold-adjacency.js";
-import { jumpLabels, jumpLandTraces, manualJumps } from "../model/manual-jump.js";
-import type { Jump } from "../model/trace-types.js";
 // The scene emitter, for the ratsnest overlay — see the note at its use in `draw()`.
 import type { FoldFile } from "../model/fold-file.js";
 import { HOME, currentRoute, goToRoute, onRouteChange } from "./route.js";
@@ -213,15 +201,13 @@ const MARGIN = 8; // mm — must match the SVG export so preview ↔ export regi
  *
  * `led` and `battery` are placements of their own — an LED straddles a hinge and the battery pins to a
  * face, so neither is a part in series on a rail. `wire` places nothing at all: it hands the canvas to
- * {@link WireTool}, which draws copper by hand rather than asking the router for it, and `jump` places
- * nothing either — it hands the canvas to {@link JumpTool}, whose two taps join the two lips of one cut
- * with a connection that exists only once the sheet is folded. `resistor` and
+ * {@link WireTool}, which draws copper by hand rather than asking the router for it. `resistor` and
  * `switch` are the two parts that predate
  * the library and keep their own fields on the {@link Circuit}; they are no longer offered in the palette
  * (the library's own `R_1206` and `SW_SPDT` place the same parts through the generic path) but the tools
  * stay so a circuit authored before the library still edits. Every other value is a `Component.id`.
  */
-type Tool = "led" | "battery" | "wire" | "jump" | "resistor" | "switch" | (string & {});
+type Tool = "led" | "battery" | "wire" | "resistor" | "switch" | (string & {});
 
 /**
  * Where the next component goes, independent of WHICH component it is.
@@ -282,6 +268,16 @@ type PlacedOnRail = { x: number; y: number; flip?: boolean };
 const PART_PICK_FLOOR_MM = 2;
 
 /**
+ * The smallest a selection ring may be drawn, in sheet millimetres.
+ *
+ * The ring is sized off the copper the part bridges, which is the right size for anything on a rail. It
+ * is the wrong size for the smallest parts: an `LED_0603`'s pads are 0.8mm and its legs 1.5mm apart, so
+ * a ring proportional to the part alone would be a dot inside the part rather than a mark around it.
+ * The floor is what a 1206 LED's ring has always come out at, so nothing already on screen moves.
+ */
+const SELECT_RING_FLOOR_MM = 1.7;
+
+/**
  * What an edit does to the copper plan, decided by the edit rather than by the Auto/Manual segment.
  *
  * - `auto` — plan if Auto is on. Placing, moving and turning parts: the copper is what the tape follows,
@@ -305,6 +301,31 @@ type Replan = "auto" | "now" | "later" | "none";
  *  already positioned — align the frame, press them down, snip the tabs, lift the frame away. */
 type ViewMode = "strips" | "carrier";
 
+/**
+ * How much of the view a pad must be worth before its own name is written on it.
+ *
+ * Deliberately well above the point where the text is merely emittable. A pin name is written *inside* the
+ * pad it names, so a barely-legible one is worse than none: it covers the copper, which is the thing the
+ * drawing exists to show. The designator has no such problem — it sits beside the part in clear space — so
+ * the two appear at different zooms, and this is the later of them.
+ */
+const PAD_LABEL_VIEW_FRACTION = 0.035;
+
+/** The canvas width in pixels to assume when the element cannot say (a headless DOM, mostly). */
+const CANVAS_PX = 900;
+
+/**
+ * How many screen pixels one "rendered millimetre" is taken to be.
+ *
+ * {@link partSvg} suppresses text below a floor expressed in rendered millimetres — the size the label
+ * comes out at, not the size it is in the sheet — and `scale` is what tells it the two differ. On a screen
+ * the honest conversion is about four pixels to the millimetre, but four pixels of text is not a word.
+ * Eighteen is where, looking at the rendered canvas, a glyph stops being a smear and starts being a
+ * character — at Fit on a whole sheet nothing is written at all, which is right, because there is nothing
+ * there big enough to write on.
+ */
+const PX_PER_RENDERED_MM = 18;
+
 export class ElectronicsModal {
   private readonly overlay: HTMLElement;
   private readonly trigger: HTMLButtonElement;
@@ -314,9 +335,6 @@ export class ElectronicsModal {
   /** Copper the author draws themselves. Armed by the `wire` tool; inert — every handler returns false —
    *  whenever it is not, which is what lets the guards at the head of the pointer handlers be one line. */
   private readonly wire: WireTool;
-  /** Jumps the author draws. Armed by the `jump` tool, and inert the rest of the time, exactly as the
-   *  wire tool is — the two share `wire-snap.ts` and the same one-line guards in the pointer handlers. */
-  private readonly jump: JumpTool;
   private readonly viewButtons = new Map<ViewMode, HTMLButtonElement>();
   /** The two halves of the Route segment, keyed by what they set {@link autoRoute} to. */
   private readonly autoButtons = new Map<boolean, HTMLButtonElement>();
@@ -435,9 +453,6 @@ export class ElectronicsModal {
   private selectedByPick = false;
   private fold: FoldFile | null = null;
   private faces: FlatFace[] = [];
-  /** Which cuts the folded artifact rejoins, cached beside {@link faces} because it is derived from the
-   *  same pattern and costs a weld of the whole goal frame to compute. Rebuilt with the geometry. */
-  private adjacency: FoldAdjacency = EMPTY_ADJACENCY;
   private tiles: TilePoly[] = [];
   private gaps: GapEdge[] = [];
   private points: Vec2[] = [];
@@ -500,7 +515,7 @@ export class ElectronicsModal {
     this.trigger = document.createElement("button");
     this.trigger.type = "button";
     this.trigger.className = "sim-trigger";
-    this.trigger.textContent = "Electronics";
+    this.trigger.textContent = "electronics";
     this.trigger.disabled = true;
     // Navigation now, not "open a dialog": clicking it goes to the editor's page, and the URL says so.
     this.trigger.className = "sim-trigger el-nav";
@@ -529,7 +544,6 @@ export class ElectronicsModal {
     // Built as soon as there is a canvas to hand it, and never later: `draw()` repaints the live layer
     // through it, so a tool that arrived after the first render would be a null check in the draw path.
     this.wire = new WireTool(this.wireHost());
-    this.jump = new JumpTool(this.jumpHost());
     this.statusEl = this.overlay.querySelector(".el-status")!;
     this.partSelect = this.overlay.querySelector(".el-part")!;
     this.partSearch = this.overlay.querySelector(".el-part-search")!;
@@ -650,7 +664,6 @@ export class ElectronicsModal {
       // worse: it deleted the selected part while you were clearing a name.
       if (isTyping(e.target)) return;
       if (this.wire.onKey(e)) return this.renderStatus();
-      if (this.jump.onKey(e)) return this.renderStatus();
       if (e.key === "Escape") {
         // Escape puts the parts menu away and stops there. It used to leave the editor, which was right
         // for a dialog and wrong for a page: a page is not dismissible, and Escape wiping out the view
@@ -809,7 +822,6 @@ export class ElectronicsModal {
     const fold = this.fold;
     const gap = this.buildGap();
     this.faces = fold ? flatFaces(fold) : [];
-    this.adjacency = fold ? foldAdjacency(fold, this.faces) : EMPTY_ADJACENCY;
     this.tiles = fold ? tilePolys(fold, this.faces, gap) : [];
     this.gaps = fold ? gapGraph(fold, this.faces, gap).gaps : [];
     this.points = fold ? flatPoints(fold) : [];
@@ -941,7 +953,6 @@ export class ElectronicsModal {
     // The wire tool owns the canvas while it is armed, and hands it straight back: disarming abandons a
     // part-drawn wire rather than committing copper the author walked away from.
     this.wire.setActive(tool === "wire");
-    this.jump.setActive(tool === "jump");
     this.syncButtons();
   }
 
@@ -1148,7 +1159,7 @@ export class ElectronicsModal {
    * 0603, and a hinge LED carried whichever was showing. It went when LEDs joined the library palette:
    * a second control for two of the library's parts, in the one place the library picker could not
    * reach, is a rule about LEDs held in the toolbar. A circuit already carrying an `LED_0603` still
-   * loads, draws and routes as one — see `electronics-palette.ts › ledPart`.
+   * loads, draws and routes as one — see {@link ledPart}.
    */
   private newLed(a: number, b: number): Led {
     return { a, b };
@@ -1278,7 +1289,7 @@ export class ElectronicsModal {
         this.emit();
         return;
       }
-      const near = nearestOnRail(this.routed.traces, flat);
+      const near = this.nearestOnRail(flat);
       // Proximity only gets a say for a part a rail could actually pass through. `placement` refuses
       // anything past three terminals — a rail arrives, crosses the part, and leaves, and a twenty-six-way
       // socket has no meaning spliced into a run of tape — so for most of the library there is no seat to
@@ -1306,7 +1317,7 @@ export class ElectronicsModal {
     if (this.tool === "resistor" || this.tool === "switch") {
       // The click is stored as a point and snapped to the nearest run when the plan is built — the routes
       // move whenever the circuit does, so an index along one would name different copper afterwards.
-      const near = nearestOnRail(this.routed.traces, flat);
+      const near = this.nearestOnRail(flat);
       if (!near || near.dist > this.pickRadius()) return;
       const existing = (this.tool === "switch" ? this.circuit.switches : this.circuit.resistors) ?? [];
       this.runCommand(appendLegacyPart(this.tool === "switch" ? "switch" : "resistor", { x: near.point.x, y: near.point.y }));
@@ -1372,7 +1383,39 @@ export class ElectronicsModal {
   /** Where the router put each placed library part. Defensive against an older plan object that predates
    *  the field, so a stale route cannot crash the canvas. */
   private routedParts(): { component: string; a: Vec2; b: Vec2; flip?: boolean; source?: number }[] {
-    return [...(this.routed.parts ?? []), ...freeParts(this.circuit.parts ?? [], this.tapeW(), this.tapeMm())];
+    return [...(this.routed.parts ?? []), ...this.freeParts()];
+  }
+
+  /**
+   * The parts standing on the sheet, given the same `a`/`b` a seated part gets from the run it breaks.
+   *
+   * A seated part takes its segment from the copper: the router cuts a gap and hands back the two cut ends,
+   * and every drawing and export downstream works from those. A free part has no run to take one from, so
+   * one is made here from the place the author put it and the angle they turned it to — the part's own
+   * `partFit.gap` long, centred on the drop point. That is the same length the rail would have removed for
+   * it, so a part reads at the same size whether it is standing on the sheet or sitting in a rail.
+   *
+   * Built here rather than in the router because the router is not asked about these parts at all: it skips
+   * them when it cuts rails, which is the whole point of `free`. Without this they would be placed, stored,
+   * exported in the netlist — and invisible on the canvas, which is the worst of all the options.
+   */
+  private freeParts(): { component: string; a: Vec2; b: Vec2; flip?: boolean; source?: number }[] {
+    const out: { component: string; a: Vec2; b: Vec2; flip?: boolean; source?: number }[] = [];
+    (this.circuit.parts ?? []).forEach((p, source) => {
+      if (!p.free) return;
+      const fp = footprintById(p.component);
+      if (!fp) return; // a part the library no longer has, left undrawn rather than guessed at
+      // The span comes from the router's own `freeSpan`, not from a copy of the arithmetic kept here. It
+      // carries the in-line flip rule with it — see its docblock for what a local copy cost.
+      const { a, b } = freeSpan(p, fp, this.tapeW(), this.tapeMm());
+      out.push({
+        component: p.component,
+        a, b,
+        ...(p.flip === undefined ? {} : { flip: p.flip }),
+        source,
+      });
+    });
+    return out;
   }
 
   /** How many parts are on rails, over all three lists — what makes the hint worth showing. */
@@ -1380,6 +1423,28 @@ export class ElectronicsModal {
     return (this.circuit.parts ?? []).length
       + (this.circuit.resistors ?? []).length
       + (this.circuit.switches ?? []).length;
+  }
+
+  /** The nearest point on any run to `p` — where a resistor would break the copper. Either rail: a
+   *  resistor in series limits the current the same on the way out as on the way back. */
+  private nearestOnRail(p: Vec2): { point: Vec2; dist: number; rot: number } | null {
+    let best: { point: Vec2; dist: number; rot: number } | null = null;
+    for (const t of this.routed.traces) {
+      for (let i = 1; i < t.pts.length; i++) {
+        const a = t.pts[i - 1]!, b = t.pts[i]!;
+        const l2 = (b.x - a.x) ** 2 + (b.y - a.y) ** 2;
+        if (l2 < 1e-18) continue;
+        const u = Math.max(0, Math.min(1, ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / l2));
+        const q = { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u };
+        const d = Math.hypot(p.x - q.x, p.y - q.y);
+        // The run's own direction at the point, so a part dropped here can be STORED at the angle it will
+        // be seated at rather than leaving that to be re-derived. See the note at the seat below.
+        if (!best || d < best.dist) {
+          best = { point: q, dist: d, rot: (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI };
+        }
+      }
+    }
+    return best;
   }
 
   /**
@@ -1442,29 +1507,6 @@ export class ElectronicsModal {
     };
   }
 
-  /** Everything {@link JumpTool} needs of this editor: the wire host, plus the relation a jump follows
-   *  and the sheet its lands have to stay clear on. Nothing here is held by the tool — see {@link wireHost}. */
-  private jumpHost(): JumpHost {
-    return {
-      ...this.wireHost(),
-      adjacency: () => this.adjacency,
-      sheet: () => this.sheetSpec,
-      drawnJumps: () => this.circuit.jumps ?? [],
-    };
-  }
-
-  /** Every hand-drawn jump on the sheet, resolved against the wire context plus this pattern's fold
-   *  adjacency — the {@link JumpContext} a jump is only meaningful in. Router-emitted jumps are P2's. */
-  private allJumps(): Jump[] {
-    return manualJumps({ ...this.wireContext(), adjacency: this.adjacency });
-  }
-
-  /** The copper a jump lays: a stub at each end for the wire to be soldered to. Plain {@link Trace2D}s, so
-   *  the canvas, the strips file and the carrier all take them without a branch for a jump (D8). */
-  private jumpLands(): Trace2D[] {
-    return jumpLandTraces(this.allJumps(), this.tapeW(), this.faces);
-  }
-
   /** The pattern a wire's ends resolve against — the same faces, gaps and tape width the router plans on. */
   private wireContext(): WireContext {
     return { faces: this.faces, gaps: this.gaps, circuit: this.circuit, tapeW: this.tapeW() };
@@ -1482,7 +1524,7 @@ export class ElectronicsModal {
    * drawn copper were not there; that gap is known and is not this method's to close.
    */
   private allTraces(): Trace2D[] {
-    return [...this.routed.traces, ...manualTraces(this.wireContext()), ...this.jumpLands()];
+    return [...this.routed.traces, ...manualTraces(this.wireContext())];
   }
 
   /**
@@ -1536,7 +1578,7 @@ export class ElectronicsModal {
       // which is the true statement and points at the box that fixes it.
       const empty = document.createElement("p");
       empty.className = "el-side-empty";
-      empty.textContent = "No nets yet — name one above to declare it.";
+      empty.textContent = "no nets yet — name one above to declare it.";
       this.netList.appendChild(empty);
       this.renderSidebar();
       return;
@@ -1851,7 +1893,7 @@ export class ElectronicsModal {
       name.dataset.pad = pad.pad;
       name.setAttribute("list", list.id);
       name.setAttribute("aria-label", `Net for pad ${pad.pad}`);
-      name.title = "Type a net name. A name that is not yet a net declares it; empty takes the pad off.";
+      name.title = "type a net name. A name that is not yet a net declares it; empty takes the pad off.";
       name.addEventListener("change", () => this.wirePad(sel.index, pad.pad, name.value));
 
       row.appendChild(tag);
@@ -2129,7 +2171,7 @@ export class ElectronicsModal {
     }
     const led = sel ? this.circuit.leds[sel.index] : undefined;
     if (!led || !sel) {
-      this.statusEl.textContent = "Select a component first, then press R to turn it round";
+      this.statusEl.textContent = "select a component first, then press R to turn it round";
       return;
     }
     // R cycles: the router's choice -> turned round -> back to the router's choice.
@@ -2156,7 +2198,7 @@ export class ElectronicsModal {
     const { items } = this.listFor(sel.kind);
     const item = items[sel.index];
     if (!item) {
-      this.statusEl.textContent = "Select a component first, then press R to turn it round";
+      this.statusEl.textContent = "select a component first, then press R to turn it round";
       return;
     }
     this.runCommand(cyclePartFlip(sel as CommandPartSelection, this.plannedPartFlip(sel)));
@@ -2374,7 +2416,6 @@ export class ElectronicsModal {
     // calls, so without this the line saying a wire cannot be cut would appear one edit late — after the
     // copper was committed, which is exactly when it is no longer useful.
     if (this.wire.onPointerDown(e)) return this.renderStatus();
-    if (this.jump.onPointerDown(e)) return this.renderStatus();
     // A click on the canvas is a placement, and it puts the library away first.
     if (this.menuOpen) this.setMenuOpen(false);
     if (e.button !== 0) return;
@@ -2404,7 +2445,6 @@ export class ElectronicsModal {
 
   private onPointerMove(e: PointerEvent): void {
     if (this.wire.onPointerMove(e)) return this.renderStatus();
-    if (this.jump.onPointerMove(e)) return this.renderStatus();
     // A part being dragged paints into the live layer and nowhere else. Committing on every move would
     // re-plan the whole circuit — most of a second — for each of the dozens of events in one drag, which is
     // the same reason the wire tool commits on pointer-up. The part stays drawn where it was until the drag
@@ -2433,7 +2473,6 @@ export class ElectronicsModal {
 
   private onPointerUp(e: PointerEvent): void {
     if (this.wire.onPointerUp(e)) return this.renderStatus();
-    if (this.jump.onPointerUp(e)) return this.renderStatus();
     const drag = this.partDrag;
     this.partDrag = null;
     if (drag) {
@@ -2472,8 +2511,9 @@ export class ElectronicsModal {
    *  Route button — goes through here rather than through {@link replan}. */
   private forceReplan(): void {
     this.routed = this.fold
-      ? this.design.route({ faces: this.faces, gaps: this.gaps, circuit: this.circuit,
-          sheetMm: this.sheetMm, sheet: this.sheetSpec, adjacency: this.adjacency })
+      ? this.design.route({
+          faces: this.faces, gaps: this.gaps, circuit: this.circuit, sheetMm: this.sheetMm, sheet: this.sheetSpec,
+        })
       : EMPTY_ROUTE;
     this.stale = false;
   }
@@ -2516,9 +2556,6 @@ export class ElectronicsModal {
    *  circuit, and re-routing to answer one wheel tick would be work for nothing. */
   private draw(): void {
     this.applyViewBox(); // keep the current pan/zoom window across re-renders
-    // Gathered once for the whole repaint: every part drawing below reads the same editor state, and
-    // rebuilding it per part would re-derive the scale and the frame's handedness for each of them.
-    const pc = this.partContext();
 
     // The sheet the copper goes on, for the build on screen — see `electronics-sheet.ts`.
     const parts: string[] = substrateParts(
@@ -2534,7 +2571,7 @@ export class ElectronicsModal {
     const windows = [
       ...this.routed.switches.map((w) =>
         switchShape(this.tp(w.a), this.tp(w.b), w.flip, this.frameFlipped())?.notch),
-      ...pc.parts.map((p) => partShapeOf(pc, p)?.notch),
+      ...this.routedParts().map((p) => this.partShapeOf(p)?.notch),
     ].filter((n): n is Vec2[] => !!n && n.length >= 3);
 
     // Copper tape, under the components so the pads and terminals stay readable on top of it.
@@ -2569,7 +2606,7 @@ export class ElectronicsModal {
     // Copper the author drew by hand: over the planned tape, under the parts. Drawn as the outline that
     // will be cut, exactly as a planned run is — a hand-drawn wire is the same tape, and a stroked
     // centreline would show the canvas a shape the cut file does not contain.
-    for (const t of [...manualTraces(this.wireContext()), ...this.jumpLands()]) {
+    for (const t of manualTraces(this.wireContext())) {
       const ring = stripOutline(t, this.tapeW(), this.routed.pads);
       if (ring.length < 3) continue;
       parts.push(`<path d="${closedPath(ring.map((p) => this.tp(p)))}" class="el-tape el-wire-copper" />`);
@@ -2582,12 +2619,12 @@ export class ElectronicsModal {
     // as a board: every pad's copper, then every pad's mask, then every drill punched over all of it, then
     // the writing on top (`js/views/svgViewer.js`). Grouped per part instead, one part's mask lands on its
     // neighbour's pad name wherever two parts sit close enough to overlap.
-    const drawn = drawnParts(pc);
+    const drawn = this.drawnParts();
     if (drawn.length) {
       const tags = designators(drawn);
       const board = drawn.map((d, i) => partLayers(d.footprint, d.shape, tags[i]!, {
-        labels: padLabelsFit(d.shape, this.view.w),
-        scale: renderScale(this.svg, this.view.w),
+        labels: this.padLabelsFit(d.shape),
+        scale: this.renderScale(),
         style: "svgpcb",
       }));
       const layer = (id: string, cls: string, pick: (l: PartLayers) => string[]): void => {
@@ -2608,7 +2645,7 @@ export class ElectronicsModal {
     const selPart = this.partSelection();
     const selSpan = selPart ? this.routedSpanFor(selPart) : null;
     if (selSpan) {
-      parts.push(selectionRing(this.tp(selSpan.a), this.tp(selSpan.b), "el-part-selected"));
+      parts.push(this.selectionRing(this.tp(selSpan.a), this.tp(selSpan.b), "el-part-selected"));
     }
     this.drawnZoomStep = this.zoomStep();
     // An LED is drawn above, with every other part, as the footprint that will be cut — two real pads at
@@ -2619,22 +2656,17 @@ export class ElectronicsModal {
     // What is left here is the two marks that are about the LED's state rather than its shape: the ring on
     // the selected one, and the ring on one the copper never reached.
     this.circuit.leds.forEach((led, i) => {
-      const pads = ledPads(pc, led, i);
+      const pads = this.ledPads(led, i);
       if (!pads) return;
       const a = this.tp(pads.pwr), b = this.tp(pads.gnd);
       if (this.routed.unreachable.includes(i)) {
-        parts.push(selectionRing(a, b, "el-led-orphan"));
+        parts.push(this.selectionRing(a, b, "el-led-orphan"));
       }
       if (this.selected?.kind === "led" && this.selected.index === i) {
-        parts.push(selectionRing(a, b, "el-led-selected"));
+        parts.push(this.selectionRing(a, b, "el-led-selected"));
       }
     });
     parts.push(...ratsnestParts(this.routed.nets, (p) => this.tp(p)));
-    // After the ratsnest and before the battery, so a jump's dashed link reads over the copper and under
-    // the parts. `jumpParts` hands back scene items rather than markup — the lands are already copper by
-    // this point, and these are only the marks that say which two of them to solder together.
-    const jumps = this.allJumps();
-    if (jumps.length) parts.push(sceneSvg(jumpParts(jumps, jumpLabels(jumps), (p) => this.tp(p))));
     const battFace = this.circuit.battery ? this.faces[this.circuit.battery.face] : null;
     if (battFace) {
       const term = this.defaultTerminals(battFace.centroid, battFace.poly);
@@ -2647,21 +2679,64 @@ export class ElectronicsModal {
     // re-planned would be a drag that stutters. The tool commits on pointer *up*, once.
     this.svg.innerHTML = `<g class="el-static">${parts.join("")}</g><g class="el-live"></g>`;
     // The live layer was just thrown away with the rest of the canvas, so put it back.
-    // One live layer and at most one tool armed to write it, so only the armed one repaints: an inactive
-    // tool's `paint` CLEARS the layer, and painting both in turn would have the second wipe the first.
-    (this.tool === "jump" ? this.jump : this.wire).paint();
+    this.wire.paint();
     this.renderStatus();
   }
 
-  /** The editor state the part drawings in `electronics-modal-parts.ts` read, gathered as plain data so
-   *  that none of them has to know an editor exists. Read once per repaint — see the note in {@link draw}. */
-  private partContext(): PartDrawContext {
+  /**
+   * A ring round the two ends a component bridges, big enough to sit outside it.
+   *
+   * One helper because it is one mark: the same circle whether it rings a part broken into a rail or an
+   * LED sat on a hinge, differing only in the class. Sized off the component's own span, floored at
+   * {@link SELECT_RING_FLOOR_MM} so the smallest parts still get a ring rather than a dot inside them.
+   */
+  private selectionRing(a: Vec2, b: Vec2, cls: string): string {
+    const c = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    const r = Math.max(Math.hypot(b.x - a.x, b.y - a.y) * 0.75, SELECT_RING_FLOOR_MM);
+    return `<circle cx="${fmt(c.x)}" cy="${fmt(c.y)}" r="${fmt(r)}" class="${cls}" />`;
+  }
+
+  /**
+   * Where an LED's two pads sit, in flat-pattern units, or null if its hinge is gone.
+   *
+   * The router's pads, when it has them, because those are the copper the part has to land on — and
+   * polarity with them: `pwr` is whichever leg it put PWR on, which is where the anode goes.
+   *
+   * With no copper — an LED the router could not reach, or could not seat the part on — the part is drawn
+   * at its OWN pitch, straddling the middle of the hinge. Not at the hinge's dents, which is what it used
+   * to be: those are 5.8mm apart on `house.fkld` and an `LED_0603`'s legs are 1.5mm, so drawing it there
+   * showed a part stretched to four times its length. The point of drawing the footprint at all is that
+   * what is on the canvas is the part that gets fitted, and that has to hold when it is not routed too.
+   */
+  private ledPads(led: Led, i: number): { pwr: Vec2; gnd: Vec2 } | null {
+    const gap = gapForLed(this.gaps, led);
+    if (!gap) return null;
+    const planned = this.routed.pads[i];
+    if (planned && !isZero(planned.pwr) && !isZero(planned.gnd)) {
+      return { pwr: planned.pwr, gnd: planned.gnd };
+    }
+    // Along the hinge's own two legs where they differ, so an unrouted LED lies the way a routed one on
+    // that hinge would; across the shared edge where the hinge has pinched to nothing and they do not.
+    let ax = gap.legA.x - gap.legB.x, ay = gap.legA.y - gap.legB.y;
+    if (Math.hypot(ax, ay) < 1e-6) {
+      const [e0, e1] = gap.ends;
+      ax = -(e1.y - e0.y); ay = e1.x - e0.x;
+    }
+    const al = Math.hypot(ax, ay) || 1;
+    ax /= al; ay /= al;
+    // Flat-pattern units, not millimetres: everything this returns is put through `tp()`, which scales by
+    // the print size. The half-pitch is the part's, in sheet millimetres, so it has to come back out of
+    // that scale first — the old marker-sized fallback did not, and on `house.fkld`, where a millimetre of
+    // sheet is a thirtieth of a pattern unit, it put the two pads 49mm apart on a 1.5mm part.
+    const sep = ledPitch(ledPart(led).footprint) / 2 / (this.scale() || 1);
+    const mid = gap.point;
     return {
-      gaps: this.gaps, routed: this.routed, parts: this.routedParts(), leds: this.circuit.leds,
-      tp: (p) => this.tp(p), scale: this.scale(), frameFlipped: this.frameFlipped(),
+      pwr: { x: mid.x + ax * sep, y: mid.y + ay * sep },
+      gnd: { x: mid.x - ax * sep, y: mid.y - ay * sep },
     };
   }
 
+  /** A placed library part's drawn shape, in the sheet millimetres the canvas works in. */
   /**
    * The dragged part, drawn at the cursor, into the live layer only.
    *
@@ -2692,6 +2767,81 @@ export class ElectronicsModal {
     // floating at the cursor reads as a second part rather than as the same one on its way somewhere.
     this.liveLayer().innerHTML =
       `<g class="el-part-ghost">${partSvg(fp, shape, "", { labels: false, style: "svgpcb" }).join("")}</g>`;
+  }
+
+  private partShapeOf(p: { component: string; a: Vec2; b: Vec2; flip?: boolean }): ResistorShape | null {
+    const fp = PART_BY_ID.get(p.component)?.footprint;
+    return fp ? partShape(fp, this.tp(p.a), this.tp(p.b), p.flip, this.frameFlipped()) : null;
+  }
+
+  /**
+   * Every part on the canvas, in the order the cut files take them, each with the footprint it is drawn
+   * from. One list, because the designators have to be assigned across all of it at once: `R1` on the
+   * canvas and `R2` in the file for the same part would be worse than no label at all.
+   *
+   * `resistors` and `switches` predate the library and carry no component id of their own, so they name
+   * the part they have always been — the same two footprints the palette now places generically.
+   */
+  private drawnParts(): { component: string; footprint: Footprint; shape: ResistorShape }[] {
+    const out: { component: string; footprint: Footprint; shape: ResistorShape }[] = [];
+    const add = (component: string, footprint: Footprint, shape: ResistorShape | null): void => {
+      if (shape) out.push({ component, footprint, shape });
+    };
+    for (const r of this.routed.resistors) {
+      // The same shape the cut files draw, so the canvas cannot drift from them.
+      add("R_1206", R_1206, resistorShape(this.tp(r.a), this.tp(r.b), this.frameFlipped()));
+    }
+    for (const w of this.routed.switches) {
+      add("SW_SPDT", SW_SPDT, switchShape(this.tp(w.a), this.tp(w.b), w.flip, this.frameFlipped()));
+    }
+    // And every other library part, drawn from its own footprint by the one generic shape — so a part the
+    // library gains appears here with nothing added to this file.
+    for (const p of this.routedParts()) {
+      const fp = PART_BY_ID.get(p.component)?.footprint;
+      if (fp) add(p.component, fp, this.partShapeOf(p));
+    }
+    // And the LEDs, last — the same order the cut files take them in, so an LED numbered `LED1` here is
+    // `LED1` in the file too. An LED is not a series part, but it is a two-pad part bridging a break like
+    // any other, so `partShape`'s in-line form draws it: pad 1 on the PWR end, pad 2 on the GND end.
+    //
+    // No `flip` is passed, and that is not an omission. `flip` is which way round the part sits on a
+    // break; an LED's anode always goes to PWR, and the author's turn has already been spent deciding
+    // which of the hinge's two legs PWR is. Passing it again would turn the part a second time.
+    this.circuit.leds.forEach((led, i) => {
+      const pads = this.ledPads(led, i);
+      if (!pads) return;
+      const c = ledPart(led);
+      add(c.id, c.footprint,
+        partShape(c.footprint, this.tp(pads.pwr), this.tp(pads.gnd), undefined, this.frameFlipped()));
+    });
+    return out;
+  }
+
+  /**
+   * Whether a part's pads are big enough on screen to carry their own pin names.
+   *
+   * The canvas fits itself to the whole sheet, and a 1206 pad on an AKDE pattern is well under a percent
+   * of it — a "1" written on that pad is a two-pixel smudge that hides the pad instead of naming it. So the
+   * names are a zoom-in: they appear once a pad is worth a few percent of the view, by which point the
+   * character inside it is comfortably a character. The designator comes back sooner, because it sits
+   * beside the part rather than on it and nothing is lost behind it.
+   */
+  private padLabelsFit(sh: ResistorShape): boolean {
+    return padMinOf(sh) >= this.view.w * PAD_LABEL_VIEW_FRACTION;
+  }
+
+  /**
+   * Rendered units per sheet millimetre: how big a millimetre of the sheet actually comes out on screen.
+   *
+   * {@link partSvg} sizes its text from the pads and drops it when the result would be too small to read,
+   * and this is what lets it know how small that is here. The canvas fits the whole sheet, so a millimetre
+   * of a 380mm pattern is a couple of pixels and a pin name on a 1206 pad is a two-pixel smudge — the same
+   * drawing that is perfectly legible in the cut file, which is printed at its real size. Zooming in raises
+   * it, which is exactly when the names become worth showing.
+   */
+  private renderScale(): number {
+    const px = (this.svg as { clientWidth?: number }).clientWidth || CANVAS_PX;
+    return px / Math.max(this.view.w, 1e-9) / PX_PER_RENDERED_MM;
   }
 
   /** The zoom, quantised into 1.25x steps — one press of the zoom buttons. Both label decisions above are
@@ -2751,7 +2901,7 @@ export class ElectronicsModal {
       design: this.design, fold: this.fold, traces: this.allTraces(), tapeW: this.tapeW(), side,
       mirror: this.mirror, sheetMm: this.sheetMm, pads: this.routed.pads, resistors: this.routed.resistors,
       switches: this.routed.switches, parts: this.routedParts(), keepOff: this.keepOff(),
-      unlayeredWires: this.unlayeredWires(), jumps: this.allJumps(),
+      unlayeredWires: this.unlayeredWires(),
     };
   }
 
@@ -2819,7 +2969,6 @@ export class ElectronicsModal {
       wiring: this.tool === "wire",
       wireFaults: this.wire.faults(),
       wireDrawing: this.wire.drawing(),
-      jumpCount: (this.circuit.jumps ?? []).length,
       stale: this.stale,
       autoRoute: this.autoRoute,
       placedCount: this.placedCount(),
@@ -2832,3 +2981,18 @@ export class ElectronicsModal {
     });
   }
 }
+
+/**
+ * The smallest dimension of any of a part's pads, in the sheet millimetres the view is measured in.
+ *
+ * A lead is the pad's rectangle: a segment across the run, with a width along it. The smaller of those two
+ * is what has to hold a character, so it is what decides whether a name fits on the pad.
+ */
+function padMinOf(sh: ResistorShape): number {
+  let m = Infinity;
+  for (const l of sh.leads) {
+    m = Math.min(m, l.width, Math.hypot(l.b.x - l.a.x, l.b.y - l.a.y));
+  }
+  return Number.isFinite(m) ? m : 0;
+}
+

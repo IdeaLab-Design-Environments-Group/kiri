@@ -50,7 +50,7 @@ describe("view/sim-modal", () => {
     modal.setEnabled(true);
 
     expect(host.children).toHaveLength(1);
-    expect(host.children[0]?.textContent).toBe("Simulation & Routing");
+    expect(host.children[0]?.textContent).toBe("simulation & routing");
     expect(host.children[0]?.disabled).toBe(false);
   });
 
@@ -126,7 +126,7 @@ describe("view/sim-modal", () => {
     await modal.open();
     const overlay = document.body.children[0]!;
     const status = overlay.querySelector(".sim-status")!;
-    expect(status.textContent).toContain("No foldable model");
+    expect(status.textContent).toContain("no foldable model");
     expect(canvasInstances[0]?.stop).toHaveBeenCalled();
 
     overlay.dispatch("click", { target: overlay });

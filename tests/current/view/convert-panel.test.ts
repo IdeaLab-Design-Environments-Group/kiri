@@ -14,8 +14,8 @@ describe("view/convert-panel", () => {
     const status = childByClass(panel.element as unknown as MockElement, "status");
     const empty = childByClass(panel.element as unknown as MockElement, "fkld-meta-empty");
 
-    expect(status?.textContent).toBe("No model loaded.");
-    expect(empty?.textContent).toBe("Load a model to see its facts.");
+    expect(status?.textContent).toBe("no model loaded.");
+    expect(empty?.textContent).toBe("load a model to see its facts.");
     expect(empty?.hidden).toBe(false);
   });
 

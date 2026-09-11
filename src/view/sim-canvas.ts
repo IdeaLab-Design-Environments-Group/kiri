@@ -114,13 +114,6 @@ const OVERLAY_COLOURS: Record<AnchoredMesh["kind"], number> = {
   "batt-pwr": hexColour(SVGPCB_COLOURS.mask),
   "batt-gnd": hexColour(SVGPCB_COLOURS.mask),
   mark: 0xffffff,
-  // A jump is the one piece of the overlay that is not copper: it is the wire the author will solder
-  // across the seam by hand. Violet says so — clear of the reds and darks the two rails take, clear of
-  // the gold and copper the pads and bodies take, and clear of `NET_COLOUR`'s blue, which any declared
-  // net can fall back to. It matches `.el-jump` on the flat canvas, so the same thing is the same colour
-  // in both views. No `renderOrder` case of its own: the expression below gives everything that is
-  // neither a rail nor a mark 4, which puts the ribbon with the rest of the layer.
-  jump: 0x8b5cf6,
 };
 
 export class SimCanvas implements SimView {

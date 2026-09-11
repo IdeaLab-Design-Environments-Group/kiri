@@ -41,8 +41,8 @@ export class ExamplesPage {
     this.trigger = document.createElement("button");
     this.trigger.type = "button";
     this.trigger.className = "sim-trigger ex-nav";
-    this.trigger.textContent = "Examples";
-    this.trigger.title = "Bundled models, kirigamized and ready to open";
+    this.trigger.textContent = "examples";
+    this.trigger.title = "bundled models, kirigamized and ready to open";
     this.trigger.addEventListener("click", () => this.open());
 
     this.overlay = el("div", "ex-page");
@@ -58,11 +58,11 @@ export class ExamplesPage {
     back.setAttribute("aria-label", "Back to the model");
     back.addEventListener("click", () => this.goBack());
     const title = el("span", "el-page-title");
-    title.textContent = "Examples";
+    title.textContent = "examples";
     this.search = document.createElement("input");
     this.search.type = "search";
     this.search.className = "ex-search";
-    this.search.placeholder = "Filter models";
+    this.search.placeholder = "filter models";
     this.search.setAttribute("aria-label", "Filter models");
     this.search.addEventListener("input", () => this.applyFilter());
     this.tally = el("span", "ex-tally");
@@ -72,7 +72,7 @@ export class ExamplesPage {
     const body = el("div", "ex-body");
     const lede = el("p", "ex-lede");
     lede.textContent =
-      "Every model here has been through the same pipeline the Kirigamize button runs, and opens as the "
+      "every model here has been through the same pipeline the Kirigamize button runs, and opens as the "
       + "pattern it produced. Pick a part to load it; hover a tile to see it flat.";
     body.append(lede);
     for (const model of EXAMPLE_MODELS) body.append(this.buildGroup(model));

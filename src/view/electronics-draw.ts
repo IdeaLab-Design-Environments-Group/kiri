@@ -19,7 +19,6 @@
  * point into the `d` of a path.
  */
 import type { FlatFace, GapEdge, TilePoly, Vec2 } from "../model/electronics.js";
-import type { Jump } from "../model/trace-types.js";
 import type { SimMaterial } from "../sim/index.js";
 import { sceneSvg, type SceneItem } from "./pcb-scene.js";
 
@@ -135,67 +134,6 @@ export function ratsnestParts(
     }
   }
   return rats.length ? [sceneSvg(rats)] : [];
-}
-
-/**
- * How a jump is drawn on the flat canvas, in sheet millimetres — the units {@link ratsnestParts} and
- * {@link batteryParts} already work in, since `tp` maps the pattern into the sheet the export uses.
- *
- * These are fixed rather than derived from the tape width, because none of the three is copper: the land
- * ring is a marker sitting ON the land, not the land itself (that is a {@link Trace2D} laid like any other
- * run), and the label has to stay readable beside a tape that may be a fraction of a millimetre wide. The
- * label size is the designator size `part-render.ts` sets, so `J1` reads as the same class of
- * annotation as `R1`.
- */
-const JUMP_LAND_R = 0.9;
-const JUMP_LABEL_SIZE = 1.5;
-/** How far off the land the label sits: up and to the right, clear of the dashed link at either end. */
-const JUMP_LABEL_OFF = 1.2;
-
-// `jumpLabels` lives in `model/manual-jump.ts` so the cut files can label a jump too — the export may not
-// import from `view/`. Re-exported here because the canvas is where it is called from.
-export { jumpLabels } from "../model/manual-jump.js";
-
-/**
- * A jump: the two solder lands, the link between them, and the label at both ends.
- *
- * Drawn as `kind: "wire"` for exactly the reason {@link ratsnestParts} is — this is a connection that does
- * not exist in the plane, reaches no cut file and must never read as tape. The difference from a ratsnest
- * is that a jump WILL exist once the sheet is folded, so it is drawn in its own colour rather than the
- * ratsnest's, and it is labelled: the author has to find the two ends again with a soldering iron.
- *
- * The lands themselves are copper and are NOT drawn here. They reach the canvas as ordinary
- * {@link Trace2D}s (`jumpLandTraces`), so the strips file, the carrier and the folded overlay need no
- * branch for them. The rings here only mark where they are.
- *
- * `labels` is index-aligned with `jumps` — {@link jumpLabels}'s output, passed in rather than recomputed so
- * the canvas and the export cannot disagree about which seam is `J1`.
- */
-export function jumpParts(jumps: Jump[], labels: string[], tp: (p: Vec2) => Vec2): SceneItem[] {
-  const out: SceneItem[] = [];
-  for (const [i, j] of jumps.entries()) {
-    const a = tp(j.a), b = tp(j.b);
-    out.push({
-      kind: "wire",
-      d: `M ${ptStr(a)} L ${ptStr(b)}`,
-      cls: "el-jump",
-      // One screen pixel, left to `vector-effect` in the stylesheet, as the ratsnest's is.
-      width: 1,
-    });
-    const label = labels[i] ?? "";
-    for (const c of [a, b]) out.push({ kind: "dot", x: c.x, y: c.y, r: JUMP_LAND_R, cls: "el-jump-land" });
-    for (const c of [a, b]) {
-      out.push({
-        kind: "text",
-        x: c.x + JUMP_LABEL_OFF,
-        y: c.y - JUMP_LABEL_OFF,
-        size: JUMP_LABEL_SIZE,
-        cls: "el-jump-label",
-        value: label,
-      });
-    }
-  }
-  return out;
 }
 
 /**

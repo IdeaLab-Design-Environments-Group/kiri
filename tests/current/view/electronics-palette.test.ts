@@ -28,10 +28,10 @@ describe("electronics palette", () => {
   });
 
   it("shelves a part by function before package shape", () => {
-    expect(shelfFor("Multiplexer_8_1_Texas_CD74HC4051M96_SOIC_16")).toBe("Analog & logic ICs");
-    expect(shelfFor("MotorDriver_BipolarStepper_Trinamic_TMC2226_HTSSOP_28_EP")).toBe("Motor drivers");
+    expect(shelfFor("Multiplexer_8_1_Texas_CD74HC4051M96_SOIC_16")).toBe("analog & logic ICs");
+    expect(shelfFor("MotorDriver_BipolarStepper_Trinamic_TMC2226_HTSSOP_28_EP")).toBe("motor drivers");
     expect(shelfFor("SOIC_8_3_9x4_9mm_P1_27mm")).toBe("IC packages");
-    expect(shelfFor("SOT_23_5")).toBe("Diodes & transistors");
+    expect(shelfFor("SOT_23_5")).toBe("diodes & transistors");
     expect(shelfFor("TSOT_23_5")).toBe("IC packages");
     expect(shelfFor("Fnord_Widget_9000")).toBe(UNSHELVED);
   });

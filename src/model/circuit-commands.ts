@@ -20,8 +20,7 @@ import {
   type Terminal,
 } from "./electronics.js";
 import { GND_NET_ID, PWR_NET_ID } from "./net-palette.js";
-import type { ManualWire, WireVertex } from "./manual-wire.js";
-import type { ManualJump } from "./manual-jump.js";
+import type { ManualWire } from "./manual-wire.js";
 
 export interface CircuitCommand {
   apply(circuit: Circuit): Circuit;
@@ -141,7 +140,6 @@ export function removeSelectedPart(sel: PartSelection): CircuitCommand {
           ...c,
           parts: (c.parts ?? []).filter((_, i) => i !== sel.index),
           terminals: reindexTerminals(c.terminals ?? [], sel.index),
-          jumps: reindexJumps(c.jumps ?? [], sel.index),
         };
       }
       const field = fieldFor(sel.kind);
@@ -203,40 +201,8 @@ export function cyclePartFlip(sel: PartSelection, plannedFlip: boolean): Circuit
   };
 }
 
-export function appendJump(jump: ManualJump): CircuitCommand {
-  return { apply: (c) => ({ ...c, jumps: [...(c.jumps ?? []), jump] }) };
-}
-
-export function removeJump(id: string): CircuitCommand {
-  return { apply: (c) => ({ ...c, jumps: (c.jumps ?? []).filter((j) => j.id !== id) }) };
-}
-
-/** Re-anchor one end of a jump. The other end, and the net, are left exactly as they were. */
-export function moveJumpEnd(id: string, end: "a" | "b", v: WireVertex): CircuitCommand {
-  return {
-    apply: (c) => ({
-      ...c,
-      jumps: (c.jumps ?? []).map((j) => (j.id === id ? { ...j, [end]: { ...v } } : j)),
-    }),
-  };
-}
-
-/** Put a jump on a net, or take it off one — an empty id clears the field back to the id fallback. */
-export function renetJump(id: string, net: string): CircuitCommand {
-  return {
-    apply: (c) => ({
-      ...c,
-      jumps: (c.jumps ?? []).map((j) => {
-        if (j.id !== id) return j;
-        if (!net) { const { net: _drop, ...rest } = j; return rest; }
-        return { ...j, net };
-      }),
-    }),
-  };
-}
-
 export function cloneCircuit(c: Circuit): Circuit {
-  const { leds, battery, resistors, switches, parts, nets, terminals, wires, jumps, ...rest } = c;
+  const { leds, battery, resistors, switches, parts, nets, terminals, wires, ...rest } = c;
   return {
     ...rest,
     leds: leds.map((l) => ({
@@ -254,27 +220,7 @@ export function cloneCircuit(c: Circuit): Circuit {
       : { id: n.id, name: n.name, color: n.color })),
     terminals: (terminals ?? []).map((t) => ({ part: t.part, pad: t.pad, net: t.net })),
     wires: (wires ?? []).map(cloneWire),
-    jumps: (jumps ?? []).map(cloneJump),
   };
-}
-
-/**
- * What becomes of the jumps when the part at `removed` is deleted.
- *
- * A jump anchored to that part is **deleted with it**, which is the opposite of what a drawn wire does. A
- * wire keeps its dangling vertex so the author can re-attach it, and the stretch that survives still draws;
- * a jump has exactly two ends and no middle, so one end short it is not a connection, draws as nothing, and
- * offers the author nothing to grab in order to re-attach it. Keeping it would only leave invisible entries
- * in the circuit that the next export has to filter out again. Jumps anchored elsewhere are kept, with pad
- * references above the hole shifted down, exactly as {@link reindexTerminals} shifts terminals.
- */
-export function reindexJumps(jumps: ManualJump[], removed: number): ManualJump[] {
-  const onRemoved = (v: WireVertex): boolean => v.kind === "pad" && v.part === removed;
-  const shift = (v: WireVertex): WireVertex =>
-    v.kind === "pad" && v.part > removed ? { ...v, part: v.part - 1 } : v;
-  return jumps
-    .filter((j) => !onRemoved(j.a) && !onRemoved(j.b))
-    .map((j) => ({ ...j, a: shift(j.a), b: shift(j.b) }));
 }
 
 export function reindexTerminals(terminals: Terminal[], removed: number): Terminal[] {
@@ -318,12 +264,6 @@ function clonePlacedPart(p: PlacedPart): PlacedPart {
     ...(p.free ? { free: true } : {}),
     ...(p.rot === undefined ? {} : { rot: p.rot }),
   };
-}
-
-function cloneJump(j: ManualJump): ManualJump {
-  const out: ManualJump = { id: j.id, a: { ...j.a }, b: { ...j.b } };
-  if (j.net !== undefined) out.net = j.net;
-  return out;
 }
 
 function cloneWire(w: ManualWire): ManualWire {

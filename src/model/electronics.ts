@@ -19,7 +19,6 @@
  */
 import type { FoldFile } from "./fold-file.js";
 import type { ManualWire } from "./manual-wire.js";
-import type { ManualJump } from "./manual-jump.js";
 import { TILE_INSET_FRAC } from "./tile-subdiv.js";
 export interface Vec2 {
   x: number;
@@ -122,15 +121,6 @@ export interface Terminal {
   terminals?: Terminal[];
   /** Copper the author drew by hand. Fixed: the router treats it as an obstacle, never re-plans it. */
   wires?: ManualWire[];
-  /**
-   * Seam rejoins the author drew: pairs of points the folded artifact brings together, to be soldered by
-   * hand once the sheet is folded. See {@link ManualJump}.
-   *
-   * Optional for the same reason every field above it is: a circuit that has never had one is the shape
-   * every in-memory circuit had before jumps existed, and reading an absent field as "no jumps" is what
-   * keeps those loading unchanged.
-   */
-  jumps?: ManualJump[];
   leds: Led[];
   battery: Battery | null;
   /** Series resistors. Optional so circuits saved before they existed still load. */
