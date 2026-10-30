@@ -54,9 +54,16 @@ export function sideOf(origin: Vec2, dir: Vec2, p: Vec2): number {
 
 /** Whether segment ab properly crosses any of the given polylines. */
 export function crossesAny(a: Vec2, b: Vec2, lines: Vec2[][]): boolean {
+  const minX = Math.min(a.x, b.x), maxX = Math.max(a.x, b.x);
+  const minY = Math.min(a.y, b.y), maxY = Math.max(a.y, b.y);
+
   for (const line of lines) {
+    if (line.length < 2) continue;
     for (let i = 1; i < line.length; i++) {
-      if (segsCross(a, b, line[i - 1]!, line[i]!)) return true;
+      const c = line[i - 1]!, d = line[i]!;
+      if (maxX < Math.min(c.x, d.x) || minX > Math.max(c.x, d.x)) continue;
+      if (maxY < Math.min(c.y, d.y) || minY > Math.max(c.y, d.y)) continue;
+      if (segsCross(a, b, c, d)) return true;
     }
   }
   return false;
@@ -65,6 +72,8 @@ export function crossesAny(a: Vec2, b: Vec2, lines: Vec2[][]): boolean {
 /** True when segments ab and cd properly cross (interiors meet; shared endpoints and collinear touching
  *  do not count — same-net tape is allowed to touch). */
 export function segsCross(a: Vec2, b: Vec2, c: Vec2, d: Vec2): boolean {
+  if (Math.max(a.x, b.x) < Math.min(c.x, d.x) || Math.min(a.x, b.x) > Math.max(c.x, d.x)) return false;
+  if (Math.max(a.y, b.y) < Math.min(c.y, d.y) || Math.min(a.y, b.y) > Math.max(c.y, d.y)) return false;
   const d1 = cross(sub(b, a), sub(c, a));
   const d2 = cross(sub(b, a), sub(d, a));
   const d3 = cross(sub(d, c), sub(a, c));
@@ -129,10 +138,23 @@ export function nearPolyline(pts: Vec2[], p: Vec2): number {
   let best = Infinity;
   for (let i = 1; i < pts.length; i++) {
     const a = pts[i - 1]!, b = pts[i]!;
+    if (p.x < Math.min(a.x, b.x) - best || p.x > Math.max(a.x, b.x) + best) continue;
+    if (p.y < Math.min(a.y, b.y) - best || p.y > Math.max(a.y, b.y) + best) continue;
     const d = segPointDist(a, b, p);
     if (d < best) best = d;
   }
   return best;
+}
+
+/** Whether `p` comes within `tol` of the polyline `pts`. Short-circuits on first hit. */
+export function isNearPolyline(pts: Vec2[], p: Vec2, tol: number): boolean {
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1]!, b = pts[i]!;
+    if (p.x < Math.min(a.x, b.x) - tol || p.x > Math.max(a.x, b.x) + tol) continue;
+    if (p.y < Math.min(a.y, b.y) - tol || p.y > Math.max(a.y, b.y) + tol) continue;
+    if (segPointDist(a, b, p) <= tol) return true;
+  }
+  return false;
 }
 
 // ---- polylines --------------------------------------------------------------

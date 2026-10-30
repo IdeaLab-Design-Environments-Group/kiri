@@ -16,6 +16,7 @@ import type { Vec2 } from "./electronics.js";
 import type { PadPair, Trace2D } from "./trace-types.js";
 import {
   cross,
+  isNearPolyline,
   isOrigin,
   polyCrosses,
   ptKey,
@@ -239,7 +240,7 @@ export function overlapLength(traces: Trace2D[], tol: number): number {
       for (let k = 0; k < steps; k++) {
         const u = (k + 0.5) / steps;
         const m = { x: p.x + (q.x - p.x) * u, y: p.y + (q.y - p.y) * u };
-        if (gnd.some((b) => nearPolyline(b.pts, m) <= tol)) hits++;
+        if (gnd.some((b) => isNearPolyline(b.pts, m, tol))) hits++;
       }
       shared += (L * hits) / steps;
     }
