@@ -314,6 +314,9 @@ const PAD_LABEL_VIEW_FRACTION = 0.035;
 /** The canvas width in pixels to assume when the element cannot say (a headless DOM, mostly). */
 const CANVAS_PX = 900;
 
+/** LED count from which Route is slow enough to deserve a "routing…" frame before it blocks. */
+const BUSY_FEEDBACK_LEDS = 8;
+
 /**
  * How many screen pixels one "rendered millimetre" is taken to be.
  *
@@ -620,7 +623,7 @@ export class ElectronicsModal {
       this.autoButtons.set(on, btn);
     }
     this.routeBtn = this.overlay.querySelector<HTMLButtonElement>(".el-route")!;
-    this.routeBtn.addEventListener("click", () => this.routeNow());
+    this.routeBtn.addEventListener("click", () => this.routeNowWithFeedback());
     for (const btn of this.overlay.querySelectorAll<HTMLButtonElement>(".el-place")) {
       const mode = btn.dataset.place === "free" ? "free" : "gap";
       btn.addEventListener("click", () => this.selectPlaceMode(mode));
@@ -2509,13 +2512,22 @@ export class ElectronicsModal {
 
   /** Plan, whatever the mode. Every path that must not show old copper — a new pattern, Clear all, the
    *  Route button — goes through here rather than through {@link replan}. */
-  private forceReplan(): void {
-    this.routed = this.fold
-      ? this.design.route({
-          faces: this.faces, gaps: this.gaps, circuit: this.circuit, sheetMm: this.sheetMm, sheet: this.sheetSpec,
-        })
-      : EMPTY_ROUTE;
-    this.stale = false;
+  private forceReplan(): boolean {
+    try {
+      this.routed = this.fold
+        ? this.design.route({
+            faces: this.faces, gaps: this.gaps, circuit: this.circuit, sheetMm: this.sheetMm, sheet: this.sheetSpec,
+          })
+        : EMPTY_ROUTE;
+      this.stale = false;
+      return true;
+    } catch (err) {
+      // Keep the last plan on screen (still marked stale) and say why, rather than letting the click die silently.
+      console.error(err);
+      this.stale = true;
+      this.statusEl.textContent = `routing failed: ${err instanceof Error ? err.message : String(err)}`;
+      return false;
+    }
   }
 
   /**
@@ -2540,11 +2552,32 @@ export class ElectronicsModal {
    * store. The nets panel is repainted with the canvas because its battery and hinge-LED rows are derived
    * from the plan (see {@link derivedRows}) — left alone they would describe the plan before this one.
    */
+  /** Route button. Routing is synchronous and takes seconds on big boards (8+ LEDs), so there paint
+   *  "routing…" first — two frames, so the browser actually shows it before the thread is busy. Small
+   *  boards route on the spot, as before. */
+  private routeNowWithFeedback(): void {
+    if (this.circuit.leds.length < BUSY_FEEDBACK_LEDS) {
+      this.routeNow();
+      return;
+    }
+    this.routeBtn.disabled = true;
+    this.statusEl.textContent = "routing…";
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      try {
+        this.routeNow();
+      } finally {
+        this.routeBtn.disabled = false;
+      }
+    }));
+  }
+
   private routeNow(): void {
-    this.forceReplan();
+    const ok = this.forceReplan();
+    const failure = this.statusEl.textContent;
     this.draw();
     this.renderNets();
     this.renderStatus();
+    if (!ok) this.statusEl.textContent = failure; // renderStatus would paint over the reason
   }
 
   private render(): void {
