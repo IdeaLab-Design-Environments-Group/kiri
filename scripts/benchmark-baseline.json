@@ -1,0 +1,68 @@
+{
+  "timestamp": "2026-10-29T20:16:12.087Z",
+  "nodeVersion": "v18.20.8",
+  "totalTimeMs": 7837.68,
+  "heapUsedMb": 113.2,
+  "results": {
+    "house.fkld": {
+      "pattern": "house.fkld",
+      "success": true,
+      "timeMs": 699.72,
+      "copperLength": 11.59,
+      "tracesCount": 12,
+      "pointsCount": 54,
+      "tensionCrossings": 11,
+      "fatiguingCrossings": 11,
+      "worstBand": 2,
+      "netCrossings": 0,
+      "overlapLength": 0
+    },
+    "church.fkld": {
+      "pattern": "church.fkld",
+      "success": true,
+      "timeMs": 856.94,
+      "copperLength": 15.86,
+      "tracesCount": 14,
+      "pointsCount": 61,
+      "tensionCrossings": 11,
+      "fatiguingCrossings": 7,
+      "worstBand": 2,
+      "netCrossings": 0,
+      "overlapLength": 0.11
+    },
+    "akde-hex.fkld": {
+      "pattern": "akde-hex.fkld",
+      "success": true,
+      "timeMs": 5807.7,
+      "copperLength": 1342.7,
+      "tracesCount": 24,
+      "pointsCount": 108,
+      "tensionCrossings": 16,
+      "fatiguingCrossings": 16,
+      "worstBand": 1,
+      "netCrossings": 0,
+      "overlapLength": 0
+    },
+    "akde-square-pyramid.fkld": {
+      "pattern": "akde-square-pyramid.fkld",
+      "success": true,
+      "timeMs": 464.45,
+      "copperLength": 280.93,
+      "tracesCount": 8,
+      "pointsCount": 33,
+      "tensionCrossings": 14,
+      "fatiguingCrossings": 14,
+      "worstBand": 1,
+      "netCrossings": 0,
+      "overlapLength": 0
+    }
+  },
+  "summary": {
+    "totalPatterns": 4,
+    "passedPatterns": 4,
+    "totalCopperLength": 1651.08,
+    "totalTensionCrossings": 52,
+    "totalNetCrossings": 0,
+    "avgTimeMs": 1957.2
+  }
+}

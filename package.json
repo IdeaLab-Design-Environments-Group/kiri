@@ -1,5 +1,5 @@
 {
-  "name": "kirigamizer",
+  "name": "kiri",
   "private": true,
   "type": "module",
   "scripts": {
@@ -19,7 +19,10 @@
     "test:sim": "vitest run tests/current/sim",
     "test:view": "vitest run tests/current/view",
     "footprints": "sh ocaml/build.sh",
-    "examples": "vite-node scripts/gen-example-previews.ts --"
+    "examples": "vite-node scripts/gen-example-previews.ts --",
+    "bench": "vite-node scripts/agent-benchmark.ts --fast",
+    "bench:full": "vite-node scripts/agent-benchmark.ts --full",
+    "bench:save": "vite-node scripts/agent-benchmark.ts --fast --save-baseline"
   },
   "devDependencies": {
     "@types/node": "^22.19.20",
