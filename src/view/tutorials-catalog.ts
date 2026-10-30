@@ -73,7 +73,7 @@ export const TUTORIAL_SECTIONS: TutorialSection[] = [
     intro: "From a mesh — or from nothing — to a crease pattern you can fold.",
     items: [
       {
-        slug: "creating-pyriamid-model-base-for-simulation",
+        slug: "creating-pyramid-model-base-for-simulation",
         title: "create a pyramid",
         blurb:
           "Create pyramid builds the AKDE pyramid from the creation pipeline: the small, well-behaved "

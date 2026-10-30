@@ -39,6 +39,25 @@ import {
 /** Hard cap on relief-loop iterations (each adds ≥1 cut edge, so ≤E anyway). */
 export const RELIEF_MAX = 64;
 
+/** Wall-clock cap on one seamedUnfold relief loop (ms). Meshes that reach it (many-vent saddles)
+ *  otherwise run for minutes on the main thread; ordinary meshes finish in well under a second. */
+export const RELIEF_SEARCH_BUDGET_MS = 20000;
+
+/** Thrown when the budget runs out. A subclass so the "this candidate failed, try the next" catches in the
+ *  relief search can tell it apart from an ordinary unfold failure and let it through. */
+class ReliefBudgetError extends PipelineError {
+  constructor() {
+    super("unfold", `relief search ran past ${RELIEF_SEARCH_BUDGET_MS / 1000}s on this surface — try a simpler mesh or fewer vents`);
+  }
+}
+
+/** Deadline of the seamedUnfold call in progress (Infinity outside one). Module state so the budget also
+ *  reaches inside a single cutAlongEdges, which is where one candidate can spend minutes. */
+let reliefDeadline = Number.POSITIVE_INFINITY;
+const checkReliefBudget = (): void => {
+  if (Date.now() > reliefDeadline) throw new ReliefBudgetError();
+};
+
 /**
  * Cap on post-relief pruning passes. Each pass re-tries every still-present
  * relief edge; removing one can make another removable, so we iterate to a
@@ -379,6 +398,7 @@ export function cutAlongEdges(
     const guardMax = Math.max(64, faces.length * 8);
     let guard = 0;
     while (queue.length > 0 && guard++ < guardMax) {
+      checkReliefBudget();
       const [x, y] = queue.pop()!;
       const key = edgeKey(x, y);
       pending.delete(key);
@@ -930,6 +950,21 @@ export function seamedUnfold(
   defects: DefectReport,
   opts: { pruneRelief?: boolean } = {},
 ): UnfoldResult {
+  reliefDeadline = Date.now() + RELIEF_SEARCH_BUDGET_MS; // one budget for the whole relief loop
+  try {
+    return seamedUnfoldWithinBudget(mesh, topo, plan, defects, opts);
+  } finally {
+    reliefDeadline = Number.POSITIVE_INFINITY;
+  }
+}
+
+function seamedUnfoldWithinBudget(
+  mesh: TriMesh,
+  topo: MeshTopology,
+  plan: CutPlan,
+  defects: DefectReport,
+  opts: { pruneRelief?: boolean },
+): UnfoldResult {
   const pruneRelief = opts.pruneRelief ?? false;
   const cutSet = new Set(plan.cutEdges);
   const reliefEdges: number[] = [];
@@ -1144,6 +1179,7 @@ function addReliefCut(
       const trial = cutAlongEdges(mesh, topo, [...cutSet, ...fresh], ventAngles);
       return labelComponents(trial.mesh).count === 1;
     } catch (err) {
+      if (err instanceof ReliefBudgetError) throw err;
       if (err instanceof PipelineError && err.stage === "unfold") return false;
       throw err;
     }
@@ -1209,12 +1245,14 @@ function addReliefCut(
   // slits toward radial form. Pick the move that STRICTLY reduces the flat
   // self-overlap pair count; the strict integer descent terminates.
   const overlapsFor = (edges: number[], cap: number): number => {
+    checkReliefBudget();
     try {
       const trial = cutAlongEdges(mesh, topo, edges, ventAngles);
       if (labelComponents(trial.mesh).count !== 1) return Number.POSITIVE_INFINITY;
       const tflat = unfoldPatch(trial, trial.mesh.faces.map((_, f) => f));
       return countFlatOverlaps(tflat, trial.mesh.faces, cap);
     } catch (err) {
+      if (err instanceof ReliefBudgetError) throw err;
       if (err instanceof PipelineError) return Number.POSITIVE_INFINITY;
       throw err;
     }

@@ -977,23 +977,37 @@ export function planRoutes(
   };
 
 
+  const buildCache = new Map<string, { tr: Trace2D[]; sc: PlanKey }>();
+  const buildAndScore = (f: boolean[]): { tr: Trace2D[]; sc: PlanKey } => {
+    let key = "";
+    for (let k = 0; k < f.length; k++) key += f[k] ? "1" : "0";
+    if (branching) key += "B";
+    if (merging) key += "M";
+    if (dirPwr) key += "P";
+    if (dirGnd) key += "G";
+    const hit = buildCache.get(key);
+    if (hit) return hit;
+    const tr = build(f);
+    const sc = score(tr, f);
+    const res = { tr, sc };
+    buildCache.set(key, res);
+    return res;
+  };
+
   // Descend from each seed by single flips, first improvement, and keep the best arrangement found. No one
   // seed wins everywhere -- the geometric seed beats all-false on akde-decagon and loses on puffin -- and
   // three descents on a handful of LEDs is cheap enough to run on every edit.
   let flip = pin(seeds[0]!.slice());
-  let best = build(flip);
-  let bestS = score(best, flip);
+  let { tr: best, sc: bestS } = buildAndScore(flip);
   for (const seed of seeds) {
     const f = pin(seed.slice());
-    let tr = build(f);
-    let sc = score(tr, f);
+    let { tr, sc } = buildAndScore(f);
     for (let sweep = 0; sweep < order.length && !flawless(sc); sweep++) {
       let moved = false;
       for (let i = 0; i < order.length && !flawless(sc); i++) {
         if (targets[order[i]!]!.pinned !== undefined) continue; // the author fixed this one
         f[i] = !f[i];
-        const cand = build(f);
-        const cs = score(cand, f);
+        const { tr: cand, sc: cs } = buildAndScore(f);
         if (lexLess(cs, sc)) {
           tr = cand;
           sc = cs;
@@ -1016,19 +1030,19 @@ export function planRoutes(
   // 1543 -> 1370) but breaks up the chain that keeps the two nets parallel, so on some patterns it adds a
   // PWR/GND crossing -- a short. The score ranks crossings above overlap, so it is kept only where it does not.
   merging = true;
-  const merged = build(flip);
-  if (lexLess(score(merged, flip), bestS)) {
+  const { tr: merged, sc: mSc } = buildAndScore(flip);
+  if (lexLess(mSc, bestS)) {
     best = merged;
-    bestS = score(merged, flip);
+    bestS = mSc;
   } else {
     merging = false;
   }
 
   branching = true;
-  const branched = build(flip);
-  if (lexLess(score(branched, flip), bestS)) {
+  const { tr: branched, sc: bSc } = buildAndScore(flip);
+  if (lexLess(bSc, bestS)) {
     best = branched;
-    bestS = score(branched, flip);
+    bestS = bSc;
   } else {
     branching = false;
   }
@@ -1039,8 +1053,7 @@ export function planRoutes(
     const keepG: boolean = dirGnd;
     dirPwr = dp;
     dirGnd = dg;
-    const cand = build(flip);
-    const sc = score(cand, flip);
+    const { tr: cand, sc: sc } = buildAndScore(flip);
     if (lexLess(sc, bestS)) {
       bestS = sc;
       best = cand;
