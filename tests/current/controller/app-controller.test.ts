@@ -263,12 +263,12 @@ describe("controller/app-controller", () => {
     expect(sim.provider?.()).toBeNull();
   });
 
-  it("kirigamizes a loaded fold by passing it through to the viewer", () => {
+  it("kirigamizes a loaded fold by passing it through to the viewer", async () => {
     const { controller, store, viewer, convert } = setup();
     const fold = makeFold({ "fkld:meta_architecture": {} });
     store.update({ model: { kind: "fold", name: "sample.fkld", object: fold } });
 
-    controller.kirigamize();
+    await controller.kirigamize();
 
     expect(viewer.showCalls).toEqual([{ object: fold, name: "sample.fkld" }]);
     expect(convert.statusCalls.at(-1)).toEqual({
@@ -277,7 +277,7 @@ describe("controller/app-controller", () => {
     });
   });
 
-  it("kirigamizes a mesh model through the full M1–M5 pipeline", { timeout: 120_000 }, () => {
+  it("kirigamizes a mesh model through the full M1–M5 pipeline", { timeout: 120_000 }, async () => {
     const { controller, store, viewer, convert } = setup();
     // open 4-gon pyramid OBJ: apex + 4 base corners, lateral faces only
     const obj = [
@@ -293,7 +293,7 @@ describe("controller/app-controller", () => {
     ].join("\n");
     store.update({ model: { kind: "mesh", name: "pyramid.obj", ext: "obj", text: obj } });
 
-    controller.kirigamize();
+    await controller.kirigamize();
 
     const m = store.model;
     expect(m?.kind).toBe("fold");
@@ -307,13 +307,13 @@ describe("controller/app-controller", () => {
     expect(status?.msg).toContain("Kirigamized");
   });
 
-  it("reports pipeline errors for unusable meshes", () => {
+  it("reports pipeline errors for unusable meshes", async () => {
     const { controller, store, convert } = setup();
     store.update({
       model: { kind: "mesh", name: "broken.obj", ext: "obj", text: "v 0 0 0" },
     });
 
-    controller.kirigamize();
+    await controller.kirigamize();
 
     expect(convert.statusCalls.at(-1)?.kind).toBe("bad");
     expect(convert.statusCalls.at(-1)?.msg).toMatch(/import|no vertices/);
@@ -409,6 +409,49 @@ describe("controller/app-controller", () => {
 
     expect(header.enabledCalls.at(-1)).toBe(true);
     expect(sim.enabledCalls.at(-1)).toBe(true);
+  });
+
+  it("keeps the kirigamize button disabled and shows the status before the heavy work runs", async () => {
+    const { controller, store, header, convert } = setup();
+    store.update({ model: { kind: "mesh", name: "broken.obj", ext: "obj", text: "v 0 0 0" } });
+    const pending = controller.kirigamize();
+    expect(header.enabledCalls.at(-1)).toBe(false);
+    expect(convert.statusCalls.at(-1)?.msg).toContain("Kirigamizing broken.obj");
+    // nothing has run yet: the failure status only arrives after the yield
+    expect(convert.statusCalls.at(-1)?.kind).toBe("");
+    await pending;
+    expect(convert.statusCalls.at(-1)?.kind).toBe("bad");
+    expect(header.enabledCalls.at(-1)).toBe(true);
+  });
+
+  function readerReturning(text: string): typeof FileReader {
+    class R {
+      result = text;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      readAsText(): void {
+        this.onload?.();
+      }
+    }
+    return R as unknown as typeof FileReader;
+  }
+
+  it("an imported FKLD becomes what the viewer and Sim/Export use", () => {
+    const { store, viewer, convert } = setup();
+    store.update({ viewerShown: { object: makeFold({ frame_title: "old" }), name: "old.fkld" } });
+    globalThis.FileReader = readerReturning(JSON.stringify(makeFold({ frame_title: "fresh" })));
+    convert.chosenHandler?.({ name: "fresh.fkld", size: 10 } as File);
+    expect(viewer.showCalls.at(-1)?.name).toBe("fresh.fkld");
+    expect(store.getState().viewerShown?.name).toBe("fresh.fkld");
+  });
+
+  it("an imported mesh drops the stale viewer model and says so", () => {
+    const { store, convert } = setup();
+    store.update({ viewerShown: { object: makeFold(), name: "old.fkld" } });
+    globalThis.FileReader = readerReturning("v 0 0 0");
+    convert.chosenHandler?.({ name: "m.obj", size: 10 } as File);
+    expect(store.getState().viewerShown).toBeNull();
+    expect(convert.statusCalls.at(-1)?.msg).toContain("still shows the previous pattern");
   });
 
   it("handles parse errors and unsupported file types", () => {
