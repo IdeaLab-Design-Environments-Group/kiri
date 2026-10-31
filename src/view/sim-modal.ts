@@ -238,7 +238,18 @@ export class SimModal {
     if (!this.canvas) {
       this.statusEl.textContent = "loading 3D viewer…";
       const Canvas = await loadSimCanvas(this.reloads++);
-      this.canvas = new Canvas(this.mount);
+      try {
+        this.canvas = new Canvas(this.mount);
+      } catch (err) {
+        // The chunk loaded, so a retry will not help: this is the renderer itself (typically no WebGL).
+        // Stay open so the reason is visible, with nothing half-built left behind.
+        this.canvas = null;
+        this.mount.textContent = "";
+        this.statusEl.textContent =
+          `3D rendering is not available in this browser (WebGL could not start: ${(err as Error).message ?? err}).`;
+        console.error(err);
+        return;
+      }
       if (this.overlay.hidden) return;
     }
     this.loadWorld();
@@ -256,7 +267,15 @@ export class SimModal {
 
   private loadWorld(): void {
     this.cancelIdleWarm();
-    const built = this.provider?.(this.material) ?? null;
+    let built: ReturnType<SimSceneProvider> = null;
+    try {
+      built = this.provider?.(this.material) ?? null;
+    } catch (err) {
+      this.statusEl.textContent = `Cannot build the 3D scene for this model: ${(err as Error).message ?? err}`;
+      console.error(err);
+      this.canvas?.stop();
+      return;
+    }
     if (!built) {
       this.statusEl.textContent = "no foldable model — load a FOLD/FKLD crease pattern, then reopen.";
       this.canvas?.stop();
