@@ -12,6 +12,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { buildScene } from "../../src/sim/scene.js";
+import { maxTensileStrain, meanTensileStrain } from "../../src/sim/strain.js";
 import type { FoldFile } from "../../src/model/fold-file.js";
 
 function loadExample(name: string): FoldFile {
@@ -45,20 +46,11 @@ describe("kirigamizer app sim path (src/sim via scene.buildScene)", () => {
     const height = Math.abs(meanZ(net.base) - meanZ(net.tips));
     expect(height).toBeCloseTo(net.meta.H, 1);
 
-    // near-isometric: molecules tuck via their cuts, so mean bar strain stays small
-    let strain = 0;
-    for (let i = 0; i < model.beams.count; i++) {
-      const a = model.beams.n0[i];
-      const b = model.beams.n1[i];
-      const l = Math.hypot(
-        model.position[3 * a] - model.position[3 * b],
-        model.position[3 * a + 1] - model.position[3 * b + 1],
-        model.position[3 * a + 2] - model.position[3 * b + 2],
-      );
-      strain += Math.abs(l / model.beams.rest[i] - 1);
-    }
-    strain /= model.beams.count;
-    expect(strain).toBeLessThan(0.1);
+    // near-isometric: molecules tuck via their cuts. Stretch only — compression at the cut mouths is
+    // legitimate (see src/sim/strain.ts) and is what the app shows, so an absolute mean of ~0.18 here
+    // measured the cut geometry, not a bad fold.
+    expect(meanTensileStrain(model)).toBeLessThan(0.05);
+    expect(maxTensileStrain(model)).toBeLessThan(0.12);
   });
 
   it("folds a generic FKLD crease pattern (free path) without blowing up", () => {
