@@ -2119,7 +2119,7 @@ export class ElectronicsModal {
    * duration of one export call is enough to make every one of them answer for the requested side instead
    * of the one on screen. Nothing renders in between, so the canvas never flashes the other side.
    */
-  private withSide<T>(side: Side, fn: () => T): T {
+  private withSide<T>(side: Side, fn: () => T): T | undefined {
     const prior = this.side;
     this.side = side;
     try {
@@ -2133,7 +2133,11 @@ export class ElectronicsModal {
       // Not an identity check against EMPTY_ROUTE: a side auto-planned once while empty holds a *fresh*
       // empty plan rather than that singleton, so `=== EMPTY_ROUTE` silently stopped firing for exactly
       // the side this feature exists to export — one edited while the author was looking at the other.
-      if (this.stale) this.forceReplan();
+      if (this.stale && !this.forceReplan()) {
+        // The re-plan failed, so the plan in hand is the stale one: say so and make no file from it.
+        this.statusEl.textContent += " — export cancelled";
+        return undefined;
+      }
       return fn();
     } finally {
       this.side = prior;
