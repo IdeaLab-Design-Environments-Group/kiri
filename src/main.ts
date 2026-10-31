@@ -54,6 +54,16 @@ tutorials.mountTrigger(header.element); // …then Tutorials (the screen recordi
 header.appendActionButtons(); // …then Create / Load sample / cut&fold ▶
 document.querySelector(".app-header")?.appendChild(header.element);
 
+// ---- Global error reporting ------------------------------------------------
+// Anything that escapes a handler lands on the status line instead of vanishing into the console.
+const reportFailure = (what: string, reason: unknown): void => {
+  const detail = reason instanceof Error ? reason.message : String(reason);
+  console.error(what, reason);
+  store.setStatus(`Unexpected error: ${detail}`.slice(0, 300), "bad");
+};
+window.addEventListener("error", (e) => reportFailure("Uncaught error", e.error ?? e.message));
+window.addEventListener("unhandledrejection", (e) => reportFailure("Unhandled rejection", e.reason));
+
 // ---- Controller -----------------------------------------------------------
 const controller = new AppController(store, convert, viewer, header, simModal, exportModal, patternEditor, electronics);
 
