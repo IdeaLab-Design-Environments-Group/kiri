@@ -263,7 +263,12 @@ describe("model/copper-svg-export", () => {
       const { T } = sheetFrame(fold);
       const { window: win, outer } = out.frame;
       for (const t of traces) {
-        expect(inCarrier(out.svg, T(t.pts[Math.floor(t.pts.length / 2)]!))).toBe(true);
+        // The middle of the run, between two consecutive points. `pts[floor(n / 2)]` is the *end* of a
+        // two-point stub, which sits on the strip's butt-cap edge where even-odd is undefined.
+        const k = Math.floor((t.pts.length - 1) / 2);
+        const a = t.pts[k]!;
+        const b = t.pts[k + 1]!;
+        expect(inCarrier(out.svg, T({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }))).toBe(true);
       }
       // The frame border is copper; off the sheet is not.
       expect(inCarrier(out.svg, { x: (win.x0 + outer.x0) / 2, y: (win.y0 + win.y1) / 2 })).toBe(true);

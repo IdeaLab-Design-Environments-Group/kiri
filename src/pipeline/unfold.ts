@@ -45,7 +45,7 @@ export const RELIEF_SEARCH_BUDGET_MS = 20000;
 
 /** Thrown when the budget runs out. A subclass so the "this candidate failed, try the next" catches in the
  *  relief search can tell it apart from an ordinary unfold failure and let it through. */
-class ReliefBudgetError extends PipelineError {
+export class ReliefBudgetError extends PipelineError {
   constructor() {
     super("unfold", `relief search ran past ${RELIEF_SEARCH_BUDGET_MS / 1000}s on this surface — try a simpler mesh or fewer vents`);
   }
@@ -1003,7 +1003,15 @@ function seamedUnfoldWithinBudget(
       let finalComponents = components;
       let reliefPruned = 0;
       if (pruneRelief && reliefEdges.length > 0) {
-        reliefPruned = pruneReliefEdges(mesh, topo, cutSet, reliefEdges, ventAngles);
+        try {
+          reliefPruned = pruneReliefEdges(mesh, topo, cutSet, reliefEdges, ventAngles);
+        } catch (err) {
+          if (!(err instanceof ReliefBudgetError)) throw err;
+          // Pruning is optional: keep the removals already verified clean and stop, rather than throw away a
+          // development that is already valid. Lift the budget so re-deriving the artifacts below can finish.
+          reliefPruned = reliefEdges.filter((e) => !cutSet.has(e)).length;
+          reliefDeadline = Number.POSITIVE_INFINITY;
+        }
         if (reliefPruned > 0) {
           finalCut = cutAlongEdges(mesh, topo, [...cutSet], ventAngles);
           finalComponents = labelComponents(finalCut.mesh);
@@ -1101,6 +1109,7 @@ function developsCleanly(
     const flat = unfoldPatch(trial, trial.mesh.faces.map((_, f) => f));
     return findSelfOverlap(flat, trial.mesh.faces) === null;
   } catch (err) {
+    if (err instanceof ReliefBudgetError) throw err;
     if (err instanceof PipelineError && err.stage === "unfold") return false;
     throw err;
   }
