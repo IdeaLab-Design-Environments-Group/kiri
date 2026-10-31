@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { resolveElectronicsTarget } from "../../../src/services/electronics-service.js";
+import { describe, expect, it, vi } from "vitest";
+import { resolveElectronicsTarget, resolveFoldedCopperOverlay } from "../../../src/services/electronics-service.js";
 import type { FoldFile, LoadedModel } from "../../../src/model/fold-file.js";
 
 function twoTri(): FoldFile {
@@ -36,5 +36,16 @@ describe("services/electronics-service", () => {
     const model: LoadedModel = { kind: "fold", name: "loaded.fold", object: twoTri() };
     expect(resolveElectronicsTarget(model, null)?.object).toBe(model.object);
     expect(resolveElectronicsTarget(null, null)).toBeNull();
+  });
+
+  it("warns instead of failing silently when the copper cannot be planned", () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const onWarning = vi.fn();
+    const circuit = { leds: [{ face: 0 }], battery: { face: 0 }, wires: 5 } as never;
+    const out = resolveFoldedCopperOverlay({ fold: twoTri(), circuit, tileGap: 0.16, sheetMm: 100, onWarning });
+    expect(out).toEqual([]);
+    expect(onWarning).toHaveBeenCalledTimes(1);
+    expect(onWarning.mock.calls[0]![0]).toContain("Copper could not be placed");
+    errSpy.mockRestore();
   });
 });

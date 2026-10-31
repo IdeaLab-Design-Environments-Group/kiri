@@ -42,6 +42,8 @@ export interface FoldedOverlayInput {
   tileGap: number;
   sheetMm: number;
   sheet?: SheetSpec;
+  /** Called with a short message when the copper could not be planned (the overlay is then empty). */
+  onWarning?: (message: string) => void;
 }
 
 export const defaultElectronicsPlanning: ElectronicsPlanningAdapter = {
@@ -60,6 +62,7 @@ export function resolveFoldedCopperOverlay({
   tileGap,
   sheetMm,
   sheet = DEFAULT_SHEET,
+  onWarning,
 }: FoldedOverlayInput): AnchoredMesh[] {
   const circuit = stored ?? EMPTY_CIRCUIT;
   if (!fold || (!circuit.leds.length && !circuit.battery && !circuit.wires?.length)) return [];
@@ -74,7 +77,9 @@ export function resolveFoldedCopperOverlay({
       : null;
     const drawn = manualTraces({ faces, gaps, circuit, tapeW });
     return anchorOverlay([...drawn, ...routed.traces], routed.pads, term, tapeW, faces);
-  } catch {
+  } catch (err) {
+    console.error(err);
+    onWarning?.(`Copper could not be placed on the folded model: ${err instanceof Error ? err.message : String(err)}`);
     return [];
   }
 }
