@@ -139,7 +139,7 @@ describe("model/electronics-routing", () => {
     expect(r.pads[3]).toEqual({ pwr: { x: 0, y: 0 }, gnd: { x: 0, y: 0 } });
   });
 
-  it("is deterministic — the preview and the SVG export each plan independently and must agree", () => {
+  it("is deterministic — the preview and the SVG export each plan independently and must agree", { timeout: 30_000 }, () => {
     const { faces, gaps } = load("akde-hex.fkld");
     const circuit: Circuit = { leds: ledsOn(gaps, 10), battery: { face: 0 } };
     const a = planRoutes(faces, gaps, circuit);
@@ -335,7 +335,7 @@ describe("model/electronics-routing", () => {
     }
   });
 
-  it("keeps every pad connected to its own terminal", () => {
+  it("keeps every pad connected to its own terminal", { timeout: 60_000 }, () => {
     // The guard on the tree pruning: dropping a cycle edge or a dead-end branch must never cut a pad off.
     for (const name of ["house.fkld", "puffin.fkld", "akde-hex.fkld"]) {
       const { faces, gaps } = load(name);

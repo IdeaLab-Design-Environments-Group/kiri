@@ -1,13 +1,13 @@
 {
-  "timestamp": "2026-10-29T20:16:12.087Z",
+  "timestamp": "2026-10-31T07:44:41.449Z",
   "nodeVersion": "v18.20.8",
-  "totalTimeMs": 7837.68,
-  "heapUsedMb": 113.2,
+  "totalTimeMs": 5977.88,
+  "heapUsedMb": 102.3,
   "results": {
     "house.fkld": {
       "pattern": "house.fkld",
       "success": true,
-      "timeMs": 699.72,
+      "timeMs": 442.85,
       "copperLength": 11.59,
       "tracesCount": 12,
       "pointsCount": 54,
@@ -20,7 +20,7 @@
     "church.fkld": {
       "pattern": "church.fkld",
       "success": true,
-      "timeMs": 856.94,
+      "timeMs": 590.08,
       "copperLength": 15.86,
       "tracesCount": 14,
       "pointsCount": 61,
@@ -33,7 +33,7 @@
     "akde-hex.fkld": {
       "pattern": "akde-hex.fkld",
       "success": true,
-      "timeMs": 5807.7,
+      "timeMs": 4652.83,
       "copperLength": 1342.7,
       "tracesCount": 24,
       "pointsCount": 108,
@@ -46,7 +46,7 @@
     "akde-square-pyramid.fkld": {
       "pattern": "akde-square-pyramid.fkld",
       "success": true,
-      "timeMs": 464.45,
+      "timeMs": 282.78,
       "copperLength": 280.93,
       "tracesCount": 8,
       "pointsCount": 33,
@@ -63,6 +63,6 @@
     "totalCopperLength": 1651.08,
     "totalTensionCrossings": 52,
     "totalNetCrossings": 0,
-    "avgTimeMs": 1957.2
+    "avgTimeMs": 1492.13
   }
 }

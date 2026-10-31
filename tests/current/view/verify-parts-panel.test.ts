@@ -63,7 +63,7 @@ describe("verify: the user's flow", () => {
     rows[0].dispatch("click", {});
     expect(modal.padPart.textContent).toContain("R_1206");
     const back = padSelects(modal).find((r: any) => r.dataset.pad === "1");
-    expect(back.value).toBe("pwr");
+    expect(back.value).toBe("PWR"); // the field shows the net's display name
     expect(modal.partList.querySelectorAll(".el-placed-row")[0].classList.contains("is-active")).toBe(true);
   });
 
