@@ -671,9 +671,9 @@
       <h2>File</h2>
       <div class="row"><span class="label">creator</span><span class="value">${escape(file.file_creator) ?? '—'}</span></div>
       <div class="row"><span class="label">frame_title</span><span class="value">${escape(file.frame_title) ?? '—'}</span></div>
-      <div class="row"><span class="label">unit</span><span class="value">${file.frame_unit ?? '—'}</span></div>
-      <div class="row"><span class="label">attributes</span><span class="value">${(file.frame_attributes || []).join(', ') || '—'}</span></div>
-      <div class="row"><span class="label">FKLD spec</span><span class="value">${file['fkld:meta_fkldSpec'] || '—'}</span></div>
+      <div class="row"><span class="label">unit</span><span class="value">${escape(file.frame_unit) ?? '—'}</span></div>
+      <div class="row"><span class="label">attributes</span><span class="value">${escape((file.frame_attributes || []).join(', ')) || '—'}</span></div>
+      <div class="row"><span class="label">FKLD spec</span><span class="value">${escape(file['fkld:meta_fkldSpec']) || '—'}</span></div>
 
       <h2>Topology</h2>
       <div class="row"><span class="label">vertices</span><span class="value">${v}</span></div>
@@ -681,20 +681,20 @@
       <div class="row"><span class="label">edges</span><span class="value">${e}</span></div>
 
       <h2>Edge assignments</h2>
-      ${Object.entries(ah).map(([k,n]) => `<div class="row"><span class="label">${k}</span><span class="value">${n}</span></div>`).join('') || '<div class="row" style="border:none;color:var(--muted)"><em>none</em></div>'}
+      ${Object.entries(ah).map(([k,n]) => `<div class="row"><span class="label">${escape(k)}</span><span class="value">${n}</span></div>`).join('') || '<div class="row" style="border:none;color:var(--muted)"><em>none</em></div>'}
 
       <h2>Cut subtypes</h2>
-      ${Object.keys(ch).length ? Object.entries(ch).map(([k,n]) => `<div class="row"><span class="label">${k}</span><span class="value">${n}</span></div>`).join('') : '<div class="row" style="border:none;color:var(--muted)"><em>none</em></div>'}
+      ${Object.keys(ch).length ? Object.entries(ch).map(([k,n]) => `<div class="row"><span class="label">${escape(k)}</span><span class="value">${n}</span></div>`).join('') : '<div class="row" style="border:none;color:var(--muted)"><em>none</em></div>'}
 
       <h2>Vertex curvature</h2>
-      ${Object.keys(vh).length ? Object.entries(vh).map(([k,n]) => `<div class="row"><span class="label">${k}</span><span class="value">${n}</span></div>`).join('') : '<div class="row" style="border:none;color:var(--muted)"><em>not recorded</em></div>'}
+      ${Object.keys(vh).length ? Object.entries(vh).map(([k,n]) => `<div class="row"><span class="label">${escape(k)}</span><span class="value">${n}</span></div>`).join('') : '<div class="row" style="border:none;color:var(--muted)"><em>not recorded</em></div>'}
 
       <h2>Molecules</h2>
       <div class="row"><span class="label">edges with θ + w</span><span class="value">${molCount}</span></div>
       ${molCount > 0 ? `<div class="row"><span class="label">θ range (rad)</span><span class="value">${(() => { const xs = thetas.filter(x => x != null); return `${Math.min(...xs).toFixed(3)} – ${Math.max(...xs).toFixed(3)}`; })()}</span></div>` : ''}
 
       <h2>Materials</h2>
-      ${matSet.length ? matSet.map(id => `<div class="row"><span class="label">${id}</span><span class="value">${matIds.filter(x => x === id).length} faces</span></div>`).join('') : '<div class="row" style="border:none;color:var(--muted)"><em>none</em></div>'}
+      ${matSet.length ? matSet.map(id => `<div class="row"><span class="label">${escape(id)}</span><span class="value">${matIds.filter(x => x === id).length} faces</span></div>`).join('') : '<div class="row" style="border:none;color:var(--muted)"><em>none</em></div>'}
     `;
     if (kirigami) {
       html += `<h2>Universal kirigami</h2><pre>${escape(JSON.stringify(kirigami, null, 2))}</pre>`;
