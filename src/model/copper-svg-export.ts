@@ -55,6 +55,9 @@ const MAX_TABS_PER_RUN = 2;
 
 /** What a wall already carrying a tab adds to the cost of reaching it, in tape widths. */
 const CROWD_TOLL = 6;
+/** Centreline clearances, in tape widths, a grid-searched tab will settle for, tried widest first. A tab is a
+ *  tape wide, so 0.5 would be edge to edge with the other net's copper; anything above leaves bare substrate. */
+const RESCUE_GAPS = [1, 0.75];
 
 /** Width of the carrier frame's border, outside the pattern window. */
 const FRAME_BUFFER = 5;
@@ -1440,7 +1443,7 @@ export function buildCopperCarrierExport(
     const picks: { index: number; side: Side; path: Vec2[] }[] = [];
     const taken = [...avoid];
     for (let t = 0; t < want; t++) {
-      const choice = pickTab(ring, others, win, tape, taken, chosen);
+      const choice = pickTab(ring, others, win, tape, taken, chosen, t === 0);
       if (!choice) break;
       // The first grip is taken as it comes — a run has to be held even where the only spot is a poor one.
       // An extra is a convenience, so it is only worth having if it is clean: taking a compromised one would
@@ -1660,6 +1663,8 @@ function pickTab(
    * over while any clear spot remains.
    */
   placed: { side: Side; path: Vec2[] }[] = [],
+  /** Whether a grid search may be tried when no tab shape is clear. Only a run's first grip is worth it. */
+  rescue = false,
 ): {
   index: number;
   side: Side;
@@ -1673,7 +1678,10 @@ function pickTab(
     avoid.some((q) => Math.hypot(p.x - q.x, p.y - q.y) < tapeW * PAD_CLEAR);
   // Nine offsets is as good as twenty-four: measured identical, so the extra reach buys nothing.
   const SIDE_STEPS = [0, 1.5, -1.5, 3, -3, 5, -5, 8, -8];
-  const candidates: { index: number; side: Side; step: number; reach: number }[] = [];
+  // Two-bend paths: out toward the wall first, then sideways, then out again. A run walled in on its own side
+  // often has a gap a little further out that only such a detour reaches.
+  const LEADS = [1.5, 3.5];
+  const candidates: { index: number; side: Side; step: number; reach: number; lead: number }[] = [];
   ring.forEach((p, i) => {
     if (onComponent(p)) return; // a pad or a terminal: grip the trace elsewhere
     const dist: [Side, number][] = [
@@ -1683,7 +1691,14 @@ function pickTab(
     for (const [side, d] of dist) {
       if (d < 0) continue; // already outside that wall
       for (const step of SIDE_STEPS) {
-        candidates.push({ index: i, side, step, reach: d + Math.abs(step) * tapeW });
+        candidates.push({ index: i, side, step, reach: d + Math.abs(step) * tapeW, lead: 0 });
+      }
+      for (const lead of LEADS) {
+        if (d < (lead + 1) * tapeW) continue;
+        for (const step of SIDE_STEPS) {
+          if (step === 0) continue;
+          candidates.push({ index: i, side, step, reach: d + (Math.abs(step) + lead * 0.1) * tapeW, lead });
+        }
       }
     }
   });
@@ -1700,7 +1715,7 @@ function pickTab(
       for (const [side, d] of dist) {
         if (d < 0) continue;
         for (const step of SIDE_STEPS) {
-          candidates.push({ index: i, side, step, reach: d + Math.abs(step) * tapeW });
+          candidates.push({ index: i, side, step, reach: d + Math.abs(step) * tapeW, lead: 0 });
         }
       }
     });
@@ -1709,8 +1724,11 @@ function pickTab(
   // stacking. Priced in tape widths: dear enough to move a tab to another wall, not so dear that it drives
   // one across the whole sheet.
   const crowd = (side: Side): number => placed.filter((q) => q.side === side).length;
+  // Two-bend shapes only after every one- and no-bend shape has been tried: they cost three times as many
+  // candidates, and a run that has a plain way out has no need of them.
   candidates.sort(
     (a, b) =>
+      (a.lead > 0 ? 1 : 0) - (b.lead > 0 ? 1 : 0) ||
       a.reach + crowd(a.side) * tapeW * CROWD_TOLL - (b.reach + crowd(b.side) * tapeW * CROWD_TOLL) ||
       a.index - b.index,
   );
@@ -1724,8 +1742,16 @@ function pickTab(
     const bend = c.step === 0
       ? null
       : { x: a.x + across.x * c.step * tapeW, y: a.y + across.y * c.step * tapeW };
-    const end = onWindow(bend ?? a, c.side, win);
-    const path = bend ? [a, bend, end] : [a, end];
+    let path: Vec2[];
+    if (c.lead > 0) {
+      const o = outTo(c.side);
+      const p1 = { x: a.x + o.x * c.lead * tapeW, y: a.y + o.y * c.lead * tapeW };
+      const p2 = { x: p1.x + across.x * c.step * tapeW, y: p1.y + across.y * c.step * tapeW };
+      path = [a, p1, p2, onWindow(p2, c.side, win)];
+    } else {
+      const end = onWindow(bend ?? a, c.side, win);
+      path = bend ? [a, bend, end] : [a, end];
+    }
     // A tab may not run *over* a pad or a terminal on its way out, not merely start off one. Keeping the anchor
     // clear was not enough: the run itself passed across components on the way to the wall, where it would be
     // stuck down on top of the part and cut into it when snipped.
@@ -1768,6 +1794,21 @@ function pickTab(
       };
     }
   }
+  if (!crowded && rescue && !forcedOntoComponent) {
+    // No tab shape is clear. Before settling for a tab across the other net, search the window itself for a
+    // way out: first keeping off the tabs already placed, then ignoring them.
+    const paths = placed.map((q) => q.path);
+    let found: ReturnType<typeof routeAround> = null;
+    for (const gap of RESCUE_GAPS) {
+      found =
+        routeAround(ring, others, win, tapeW, avoid, paths, onComponent, gap) ??
+        routeAround(ring, others, win, tapeW, avoid, [], onComponent, gap);
+      if (found) break;
+    }
+    if (found) {
+      return { ...found, clear: true, onComponent: false, overComponent: false };
+    }
+  }
   if (crowded) {
     return {
       index: crowded.index, side: crowded.side, path: crowded.path,
@@ -1780,6 +1821,194 @@ function pickTab(
         clear: false, onComponent: forcedOntoComponent, overComponent: !!fallback.over,
       }
     : null;
+}
+
+/**
+ * A tab found by searching the window on a grid, for runs that no single- or double-bend shape frees.
+ *
+ * Cells are half a tape wide. A cell is open when its centre keeps a tape width clear of the other net, of every
+ * component and of the tabs already placed. Starting from every anchor on the run at once, the cheapest
+ * axis-aligned path to a wall is taken (length, plus a charge for every turn so it stays simple), and it must
+ * arrive heading straight out. The result is re-checked with the same tests the shaped candidates face, and
+ * dropped if it fails them, so this can only ever replace a tab that would have been compromised.
+ */
+function routeAround(
+  ring: Vec2[],
+  others: Vec2[][],
+  win: Win,
+  tapeW: number,
+  avoid: Vec2[],
+  placed: Vec2[][],
+  onComponent: (p: Vec2) => boolean,
+  gap: number,
+): { index: number; side: Side; path: Vec2[] } | null {
+  const cs = tapeW / 2;
+  const nx = Math.floor((win.x1 - win.x0) / cs);
+  const ny = Math.floor((win.y1 - win.y0) / cs);
+  if (nx < 3 || ny < 3 || nx * ny > 250000) return null;
+  const ox = win.x0 + ((win.x1 - win.x0) - nx * cs) / 2 + cs / 2;
+  const oy = win.y0 + ((win.y1 - win.y0) - ny * cs) / 2 + cs / 2;
+  const centre = (i: number, j: number): Vec2 => ({ x: ox + i * cs, y: oy + j * cs });
+  const margin = tapeW * gap * 1.1;
+  const open = new Int8Array(nx * ny); // 0 unknown, 1 open, 2 shut
+  const isOpen = (i: number, j: number): boolean => {
+    if (i < 0 || j < 0 || i >= nx || j >= ny) return false;
+    const k = j * nx + i;
+    if (open[k]) return open[k] === 1;
+    const c = centre(i, j);
+    const shut =
+      avoid.some((q) => Math.hypot(c.x - q.x, c.y - q.y) < margin * PAD_CLEAR) ||
+      others.some((o) => ptRingDist(c, o) < margin) ||
+      placed.some((q) => {
+        for (let m = 1; m < q.length; m++) if (ptSegDist(c, q[m - 1]!, q[m]!) < margin) return true;
+        return false;
+      });
+    open[k] = shut ? 2 : 1;
+    return !shut;
+  };
+  const clearSeg = (a: Vec2, b: Vec2): boolean =>
+    !others.some((o) => segNearRing(a, b, o, tapeW * gap)) &&
+    !avoid.some((q) => ptSegDist(q, a, b) < tapeW * PAD_CLEAR) &&
+    !placed.some((q) => {
+      for (let m = 1; m < q.length; m++) if (segSegDist(a, b, q[m - 1]!, q[m]!) < tapeW) return true;
+      return false;
+    });
+
+  // State = cell and heading. Dijkstra with a binary heap, seeded from every anchor.
+  const DIRS: [number, number][] = [[-1, 0], [1, 0], [0, -1], [0, 1]]; // left, right, top, bottom
+  const SIDE_OF: Side[] = ["left", "right", "top", "bottom"];
+  const N = nx * ny * 4;
+  const dist = new Float64Array(N).fill(Infinity);
+  const prev = new Int32Array(N).fill(-1);
+  const origin = new Int32Array(N).fill(-1); // which anchor a chain began at
+  const heap: [number, number][] = [];
+  const push = (d: number, s: number): void => {
+    heap.push([d, s]);
+    let c = heap.length - 1;
+    while (c > 0) {
+      const par = (c - 1) >> 1;
+      if (heap[par]![0] <= heap[c]![0]) break;
+      [heap[par], heap[c]] = [heap[c]!, heap[par]!];
+      c = par;
+    }
+  };
+  const pop = (): [number, number] => {
+    const top = heap[0]!;
+    const last = heap.pop()!;
+    if (heap.length) {
+      heap[0] = last;
+      let c = 0;
+      for (;;) {
+        const l = 2 * c + 1, r = l + 1;
+        let m = c;
+        if (l < heap.length && heap[l]![0] < heap[m]![0]) m = l;
+        if (r < heap.length && heap[r]![0] < heap[m]![0]) m = r;
+        if (m === c) break;
+        [heap[m], heap[c]] = [heap[c]!, heap[m]!];
+        c = m;
+      }
+    }
+    return top;
+  };
+  const anchorCell: { i: number; j: number }[] = [];
+  ring.forEach((a, idx) => {
+    const i = Math.round((a.x - ox) / cs), j = Math.round((a.y - oy) / cs);
+    anchorCell.push({ i, j });
+    if (onComponent(a) || !isOpen(i, j)) return;
+    if (!clearSeg(a, centre(i, j))) return;
+    const d0 = Math.hypot(a.x - centre(i, j).x, a.y - centre(i, j).y);
+    for (let h = 0; h < 4; h++) {
+      const s = (j * nx + i) * 4 + h;
+      if (d0 < dist[s]!) {
+        dist[s] = d0;
+        origin[s] = idx;
+        push(d0, s);
+      }
+    }
+  });
+  const TURN = 3 * cs;
+  let goal = -1;
+  while (heap.length) {
+    const [d, s] = pop();
+    if (d > dist[s]!) continue;
+    const h = s & 3, cell = s >> 2, i = cell % nx, j = (cell / nx) | 0;
+    // Heading straight out onto the outermost row or column of that wall ends the search.
+    if (
+      (h === 0 && i === 0) || (h === 1 && i === nx - 1) || (h === 2 && j === 0) || (h === 3 && j === ny - 1)
+    ) {
+      goal = s;
+      break;
+    }
+    for (let g = 0; g < 4; g++) {
+      const ni = i + DIRS[g]![0], nj = j + DIRS[g]![1];
+      if (!isOpen(ni, nj)) continue;
+      const ns = (nj * nx + ni) * 4 + g;
+      const nd = d + cs + (g === h ? 0 : TURN);
+      if (nd < dist[ns]!) {
+        dist[ns] = nd;
+        prev[ns] = s;
+        origin[ns] = origin[s]!;
+        push(nd, ns);
+      }
+    }
+  }
+  if (goal < 0) return null;
+  const side = SIDE_OF[goal & 3]!;
+  const cells: Vec2[] = [];
+  for (let s = goal; s >= 0; s = prev[s]!) {
+    const cell = s >> 2;
+    cells.push(centre(cell % nx, (cell / nx) | 0));
+  }
+  cells.reverse();
+  const index = origin[goal]!;
+  // Keep only the corners.
+  const pts: Vec2[] = [ring[index]!, cells[0]!];
+  for (let k = 1; k < cells.length; k++) {
+    const a = pts[pts.length - 1]!, b = cells[k]!;
+    const before = pts[pts.length - 2]!;
+    const same = Math.abs((a.x - before.x) * (b.y - a.y) - (a.y - before.y) * (b.x - a.x)) < 1e-9;
+    if (same && k > 0 && (a.x - before.x) * (b.x - a.x) + (a.y - before.y) * (b.y - a.y) > 0) pts[pts.length - 1] = b;
+    else pts.push(b);
+  }
+  const ok = (path: Vec2[]): boolean => {
+    for (let k = 1; k < path.length; k++) if (!clearSeg(path[k - 1]!, path[k]!)) return false;
+    return true;
+  };
+  const finish = (corners: Vec2[]): Vec2[] => {
+    const end = onWindow(corners[corners.length - 1]!, side, win);
+    // A last corner already heading for the wall is no corner: the wall is simply where the leg stops.
+    const prev = corners[corners.length - 2];
+    const straight = prev && (side === "left" || side === "right" ? Math.abs(prev.y - end.y) < 1e-9 : Math.abs(prev.x - end.x) < 1e-9);
+    return straight ? [...corners.slice(0, -1), end] : [...corners, end];
+  };
+  // The hop from the anchor to its cell centre is a sliver of a leg, and turning straight after it leaves a
+  // tab whose first step is a fraction of its own width: its sides fold over there and the cut will not close.
+  // So the first leg is slid onto the anchor itself, which is at most half a cell away, when that stays clear.
+  if (pts.length >= 3) {
+    const a = pts[0]!, c0 = pts[1]!, c1 = pts[2]!;
+    const horizontal = Math.abs(c1.y - c0.y) < 1e-9;
+    const moved: Vec2[] = [
+      a,
+      horizontal ? { x: c1.x, y: a.y } : { x: a.x, y: c1.y },
+      ...pts.slice(3),
+    ];
+    // The corner that moved also drags the next leg's start along it; that leg is perpendicular, so only its
+    // far end is fixed.
+    const path = finish(moved);
+    if (ok(path) && Math.hypot(path[1]!.x - a.x, path[1]!.y - a.y) > tapeW * 0.5) return { index, side, path };
+  }
+  const path = finish(pts);
+  return ok(path) ? { index, side, path } : null;
+}
+
+/** Distance from `p` to the nearest edge of the closed polygon `ring`. */
+function ptRingDist(p: Vec2, ring: Vec2[]): number {
+  let m = Infinity;
+  for (let i = 0; i < ring.length; i++) {
+    const d = ptSegDist(p, ring[i]!, ring[(i + 1) % ring.length]!);
+    if (d < m) m = d;
+  }
+  return m;
 }
 
 /** Whether the tab segment a-q comes within a tape width of any edge of `ring`. */
@@ -1812,6 +2041,11 @@ function ptSegDist(p: Vec2, a: Vec2, b: Vec2): number {
 /** Unit vector across a tab running to `side` — the direction its width is measured in. */
 function perpTo(side: Side): Vec2 {
   return side === "left" || side === "right" ? { x: 0, y: 1 } : { x: 1, y: 0 };
+}
+
+/** Unit vector pointing from inside the window toward the given wall. */
+function outTo(side: Side): Vec2 {
+  return side === "left" ? { x: -1, y: 0 } : side === "right" ? { x: 1, y: 0 } : side === "top" ? { x: 0, y: -1 } : { x: 0, y: 1 };
 }
 
 /** `p` projected onto the given window edge. */

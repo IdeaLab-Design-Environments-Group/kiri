@@ -299,17 +299,17 @@ describe("model/copper-svg-export", () => {
     it("tabs at the tape's own width, clear of the other net, using whichever wall is free", { timeout: 30000 }, () => {
       // A tab across another trace would be stuck down on top of it, shorting the two, and snipping it would cut
       // the trace underneath. Same-net runs are not obstacles: they meet at junctions by design.
-      // Zero on akde-hex and house. The others keep some, counted and not hidden: church 2, puffin 7 (routing
-      // around mountain folds sends runs down narrow corridors, leaving few clear lines out to a wall), and the
-      // akde pyramids 1 each. These are the values measured today; the real fix is better tab selection, and
-      // the budgets are pinned so the counts cannot spread in the meantime.
+      // Zero everywhere but puffin, which keeps 7, counted and not hidden: routing around mountain folds sends
+      // runs down narrow corridors, and several of its runs are so short that every point on them sits under a
+      // component or within a tape width of the other net. These are the values measured today; they are pinned
+      // so the counts cannot spread.
       const budget: Record<string, number> = {
         "akde-hex.fkld": 0,
         "house.fkld": 0,
-        "church.fkld": 2,
+        "church.fkld": 0,
         "puffin.fkld": 7,
-        "akde-square-pyramid.fkld": 1,
-        "akde-decagon-pyramid.fkld": 1,
+        "akde-square-pyramid.fkld": 0,
+        "akde-decagon-pyramid.fkld": 0,
       };
       for (const [name, want] of Object.entries(budget)) {
         const { fold, traces, tapeW } = planned(name, 12);
@@ -357,13 +357,12 @@ describe("model/copper-svg-export", () => {
 
     it("does not run a tab over a pad or a terminal", { timeout: 30000 }, () => {
       // Keeping the *anchor* off a component was not enough: the tab still crossed parts on its way to the
-      // wall, where it is stuck down on top of one and cuts into it when snipped. Zero on house, akde-hex and
-      // the decagon pyramid. Church (2) and puffin (5) have runs with no clear line out at all -- those fall
-      // back to the shortest tab and are counted, not hidden. These are the values measured today; the real
-      // fix is better tab selection, and the budgets stop the counts spreading until then.
+      // wall, where it is stuck down on top of one and cuts into it when snipped. Zero everywhere but puffin (5),
+      // which has runs with no clear line out at all -- those fall back to the shortest tab and are counted, not
+      // hidden. These are the values measured today; the budgets stop the counts spreading.
       const budget: Record<string, number> = {
         "house.fkld": 0,
-        "church.fkld": 2,
+        "church.fkld": 0,
         "akde-hex.fkld": 0,
         "akde-decagon-pyramid.fkld": 0,
         "akde-square-pyramid.fkld": 0,
