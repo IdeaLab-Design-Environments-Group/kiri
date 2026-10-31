@@ -72,6 +72,9 @@ interface ViewerApi {
   canvas: StubEl;
   status: StubEl;
   sample: StubEl;
+  sidebar: StubEl;
+  win: Record<string, unknown>;
+  messageListeners: ((e: unknown) => void)[];
   toggles: { name: string; press: (on: boolean) => void }[];
 }
 
@@ -94,9 +97,11 @@ function loadViewer(): ViewerApi {
     querySelectorAll: () => [] as StubEl[],
     body: new StubEl("body"),
   };
+  const messageListeners: ((e: unknown) => void)[] = [];
   const window: Record<string, unknown> = {
-    addEventListener() {}, removeEventListener() {},
-    location: { search: "" }, devicePixelRatio: 2,
+    addEventListener(type: string, fn: (e: unknown) => void) { if (type === "message") messageListeners.push(fn); },
+    removeEventListener() {},
+    location: { search: "", origin: "http://localhost:4173" }, devicePixelRatio: 2,
     requestAnimationFrame: () => 0,
   };
   window.parent = window;   // "not in an iframe", so the postMessage handshake stays out of the way
@@ -119,6 +124,9 @@ function loadViewer(): ViewerApi {
     canvas: document.getElementById("canvas"),
     status: document.getElementById("status-text"),
     sample: document.getElementById("load-sample"),
+    sidebar: document.getElementById("sidebar"),
+    win: window,
+    messageListeners,
     toggles,
   };
 }
@@ -234,5 +242,44 @@ describe("view/fkld-viewer", () => {
       expect(rule, `svg .${cls} rule not found`).not.toBe("");
       expect(rule).not.toMatch(/font-size/);
     }
+  });
+
+  it("HTML-escapes every file-supplied string the sidebar prints", () => {
+    const viewer = loadViewer();
+    viewer.loadObject({
+      vertices_coords: [[0, 0], [1, 0], [0, 1]],
+      faces_vertices: [[0, 1, 2]],
+      edges_vertices: [[0, 1], [1, 2], [2, 0]],
+      edges_assignment: ["<img src=x onerror=assign>", "B", "B"],
+      frame_unit: "<img src=x onerror=unit>",
+      frame_attributes: ["<img src=x onerror=attr>"],
+      "fkld:meta_fkldSpec": "<img src=x onerror=spec>",
+      "fkld:edges_cutType": ["<img src=x onerror=cut>", null, null],
+      "fkld:vertices_curvatureClass": ["<img src=x onerror=curv>", null, null],
+      "fkld:faces_materialId": ["<img src=x onerror=mat>"],
+    }, "evil.fkld");
+    const html = viewer.sidebar.innerHTML;
+    expect(html).not.toMatch(/<img/);
+    for (const tag of ["assign", "unit", "attr", "spec", "cut", "curv", "mat"]) {
+      expect(html, tag).toContain(`&lt;img src=x onerror=${tag}&gt;`);
+    }
+  });
+
+  it("only accepts kirigamizer:load from its parent window on the same origin", () => {
+    const viewer = loadViewer();
+    const parent = { postMessage() {} };
+    viewer.win.parent = parent;
+    expect(viewer.messageListeners).toHaveLength(1);
+    const send = (source: unknown, origin: string) => viewer.messageListeners[0]!({
+      source, origin, data: { type: "kirigamizer:load", fkld: { vertices_coords: [[0, 0]] }, name: "m.fkld" },
+    });
+    const status = () => viewer.status.textContent;
+
+    send({}, "http://localhost:4173");
+    send(parent, "https://evil.example");
+    expect(status()).not.toMatch(/m\.fkld/);
+
+    send(parent, "http://localhost:4173");
+    expect(status()).toMatch(/m\.fkld/);
   });
 });

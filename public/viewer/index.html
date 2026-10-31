@@ -812,7 +812,7 @@
     // what the viewer shows — regardless of how it was loaded (host postMessage, file picker,
     // example dropdown, or drag-and-drop).
     if (window.parent && window.parent !== window) {
-      window.parent.postMessage({ type: 'kirigamizer:viewer-loaded', fkld: file, name: sourceName }, '*');
+      window.parent.postMessage({ type: 'kirigamizer:viewer-loaded', fkld: file, name: sourceName }, window.location.origin);
     }
   }
   function loadJsonString(text, name) {
@@ -871,6 +871,8 @@
   // model with postMessage: { type:'kirigamizer:load', fkld, name } where
   // `fkld` is either a JSON string or a parsed FKLD/FOLD object.
   window.addEventListener('message', (e) => {
+    // Only the embedding app (same origin) may hand us a model.
+    if (e.source !== window.parent || e.origin !== window.location.origin) return;
     const msg = e.data;
     if (!msg || msg.type !== 'kirigamizer:load') return;
     const name = msg.name || 'kirigamizer-model';
@@ -879,7 +881,7 @@
   });
   // Announce readiness so the host can flush any queued model.
   if (window.parent && window.parent !== window) {
-    window.parent.postMessage({ type: 'kirigamizer:viewer-ready' }, '*');
+    window.parent.postMessage({ type: 'kirigamizer:viewer-ready' }, window.location.origin);
   }
 
   document.body.addEventListener('dragover', (e) => e.preventDefault());
