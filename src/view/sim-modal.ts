@@ -70,7 +70,7 @@ export class SimModal {
     this.overlay.innerHTML = `
       <div class="sim-modal" role="dialog" aria-modal="true" aria-label="3D fold simulation">
         <header class="sim-modal-header">
-          <span class="sim-modal-title">Simulation &amp; routing — the copper on the folded model</span>
+          <span class="sim-modal-title">3D fold simulation — the copper on the folded model</span>
           <button type="button" class="sim-modal-close" aria-label="close">×</button>
         </header>
         <div class="sim-modal-body">
