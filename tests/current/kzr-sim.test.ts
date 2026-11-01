@@ -53,6 +53,22 @@ describe("kirigamizer app sim path (src/sim via scene.buildScene)", () => {
     expect(maxTensileStrain(model)).toBeLessThan(0.12);
   });
 
+  // akde-hex and akde-decagon-pyramid are REFERENCE-ONLY (issue #14). Unlike the pyramid, their
+  // declared foldedForm goal is not an isometry of their own flat net, so no fold can reach it and
+  // the tensile bound above cannot hold for them: measured goal strain is mean 0.054 / max 0.336 for
+  // hex and mean 0.195 / max 1.183 for decagon. The goal is the conditioned target emitted by the
+  // kirigamize pipeline (src/pipeline/emit.ts), not something src/sim generates, so the fix belongs
+  // in the AKDE generator for N=6 and N=10. Until then this pins the known gap: when a regenerated
+  // file passes mean < 0.05 and max < 0.12 these assertions fail, and the preset should move to
+  // REACHABLE in fold-realism.test.ts and get the same checks as the pyramid.
+  it("hex and decagon goal poses are not isometric (reference-only, known gap)", () => {
+    for (const name of ["akde-hex.fkld", "akde-decagon-pyramid.fkld"]) {
+      const { model } = buildScene(loadExample(name))!.scene;
+      model.position.set(model.goal);
+      expect(maxTensileStrain(model)).toBeGreaterThan(0.12);
+    }
+  });
+
   it("folds a generic FKLD crease pattern (free path) without blowing up", () => {
     const fold = loadExample("fold-upstream/diagonal-cp.fold");
     const built = buildScene(fold);
