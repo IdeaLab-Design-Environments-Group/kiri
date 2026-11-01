@@ -1,32 +1,36 @@
-/* First-run welcome card, drawn over the viewer column. */
+/* First-run welcome banner: a slim row above the viewer iframe, in flow so it covers nothing. */
 .viewer-column {
-  position: relative;
-}
-.welcome-card {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  z-index: 5;
-  width: 260px;
-  padding: 12px 14px;
-  border-radius: 8px;
-  background: #fff;
-  color: #222;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+}
+.viewer-column .viewer-frame {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+}
+.welcome-card {
+  position: relative;
+  flex: 0 0 auto;
+  padding: 6px 34px 6px 12px;
+  background: #fff;
+  color: #222;
+  border-bottom: 1px solid #d0d5dd;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
 }
 .welcome-card[hidden] {
   display: none;
 }
 .welcome-title {
   margin: 0;
-  font-size: 15px;
+  font-size: 14px;
 }
 .welcome-text {
-  margin: 0 0 4px;
-  font-size: 13px;
+  margin: 0;
+  font-size: 12px;
+  flex: 1 1 200px;
 }
 .welcome-close {
   position: absolute;
@@ -38,15 +42,19 @@
   cursor: pointer;
 }
 .welcome-action {
-  padding: 6px 10px;
+  padding: 4px 10px;
   border: 1px solid #888;
   border-radius: 6px;
   background: #f4f4f4;
+  font-size: 12px;
   cursor: pointer;
-  text-align: left;
 }
 .welcome-primary {
   background: #2a6df4;
   border-color: #2a6df4;
   color: #fff;
+}
+.welcome-card button:focus-visible {
+  outline: 2px solid #2a6df4;
+  outline-offset: 2px;
 }
