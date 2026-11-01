@@ -1,0 +1,52 @@
+/* First-run welcome card, drawn over the viewer column. */
+.viewer-column {
+  position: relative;
+}
+.welcome-card {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 5;
+  width: 260px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: #fff;
+  color: #222;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.welcome-card[hidden] {
+  display: none;
+}
+.welcome-title {
+  margin: 0;
+  font-size: 15px;
+}
+.welcome-text {
+  margin: 0 0 4px;
+  font-size: 13px;
+}
+.welcome-close {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  border: 0;
+  background: none;
+  font-size: 18px;
+  cursor: pointer;
+}
+.welcome-action {
+  padding: 6px 10px;
+  border: 1px solid #888;
+  border-radius: 6px;
+  background: #f4f4f4;
+  cursor: pointer;
+  text-align: left;
+}
+.welcome-primary {
+  background: #2a6df4;
+  border-color: #2a6df4;
+  color: #fff;
+}

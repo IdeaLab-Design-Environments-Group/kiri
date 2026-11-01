@@ -265,7 +265,7 @@ export class AppController {
       this.apply(model);
       if (model.kind === "fold") this.viewer.show(model.object, model.name);
     } catch {
-      this.store.setStatus(`Could not load ${name} (serve over http to read the examples).`, "bad");
+      this.store.setStatus(`Could not load ${name}: the examples need the app served over http. Run "npm run dev" and open the printed address, or drop a model file on the left.`, "bad");
     }
   }
 
@@ -277,7 +277,7 @@ export class AppController {
       if (announce) this.store.setStatus("Loaded bundled sample into the viewer.", "ok");
     } catch {
       if (announce)
-        this.store.setStatus("Sample fetch failed (serve over http). The viewer shows it by default.", "");
+        this.store.setStatus("Could not load the house example: serve the app over http (run \"npm run dev\" and open the printed address), or drop a model file on the left.", "");
     }
   }
 

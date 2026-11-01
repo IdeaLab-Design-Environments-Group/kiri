@@ -11,6 +11,8 @@
  * This file owns no behavior beyond construction and mounting.
  */
 import "./styles.css";
+import "./styles-welcome.css";
+import { installFirstRun } from "./view/first-run.js";
 import { AppStore } from "./model/app-store.js";
 import { ConvertPanel } from "./view/convert-panel.js";
 import { ViewerFrame } from "./view/viewer-frame.js";
@@ -73,3 +75,4 @@ examples.onPick((slug) => void controller.loadExample(slug));
 // Default state: load the bundled FKLD example so the panels, viewer, and 3D
 // Sim are all live on first paint (no-op under file:// where fetch is blocked).
 void controller.loadSample(false);
+installFirstRun(viewer.element, convert.element, controller); // first-run welcome card
