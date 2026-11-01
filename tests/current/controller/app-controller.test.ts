@@ -385,7 +385,7 @@ describe("controller/app-controller", () => {
     await controller.loadSample(true);
 
     expect(convert.statusCalls.at(-1)).toEqual({
-      msg: "Sample fetch failed (serve over http). The viewer shows it by default.",
+      msg: "Could not load the house example: serve the app over http (run \"npm run dev\" and open the printed address), or drop a model file on the left.",
       kind: "",
     });
   });

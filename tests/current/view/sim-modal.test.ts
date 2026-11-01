@@ -55,7 +55,7 @@ describe("view/sim-modal", () => {
     modal.setEnabled(true);
 
     expect(host.children).toHaveLength(1);
-    expect(host.children[0]?.textContent).toBe("simulation & routing");
+    expect(host.children[0]?.textContent).toBe("Simulate");
     expect(host.children[0]?.disabled).toBe(false);
   });
 
