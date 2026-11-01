@@ -336,8 +336,8 @@ export function cutAlongEdges(
     d2: Vec2,
     frontier: [number, number][],
     ventEdges: [number, number][],
-  ): void => {
-    if (flatLive === null) return;
+  ): boolean => {
+    if (flatLive === null) return true;
     const flat = flatLive;
     const orient = Math.sign(cross2(d1.x, d1.y, d2.x, d2.y)) || 1;
     const sideOf = (ray: Vec2, p: Vec2): number => {
@@ -395,7 +395,7 @@ export function cutAlongEdges(
       queue.push([a, b]);
     };
 
-    const guardMax = Math.max(64, faces.length * 8);
+    const guardMax = Math.max(64, mesh.faces.length * 8);
     let guard = 0;
     while (queue.length > 0 && guard++ < guardMax) {
       checkReliefBudget();
@@ -420,6 +420,14 @@ export function cutAlongEdges(
           carved = true;
           continue;
         }
+        // A zero-area (collinear) live face holds no material to chord: its ray
+        // crossing lands back on a vertex, so chording would re-create the same
+        // sliver (+1 vertex) and ping-pong forever with its far neighbour.
+        const ex = flat[y].x - flat[x].x;
+        const ey = flat[y].y - flat[x].y;
+        const fx = flat[t].x - flat[x].x;
+        const fy = flat[t].y - flat[x].y;
+        if (Math.abs(cross2(ex, ey, fx, fy)) <= 1e-9 * Math.hypot(ex, ey) * Math.hypot(fx, fy)) continue;
         // Exactly one ray separates t from the cone; chord it off.
         const ray = s1 < 0 ? d1 : d2;
         const rx = crossingOn(ray, x, t);
@@ -457,6 +465,7 @@ export function cutAlongEdges(
       }
       if (!carved) continue; // sheet boundary (or already carved)
     }
+    return queue.length === 0;
   };
 
   for (const v of ventVerts) {
@@ -592,10 +601,12 @@ export function cutAlongEdges(
         const apex = flatLive[vc];
         const d1 = { x: flatLive[firstLead].x - apex.x, y: flatLive[firstLead].y - apex.y };
         const d2 = { x: flatLive[coneEnd].x - apex.x, y: flatLive[coneEnd].y - apex.y };
-        carveCone(apex, d1, d2, frontier, ventEdges);
+        ok = carveCone(apex, d1, d2, frontier, ventEdges);
       }
 
-      const fits = ok && remaining <= 1e-6 && liveComponents() === baseComponents;
+      // A carve that cuts through an earlier vent's vertex would leave it short of 2π.
+      const intact = vents.every((vt) => (wedgesOf.get(vt.sourceVertex) ?? []).reduce((a, w) => a + liveAngleAt(w.copy), 0) > TAU - 1e-6);
+      const fits = ok && remaining <= 1e-6 && intact && liveComponents() === baseComponents;
       return { fits, ventEdges };
     };
 
