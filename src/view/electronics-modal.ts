@@ -131,7 +131,7 @@ import {
   netTally,
   netlistTrouble,
   partsTally,
-  statusLine,
+  statusLine, syncRouteHint,
 } from "./electronics-presenters.js";
 // Re-exported so the presenters can be reached through the modal that renders them, the same way the
 // palette's own catalog is — a caller that has the modal should not need to know which file the rows
@@ -2997,7 +2997,7 @@ export class ElectronicsModal {
   private renderStatus(): void {
     const selPart = this.partSelection();
     const sel = this.selected;
-    this.routeBtn?.classList.toggle("is-stale", this.stale);
+    syncRouteHint(this.routeBtn, this.circuit.leds.length, this.stale);
     this.statusEl.textContent = statusLine({
       circuit: this.circuit,
       routed: this.routed,
