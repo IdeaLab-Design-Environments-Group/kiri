@@ -34,6 +34,8 @@ export class ViewerFrame {
     this.element.append(this.iframe);
 
     window.addEventListener("message", (e: MessageEvent) => {
+      // Accept only our own viewer iframe, served from the same origin.
+      if (e.source !== this.iframe.contentWindow || e.origin !== window.location.origin) return;
       const msg = e.data;
       if (!msg) return;
       if (msg.type === "kirigamizer:viewer-ready") {
@@ -67,6 +69,6 @@ export class ViewerFrame {
   }
 
   private post(payload: LoadPayload): void {
-    this.iframe.contentWindow?.postMessage(payload, "*");
+    this.iframe.contentWindow?.postMessage(payload, window.location.origin);
   }
 }
