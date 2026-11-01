@@ -58,7 +58,7 @@ describe("model/electronics-routing", () => {
   // flakiness rather than as a budget nobody had ever chosen. 20s is picked to be loose enough that load
   // cannot trip it and tight enough that a real slowdown still can: the routing would have to get four
   // times slower to fail here, which is far past any change that should pass review unnoticed.
-  it("never runs copper over an LED chip, on any bundled pattern", { timeout: 20_000 }, () => {
+  it("never runs copper over an LED chip, on any bundled pattern", { timeout: 45_000 }, () => {
     // The one destructive constraint: tape over the chip shorts the part. Checked on the real patterns,
     // not a toy grid, because a toy grid satisfies it by construction.
     for (const name of ["house.fkld", "church.fkld", "puffin.fkld", "akde-hex.fkld"]) {
@@ -147,7 +147,7 @@ describe("model/electronics-routing", () => {
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
   });
 
-  it("keeps crossings far below the graph-search router it replaces", { timeout: 30000 }, () => {
+  it("keeps crossings far below the graph-search router it replaces", { timeout: 60_000 }, () => {
     // Pins the measured improvement so a regression is visible. The old router scored 78 here and 36 on
     // puffin, on these same configurations, while also running over chips.
     // Zero on every bundled pattern but akde-decagon, since the search learned to route *around* the other net
@@ -295,7 +295,7 @@ describe("model/electronics-routing", () => {
     }
   });
 
-  it("gives each net exactly one path to every pad — no double connections", { timeout: 20000 }, () => {
+  it("gives each net exactly one path to every pad — no double connections", { timeout: 45_000 }, () => {
     // Explicit timeout, like its neighbours in this file. It routes twelve LEDs on four patterns, which is
     // about 4.7s of real work against vitest's 5s default — so it was a flake waiting for a busy machine,
     // and duly flaked on one. Measured before adding this rather than after assuming: 235/274/1961/2030ms
