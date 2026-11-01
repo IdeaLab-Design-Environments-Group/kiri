@@ -7,7 +7,7 @@ import type { SimView } from "./sim-view.js";
 export type SimSceneProvider = (material?: SimMaterial) => { scene: FoldScene; title: string } | null;
 
 /**
- * "Simulation & Routing" trigger + modal hosting the Three.js fold simulation, with the planned copper drawn
+ * "Simulate" trigger + modal hosting the Three.js fold simulation, with the planned copper drawn
  * on the folded model. The copper is *placed* in the Electronics modal; this is where it is seen in 3D. Opening
  * builds the scene from the current model and starts the CPU solver; the
  * fold slider scrubs `foldPercent` 0→1; "Reset fold" rebuilds from the
@@ -50,7 +50,7 @@ export class SimModal {
     this.trigger = document.createElement("button");
     this.trigger.type = "button";
     this.trigger.className = "sim-trigger";
-    this.trigger.textContent = "simulation & routing";
+    this.trigger.textContent = "Simulate";
     this.trigger.disabled = true;
     this.trigger.addEventListener("click", () => {
       this.open().catch((err) => {
