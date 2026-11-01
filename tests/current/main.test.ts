@@ -19,6 +19,8 @@ const headerRoot = {
 };
 
 vi.mock("../../src/styles.css", () => ({}));
+vi.mock("../../src/styles-welcome.css", () => ({}));
+vi.mock("../../src/view/first-run.js", () => ({ installFirstRun: vi.fn() }));
 
 vi.mock("../../src/model/app-store.js", () => ({
   AppStore: class AppStore {
