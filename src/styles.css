@@ -11,7 +11,7 @@
   --bg: #eef0f3;
   --card: #fff;
   --border: #e4e7ec; /* decorative dividers and card edges */
-  --border-control: #8792a5; /* input and button edges, 3:1 on white */
+  --border-control: #7d889c; /* input and button edges, 3:1 on white, --surface-soft and --bg */
   --ink: #1f2328;
   --muted: #596275;
   --accent: #1f6feb;
@@ -145,7 +145,7 @@ body {
   line-height: 1;
   color: var(--muted);
   background: var(--card);
-  border: 1px solid var(--border-control, #8792a5);
+  border: 1px solid var(--border-control, #7d889c);
   border-radius: 50%;
   box-shadow: var(--shadow);
   cursor: pointer;
@@ -303,7 +303,7 @@ body {
   font: inherit;
   font-weight: 500;
   padding: 0.45rem 0.85rem;
-  border: 1px solid var(--border-control, #8792a5);
+  border: 1px solid var(--border-control, #7d889c);
   background: var(--card);
   color: #344054;
   border-radius: var(--radius-sm);
@@ -503,7 +503,7 @@ body {
   font: inherit;
   font-weight: 500;
   padding: 0.45rem 0.9rem;
-  border: 1px solid var(--border-control, #8792a5);
+  border: 1px solid var(--border-control, #7d889c);
   background: var(--card);
   color: #344054;
   border-radius: var(--radius-sm);
@@ -791,7 +791,7 @@ body.is-electronics .app-legend {
   font: inherit;
   font-size: 0.85rem;
   padding: 0.28rem 0.7rem;
-  border: 1px solid var(--border-control, #8792a5);
+  border: 1px solid var(--border-control, #7d889c);
   border-radius: var(--radius-sm, 8px);
   background: #fff;
   color: #344054;
@@ -865,7 +865,7 @@ body.is-electronics .app-legend {
    rather than as separate things that happen to be adjacent. */
 .el-seg {
   display: inline-flex;
-  border: 1px solid var(--border-control, #8792a5);
+  border: 1px solid var(--border-control, #7d889c);
   border-radius: var(--radius-sm, 8px);
   overflow: hidden;
   background: #fff;
@@ -894,7 +894,7 @@ body.is-electronics .app-legend {
   font: inherit;
   font-size: 0.82rem;
   padding: 0.28rem 0.55rem;
-  border: 1px solid var(--border-control, #8792a5);
+  border: 1px solid var(--border-control, #7d889c);
   border-radius: var(--radius-sm, 8px);
   background: #fff;
   color: #344054;
@@ -992,7 +992,7 @@ body.is-electronics .app-legend {
   font-size: 0.85rem;
   text-align: left;
   padding: 0.3rem 1.6rem 0.3rem 0.5rem;
-  border: 1px solid var(--border-control, #8792a5);
+  border: 1px solid var(--border-control, #7d889c);
   border-radius: 0.4rem;
   background: var(--surface, #fff);
   color: inherit;
@@ -1105,7 +1105,7 @@ body.is-electronics .app-legend {
   font: inherit;
   font-size: 0.85rem;
   padding: 0.3rem 0.5rem;
-  border: 1px solid var(--border-control, #8792a5);
+  border: 1px solid var(--border-control, #7d889c);
   border-radius: 0.4rem;
   background: var(--surface, #fff);
   color: inherit;
@@ -1373,7 +1373,7 @@ body.is-electronics .app-legend {
   width: 100%;
   box-sizing: border-box;
   padding: 0.25rem 0.4rem;
-  border: 1px solid var(--border-control, #8792a5);
+  border: 1px solid var(--border-control, #7d889c);
   border-radius: 0.4rem;
   background: #fff;
 }
@@ -1384,7 +1384,7 @@ body.is-electronics .app-legend {
   line-height: 1;
   margin-left: auto;
   padding: 0.05rem 0.3rem 0.15rem;
-  border: 1px solid var(--border-control, #8792a5);
+  border: 1px solid var(--border-control, #7d889c);
   border-radius: 0.3rem;
   background: #fff;
   color: #344054;
@@ -1786,7 +1786,7 @@ body.is-tutorials .app-legend {
   font-size: 0.85rem;
   padding: 0.28rem 0.6rem;
   min-width: 200px;
-  border: 1px solid var(--border-control, #8792a5);
+  border: 1px solid var(--border-control, #7d889c);
   border-radius: var(--radius-sm, 8px);
   background: #fff;
   color: #344054;
@@ -1907,7 +1907,7 @@ body.is-examples .app-legend {
   font-size: 0.85rem;
   padding: 0.28rem 0.6rem;
   min-width: 200px;
-  border: 1px solid var(--border-control, #8792a5);
+  border: 1px solid var(--border-control, #7d889c);
   border-radius: var(--radius-sm, 8px);
   background: #fff;
   color: #344054;
