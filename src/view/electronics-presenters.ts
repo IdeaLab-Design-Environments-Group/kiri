@@ -519,3 +519,26 @@ export function statusLine(input: StatusInput): string {
   }
   return msg;
 }
+
+/** Whether the canvas should say the copper is not there yet: parts exist, but the plan is stale or missing. */
+export function routeHintShown(ledCount: number, stale: boolean): boolean {
+  return ledCount > 0 && stale;
+}
+
+/**
+ * Keep the Route button and the strip on the canvas in step with the plan.
+ *
+ * Manual routing is the default, so a freshly placed LED has no copper under it and the status line was
+ * the only sign. The button takes `is-stale` (it pulses) and the `.el-route-hint` strip in the same
+ * editor body is shown for as long as the plan is out of date.
+ */
+export function syncRouteHint(
+  routeBtn: { classList: { toggle(name: string, force?: boolean): unknown }; closest?(sel: string): unknown } | null | undefined,
+  ledCount: number,
+  stale: boolean,
+): void {
+  routeBtn?.classList.toggle("is-stale", stale);
+  const body = routeBtn?.closest?.(".el-body") as { querySelector(sel: string): { hidden: boolean } | null } | null | undefined;
+  const strip = body?.querySelector(".el-route-hint");
+  if (strip) strip.hidden = !routeHintShown(ledCount, stale);
+}

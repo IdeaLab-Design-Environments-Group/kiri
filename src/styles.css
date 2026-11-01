@@ -931,6 +931,34 @@ body.is-electronics .app-legend {
   font-weight: 600;
 }
 .el-route.is-stale:hover { background: #fdf0d3; border-color: #d6ad5c; }
+/* Pulse for the same state, and the "Not routed yet" strip over the canvas while LEDs exist and the plan
+   is stale or missing. */
+.el-canvas-wrap { position: relative; }
+.el-route-hint {
+  position: absolute;
+  top: 0.75rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  padding: 0.3rem 0.8rem;
+  border: 1px solid #e3c07a;
+  border-radius: 999px;
+  background: #fff8e8;
+  color: #6b4500;
+  font-size: 0.8rem;
+  font-weight: 600;
+  pointer-events: none;
+  box-shadow: var(--shadow);
+}
+.el-route-hint[hidden] { display: none; }
+@keyframes el-route-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(227, 192, 122, 0.8); }
+  50% { box-shadow: 0 0 0 5px rgba(227, 192, 122, 0); }
+}
+.el-route.is-stale { animation: el-route-pulse 1.6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .el-route.is-stale { animation: none; }
+}
 /* Clear is the one control on the row that throws work away, so it says so quietly — after the shared
    hover rule above, which it has to override rather than be overridden by. */
 .el-clear { color: #a4404a; }
