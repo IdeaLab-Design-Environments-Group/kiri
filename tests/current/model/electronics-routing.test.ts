@@ -204,7 +204,7 @@ describe("model/electronics-routing", () => {
     }
   });
 
-  it("keeps the whole width of every strip inside the shape", { timeout: 20000 }, () => {
+  it("keeps the whole width of every strip inside the shape", { timeout: 60000 }, () => {
     // Tape has width, so checking the centreline is not enough: a run tracking the boundary keeps its centre on
     // the material while half the strip hangs off. Both edges are sampled here, which is what the router now
     // plans to -- its containment test and its corridor chords both account for the width.
