@@ -6,4 +6,9 @@ describe("index.html", () => {
     const html = readFileSync("index.html", "utf8");
     expect(html).toMatch(/<link rel="icon" href="data:image\/svg\+xml,/);
   });
+
+  it("keeps the footer credit for the reused FKLD viewer", () => {
+    const html = readFileSync("index.html", "utf8");
+    expect(html).toContain("viewer reused from <code>FKLD/examples/viewer</code>");
+  });
 });
