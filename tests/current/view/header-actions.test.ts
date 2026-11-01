@@ -38,4 +38,17 @@ describe("view/header-actions", () => {
     expect(onKirigamize).toHaveBeenCalledTimes(1);
     expect(children[1]?.disabled).toBe(false);
   });
+
+  it("refreshes the Cut & fold tooltip with its enabled and busy state", () => {
+    installDom();
+    const header = new HeaderActions();
+    header.appendActionButtons();
+    const btn = Array.from(header.element.children)[1] as HTMLButtonElement;
+    header.setKirigamizeEnabled(true);
+    expect(btn.title).toBe("Turn the loaded mesh into a cut-and-fold pattern.");
+    header.setKirigamizeEnabled(false, true);
+    expect(btn.title).toContain("Working");
+    header.setKirigamizeEnabled(false);
+    expect(btn.title).toContain("Needs a mesh");
+  });
 });

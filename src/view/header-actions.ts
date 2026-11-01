@@ -8,6 +8,7 @@
  * carried the same action twice. The button now lives in the viewer, where that dropdown was.
  */
 import { el } from "./dom.js";
+import { applyHeaderCopy } from "./header-copy.js";
 
 export class HeaderActions {
   readonly element: HTMLElement;
@@ -43,7 +44,9 @@ export class HeaderActions {
     this.kirigamizeBtn.addEventListener("click", () => handler());
   }
 
-  setKirigamizeEnabled(enabled: boolean): void {
+  setKirigamizeEnabled(enabled: boolean, busy = false): void {
     this.kirigamizeBtn.disabled = !enabled;
+    this.kirigamizeBtn.setAttribute("aria-busy", String(busy));
+    applyHeaderCopy(this.element);
   }
 }

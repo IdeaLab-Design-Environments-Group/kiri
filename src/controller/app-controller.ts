@@ -203,7 +203,7 @@ export class AppController {
       return;
     }
     this.busy = true;
-    this.header.setKirigamizeEnabled(false);
+    this.header.setKirigamizeEnabled(false, true);
     this.store.setStatus(`Kirigamizing ${m.name}… (plan cuts → unfold → emit → verify)`, "");
     try {
       // The pipeline is synchronous: let the status line and the disabled button paint first.
