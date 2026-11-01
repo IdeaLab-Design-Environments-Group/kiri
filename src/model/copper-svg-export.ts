@@ -1726,7 +1726,6 @@ function pickTab(
       : { x: a.x + across.x * c.step * tapeW, y: a.y + across.y * c.step * tapeW };
     const end = onWindow(bend ?? a, c.side, win);
     const path = bend ? [a, bend, end] : [a, end];
-    if (!fallback) fallback = { index: c.index, side: c.side, path, over: false };
     // A tab may not run *over* a pad or a terminal on its way out, not merely start off one. Keeping the anchor
     // clear was not enough: the run itself passed across components on the way to the wall, where it would be
     // stuck down on top of the part and cut into it when snipped.
@@ -1736,10 +1735,10 @@ function pickTab(
       }
       return false;
     });
+    // The first candidate is the shortest, and is what is used if nothing at all is clear: a tab over a part
+    // still beats a trace left loose in the window. Whether it runs over a part is recorded so it is reported.
+    if (!fallback) fallback = { index: c.index, side: c.side, path, over: overComponent };
     if (overComponent) {
-      // Remember the shortest one anyway: if nothing at all is clear, a tab over a part still beats a trace
-      // left loose in the window.
-      if (!fallback) fallback = { index: c.index, side: c.side, path, over: true };
       continue;
     }
     const blocked = others.some((o) => {
