@@ -40,6 +40,10 @@ export function applyHeaderCopy(header: HTMLElement): void {
     const copy = HEADER_COPY.find((c) => key(c.label) === key(button.textContent ?? ""));
     if (!copy) continue;
     button.textContent = copy.label;
+    if (button.getAttribute("aria-busy") === "true") {
+      button.title = "Working… the button comes back when the pattern is ready.";
+      continue;
+    }
     button.title = (button as HTMLButtonElement).disabled && copy.needs ? `${copy.title} ${copy.needs}` : copy.title;
   }
 }
