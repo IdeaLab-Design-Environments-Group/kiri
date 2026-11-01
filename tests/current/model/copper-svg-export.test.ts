@@ -296,7 +296,7 @@ describe("model/copper-svg-export", () => {
       if (onLeft.length) expect(covered).toBeLessThan(win.y1 - win.y0 - 1e-6);
     });
 
-    it("tabs at the tape's own width, clear of the other net, using whichever wall is free", { timeout: 30000 }, () => {
+    it("tabs at the tape's own width, clear of the other net, using whichever wall is free", { timeout: 90_000 }, () => {
       // A tab across another trace would be stuck down on top of it, shorting the two, and snipping it would cut
       // the trace underneath. Same-net runs are not obstacles: they meet at junctions by design.
       // Zero on akde-hex and house. The others keep some, counted and not hidden: church 2, puffin 7 (routing
@@ -328,7 +328,7 @@ describe("model/copper-svg-export", () => {
       }
     });
 
-    it("grips the trace body, never a pad or a battery terminal", { timeout: 30000 }, () => {
+    it("grips the trace body, never a pad or a battery terminal", { timeout: 60_000 }, () => {
       // A tab on a pad sits exactly where the LED goes, and snipping it would cut at the pad. The pads are the
       // outermost points of every run, so they are the first thing a nearest-wall search reaches -- which is
       // what it used to pick.

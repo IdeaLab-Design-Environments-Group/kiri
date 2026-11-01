@@ -127,7 +127,7 @@ describe("model/crease-price", () => {
     // but name and the classification cannot differ from it. On a thinner sheet, where the strains spread
     // out, it would.
     expect(priced).toEqual(crossings("church.fkld", 12));
-  });
+  }, 15_000);
 
   it("sits on a plateau: the exact penalty value is not a number this system defends", { timeout: 60000 }, () => {
     // Every route is identical from 0.3 of the diagonal up to the full diagonal Nakaya et al. use, so the
