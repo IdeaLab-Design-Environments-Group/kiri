@@ -25,6 +25,9 @@ vi.mock("../../src/view/header-copy.js", () => ({ applyHeaderCopy: vi.fn() }));
 
 vi.mock("../../src/model/app-store.js", () => ({
   AppStore: class AppStore {
+    subscribe(listener: (s: unknown) => void) {
+      listener({});
+    }
     setStatus(msg: string, kind: string) {
       state.statuses.push({ msg, kind });
     }

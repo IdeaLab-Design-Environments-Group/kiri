@@ -103,6 +103,15 @@ export class MockElement {
     }
   }
 
+  prepend(...nodes: any[]): void {
+    for (const node of nodes) {
+      if (node instanceof MockElement) {
+        node.parent = this;
+        this.children.unshift(node);
+      }
+    }
+  }
+
   appendChild(node: MockElement): MockElement {
     this.append(node);
     return node;

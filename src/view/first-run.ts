@@ -1,5 +1,5 @@
 /**
- * **View** — the first-run welcome card: a small dismissible panel over the viewer with the three
+ * **View** — the first-run welcome card: a slim dismissible banner above the viewer (in flow, so it never covers a viewer control) with the three
  * ways in (open the house example, choose a model file, open the tutorials).
  *
  * It owns no loading logic. Each action calls something that already exists: the controller's
@@ -51,7 +51,7 @@ export function mountWelcomeCard(host: HTMLElement, actions: FirstRunActions): H
   const title = el("h2", "welcome-title");
   title.textContent = "Welcome to kiri";
   const text = el("p", "welcome-text");
-  text.textContent = "Turn a 3D model into a foldable kirigami sheet. Start here:";
+  text.textContent = "Turn a 3D model into a foldable kirigami sheet.";
 
   const dismiss = (): void => {
     remember();
@@ -77,7 +77,7 @@ export function mountWelcomeCard(host: HTMLElement, actions: FirstRunActions): H
     button("Choose a model file…", actions.chooseFile),
     button("Watch the tutorials", actions.openTutorials),
   );
-  host.append(card);
+  host.prepend(card); // above the iframe, in flow
   return card;
 }
 
