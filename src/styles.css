@@ -10,9 +10,10 @@
 :root {
   --bg: #eef0f3;
   --card: #fff;
-  --border: #e4e7ec;
+  --border: #e4e7ec; /* decorative dividers and card edges */
+  --border-control: #8792a5; /* input and button edges, 3:1 on white */
   --ink: #1f2328;
-  --muted: #667085;
+  --muted: #596275;
   --accent: #1f6feb;
   --accent-strong: #1741c4;
   --accent-soft: #eef3ff;
@@ -25,6 +26,11 @@
      something, a guide line is a long thin run over the panel's own grey, and at --border it read as a
      smudge rather than as the thing holding the rows together. */
   --tree-line: #c2c9d6;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 html,
@@ -139,7 +145,7 @@ body {
   line-height: 1;
   color: var(--muted);
   background: var(--card);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-control, #8792a5);
   border-radius: 50%;
   box-shadow: var(--shadow);
   cursor: pointer;
@@ -297,7 +303,7 @@ body {
   font: inherit;
   font-weight: 500;
   padding: 0.45rem 0.85rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-control, #8792a5);
   background: var(--card);
   color: #344054;
   border-radius: var(--radius-sm);
@@ -497,7 +503,7 @@ body {
   font: inherit;
   font-weight: 500;
   padding: 0.45rem 0.9rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-control, #8792a5);
   background: var(--card);
   color: #344054;
   border-radius: var(--radius-sm);
@@ -785,7 +791,7 @@ body.is-electronics .app-legend {
   font: inherit;
   font-size: 0.85rem;
   padding: 0.28rem 0.7rem;
-  border: 1px solid var(--border, #e4e7ec);
+  border: 1px solid var(--border-control, #8792a5);
   border-radius: var(--radius-sm, 8px);
   background: #fff;
   color: #344054;
@@ -859,7 +865,7 @@ body.is-electronics .app-legend {
    rather than as separate things that happen to be adjacent. */
 .el-seg {
   display: inline-flex;
-  border: 1px solid var(--border, #d7dbe4);
+  border: 1px solid var(--border-control, #8792a5);
   border-radius: var(--radius-sm, 8px);
   overflow: hidden;
   background: #fff;
@@ -888,7 +894,7 @@ body.is-electronics .app-legend {
   font: inherit;
   font-size: 0.82rem;
   padding: 0.28rem 0.55rem;
-  border: 1px solid var(--border, #e4e7ec);
+  border: 1px solid var(--border-control, #8792a5);
   border-radius: var(--radius-sm, 8px);
   background: #fff;
   color: #344054;
@@ -958,7 +964,7 @@ body.is-electronics .app-legend {
   font-size: 0.85rem;
   text-align: left;
   padding: 0.3rem 1.6rem 0.3rem 0.5rem;
-  border: 1px solid var(--border, #d7dbe4);
+  border: 1px solid var(--border-control, #8792a5);
   border-radius: 0.4rem;
   background: var(--surface, #fff);
   color: inherit;
@@ -1071,14 +1077,13 @@ body.is-electronics .app-legend {
   font: inherit;
   font-size: 0.85rem;
   padding: 0.3rem 0.5rem;
-  border: 1px solid var(--border, #d7dbe4);
+  border: 1px solid var(--border-control, #8792a5);
   border-radius: 0.4rem;
   background: var(--surface, #fff);
   color: inherit;
   width: 10.5rem;
 }
 .el-part-search:focus {
-  outline: none;
   border-color: var(--accent, #1f6feb);
 }
 /* The picker is one line: the two fields and the count beside them. It was a column while the count was a
@@ -1315,7 +1320,7 @@ body.is-electronics .app-legend {
   color: #344054;
 }
 .el-net-name:hover { border-color: var(--border, #d7dbe4); background: #fff; }
-.el-net-name:focus { outline: none; border-color: var(--accent, #1f6feb); background: #fff; }
+.el-net-name:focus { border-color: var(--accent, #1f6feb); background: #fff; }
 .el-net-count {
   font-size: 0.68rem;
   color: #475467;
@@ -1340,18 +1345,18 @@ body.is-electronics .app-legend {
   width: 100%;
   box-sizing: border-box;
   padding: 0.25rem 0.4rem;
-  border: 1px solid var(--border, #d7dbe4);
+  border: 1px solid var(--border-control, #8792a5);
   border-radius: 0.4rem;
   background: #fff;
 }
-.el-net-new:focus { outline: none; border-color: var(--accent, #1f6feb); }
+.el-net-new:focus { border-color: var(--accent, #1f6feb); }
 .el-net-add {
   font: inherit;
   font-size: 0.95rem;
   line-height: 1;
   margin-left: auto;
   padding: 0.05rem 0.3rem 0.15rem;
-  border: 1px solid var(--border, #d7dbe4);
+  border: 1px solid var(--border-control, #8792a5);
   border-radius: 0.3rem;
   background: #fff;
   color: #344054;
@@ -1489,7 +1494,6 @@ body.is-electronics .app-legend {
 }
 .el-pad:hover .el-pad-net { border-color: var(--border, #e4e7ec); background: #fff; }
 .el-pad-net:focus {
-  outline: none;
   border-color: var(--accent, #1f6feb);
   background: #fff;
 }
@@ -1754,13 +1758,12 @@ body.is-tutorials .app-legend {
   font-size: 0.85rem;
   padding: 0.28rem 0.6rem;
   min-width: 200px;
-  border: 1px solid var(--border, #e4e7ec);
+  border: 1px solid var(--border-control, #8792a5);
   border-radius: var(--radius-sm, 8px);
   background: #fff;
   color: #344054;
 }
 .tut-search:focus {
-  outline: none;
   border-color: var(--accent, #2563eb);
 }
 .tut-tally {
@@ -1876,13 +1879,12 @@ body.is-examples .app-legend {
   font-size: 0.85rem;
   padding: 0.28rem 0.6rem;
   min-width: 200px;
-  border: 1px solid var(--border, #e4e7ec);
+  border: 1px solid var(--border-control, #8792a5);
   border-radius: var(--radius-sm, 8px);
   background: #fff;
   color: #344054;
 }
 .ex-search:focus {
-  outline: none;
   border-color: var(--accent, #1f6feb);
   box-shadow: 0 0 0 3px var(--accent-soft, #eef3ff);
 }

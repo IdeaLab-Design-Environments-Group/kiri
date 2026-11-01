@@ -57,7 +57,7 @@ export class ExportModal {
           </div>
         </div>
         <footer class="sim-modal-footer">
-          <span class="sim-status"></span>
+          <span class="sim-status" role="status"></span>
           <button type="button" class="export-zip-btn">cut + score (zip)</button>
           <button type="button" class="export-combined-btn">single SVG</button>
           <label class="export-stl-height-label" title="printable sheet size — longest dimension of the flat pattern.">size
