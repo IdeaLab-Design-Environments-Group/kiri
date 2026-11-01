@@ -36,7 +36,7 @@ export class ExportModal {
     this.trigger = document.createElement("button");
     this.trigger.type = "button";
     this.trigger.className = "sim-trigger";
-    this.trigger.textContent = "export";
+    this.trigger.textContent = "Export";
     this.trigger.disabled = true;
     this.trigger.addEventListener("click", () => this.open());
 
@@ -154,7 +154,7 @@ export class ExportModal {
       this.previews.cut.innerHTML = this.previews.score.innerHTML = this.previews.both.innerHTML = "";
       this.statusEl.textContent = stlDefault
         ? "No cut pattern, but the 3D-printed tiles are exportable as STL."
-        : "No pattern to export — load or kirigamize a model first.";
+        : "No pattern to export — load a model and press Cut & fold first.";
       this.zipBtn.disabled = this.combinedBtn.disabled = true;
       return;
     }
