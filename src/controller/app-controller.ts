@@ -214,7 +214,7 @@ export class AppController {
     } catch (err) {
       // PipelineError passes through with its "<stage>: <message>" text;
       // anything else is wrapped with the kirigamize prefix.
-      const { msg, kind } = statusFromError(err, "pipeline", "kirigamize failed");
+      const { msg, kind } = statusFromError(err, "pipeline", "Cut & fold failed");
       this.store.setStatus(msg, kind);
     } finally {
       this.busy = false;
@@ -302,7 +302,7 @@ export class AppController {
       this.store.update({
         viewerShown: null,
         status: {
-          msg: `Loaded ${model.ext.toUpperCase()} mesh "${model.name}". The viewer still shows the previous pattern; press cut&fold ▶ to convert this mesh.`,
+          msg: `Loaded ${model.ext.toUpperCase()} mesh "${model.name}". The viewer still shows the previous pattern; press Cut & fold to convert this mesh.`,
           kind: "",
         },
       });

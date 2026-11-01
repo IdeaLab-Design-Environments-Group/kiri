@@ -1,5 +1,5 @@
 /**
- * **View** — the header action bar: "Create pyramid" and "cut&fold ▶", plus a slot for the page
+ * **View** — the header action bar: "Create pyramid" and "Cut & fold", plus a slot for the page
  * triggers mounted before them. Emits intents (`onCreatePyramid`, `onKirigamize`) and exposes
  * `setKirigamizeEnabled`; it holds no app state.
  *
@@ -18,17 +18,17 @@ export class HeaderActions {
     this.element = el("div", "header-actions");
     this.createBtn = el("button", "sim-trigger") as HTMLButtonElement;
     this.createBtn.type = "button";
-    this.createBtn.textContent = "create pyramid";
+    this.createBtn.textContent = "Create pyramid";
     this.kirigamizeBtn = el("button", "export-trigger") as HTMLButtonElement;
     this.kirigamizeBtn.type = "button";
-    this.kirigamizeBtn.textContent = "cut&fold ▶";
+    this.kirigamizeBtn.textContent = "Cut & fold";
     this.kirigamizeBtn.disabled = true;
   }
 
   /**
    * Append the action buttons. Call *after* any earlier triggers (e.g. the
    * 3D-Sim button) have been mounted into `element`, to preserve their order:
-   * [3D Sim] … [Create pyramid] [cut&fold ▶].
+   * [3D Sim] … [Create pyramid] [Cut & fold].
    */
   appendActionButtons(): void {
     this.element.append(this.createBtn, this.kirigamizeBtn);

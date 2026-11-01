@@ -107,10 +107,10 @@ export function loadedStatus(model: LoadedModel): Status {
   if (model.kind === "fold") {
     const kind = isFkld(model.object) ? "FKLD" : "FOLD";
     const sim = canSimulate(model.object) ? " 3D Sim ready." : "";
-    return { msg: `Loaded ${kind} model "${model.name}". Ready to Kirigamize.${sim}`, kind: "ok" };
+    return { msg: `Loaded ${kind} model "${model.name}". Ready to cut & fold.${sim}`, kind: "ok" };
   }
   return {
-    msg: `Loaded ${model.ext.toUpperCase()} mesh "${model.name}". Press Kirigamize ▶ to convert.`,
+    msg: `Loaded ${model.ext.toUpperCase()} mesh "${model.name}". Press Cut & fold to convert.`,
     kind: "",
   };
 }

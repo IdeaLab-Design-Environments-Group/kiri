@@ -41,7 +41,7 @@ export class ExamplesPage {
     this.trigger = document.createElement("button");
     this.trigger.type = "button";
     this.trigger.className = "sim-trigger ex-nav";
-    this.trigger.textContent = "examples";
+    this.trigger.textContent = "Examples";
     this.trigger.title = "bundled models, kirigamized and ready to open";
     this.trigger.addEventListener("click", () => this.open());
 
@@ -72,7 +72,7 @@ export class ExamplesPage {
     const body = el("div", "ex-body");
     const lede = el("p", "ex-lede");
     lede.textContent =
-      "every model here has been through the same pipeline the Kirigamize button runs, and opens as the "
+      "every model here has been through the same pipeline the Cut & fold button runs, and opens as the "
       + "pattern it produced. Pick a part to load it; hover a tile to see it flat.";
     body.append(lede);
     for (const model of EXAMPLE_MODELS) body.append(this.buildGroup(model));

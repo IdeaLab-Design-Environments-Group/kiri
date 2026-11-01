@@ -75,7 +75,7 @@ export class PatternEditorModal {
     this.trigger = document.createElement("button");
     this.trigger.type = "button";
     this.trigger.className = "sim-trigger";
-    this.trigger.textContent = "pattern editor";
+    this.trigger.textContent = "Pattern editor";
     this.trigger.addEventListener("click", () => this.open());
 
     this.overlay = document.createElement("div");
