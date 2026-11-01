@@ -77,4 +77,6 @@ examples.onPick((slug) => void controller.loadExample(slug));
 // Sim are all live on first paint (no-op under file:// where fetch is blocked).
 void controller.loadSample(false);
 installFirstRun(viewer.element, convert.element, controller); // first-run welcome card
-applyHeaderCopy(header.element); // one vocabulary: labels and tooltips for every header button
+// One vocabulary: labels and tooltips for every header button; the "needs" part follows enablement.
+// Subscribed after the controller, so it runs once the buttons were enabled or disabled for this state.
+store.subscribe(() => applyHeaderCopy(header.element));
