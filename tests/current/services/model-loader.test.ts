@@ -26,6 +26,22 @@ describe("services/model-loader", () => {
     expect(m).toEqual({ kind: "mesh", name: "shape.obj", ext: "obj", text: "v 0 0 0" });
   });
 
+  it("rejects JSON that is not an object", () => {
+    for (const text of ["null", "123", "[1,2]", '"x"']) {
+      expect(() => parseLoaded(text, "n.fkld")).toThrow(/expected a FOLD\/FKLD object/);
+    }
+  });
+
+  it("rejects meshes over the vertex/triangle caps and files over 50 MB", () => {
+    const big = "v 0 0 0\n".repeat(500_001);
+    expect(() => parseLoaded(big, "big.obj")).toThrow(/too large to process/);
+    const onError = vi.fn();
+    const onLoaded = vi.fn();
+    readModelFile({ name: "huge.stl", size: 51 * 1024 * 1024 } as File, onLoaded, onError);
+    expect(onLoaded).not.toHaveBeenCalled();
+    expect((onError.mock.calls[0]![0] as AppError).message).toContain("too large");
+  });
+
   it("throws AppError(parse) with the exact UI message on bad JSON", () => {
     let err: unknown;
     try {

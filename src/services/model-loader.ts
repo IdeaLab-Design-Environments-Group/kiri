@@ -16,18 +16,54 @@ import { isFkld } from "../model/fold-file.js";
 import { canSimulate } from "../sim/index.js";
 import type { Status } from "../model/app-store.js";
 
+/** Largest file we will read into memory. */
+export const MAX_FILE_BYTES = 50 * 1024 * 1024;
+/** Largest mesh we will hand to the (synchronous) pipeline. */
+export const MAX_MESH_VERTICES = 500_000;
+export const MAX_MESH_TRIANGLES = 1_000_000;
+
+/** Cheap upper-bound estimate of the vertex / triangle count of an STL or OBJ text. Null when unknown. */
+function meshCounts(text: string, ext: "obj" | "stl"): { vertices: number; triangles: number } {
+  let vertices = 0;
+  let triangles = 0;
+  if (ext === "stl") {
+    // ASCII STL: three "vertex" lines per facet.
+    for (let i = text.indexOf("vertex"); i >= 0; i = text.indexOf("vertex", i + 6)) vertices++;
+    return { vertices, triangles: Math.floor(vertices / 3) };
+  }
+  for (const line of text.split("\n")) {
+    if (line.startsWith("v ")) vertices++;
+    else if (line.startsWith("f ")) triangles += Math.max(1, line.trim().split(/\s+/).length - 3);
+  }
+  return { vertices, triangles };
+}
+
 /** Parse file text into a LoadedModel based on its extension. Throws AppError. */
 export function parseLoaded(text: string, name: string): LoadedModel {
   const ext = (name.split(".").pop() ?? "").toLowerCase();
   if (ext === "fold" || ext === "fkld" || ext === "json") {
+    let object: unknown;
     try {
-      return { kind: "fold", name, object: JSON.parse(text) as FoldFile };
+      object = JSON.parse(text);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       throw new AppError("parse", `Parse error in ${name}: ${message}`, err);
     }
+    if (object === null || typeof object !== "object" || Array.isArray(object)) {
+      throw new AppError("parse", `Parse error in ${name}: expected a FOLD/FKLD object, got ${object === null ? "null" : Array.isArray(object) ? "an array" : typeof object}.`);
+    }
+    return { kind: "fold", name, object: object as FoldFile };
   }
   if (ext === "obj" || ext === "stl") {
+    const { vertices, triangles } = meshCounts(text, ext);
+    if (vertices > MAX_MESH_VERTICES || triangles > MAX_MESH_TRIANGLES) {
+      throw new AppError(
+        "parse",
+        `${name} is too large to process in the browser (${vertices.toLocaleString("en-US")} vertices, ` +
+          `${triangles.toLocaleString("en-US")} triangles; limit ${MAX_MESH_VERTICES.toLocaleString("en-US")} / ` +
+          `${MAX_MESH_TRIANGLES.toLocaleString("en-US")}). Simplify the mesh and try again.`,
+      );
+    }
     return { kind: "mesh", name, ext, text };
   }
   throw new AppError("io", `Unsupported file type: .${ext}`);
@@ -43,6 +79,10 @@ export function readModelFile(
   onError: (err: AppError) => void,
 ): void {
   const name = file.name;
+  if (file.size > MAX_FILE_BYTES) {
+    onError(new AppError("io", `${name} is too large (${(file.size / 1048576).toFixed(1)} MB; limit ${MAX_FILE_BYTES / 1048576} MB).`));
+    return;
+  }
   const reader = new FileReader();
   reader.onload = () => {
     try {
