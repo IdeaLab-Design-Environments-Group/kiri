@@ -81,7 +81,7 @@ export class SimModal {
           <div class="sim-canvas-mount"></div>
         </div>
         <footer class="sim-modal-footer">
-          <span class="sim-status"></span>
+          <span class="sim-status" role="status"></span>
           <span class="sim-strain" title="mean stretch of the sheet. Paper bends, it does not stretch, so a real fold stays near 0% — a large figure means what you are looking at is not a fold the material could make."></span>
           <label class="sim-fold-control sim-detail-control" title="pave the harder-folding faces with more, smaller tiles. Level 0 = one tile per face; 4 splits the sharpest folds 4 deep. Finer tiles leave narrower gaps, so the model folds less far.">
             detail <span class="sim-detail-value">0</span>
