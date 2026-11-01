@@ -155,7 +155,7 @@ export function shellMarkup(): string {
               <span class="el-key"><i class="el-swatch" style="background:${SVGPCB_COLOURS.componentLabel}"></i>Part label (R1)</span>
               <span class="el-key"><i class="el-swatch el-swatch-ring el-key-led"></i>LED the copper never reached</span>
             </p>
-            <span class="sim-status el-status"></span>
+            <span class="sim-status el-status" role="status"></span>
           </div>
         </div>
       </div>
