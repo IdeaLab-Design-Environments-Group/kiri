@@ -24,8 +24,12 @@ describe("styles.css accessibility", () => {
   it("keeps muted text readable on the page background", () => {
     expect(ratio(token("muted"), token("bg"))).toBeGreaterThanOrEqual(4.5);
   });
-  it("keeps control borders at 3:1 on white", () => {
-    expect(ratio(token("border-control"), "#ffffff")).toBeGreaterThanOrEqual(3);
+  it.each([
+    ["white", () => "#ffffff"],
+    ["--surface-soft", () => token("surface-soft")],
+    ["--bg", () => token("bg")],
+  ])("keeps control borders at 3:1 on %s", (_name, surface) => {
+    expect(ratio(token("border-control"), surface())).toBeGreaterThanOrEqual(3);
   });
   it("has a global focus-visible ring and no bare outline: none", () => {
     expect(css).toMatch(/:focus-visible\s*\{\s*outline:\s*2px solid var\(--accent\)/);
