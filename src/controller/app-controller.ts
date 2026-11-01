@@ -91,7 +91,7 @@ export class AppController {
     // View intents → controller handlers.
     this.convert.onFileChosen((file) => this.loadFromFile(file));
     this.header.onCreatePyramid(() => this.createPyramid());
-    this.header.onKirigamize(() => this.kirigamize());
+    this.header.onKirigamize(() => void this.kirigamize());
 
     // Secondary design path: the pattern editor commits a drawn grid as FKLD,
     // then shows it like any other pattern. The serializer feeds its download.
@@ -122,7 +122,7 @@ export class AppController {
     const m = state.model;
     this.convert.renderFacts(m ? deriveFacts(m) : []);
     this.convert.setStatus(state.status.msg, state.status.kind);
-    this.header.setKirigamizeEnabled(!!m);
+    this.header.setKirigamizeEnabled(!!m && !this.busy);
     // Sim enablement follows what would actually be simulated: the viewer's
     // model first, else the loaded fold model. (Previously the viewer-driven
     // enablement was silently overridden by the next render — now it derives
@@ -154,20 +154,32 @@ export class AppController {
    *  the copper belongs on the model either way. */
   private tracesForSim(fold: FoldFile | null): AnchoredMesh[] {
     const { circuit: stored, simTileGap } = this.store.getState();
-    return this.electronicsPlanning.foldedOverlay({
+    const seen: { msg: string | null } = { msg: null };
+    const traces = this.electronicsPlanning.foldedOverlay({
       fold,
       circuit: stored,
       tileGap: simTileGap,
       sheetMm: this.exporter.printSizeMm(),
+      onWarning: (message) => (seen.msg = message),
     });
+    const warning = seen.msg;
+    // Render runs on every store update, and showing the warning is itself an update: report each distinct
+    // warning once, and forget it as soon as planning succeeds again.
+    if (warning !== this.lastCopperWarning) {
+      this.lastCopperWarning = warning;
+      if (warning) this.store.setStatus(warning, "bad");
+    }
+    return traces;
   }
+
+  private lastCopperWarning: string | null = null;
 
   // ---- intents (each: a service call + a store update) ---------------------
 
   loadFromFile(file: File): void {
     readModelFile(
       file,
-      (model) => this.apply(model),
+      (model) => this.applyImported(model),
       (err) => {
         // Parse failures invalidate the current model; IO failures (unsupported
         // type, unreadable file) leave it untouched — same behavior as before.
@@ -182,16 +194,20 @@ export class AppController {
    * seamed unfold → pack/classify → emit FKLD → fold in the sim and verify
    * d_H against the source mesh. FOLD/FKLD models pass through to the viewer.
    */
-  kirigamize(): void {
+  async kirigamize(): Promise<void> {
     const m = this.store.model;
-    if (!m) return;
+    if (!m || this.busy) return;
     if (m.kind === "fold") {
       this.viewer.show(m.object, m.name); // already a pattern — just show it
       this.store.setStatus(`Showing "${m.name}" in the viewer (already a FOLD/FKLD pattern).`, "ok");
       return;
     }
+    this.busy = true;
+    this.header.setKirigamizeEnabled(false);
     this.store.setStatus(`Kirigamizing ${m.name}… (plan cuts → unfold → emit → verify)`, "");
     try {
+      // The pipeline is synchronous: let the status line and the disabled button paint first.
+      await nextPaint();
       const outcome = kirigamizeMesh(m.text, m.ext, m.name);
       this.showPattern(outcome.fkld, outcome.name);
       this.store.setStatus(outcome.summary, outcome.ok ? "ok" : "bad");
@@ -200,8 +216,14 @@ export class AppController {
       // anything else is wrapped with the kirigamize prefix.
       const { msg, kind } = statusFromError(err, "pipeline", "kirigamize failed");
       this.store.setStatus(msg, kind);
+    } finally {
+      this.busy = false;
+      this.header.setKirigamizeEnabled(!!this.store.model);
     }
   }
+
+  /** True while a kirigamize run is in flight (blocks re-entry). */
+  private busy = false;
 
   /** Commit a hand-drawn crease pattern (the editor's lattice) as an FKLD pattern and show it. */
   usePattern(grid: PatternGrid): void {
@@ -266,9 +288,41 @@ export class AppController {
     this.store.update({ model, status: loadedStatus(model), circuit: null });
   }
 
+  /**
+   * Commit a model imported from a file. A pattern is shown in the viewer (as examples are), so Sim,
+   * Electronics and Export, which prefer the viewer's model, use the imported one. A mesh has no pattern
+   * yet: the stale viewer model is dropped from state so those features do not act on it.
+   */
+  private applyImported(model: LoadedModel): void {
+    this.apply(model);
+    if (model.kind === "fold") {
+      this.store.update({ viewerShown: { object: model.object, name: model.name } });
+      this.viewer.show(model.object, model.name);
+    } else {
+      this.store.update({
+        viewerShown: null,
+        status: {
+          msg: `Loaded ${model.ext.toUpperCase()} mesh "${model.name}". The viewer still shows the previous pattern; press cut&fold ▶ to convert this mesh.`,
+          kind: "",
+        },
+      });
+    }
+  }
+
   /** Commit a generated pattern and show it in the viewer. */
   private showPattern(fkld: FoldFile, name: string): void {
     this.apply({ kind: "fold", name, object: fkld });
     this.viewer.show(fkld, name);
   }
+}
+
+/** Resolve after the browser has painted: two animation frames, with a timer fallback when rAF is missing. */
+export function nextPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame !== "function") {
+      setTimeout(resolve, 0);
+      return;
+    }
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
 }
