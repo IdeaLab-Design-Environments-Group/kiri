@@ -100,6 +100,7 @@ export function shellMarkup(): string {
               </div>
             </aside>
             <div class="el-canvas-wrap">
+              <div class="el-route-hint" role="status" hidden>Not routed yet — press Route</div>
               <svg class="el-svg" xmlns="${SVG_NS}" aria-label="electronics flat-pattern canvas"></svg>
             </div>
             <aside class="el-tools" aria-label="view and output">
