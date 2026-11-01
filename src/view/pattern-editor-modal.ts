@@ -75,7 +75,7 @@ export class PatternEditorModal {
     this.trigger = document.createElement("button");
     this.trigger.type = "button";
     this.trigger.className = "sim-trigger";
-    this.trigger.textContent = "pattern editor";
+    this.trigger.textContent = "Pattern editor";
     this.trigger.addEventListener("click", () => this.open());
 
     this.overlay = document.createElement("div");
@@ -127,7 +127,7 @@ export class PatternEditorModal {
           </p>
         </div>
         <footer class="sim-modal-footer">
-          <span class="sim-status pe-status"></span>
+          <span class="sim-status pe-status" role="status"></span>
           <button type="button" class="pe-download">download .fkld</button>
           <button type="button" class="export-trigger pe-use">use this pattern ▶</button>
         </footer>
