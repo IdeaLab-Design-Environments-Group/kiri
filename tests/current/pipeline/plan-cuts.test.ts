@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { angleDefects } from "../../../src/pipeline/curvature.js";
 import { buildTopology } from "../../../src/pipeline/mesh.js";
 import { planCuts, shortestPaths } from "../../../src/pipeline/plan-cuts.js";
-import type { MeshTopology } from "../../../src/pipeline/types.js";
+import { seamedUnfold } from "../../../src/pipeline/unfold.js";
+import type { MeshTopology, TriMesh } from "../../../src/pipeline/types.js";
 import { makeCube, makeGrid, makeOctahedron, makePyramid, makeSaddleFan } from "./fixtures/targets.js";
 
 function isForest(topo: MeshTopology, cutEdges: number[]): boolean {
@@ -110,6 +111,38 @@ describe("planCuts — dart strategy (default)", () => {
     expect(isForest(topo, plan.cutEdges)).toBe(true);
     expect(plan.cutEdges.length).toBe(5); // spanning tree of 6 vertices
     for (let v = 0; v < 6; v++) expect(cutDegree(topo, plan.cutEdges, v)).toBeGreaterThanOrEqual(1);
+  });
+});
+
+/** Open cylinder (annulus): n vertices on the bottom ring (even ids), n on the top (odd ids). */
+function makeOpenCylinder(n = 12, r = 30, h = 50): TriMesh {
+  const vertices: TriMesh["vertices"] = [];
+  const faces: TriMesh["faces"] = [];
+  for (let i = 0; i < n; i++) {
+    const u = (2 * Math.PI * i) / n;
+    vertices.push({ x: r * Math.cos(u), y: r * Math.sin(u), z: 0 }, { x: r * Math.cos(u), y: r * Math.sin(u), z: h });
+  }
+  for (let i = 0; i < n; i++) {
+    const [a, b, c, d] = [2 * i, 2 * i + 1, 2 * ((i + 1) % n), 2 * ((i + 1) % n) + 1];
+    faces.push([a, c, d], [a, d, b]);
+  }
+  return { vertices, faces };
+}
+
+describe("planCuts — several boundary loops", () => {
+  it("open cylinder: one seam joins the two rims, so the sheet unfolds as one piece", () => {
+    const cyl = makeOpenCylinder();
+    const topo = buildTopology(cyl);
+    const defects = angleDefects(cyl, topo);
+    const plan = planCuts(cyl, topo, defects, { lambda: 0, strategy: "dart" });
+    expect(plan.cutEdges.length).toBeGreaterThanOrEqual(1);
+    expect(isForest(topo, plan.cutEdges)).toBe(true);
+    const ends = plan.cutEdges.flatMap((e) => [topo.edges[e].a, topo.edges[e].b]);
+    expect(ends.some((v) => v % 2 === 0)).toBe(true); // touches the bottom rim
+    expect(ends.some((v) => v % 2 === 1)).toBe(true); // and the top rim
+    const unfold = seamedUnfold(cyl, topo, plan, defects);
+    expect(unfold.patchCount).toBe(1);
+    expect(unfold.faces.length).toBe(cyl.faces.length);
   });
 });
 

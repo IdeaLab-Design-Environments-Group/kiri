@@ -26,10 +26,11 @@
  *   routing:     min_C Σ_{e∈C} (len(e) + λ·vis(e))
  *   sign rule:   δ>0 → dart; δ<0 → slit (vent supplies 2π closure, no wedge rule)
  *
- * Connectivity: the cut set is a FOREST (cycles pruned) touching the mesh
- * boundary at most ONCE (the boundary pseudo-terminal joins the MST exactly
- * once, and terminal-to-terminal paths are forbidden from passing THROUGH
- * boundary vertices) — a tree with ≤1 boundary contact never disconnects.
+ * Connectivity: the cut set is a FOREST (cycles pruned) touching each
+ * boundary loop at most ONCE (every loop is a pseudo-terminal joining the MST
+ * exactly once, and paths are forbidden from passing THROUGH boundary
+ * vertices) — such a tree never disconnects. With several loops the tree also
+ * joins them, which is what lets an open cylinder flatten (one rim-to-rim seam).
  */
 
 import { edgeLength } from "./mesh.js";
@@ -181,6 +182,25 @@ function pruneLeaves(
   }
 }
 
+/** Boundary vertices grouped into loops (joined through boundary edges), in vertex order. */
+function boundaryLoops(topo: MeshTopology): number[][] {
+  const parent = new Map<number, number>();
+  const find = (x: number): number => {
+    while (parent.get(x)! !== x) x = parent.get(x)!;
+    return x;
+  };
+  for (const v of topo.boundaryVertices) parent.set(v, v);
+  for (const edge of topo.edges) {
+    if (edge.faces.length === 1) parent.set(find(edge.a), find(edge.b));
+  }
+  const loops = new Map<number, number[]>();
+  for (const v of [...topo.boundaryVertices].sort((a, b) => a - b)) {
+    const r = find(v);
+    (loops.get(r) ?? loops.set(r, []).get(r)!).push(v);
+  }
+  return [...loops.values()];
+}
+
 /** Spanning forest of an edge subset (drops cycle-closing edges). */
 function spanningForest(topo: MeshTopology, edgeSet: Set<number>): Set<number> {
   const parent = new Map<number, number>();
@@ -272,23 +292,35 @@ export function planCuts(
   }
 
   const cutSet = new Set<number>();
+  const loops = boundaryLoops(topo);
 
-  if (cutTerminals.length > 0) {
+  if (cutTerminals.length > 0 || loops.length > 1) {
     // --- Connection: MST of the terminals' metric closure ------------------
-    // Boundary acts as one extra pseudo-terminal reachable at the distance to
-    // the nearest boundary vertex (multi-source Dijkstra already in boundarySol).
-    // Terminal-to-terminal paths must not pass THROUGH boundary vertices
+    // Each boundary loop acts as one extra pseudo-terminal reachable at the
+    // distance to its nearest vertex (multi-source Dijkstra; a lone loop is
+    // exactly boundarySol). Paths must not pass THROUGH boundary vertices
     // (K2 connectivity: a cut path transiting the boundary tears the sheet).
     const sols = new Map<number, ShortestPathResult>();
     for (const t of cutTerminals) {
       sols.set(t, shortestPaths(mesh, topo, [t], weights, topo.boundaryVertices));
     }
+    const loopSols =
+      loops.length === 1
+        ? [boundarySol!]
+        : loops.map((loop) => {
+            const others = new Set([...topo.boundaryVertices].filter((v) => !loop.includes(v)));
+            return shortestPaths(mesh, topo, loop, weights, others);
+          });
+    /** Vertex of loop j nearest to loop i (where the joining path ends). */
+    const loopEnd = (i: number, j: number): number =>
+      loops[j].reduce((best, v) => (loopSols[i].dist[v] < loopSols[i].dist[best] ? v : best));
 
-    type Node = number | "boundary";
-    const nodes: Node[] = hasBoundary ? [...cutTerminals, "boundary"] : [...cutTerminals];
+    type Node = number | { loop: number };
+    const nodes: Node[] = [...cutTerminals, ...loops.map((_, loop) => ({ loop }))];
     const distOf = (u: Node, v: Node): number => {
-      if (u === "boundary") return boundarySol!.dist[v as number];
-      if (v === "boundary") return boundarySol!.dist[u as number];
+      if (typeof u !== "number" && typeof v !== "number") return loopSols[u.loop].dist[loopEnd(u.loop, v.loop)];
+      if (typeof u !== "number") return loopSols[u.loop].dist[v as number];
+      if (typeof v !== "number") return loopSols[v.loop].dist[u];
       return sols.get(u)!.dist[v];
     };
     // Prim's MST over the closure.
@@ -316,8 +348,9 @@ export function planCuts(
     // Expand MST pairs to mesh-edge paths.
     for (const [u, v] of mstPairs) {
       let path: number[];
-      if (u === "boundary") path = extractPath(boundarySol!, v as number);
-      else if (v === "boundary") path = extractPath(boundarySol!, u);
+      if (typeof u !== "number" && typeof v !== "number") path = extractPath(loopSols[u.loop], loopEnd(u.loop, v.loop));
+      else if (typeof u !== "number") path = extractPath(loopSols[u.loop], v as number);
+      else if (typeof v !== "number") path = extractPath(loopSols[v.loop], u);
       else path = extractPath(sols.get(u)!, v);
       for (const e of path) cutSet.add(e);
     }
