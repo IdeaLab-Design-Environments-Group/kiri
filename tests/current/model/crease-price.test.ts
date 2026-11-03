@@ -97,12 +97,16 @@ describe("model/crease-price", () => {
     // Narrower tape gives the search more room, so it both crosses more creases when nothing stops it and
     // avoids more of them when the price does: the trade got wider at both ends, which is the direction it
     // should move, and the assertions below pin the SHAPE of it rather than only the four numbers.
+    //
+    // Re-recorded on 2026-11-03 (from 17/11 crossings and 13.9/15.86 units), when the strict corridor
+    // pass began refusing copper that touches the other net. The trade narrowed: two crossings fewer for
+    // 9.3% more copper, where it was six for 14.1%.
     const priced = crossings("church.fkld", 12);
     const lengthOnly = crossings("church.fkld", 12, 0);
-    expect(lengthOnly.tension).toBe(17);
-    expect(priced.tension).toBe(11);
-    expect(lengthOnly.len).toBeCloseTo(13.9, 2);
-    expect(priced.len).toBeCloseTo(15.86, 2);
+    expect(lengthOnly.tension).toBe(15);
+    expect(priced.tension).toBe(13);
+    expect(lengthOnly.len).toBeCloseTo(13.62, 2);
+    expect(priced.len).toBeCloseTo(14.88, 2);
     // The trade itself, independent of the four figures above: fewer creases crossed, more copper spent.
     expect(priced.tension).toBeLessThan(lengthOnly.tension);
     expect(priced.len).toBeGreaterThan(lengthOnly.len);
@@ -152,7 +156,8 @@ describe("model/crease-price", () => {
     it("steers a route on its own, with no crease price at all", { timeout: 60000 }, () => {
       const flat = crossings("church.fkld", 12, 0, 0);
       const banded = crossings("church.fkld", 12, 0, STRAIN_BAND_CAP);
-      expect(flat.tension).toBe(17);
+      // 15 since 2026-11-03 (was 17): the same unpriced route as in "buys tension crossings".
+      expect(flat.tension).toBe(15);
       // 11, and it was 14 while eps_f was the chosen 1%. The ordering got STRONGER when the threshold was
       // derived from the foil's ductility: at 1% almost every crossing capped to the same band and the
       // search had nothing to order, and at 3% the bands separate. Same code, better-founded constant.
@@ -177,8 +182,9 @@ describe("model/crease-price", () => {
     it("leaves every route untouched when it is switched off", { timeout: 60000 }, () => {
       // The escape hatch has to be real: at `bandCap` 0 this is the router as it was before bands existed.
       const before = crossings("church.fkld", 12, undefined, 0);
-      expect(before.tension).toBe(11);
-      expect(before.len).toBeCloseTo(15.86, 2);
+      // 13 and 14.88 since 2026-11-03 (was 11 and 15.86): the priced plan in "buys tension crossings".
+      expect(before.tension).toBe(13);
+      expect(before.len).toBeCloseTo(14.88, 2);
     });
   });
 });

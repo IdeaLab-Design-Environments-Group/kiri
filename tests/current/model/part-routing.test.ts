@@ -360,21 +360,24 @@ describe("model/part-routing", () => {
     //    because what defeats them is hinge length against the 1206's 3.40mm legs, not strip width.
     const before: [string, number, number, number][] = [
       ["akde-decagon-pyramid", 1, 2, 75.47206013267432],
-      ["akde-decagon-pyramid", 3, 6, 403.19751558200016],
+      // Re-recorded on 2026-11-03, when the router began refusing PWR touching GND. akde-decagon at three
+      // went 6 runs / 403 units -> 5 / 913: the old plan had 4 PWR/GND contacts, and avoiding them costs
+      // the copper. akde-hex and church at three grew 6% and 51%; puffin at three lost a run.
+      ["akde-decagon-pyramid", 3, 5, 913.0393885657775],
       ["akde-hex", 1, 2, 105.15717799886949],
-      ["akde-hex", 3, 6, 351.5438685461294],
+      ["akde-hex", 3, 6, 371.8569352700687],
       ["akde-square-pyramid", 1, 0, 0],
       ["akde-square-pyramid", 3, 2, 49.15677510965487],
       ["bistable-star-tiling", 1, 0, 0],
       ["bistable-star-tiling", 3, 0, 0],
       ["church", 1, 2, 0.5390219396942254],
-      ["church", 3, 6, 6.804114837907989],
+      ["church", 3, 6, 10.291695030652605],
       ["house", 1, 2, 0.8038265682751792],
       ["house", 3, 6, 4.387003709496385],
       ["kirigami-flap", 1, 2, 68.50569501309963],
       ["kirigami-flap", 3, 2, 68.50569501309963],
       ["puffin", 1, 2, 12.996160368450141],
-      ["puffin", 3, 6, 101.55074579073953],
+      ["puffin", 3, 5, 86.23574359038487],
     ];
     for (const [name, leds, runs, copper] of before) {
       const fold = JSON.parse(readFileSync(`${EXAMPLES}${name}.fkld`, "utf8"));

@@ -164,8 +164,13 @@ describe("model/electronics-routing", () => {
     // search bought a crossing to save one. A net crossing is a SHORT -- a hard fault -- and should never
     // be tradeable against strain, which is wear-out. The fix belongs in the crossing penalty, not in the
     // threshold, and until it is made this budget records the true state of the router.
+    //
+    // **puffin is 30 since 2026-11-03, when `countNetCrossings` began counting PWR touching GND.** Not a
+    // new fault: the same plans had 43 such contacts that read as zero, because only a proper crossing
+    // counted. The strict corridor pass now refuses contact and puffin has no proper crossing left, but
+    // the fallback pass still lays rails that share points. Recorded as the regression it always was.
     const cases: [string, number][] = [
-      ["akde-hex.fkld", 0], ["puffin.fkld", 1], ["church.fkld", 0], ["house.fkld", 0],
+      ["akde-hex.fkld", 0], ["puffin.fkld", 30], ["church.fkld", 0], ["house.fkld", 0],
       ["akde-square-pyramid.fkld", 0], ["akde-decagon-pyramid.fkld", 1],
     ];
     for (const [name, budget] of cases) {
@@ -418,7 +423,10 @@ describe("model/electronics-routing", () => {
       // whole cause. The repair pass that pushes landing segments aside is what needs to get better here;
       // until it does, puffin ships one more terminal sweep than it did, on the same tile and for the same
       // reason as the first.
-      "puffin.fkld": 2,
+      //
+      // Back to 1 on 2026-11-03: with the strict corridor pass refusing copper that touches the other net,
+      // and the first leg out of a terminal checked against the far one, the second sweep is gone.
+      "puffin.fkld": 1,
     };
     for (const [name, want] of Object.entries(budget)) {
       const { faces, gaps } = load(name);
