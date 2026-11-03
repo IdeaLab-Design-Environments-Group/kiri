@@ -167,7 +167,6 @@ const SIZE_BUDGETS: Record<string, number> = {
   // the limit means splitting that function, not moving more helpers.
   "model/electronics-routing.ts": 1692,
     "model/copper-svg-export.ts": 1862,
-  "pipeline/unfold.ts": 1252,
 };
 
 const LINE_LIMIT = 1200;
