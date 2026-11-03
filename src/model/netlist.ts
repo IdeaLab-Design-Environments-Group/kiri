@@ -80,6 +80,7 @@ export interface NetlistFault {
     | "unknown-component"
     | "bad-placement"
     | "duplicate-terminal"
+    | "duplicate-net"
     | "single-terminal-net"
     | "pads-too-close"
     | "wire-short";
@@ -390,7 +391,14 @@ export function resolveNetlist(
   }
 
   const nets: ResolvedNet[] = [];
+  const emitted = new Set<string>();
   for (const n of circuit.nets ?? []) {
+    // The first declaration holds the id; a second would hand the router the same net twice.
+    if (emitted.has(n.id)) {
+      faults.push({ kind: "duplicate-net", why: `net id "${n.id}" is declared more than once`, net: n.id });
+      continue;
+    }
+    emitted.add(n.id);
     const pts = points.get(n.id)!;
     // A net the battery is on is never short of terminals: the bus lays a rail from the battery to it,
     // which is a connection the netlist does not have to make and cannot see in `points`.

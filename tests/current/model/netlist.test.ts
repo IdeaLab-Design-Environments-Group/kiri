@@ -198,6 +198,14 @@ describe("model/netlist", () => {
       }
     });
 
+    it("names a net id declared twice, and routes that net once", () => {
+      const c = circuit({ nets: [{ id: "n1", name: "PWR" }, { id: "n1", name: "VCC" }] });
+      const { nets, faults } = resolveNetlist(c, TAPE_W, TAPE_MM);
+      expect(nets.map((n) => n.name)).toEqual(["PWR"]);
+      expect(nets[0]!.points).toHaveLength(2);
+      expect(faults.some((x) => x.kind === "duplicate-net" && x.net === "n1")).toBe(true);
+    });
+
     it("keeps routing the good nets when another one is broken", () => {
       // A fault in one net must not cost the user the rest of the circuit.
       const c = circuit({
