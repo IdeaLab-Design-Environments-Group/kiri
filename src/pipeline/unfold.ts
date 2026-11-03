@@ -299,7 +299,8 @@ export function cutAlongEdges(
    * every split is an affine sub-division of a flat face), remove every face
    * piece strictly between ray d1 and ray d2 from `apex`, splitting crossed
    * faces conformingly. Stops at the sheet boundary. Connectivity damage is
-   * caught by the caller's component check.
+   * caught by the caller's component check. Returns false when the walk
+   * exhausts its guard with edges still queued (the carve did not finish).
    */
   const carveCone = (
     apex: Vec2,
@@ -307,8 +308,8 @@ export function cutAlongEdges(
     d2: Vec2,
     frontier: [number, number][],
     ventEdges: [number, number][],
-  ): void => {
-    if (flatLive === null) return;
+  ): boolean => {
+    if (flatLive === null) return true;
     const flat = flatLive;
     const orient = Math.sign(cross2(d1.x, d1.y, d2.x, d2.y)) || 1;
     const sideOf = (ray: Vec2, p: Vec2): number => {
@@ -355,6 +356,73 @@ export function cutAlongEdges(
       };
     })();
 
+    /** Synthesize a vertex at the apex inside live face (p0, p1, p2), barycentric in all coordinate sets. */
+    const apexVertex = (p0: number, p1: number, p2: number): number => {
+      const [a, b, c] = [flat[p0], flat[p1], flat[p2]];
+      const area = cross2(b.x - a.x, b.y - a.y, c.x - a.x, c.y - a.y);
+      const w1 = cross2(apex.x - a.x, apex.y - a.y, c.x - a.x, c.y - a.y) / area;
+      const w2 = cross2(b.x - a.x, b.y - a.y, apex.x - a.x, apex.y - a.y) / area;
+      const w0 = 1 - w1 - w2;
+      const mix = (q: TriMesh["vertices"]) => ({
+        x: w0 * q[p0].x + w1 * q[p1].x + w2 * q[p2].x,
+        y: w0 * q[p0].y + w1 * q[p1].y + w2 * q[p2].y,
+        z: w0 * q[p0].z + w1 * q[p1].z + w2 * q[p2].z,
+      });
+      const id = vertices.length;
+      vertices.push(mix(vertices));
+      goalPos.push(mix(goalPos));
+      origVertex.push(-1);
+      flat.push({ x: apex.x, y: apex.y });
+      return id;
+    };
+
+    /**
+     * Conformity split of the live face across (u1, u2) at `mid`, which lies
+     * on `ray`. The plain split joins mid to the far face's third corner; when
+     * that diagonal crosses the other ray it runs through the cone, becomes
+     * the next frontier, and every chord after it spawns another — a Zeno
+     * zigzag that never leaves the face. Split along `ray` to where it exits
+     * the face instead (conforming the next face the same way), so the carve
+     * crosses each face once. A face with no forward exit that covers the
+     * apex (the development overlaps itself there) is split at the apex, so
+     * the cone ends at a vertex.
+     */
+    const splitFarAlongRay = (u1: number, u2: number, mid: number, exclude: number, ray: Vec2, depth = 0): void => {
+      const far = faces.findIndex((g, gi) => gi !== exclude && g !== null && g.includes(u1) && g.includes(u2));
+      if (far === -1) return;
+      const ntri = faces[far]!;
+      if (ntri.includes(mid)) return;
+      const third = ntri.find((x) => x !== u1 && x !== u2)!;
+      const other = ray === d1 ? d2 : d1;
+      if (depth >= 64 || crossingOn(other, mid, third) === null) {
+        splitFarAt(u1, u2, mid, exclude);
+        return;
+      }
+      // Winding order p0 → p1 → p2 with mid on (p0, p1).
+      const ia = ntri.indexOf(u1);
+      const [p0, p1] = ntri[(ia + 1) % 3] === u2 ? [u1, u2] : [u2, u1];
+      const p2 = third;
+      const r12 = crossingOn(ray, p1, p2);
+      const r20 = r12 === null ? crossingOn(ray, p2, p0) : null;
+      if (r12 !== null) {
+        const q = lerpOnEdge(p1, p2, r12);
+        faces[far] = [mid, p1, q];
+        faces.push([p0, mid, q], [p0, q, p2]);
+        splitFarAlongRay(p1, p2, q, -1, ray, depth + 1);
+      } else if (r20 !== null) {
+        const q = lerpOnEdge(p2, p0, r20);
+        faces[far] = [p0, mid, q];
+        faces.push([mid, p1, p2], [mid, p2, q]);
+        splitFarAlongRay(p2, p0, q, -1, ray, depth + 1);
+      } else if (strictlyInside(apex, flat[p0], flat[p1], flat[p2])) {
+        const a = apexVertex(p0, p1, p2);
+        faces[far] = [p0, mid, a];
+        faces.push([mid, p1, a], [p1, p2, a], [p2, p0, a]);
+      } else {
+        splitFarAt(u1, u2, mid, exclude);
+      }
+    };
+
     const queue = [...frontier];
     const done = new Set<string>();
     const pending = new Set<string>();
@@ -400,8 +468,8 @@ export function cutAlongEdges(
           const wb = lerpOnEdge(y, t, ry);
           faces[gi] = tri.map((vv) => (vv === x ? wa : vv === y ? wb : vv)) as [number, number, number];
           ventEdges.push([wa, wb]);
-          splitFarAt(x, t, wa, gi);
-          splitFarAt(y, t, wb, gi);
+          splitFarAlongRay(x, t, wa, gi, ray);
+          splitFarAlongRay(y, t, wb, gi, ray);
           pushEdge(x, wa);
           pushEdge(y, wb);
           carved = true;
@@ -410,7 +478,7 @@ export function cutAlongEdges(
           const w = lerpOnEdge(y, t, ry);
           faces[gi] = tri.map((vv) => (vv === y ? w : vv)) as [number, number, number];
           ventEdges.push([x, w]);
-          splitFarAt(y, t, w, gi);
+          splitFarAlongRay(y, t, w, gi, ray);
           pushEdge(y, w);
           carved = true;
         } else if (rx !== null) {
@@ -418,7 +486,7 @@ export function cutAlongEdges(
           const w = lerpOnEdge(x, t, rx);
           faces[gi] = tri.map((vv) => (vv === x ? w : vv)) as [number, number, number];
           ventEdges.push([y, w]);
-          splitFarAt(x, t, w, gi);
+          splitFarAlongRay(x, t, w, gi, ray);
           pushEdge(x, w);
           carved = true;
         }
@@ -427,6 +495,7 @@ export function cutAlongEdges(
       }
       if (!carved) continue; // sheet boundary (or already carved)
     }
+    return queue.length === 0;
   };
 
   for (const v of ventVerts) {
@@ -557,15 +626,18 @@ export function cutAlongEdges(
       }
 
       // Continue the excised sector radially outward (the wrap it compensates
-      // displaces material at all radii, not just the one-ring).
+      // displaces material at all radii, not just the one-ring). An unfinished
+      // carve rejects the candidate: its guard-capped sliver fan would seed
+      // the next vent with ~8× the faces.
+      let carveDone = true;
       if (deep && ok && remaining <= 1e-6 && flatLive !== null && firstLead !== -1 && coneEnd !== -1) {
         const apex = flatLive[vc];
         const d1 = { x: flatLive[firstLead].x - apex.x, y: flatLive[firstLead].y - apex.y };
         const d2 = { x: flatLive[coneEnd].x - apex.x, y: flatLive[coneEnd].y - apex.y };
-        carveCone(apex, d1, d2, frontier, ventEdges);
+        carveDone = carveCone(apex, d1, d2, frontier, ventEdges);
       }
 
-      const fits = ok && remaining <= 1e-6 && liveComponents() === baseComponents;
+      const fits = ok && carveDone && remaining <= 1e-6 && liveComponents() === baseComponents;
       return { fits, ventEdges };
     };
 
@@ -693,6 +765,14 @@ export function cutAlongEdges(
   }
 
   return { mesh: { vertices: outVerts, faces: remappedFaces }, origVertex: outOrig, goalPos: outGoal, lips: outLips, vents: outVents };
+}
+
+/** True iff p lies inside triangle (a, b, c) at least SNAP_LEN from every edge. */
+function strictlyInside(p: Vec2, a: Vec2, b: Vec2, c: Vec2): boolean {
+  const edgeDist = (u: Vec2, v: Vec2): number =>
+    cross2(v.x - u.x, v.y - u.y, p.x - u.x, p.y - u.y) / Math.hypot(v.x - u.x, v.y - u.y);
+  const d = [edgeDist(a, b), edgeDist(b, c), edgeDist(c, a)];
+  return d.every((x) => x > SNAP_LEN) || d.every((x) => x < -SNAP_LEN);
 }
 
 /**

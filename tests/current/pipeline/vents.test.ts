@@ -13,6 +13,7 @@ import { condition } from "../../../src/pipeline/conditioning.js";
 import { angleDefects } from "../../../src/pipeline/curvature.js";
 import { kirigamize } from "../../../src/pipeline/kirigamize.js";
 import { buildTopology, edgeKey } from "../../../src/pipeline/mesh.js";
+import { planCuts } from "../../../src/pipeline/plan-cuts.js";
 import { cutAlongEdges, findSelfOverlap } from "../../../src/pipeline/unfold.js";
 import { pointTriangleDistance } from "../../../src/pipeline/verify.js";
 import { PipelineError, type TriMesh, type UnfoldResult, type Vec2 } from "../../../src/pipeline/types.js";
@@ -263,6 +264,24 @@ describe("saddle roof + Enneper — many-vent invariants", () => {
     expectTwoPiInvariant(result.unfold);
     expect(findSelfOverlap(result.unfold.flat, result.unfold.faces)).toBeNull();
     expectVentEdgesOnSheet(result.unfold);
+  });
+});
+
+describe("saddle roof — vent cones carve through whole faces", () => {
+  it("cutting the planned forest with vents adds a bounded number of faces", () => {
+    // A cone carve that zigzags between its two rays inside one face never
+    // finishes; its guard-capped sliver fan used to multiply the face count
+    // (32 → 312 here) and stall every later overlap count.
+    const { mesh, topo, defects } = conditioned(makeSaddleRoof());
+    const plan = planCuts(mesh, topo, defects, { lambda: 0, strategy: "dart" });
+    const ventAngles = new Map<number, number>();
+    plan.perVertexAction.forEach((a, v) => {
+      if (a === "slit" && defects.defects[v] < 0) ventAngles.set(v, -defects.defects[v]);
+    });
+    expect(ventAngles.size).toBeGreaterThanOrEqual(7);
+    const cut = cutAlongEdges(mesh, topo, plan.cutEdges, ventAngles);
+    expect(cut.vents.length).toBeGreaterThanOrEqual(7);
+    expect(cut.mesh.faces.length).toBeLessThanOrEqual(3 * mesh.faces.length);
   });
 });
 
