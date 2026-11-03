@@ -151,6 +151,9 @@ export function pickTab(
       continue;
     }
     if (!fallback) fallback = { index: c.index, side: c.side, path, over: false };
+    // Nor back across its own run. A bent tab whose first leg heads inward lies on the copper it grips: its
+    // outline is never clipped against that run, so its sides cut straight through it.
+    if (path.some((_, k) => k > 0 && crossesRing(path[k - 1]!, path[k]!, ring, c.index))) continue;
     const blocked = others.some((o) => {
       for (let k = 1; k < path.length; k++) {
         if (segNearRing(path[k - 1]!, path[k]!, o, tapeW)) return true;
@@ -197,6 +200,16 @@ export function pickTab(
 export function stripsMeet(a: Vec2[], b: Vec2[], tapeW: number): boolean {
   for (let i = 1; i < a.length; i++) {
     for (let j = 1; j < b.length; j++) if (segSegDist(a[i - 1]!, a[i]!, b[j - 1]!, b[j]!) < tapeW) return true;
+  }
+  return false;
+}
+
+/** Whether a-q crosses an edge of `ring`, leaving out the two that meet at vertex `from`, where it starts. */
+function crossesRing(a: Vec2, q: Vec2, ring: Vec2[], from: number): boolean {
+  const n = ring.length;
+  for (let i = 0; i < n; i++) {
+    if (i === from || (i + 1) % n === from) continue;
+    if (segsIntersect(a, q, ring[i]!, ring[(i + 1) % n]!)) return true;
   }
   return false;
 }

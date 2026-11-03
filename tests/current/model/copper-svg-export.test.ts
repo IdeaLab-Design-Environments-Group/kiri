@@ -1105,10 +1105,11 @@ describe("model/copper-svg-export", () => {
       // left is the tab lead-ins: a tab side starts on the ring it grips and is not clipped against it, so
       // its first fraction of a millimetre lies inside that strip by construction -- about 0.2mm a tab.
       //
-      // **4.5 tape widths since 2026-11-03 (was 3.5). A recorded regression:** puffin reads 6.29mm (4.2
-      // tapes) since the router began refusing copper that touches the other net, which reshaped its
-      // runs and where the carrier's tabs land on them.
-      expect(through, `${name}: mm of cut line running through copper`).toBeLessThan(4.5 * tape);
+      // Loosened to 4.5 tape widths on 2026-11-03 when puffin read 6.29mm (4.2 tapes) after the router
+      // began refusing copper that touches the other net. Back to 3.5 the same day: the excess was bent tabs
+      // whose first leg ran back across the run they grip, which are now refused. puffin reads 0mm,
+      // akde-square-pyramid 1.04mm.
+      expect(through, `${name}: mm of cut line running through copper`).toBeLessThan(3.5 * tape);
     }
   }, { timeout: 30000 });
 
