@@ -60,7 +60,7 @@ import {
   type SheetSpec,
 } from "./fold-strain.js";
 import { CALIBRATED_DEMAND, tapeMmForDemand, traceDemand } from "./tape-demand.js";
-import { resolveNetlist, type NetlistFault } from "./netlist.js";
+import { padsOnFolds, resolveNetlist, type NetlistFault } from "./netlist.js";
 import { planNets, type RoutedNet } from "./net-routing.js";
 import { manualTraces, wireShorts } from "./manual-wire.js";
 import { type Box, type Footprint, type Pad, padAt, padSize } from "./footprint.js";
@@ -1331,8 +1331,9 @@ function routeDeclaredNets(
     ...(t.widths ? { widths: t.widths } : t.width !== undefined ? { widths: t.pts.map(() => t.width!) } : {}),
   });
   const rails = bus.map(asRail);
-  const { nets, faults, fields, pads } =
+  const { nets, faults: netFaults, fields, pads } =
     resolveNetlist(circuit, tapeW, tapeMm, new Set(rails.map((r) => r.net)), batteryPads);
+  const faults = [...netFaults, ...padsOnFolds(pads, gaps)];
   if (!nets.length) return { traces: [], nets: [], faults: [...faults, ...wireShorts(drawn, bus, tapeW)] };
   // The bus goes over as `rails` and NOT also as `obstacles`. Passed twice it arrives twice — once tagged
   // with the net it is a rail for and once anonymously — and the anonymous copy is not excluded from a

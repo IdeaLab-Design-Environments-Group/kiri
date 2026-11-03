@@ -500,6 +500,33 @@ describe("model/net-routing", () => {
     });
   });
 
+  it("reports a part whose pads lie across a fold, and only that part", () => {
+    // The editor's gap mode stands a part on a hinge, turned to cross it. A two-pad chip lands a pad on
+    // each tile; a SOT-23 lands two of its three pads on the hinge line itself, where the sheet bends under
+    // the solder. Nothing said so.
+    const { faces, gaps } = load("church.fkld");
+    const len = (g: (typeof gaps)[number]) => Math.hypot(g.ends[1].x - g.ends[0].x, g.ends[1].y - g.ends[0].y);
+    const g = [...gaps].sort((x, y) => len(y) - len(x))[0]!;
+    const [p, q] = g.ends;
+    const rot = ((Math.atan2(q.x - p.x, -(q.y - p.y)) * 180) / Math.PI + 360) % 360;
+    const far = faces.findIndex((_, i) => i !== g.faceA && i !== g.faceB);
+    const r = planRoutes(faces, gaps, {
+      leds: [], battery: null,
+      parts: [
+        { component: "SOT_23_3", x: (p.x + q.x) / 2, y: (p.y + q.y) / 2, free: true, rot },
+        { component: "SOT_23_3", x: faces[far]!.centroid.x, y: faces[far]!.centroid.y, free: true, rot: 0 },
+      ],
+      nets: [{ id: "a", name: "A" }, { id: "b", name: "B" }],
+      terminals: [
+        { part: 0, pad: "1", net: "a" }, { part: 1, pad: "1", net: "a" },
+        { part: 0, pad: "2", net: "b" }, { part: 1, pad: "2", net: "b" },
+      ],
+    });
+    const folds = r.netFaults.filter((f) => f.kind === "pad-on-fold");
+    expect(folds.map((f) => f.part)).toEqual([0]);
+    expect(folds[0]!.why).toMatch(/fold/);
+  });
+
   it("says a terminal off the material is off it, not behind another net", () => {
     // A lone net has no other net to cross, and the message sent the author looking for one.
     const { faces, gaps, tapeW } = load("house.fkld");

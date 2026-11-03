@@ -16,6 +16,7 @@ import {
   BATTERY_PART,
   BATTERY_PWR_PAD,
   type Circuit,
+  type GapEdge,
   type PlacedPart,
   type Terminal,
   type Vec2,
@@ -35,6 +36,7 @@ import {
 import { MIN_LAND_FRAC, weedGapFor } from "./tape-width.js";
 import { landingWidthFor, padRoomFor } from "./pad-landing.js";
 import type { PadField } from "./trace-types.js";
+import { polyCrosses } from "./trace-geometry.js";
 
 /** One terminal, resolved: which pad of which part, where it is, and the net it is on. */
 export interface NetPoint {
@@ -83,6 +85,7 @@ export interface NetlistFault {
     | "duplicate-net"
     | "single-terminal-net"
     | "pads-too-close"
+    | "pad-on-fold"
     | "wire-short";
   /** Human-readable, and specific enough to act on. */
   why: string;
@@ -490,3 +493,25 @@ export function resolveNetlist(
  * author's own assignment, and an LED meant for a signal net had to be un-wired before it could be wired.
  * Placing a part and wiring it are two decisions and this made one of them silently.
  */
+
+/**
+ * Parts with a pad lying across a fold, one fault per part.
+ *
+ * The editor stands a part on a hinge to bridge two tiles, and a two-pad chip then lands a pad on each. A
+ * part with pads in between puts some on the hinge line itself, where the sheet bends under the solder —
+ * which nothing reported, since the pad's centre is still on the material and routes like any other.
+ */
+export function padsOnFolds(pads: PadObstacle[], gaps: GapEdge[]): NetlistFault[] {
+  const byPart = new Map<number, string[]>();
+  for (const pad of pads) {
+    const ring = [...pad.outline, pad.outline[0]!];
+    if (!pad.outline.length || !gaps.some((g) => polyCrosses(ring, g.ends[0], g.ends[1]))) continue;
+    byPart.set(pad.part, [...(byPart.get(pad.part) ?? []), pad.pad]);
+  }
+  return [...byPart].map(([part, names]) => ({
+    kind: "pad-on-fold" as const,
+    why: `part ${part} has pad${names.length > 1 ? "s" : ""} ${names.join(", ")} across a fold, where the sheet ` +
+      `bends under the solder: turn or move the part so each pad sits flat on one tile.`,
+    part,
+  }));
+}
