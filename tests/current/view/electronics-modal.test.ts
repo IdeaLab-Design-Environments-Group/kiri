@@ -3247,10 +3247,9 @@ describe("view/electronics-modal", () => {
       done();
     });
 
-    it("carries a wire on no rail in the carrier file, and says the strips file could not", () => {
-      // The two files disagree, and the difference is real: the carrier holds runs in a frame whatever net
-      // they are on, while the strips file sorts them onto two cut layers, PWR and GND, and has nowhere to
-      // put a third. A wire between two free points is its own net, so it lands on neither.
+    it("cuts a wire on no rail on a layer of its own in the strips file, and holds it in the carrier", () => {
+      // A wire between two free points is its own net, so it lands on neither rail; the strips file gives
+      // it a layer of its own rather than dropping it.
       const { modal } = openOn(grid2x2());
       const { svgs, done } = catchDownloads();
       drawWire(modal, [{ x: 0.4, y: 0.4 }, { x: 1.6, y: 0.6 }]);
@@ -3258,9 +3257,8 @@ describe("view/electronics-modal", () => {
 
       modal.overlay.querySelector(".el-export").dispatch("click", {});
       expect(svgs, "the file was not built at all").toHaveLength(1);
-      // Not silently: the author is told which file has it, and how to put it on a rail.
-      expect(modal.statusEl.textContent).toContain("1 drawn wire is not in this file");
-      expect(modal.statusEl.textContent).toContain("carrier file carries them all");
+      expect(svgs[0]).toMatch(/<g id="net-[^"]+"[^>]*>\s*<path /);
+      expect(modal.statusEl.textContent).toContain("1 strip on 1 other net");
 
       modal.overlay.querySelector(".el-export-carrier").dispatch("click", {});
       expect(svgs).toHaveLength(2);

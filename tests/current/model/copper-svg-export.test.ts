@@ -169,6 +169,18 @@ describe("model/copper-svg-export", () => {
     expect(total).toBe(traces.filter((t) => t.pts.length >= 2).length);
   });
 
+  it("cuts every other net's copper on a layer of its own and counts it", () => {
+    const { fold, tapeW } = planned("house.fkld");
+    const run = (net: string, y: number) => ({ net, pts: [{ x: 0.5, y }, { x: 1.5, y }] });
+    const out = buildCopperSvgExport(fold, [run("pwr", 0.5), run("gnd", 1), run("n1", 1.5), run("n1", 2), run("w7", 2.5)], tapeW);
+    expect(out.counts).toEqual({ pwr: 1, gnd: 1 });
+    expect(out.nets).toEqual([{ net: "n1", count: 2 }, { net: "w7", count: 1 }]);
+    expect(out.svg.match(/<path /g)).toHaveLength(5);
+    const fills = [...out.svg.matchAll(/<g id="net-(\w+)" fill="([^"]+)"/g)].map((m) => [m[1], m[2]]);
+    expect(fills.map((f) => f[0])).toEqual(["n1", "w7"]);
+    expect(new Set([fills[0]![1], fills[1]![1], "#ff0000", "#222222"]).size).toBe(4);
+  });
+
   it("shares the cut file's frame exactly, so the layers import registered", () => {
     // The whole point of matching MARGIN, bounds and the Y-flip: copper must land on the pattern it was
     // planned for, without being nudged into place by hand.

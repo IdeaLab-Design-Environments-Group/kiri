@@ -9,10 +9,9 @@
  * ## Why `pwr` and `gnd` are the ids, and not `n1`/`n2`
  *
  * The bus router already lays two rails and tags their copper with the literal net ids `"pwr"` and
- * `"gnd"`, and the strips SVG export takes a run onto one of its two cut layers by matching those same
+ * `"gnd"`, and the strips SVG export takes a run onto its PWR or GND cut layer by matching those same
  * two strings. Seeding the declared nets under those ids means a wire the author draws between two pads
- * of the declared PWR net lands on the PWR layer instead of being dropped from the file — which is what
- * `unlayeredWires()` in the editor exists to warn about.
+ * of the declared PWR net lands on the PWR layer instead of a layer of its own.
  *
  * And since 2026-08-26 sharing the id means sharing the copper: `routeDeclaredNets` hands the bus over
  * tagged by net, and a declared net whose id matches a rail **taps** that rail — one leg from a pad onto

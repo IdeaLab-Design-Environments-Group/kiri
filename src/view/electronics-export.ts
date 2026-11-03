@@ -32,8 +32,6 @@ export interface ExportRequest {
   switches?: { a: Vec2; b: Vec2; flip?: boolean }[];
   parts?: PlacedPartMark[];
   keepOff?: Vec2[];
-  /** Drawn wires on neither rail, which the strips file cannot carry — see {@link stripsExport}. */
-  unlayeredWires?: number;
 }
 
 /**
@@ -66,7 +64,7 @@ function nothingToExport(side: string): ExportResult {
 }
 
 /**
- * The copper as separate strips to cut, one cut layer per rail.
+ * The copper as separate strips to cut, one cut layer per net.
  *
  * Hand-drawn copper counts toward "is there anything here": a sheet carrying only wires the author drew has
  * real copper on it, and refusing to export one while telling them to place a battery was blaming them for
@@ -80,29 +78,23 @@ export function stripsExport(req: ExportRequest): ExportResult {
     parts: req.parts,
   });
   const { pwr, gnd } = out.counts;
+  // Every other net (a declared one, a free wire) has a layer of its own, and is counted here with them.
+  const more = out.nets.reduce((n, l) => n + l.count, 0);
+  const others = more
+    ? `${more} strip${more === 1 ? "" : "s"} on ${out.nets.length} other net${out.nets.length === 1 ? "" : "s"}, `
+    : "";
   let message =
     `Exported ${out.filename} — ${pwr} PWR strip${pwr === 1 ? "" : "s"}, ` +
-    `${gnd} GND strip${gnd === 1 ? "" : "s"}, ${mm(out.widthMm)}mm wide${mirrorNote(req.mirror)}`;
+    `${gnd} GND strip${gnd === 1 ? "" : "s"}, ${others}${mm(out.widthMm)}mm wide${mirrorNote(req.mirror)}`;
   // The strip width follows the pattern, and a flat pattern need not be at a physical scale.
   if (out.tooNarrow) message += " — too narrow to cut; scale the pattern up before cutting";
-  // And the drawn wires this file could not take. The strips file cuts two layers, PWR and GND, and a wire
-  // on neither is left out of it. Said out loud, with the way out, because the canvas has already shown the
-  // author that copper and they would otherwise find it missing on the mat.
-  const missed = req.unlayeredWires ?? 0;
-  if (missed > 0) {
-    message +=
-      ` — warning: ${missed} drawn wire${missed === 1 ? " is" : "s are"} not in this file;` +
-      ` the strips file cuts PWR and GND only, so draw a wire from a battery terminal to put it on a rail` +
-      ` (the carrier file carries them all)`;
-  }
   return { filename: out.filename, svg: out.svg, message };
 }
 
 /**
  * One carrier frame holding every trace in place: align it, stick the traces down, snip the tabs.
  *
- * Takes every trace, drawn ones included, whatever net they are on — unlike the strips file it holds runs
- * in a frame rather than sorting them onto two cut layers, so it has no rail to leave a wire off.
+ * Takes every trace, drawn ones included, whatever net they are on, and holds them all in one frame.
  */
 export function carrierExport(req: ExportRequest): ExportResult {
   if (!req.fold || !req.traces.length) return nothingToExport(req.side);

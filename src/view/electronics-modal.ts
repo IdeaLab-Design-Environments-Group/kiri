@@ -1529,22 +1529,6 @@ export class ElectronicsModal {
   }
 
   /**
-   * How many drawn wires the strips file cannot carry.
-   *
-   * That file has exactly two cut layers, `pwr` and `gnd`, and takes a run onto one of them by matching
-   * `Trace2D.net` against those two names. A wire the author drew between two free points carries its own
-   * id, and one drawn between the pads of a declared net carries that net's id — neither is `pwr` or
-   * `gnd`, so neither lands on a layer and both are dropped from the file without a word.
-   *
-   * Counted here so the status line can say so. Silence is the one thing this must not do: the canvas has
-   * already told the author the copper exists.
-   */
-  private unlayeredWires(): number {
-    return manualTraces(this.wireContext())
-      .filter((t) => t.net !== "pwr" && t.net !== "gnd").length;
-  }
-
-  /**
    * The overlay group the wire tool paints into, and nothing else writes to.
    *
    * Re-queried on every call rather than held: `draw()` rewrites the canvas wholesale, so the element
@@ -2902,7 +2886,6 @@ export class ElectronicsModal {
       design: this.design, fold: this.fold, traces: this.allTraces(), tapeW: this.tapeW(), side,
       mirror: this.mirror, sheetMm: this.sheetMm, pads: this.routed.pads, resistors: this.routed.resistors,
       switches: this.routed.switches, parts: this.routedParts(), keepOff: this.keepOff(),
-      unlayeredWires: this.unlayeredWires(),
     };
   }
 

@@ -26,6 +26,7 @@ import {
   weedGapFor,
 } from "./electronics-routing.js";
 import { printScale } from "./print-scale.js";
+import { NET_PALETTE } from "./net-palette.js";
 import { type Box, type Footprint, type Pad, holes, MM_PER_INCH, padAt, padSize, terminals } from "./footprint.js";
 import { type AcrossPart, acrossPart, inlineNamedTerminals, padAxis, padRunBox, seatSigns } from "./parts.js";
 import { R_1206, SW_SPDT } from "./footprints.generated.js";
@@ -142,6 +143,8 @@ export interface CopperSvgExport {
   svg: string;
   /** How many strips each net is cut into — what the user has to peel and lay. */
   counts: { pwr: number; gnd: number };
+  /** The same for every other net (a declared one, a free wire), each on a layer of its own. */
+  nets: { net: string; count: number }[];
   /** NOMINAL strip width in the file's own units, which the SVG declares as mm. See {@link narrowestMm}. */
   widthMm: number;
   /**
@@ -271,7 +274,7 @@ export function buildCopperSvgExport(
     ...parts.map((w) => partShapeOf(w, T)?.notch),
   ].filter((n): n is Vec2[] => !!n && n.length >= 3);
 
-  const layer = (net: "pwr" | "gnd"): { body: string; count: number } => {
+  const layer = (net: string): { body: string; count: number } => {
     const runs = traces.filter((t) => t.net === net && t.pts.length >= 2);
     const paths: string[] = [];
     for (const t of runs) {
@@ -283,14 +286,16 @@ export function buildCopperSvgExport(
     return { body: paths.join("\n    "), count: paths.length };
   };
 
-  const pwr = layer("pwr");
-  const gnd = layer("gnd");
+  const nets = new Set(["pwr", "gnd", ...traces.filter((t) => t.pts.length >= 2).map((t) => t.net)]);
+  const [pwr, gnd, ...others] = [...nets].map((net) => ({ net, ...layer(net) }));
   // Named once, for this export: the carrier builds the same list from the same arguments, so a part is
   // the same R1 on both files.
   const marks = partsLayer(drawnParts(resistors, switches, parts, pads), T);
+  const group = (id: string, fill: string, body: string): string =>
+    `  <g id="${id}" fill="${fill}" stroke="none" fill-rule="evenodd">\n    ${body}\n  </g>`;
   const body =
-    `  <g id="pwr" fill="${PWR_FILL}" stroke="none" fill-rule="evenodd">\n    ${pwr.body}\n  </g>\n` +
-    `  <g id="gnd" fill="${GND_FILL}" stroke="none" fill-rule="evenodd">\n    ${gnd.body}\n  </g>` +
+    [group("pwr", PWR_FILL, pwr!.body), group("gnd", GND_FILL, gnd!.body), ...others.map((l, i) =>
+      group(`net-${l.net.replace(/[^\w-]/g, "_")}`, NET_PALETTE[i % NET_PALETTE.length]!, l.body))].join("\n") +
     // The parts sit on their own layer: they show where the resistor goes, and are not copper to cut.
     (marks.length ? `\n  <g id="parts">\n    ${marks.join("\n    ")}\n  </g>` : "");
 
@@ -302,7 +307,8 @@ export function buildCopperSvgExport(
     svg:
       `<svg xmlns="http://www.w3.org/2000/svg" width="${fmt(w)}mm" height="${fmt(h)}mm" ` +
       `viewBox="0 0 ${fmt(w)} ${fmt(h)}">\n${body}\n</svg>\n`,
-    counts: { pwr: pwr.count, gnd: gnd.count },
+    counts: { pwr: pwr!.count, gnd: gnd!.count },
+    nets: others.map(({ net, count }) => ({ net, count })),
   };
 }
 
