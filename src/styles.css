@@ -851,8 +851,9 @@ body.is-electronics .app-legend {
   border-left: 1px solid var(--border, #e4e7ec);
 }
 /* Clear sits away from everything it would undo, at the far end of the row. */
-.el-group-end {
+.el-group.el-group-end {
   margin-left: auto;
+  padding-left: 0;
   border-left: 0;
 }
 /* A segmented control: buttons that are one choice, so they are drawn as one control with dividers
@@ -1081,7 +1082,7 @@ body.is-electronics .app-legend {
   border-radius: 0.4rem;
   background: var(--surface, #fff);
   color: inherit;
-  width: 10.5rem;
+  width: 13rem;
 }
 .el-part-search:focus {
   outline: none;
@@ -1151,16 +1152,34 @@ body.is-electronics .app-legend {
 }
 /* Narrower than the netlist rail: every control in it is a fixed-width segment or a one-line button, so the
    room a long net name needs would only be empty space here. */
-.el-tools { flex-basis: 12rem; }
+.el-tools { flex-basis: 14rem; }
 /* Full width, stacked — a rail is a column, so a segment laid out for a toolbar row would leave its halves
    at their content widths and ragged against the section header above them. */
 .el-tools .el-seg { display: flex; }
 .el-tools .el-seg > * { flex: 1 1 0; text-align: center; }
 .el-tools .el-route,
-.el-tools .el-export,
-.el-tools .el-export-carrier { display: block; width: 100%; }
-/* The four cut files read as one list rather than four loose buttons. */
-.el-export-sect { gap: 0.25rem; }
+.el-tools .el-form { display: block; width: 100%; margin-left: 0; }
+.el-tools .el-route { font-weight: 600; }
+.el-tools .el-seg > button { padding-left: 0.3rem; padding-right: 0.3rem; white-space: nowrap; }
+/* The four cut files are one table: what is cut down the side, which face across the top. */
+.el-export-grid {
+  display: grid;
+  grid-template-columns: auto 1fr 1fr;
+  gap: 0.25rem;
+  align-items: center;
+}
+.el-export-grid .el-export,
+.el-export-grid .el-export-carrier { width: 100%; text-align: center; }
+.el-export-col,
+.el-export-row,
+.el-sub-label {
+  font-size: 0.72rem;
+  color: var(--muted, #98a2b3);
+  white-space: nowrap;
+}
+.el-export-col { text-align: center; }
+.el-export-row { padding-right: 0.2rem; }
+.el-sub-label { margin-top: 0.25rem; }
 .el-side-sect { display: flex; flex-direction: column; gap: 0.3rem; }
 .el-side-head {
   display: flex;

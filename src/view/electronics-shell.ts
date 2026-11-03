@@ -46,8 +46,6 @@ export function shellMarkup(): string {
                   <span class="el-part-count" aria-live="polite"></span>
                 </span>
               </span>
-            </div>
-            <div class="el-toolbar-row">
               <span class="el-group el-place-modes">
                 <span class="el-group-label">Seat</span>
                 <span class="el-seg">
@@ -55,6 +53,8 @@ export function shellMarkup(): string {
                   <button type="button" class="el-place" data-place="free" title="on a tile: the component stands where you put it, and its pads are wired by nets or by hand-drawn copper">on a tile</button>
                 </span>
               </span>
+            </div>
+            <div class="el-toolbar-row">
               <span class="el-group el-build-modes">
                 <span class="el-group-label">Build</span>
                 <span class="el-seg">
@@ -103,46 +103,46 @@ export function shellMarkup(): string {
               <svg class="el-svg" xmlns="${SVG_NS}" aria-label="electronics flat-pattern canvas"></svg>
             </div>
             <aside class="el-tools" aria-label="view and output">
-              <div class="el-side-sect el-view-modes">
-                <div class="el-side-head"><span class="el-side-title">Copper</span></div>
-                <span class="el-seg">
-                  <button type="button" class="el-view" data-view="strips" title="show the copper as separate strips">strips</button>
-                  <button type="button" class="el-view" data-view="carrier" title="show the copper as one carrier frame holding every trace in place">carrier</button>
-                </span>
-              </div>
               <div class="el-side-sect el-route-modes">
                 <div class="el-side-head"><span class="el-side-title">Route</span></div>
                 <span class="el-seg">
                   <button type="button" class="el-auto" data-auto="on" title="re-plan the copper on every edit that moves it. Wiring a net still waits for Route">auto</button>
                   <button type="button" class="el-auto" data-auto="off" title="the default: leave the copper alone while you place and wire things. The canvas keeps showing the last plan until you press Route">manual</button>
                 </span>
-                <button type="button" class="el-route" title="re-plan the copper now">route</button>
+                <button type="button" class="el-route" title="re-plan the copper now">route now</button>
               </div>
-              <div class="el-side-sect el-mirror-modes">
-                <div class="el-side-head"><span class="el-side-title">Mirror</span></div>
+              <div class="el-side-sect el-view-modes">
+                <div class="el-side-head"><span class="el-side-title">View</span></div>
                 <span class="el-seg">
-                  <button type="button" class="el-mirror" data-axis="x" title="mirror the cut left-right — for cutting through the backing or laying the tape adhesive side up" aria-pressed="false">⇄ Left-right</button>
-                  <button type="button" class="el-mirror" data-axis="y" title="mirror the cut top-bottom" aria-pressed="false">⇅ Top-bottom</button>
+                  <button type="button" class="el-view" data-view="strips" title="show the copper as separate strips">strips</button>
+                  <button type="button" class="el-view" data-view="carrier" title="show the copper as one carrier frame holding every trace in place">carrier</button>
                 </span>
-              </div>
-              <div class="el-side-sect el-export-sect">
-                <div class="el-side-head"><span class="el-side-title">Export</span></div>
-                <button type="button" class="el-export" data-side="inside" title="download the inside's copper as separate strips to cut">strips — Inside</button>
-                <button type="button" class="el-export" data-side="outside" title="download the outside's copper as separate strips to cut">strips — Outside</button>
-                <button type="button" class="el-export-carrier" data-side="inside" title="download the inside's carrier frame: align it, stick the traces down, snip the tabs">carrier — Inside</button>
-                <button type="button" class="el-export-carrier" data-side="outside" title="download the outside's carrier frame: align it, stick the traces down, snip the tabs">carrier — Outside</button>
-              </div>
-              <div class="el-side-sect el-form-sect">
-                <div class="el-side-head"><span class="el-side-title">Form</span></div>
-                <button type="button" class="el-form" title="fold this build in 3D with the copper on it — the same simulation the model page opens, in the material selected here">folded form</button>
-              </div>
-              <div class="el-side-sect el-view-group">
-                <div class="el-side-head"><span class="el-side-title">Zoom</span></div>
                 <span class="el-seg">
                   <button type="button" class="el-zoom-out" title="zoom out" aria-label="zoom out">−</button>
                   <button type="button" class="el-zoom-in" title="zoom in" aria-label="zoom in">+</button>
                   <button type="button" class="el-fit" title="fit to screen">fit</button>
                 </span>
+              </div>
+              <div class="el-side-sect el-export-sect">
+                <div class="el-side-head"><span class="el-side-title">Export</span></div>
+                <div class="el-export-grid">
+                  <span></span><span class="el-export-col">inside</span><span class="el-export-col">outside</span>
+                  <span class="el-export-row">strips</span>
+                  <button type="button" class="el-export" data-side="inside" title="download the inside's copper as separate strips to cut">SVG</button>
+                  <button type="button" class="el-export" data-side="outside" title="download the outside's copper as separate strips to cut">SVG</button>
+                  <span class="el-export-row">carrier</span>
+                  <button type="button" class="el-export-carrier" data-side="inside" title="download the inside's carrier frame: align it, stick the traces down, snip the tabs">SVG</button>
+                  <button type="button" class="el-export-carrier" data-side="outside" title="download the outside's carrier frame: align it, stick the traces down, snip the tabs">SVG</button>
+                </div>
+                <span class="el-sub-label">mirror the cut</span>
+                <span class="el-seg">
+                  <button type="button" class="el-mirror" data-axis="x" title="mirror the cut left-right — for cutting through the backing or laying the tape adhesive side up" aria-pressed="false">⇄ left-right</button>
+                  <button type="button" class="el-mirror" data-axis="y" title="mirror the cut top-bottom" aria-pressed="false">⇅ top-bottom</button>
+                </span>
+              </div>
+              <div class="el-side-sect el-form-sect">
+                <div class="el-side-head"><span class="el-side-title">Fold</span></div>
+                <button type="button" class="el-form" title="fold this build in 3D with the copper on it — the same simulation the model page opens, in the material selected here">preview folded form</button>
               </div>
             </aside>
           </div>
