@@ -284,6 +284,20 @@ export function inlineTerminals(fp: Footprint): Pad[] {
   return inlineNamedTerminals(fp).map(([, p]) => p);
 }
 
+/**
+ * The middle of an in-line part's gap — the bare pattern between its outermost pads — along its own axis,
+ * in millimetres. That gap is what the part is dropped and seated by (`part-fit.ts › freeSpan`); its
+ * middle is not the middle of the pad centres wherever the two outer pads differ in length. A lone pad is
+ * its own middle.
+ */
+export function inlineGapMid(fp: Footprint): number {
+  const row = inlineTerminals(fp), ax = padAxis(fp);
+  if (!row.length) return 0;
+  const ext = (p: Pad): number => (ax.alongIsY ? padSize(p).h : padSize(p).w);
+  const first = row[0]!, last = row[row.length - 1]!;
+  return (ax.along(first) + ext(first) / 2 + ax.along(last) - ext(last) / 2) / 2;
+}
+
 /** The same, keeping each terminal's own name — what a drawing needs to label a pad. */
 export function inlineNamedTerminals(fp: Footprint): [string, Pad][] {
   const ax = padAxis(fp);

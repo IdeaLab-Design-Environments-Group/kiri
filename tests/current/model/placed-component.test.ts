@@ -145,33 +145,23 @@ describe("model/electronics-parts — the placement transform", () => {
     // ORIGIN instead, so the 19 footprints whose pads are not symmetric about it routed a whole pitch away —
     // a net wired to pin 1 landing on pin 2.
     //
-    // **Left — the drawing invents or stretches contacts.** Three parts, and each is a known defect with its
-    // own note in the source:
-    //   - `SW_SPDT` is a one-row part whose second row `acrossPart` FABRICATES by reflecting the common
-    //     through the peg line, so `rowLeads` refuses it and `rowShape` falls back to three contacts at
-    //     places the part has no metal. `rowLeads`' docblock names this and says it cannot be fixed from
-    //     that side. The two USB sockets were here for the same reason until the fabrication stopped at
-    //     three pads.
-    //   - `LED_Luminus_1206` and `TerminalBlock_1pos_...` are two-terminal one-row parts, where
-    //     `inlineShape` pins both pads to the CUT ENDS rather than to their own pitch, so the pad spread is
-    //     stretched whenever that pitch is not `fit.gap` plus a pad's length.
+    // **Fixed — the drawing invented or stretched contacts.** A free `SW_SPDT` was drawn as the rail switch,
+    // its throws on a row `acrossPart` fabricates, where the part has no metal; it is now drawn on its real
+    // pads when it stands free. `LED_Luminus_1206` and `TerminalBlock_1pos_...` have unequal outer pads, and
+    // the drawing centred the GAP between them on the drop point while the bake centred their centres; both
+    // now centre the gap.
     //
-    // The list may only ever SHRINK. A part leaving is the drawing being fixed; a part joining is a
-    // regression, and this test says which.
-    const DRAWING_INVENTS = [
-      "LED_Luminus_1206",
-      "SW_SPDT",
-      "TerminalBlock_1pos_Metz_SM99S01VBNN05G7",
-    ];
+    // The list may only ever SHRINK. A part joining it is a regression, and this test says which.
+    const DRAWING_INVENTS: string[] = [];
 
     const off = (pose: { rot: number; flip: boolean }): Set<string> => {
       const out = new Set<string>();
       for (const { id, footprint: fp } of LIBRARY) {
-        if (terminals(fp).length < 2) continue;   // `partShape` refuses a one-terminal part
         const part = free(id, pose.rot, pose.flip);
         const span = drawnSpanMm(fp, part);
-        const shape = partShape(fp, span.a, span.b, pose.flip);
-        if (!shape) continue;
+        // Free, as the canvas draws every part it did not seat in a rail.
+        const shape = partShape(fp, span.a, span.b, pose.flip, false, true);
+        if (!shape) { out.add(id); continue; }
         const c = placeComponent(part, fp, TAPE_W, TAPE_MM);
         for (const lead of shape.leads) {
           if (!lead.name) continue;
@@ -197,10 +187,10 @@ describe("model/electronics-parts — the placement transform", () => {
     // always did. It used to add 24 parts — `R_1206`, `C_1206`, `LED_1206`, `SW_PUSH` and the rest.
     expect([...flipped].filter((id) => !upright.has(id)).sort()).toEqual([]);
     // And every part outside both lists agrees, which is the assertion that actually protects the transform.
-    // 126 of 129, from 85 when this test was written: 24 recovered by the in-line flip rule, 15 by reading
-    // the right axis, 19 more by anchoring on the pad span, and the two USB sockets by not fabricating a
-    // row for them. The three left are the drawing's own.
-    expect(LIBRARY.length - DRAWING_INVENTS.length).toBe(126);
+    // All 129, from 85 when this test was written: 24 recovered by the in-line flip rule, 15 by reading the
+    // right axis, 19 by anchoring on the pad span, the two USB sockets by not fabricating a row for them,
+    // and the last three by drawing free parts on their real pads.
+    expect(LIBRARY.length - DRAWING_INVENTS.length).toBe(129);
   });
 
   it("draws a free one-terminal part, on the pad its net routes to", () => {

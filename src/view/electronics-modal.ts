@@ -71,6 +71,7 @@ import {
   buildCopperCarrierExport,
   buildCopperSvgExport,
   frameMirrored,
+  type PlacedPartMark,
   type ResistorShape,
   mirrorPoint,
   partShape,
@@ -1372,7 +1373,7 @@ export class ElectronicsModal {
 
   /** Where the router put each placed library part. Defensive against an older plan object that predates
    *  the field, so a stale route cannot crash the canvas. */
-  private routedParts(): { component: string; a: Vec2; b: Vec2; flip?: boolean; source?: number }[] {
+  private routedParts(): { component: string; a: Vec2; b: Vec2; flip?: boolean; free?: boolean; source?: number }[] {
     return [...(this.routed.parts ?? []), ...this.freeParts()];
   }
 
@@ -1389,8 +1390,8 @@ export class ElectronicsModal {
    * them when it cuts rails, which is the whole point of `free`. Without this they would be placed, stored,
    * exported in the netlist — and invisible on the canvas, which is the worst of all the options.
    */
-  private freeParts(): { component: string; a: Vec2; b: Vec2; flip?: boolean; source?: number }[] {
-    const out: { component: string; a: Vec2; b: Vec2; flip?: boolean; source?: number }[] = [];
+  private freeParts(): { component: string; a: Vec2; b: Vec2; flip?: boolean; free?: boolean; source?: number }[] {
+    const out: { component: string; a: Vec2; b: Vec2; flip?: boolean; free?: boolean; source?: number }[] = [];
     (this.circuit.parts ?? []).forEach((p, source) => {
       if (!p.free) return;
       const fp = footprintById(p.component);
@@ -1400,7 +1401,7 @@ export class ElectronicsModal {
       const { a, b } = freeSpan(p, fp, this.tapeW(), this.tapeMm());
       out.push({
         component: p.component,
-        a, b,
+        a, b, free: true,
         ...(p.flip === undefined ? {} : { flip: p.flip }),
         source,
       });
@@ -2713,17 +2714,9 @@ export class ElectronicsModal {
     const fp = part ? footprintById(part.component) : null;
     if (!part || !fp) return;
     const dx = d.at.x - d.from.x, dy = d.at.y - d.from.y;
-    const half = ((partFit(fp).gap * this.tapeW()) / this.tapeMm()) / 2;
-    const th = ((part.rot ?? 0) * Math.PI) / 180;
-    const ux = Math.cos(th), uy = Math.sin(th);
-    const c = { x: part.x + dx, y: part.y + dy };
-    const shape = partShape(
-      fp,
-      this.tp({ x: c.x - ux * half, y: c.y - uy * half }),
-      this.tp({ x: c.x + ux * half, y: c.y + uy * half }),
-      part.flip,
-      this.frameFlipped(),
-    );
+    // The same span and form the part is drawn with where it stands — see `freeParts`.
+    const { a, b } = freeSpan({ ...part, x: part.x + dx, y: part.y + dy }, fp, this.tapeW(), this.tapeMm());
+    const shape = partShape(fp, this.tp(a), this.tp(b), part.flip, this.frameFlipped(), part.free);
     if (!shape) return;
     // No designator on a ghost: the label belongs to the part where it is, and a second copy of `U1`
     // floating at the cursor reads as a second part rather than as the same one on its way somewhere.
@@ -2731,9 +2724,9 @@ export class ElectronicsModal {
       `<g class="el-part-ghost">${partSvg(fp, shape, "", { labels: false, style: "svgpcb" }).join("")}</g>`;
   }
 
-  private partShapeOf(p: { component: string; a: Vec2; b: Vec2; flip?: boolean }): ResistorShape | null {
+  private partShapeOf(p: PlacedPartMark): ResistorShape | null {
     const fp = PART_BY_ID.get(p.component)?.footprint;
-    return fp ? partShape(fp, this.tp(p.a), this.tp(p.b), p.flip, this.frameFlipped()) : null;
+    return fp ? partShape(fp, this.tp(p.a), this.tp(p.b), p.flip, this.frameFlipped(), p.free) : null;
   }
 
   /**

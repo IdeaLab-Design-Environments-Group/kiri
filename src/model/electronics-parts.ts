@@ -43,7 +43,7 @@ import {
   carriesCopper, isTerminal, padAt, padNamed, padPoints, padSize, terminals,
   type Box, type Footprint,
 } from "./footprint.js";
-import { acrossPart, padAxis, seatSigns } from "./parts.js";
+import { acrossPart, inlineGapMid, padAxis, seatSigns } from "./parts.js";
 // `partFit` and `acrossRun` are the two readings a placement has to agree with, and a second copy of
 // either is a second thing to drift. Taken from `part-fit.ts` rather than from the router's facade: this
 // used to be a live cycle (the router reaches placement through `netlist.ts`), safe only by the accident
@@ -167,7 +167,7 @@ export function placementOf(
   if (!across) {
     const c = k * s;
     const p0 = { x: -u.y, y: u.x };   // across the run
-    // Anchored on the middle of the PAD SPAN, not on the footprint's origin.
+    // Anchored on the middle of the GAP between the outermost pads, not on the footprint's origin.
     //
     // `electronics-modal.ts › freeParts` says what the drop point means: the span is "the part's own
     // `partFit.gap` long, centred on the drop point", and `partFit.gap` is measured between the outermost
@@ -175,8 +175,9 @@ export function placementOf(
     // call the origin — and for the 19 footprints whose pads are not symmetric about that origin, the two
     // are different places. Measured before this: `PinHeader_01x03_P2_54mm_Horizontal_SMD` routed a whole
     // 2.54mm pitch away from where it is drawn, so a net wired to pin 1 landed on pin 2.
-    const alongs = terminals(fp).map(([, q]) => ax.along(q));
-    const mid = alongs.length ? (Math.min(...alongs) + Math.max(...alongs)) / 2 : 0;
+    // The gap's middle, not the pad centres': the two differ by a quarter of the outer pads' difference in
+    // length, 0.3mm on `LED_Luminus_1206`, and the drawing and the break are both centred on the gap.
+    const mid = inlineGapMid(fp);
     const origin = { x: at.x - u.x * c * mid, y: at.y - u.y * c * mid };
     // Columns are the images of the footprint's x and y axes.
     //

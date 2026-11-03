@@ -28,7 +28,9 @@ import {
 import { printScale } from "./print-scale.js";
 import { NET_PALETTE } from "./net-palette.js";
 import { type Box, type Footprint, type Pad, holes, MM_PER_INCH, padAt, padSize, terminals } from "./footprint.js";
-import { type AcrossPart, acrossPart, inlineNamedTerminals, padAxis, padRunBox, seatSigns } from "./parts.js";
+import {
+  type AcrossPart, acrossPart, inlineNamedTerminals, padAxis, padRunBox, seatSigns,
+} from "./parts.js";
 import { R_1206, SW_SPDT } from "./footprints.generated.js";
 import { footprintById } from "./library.js";
 import { designators, partSvg } from "./part-render.js";
@@ -776,6 +778,9 @@ export function partShape(
    * tests do) needs to say nothing.
    */
   frameFlipped?: boolean,
+  /** Standing free rather than seated in a rail: drawn on its real pads even where the rail would invent
+   *  a row — the slide switch, whose seat reflects its common across a row the part does not have. */
+  free?: boolean,
 ): ResistorShape | null {
   const ts = inlineNamedTerminals(fp);
   if (!ts.length) return null;
@@ -785,7 +790,7 @@ export function partShape(
   const ux = dx / L, uy = dy / L;
   const across = acrossPart(fp);
   return across
-    ? rowShape(fp, across, a, ux, uy, flip, frameFlipped)
+    ? rowShape(fp, across, a, ux, uy, flip, frameFlipped, free)
     : inlineShape(fp, ts, a, b, ux, uy, dx, dy, frameFlipped);
 }
 
@@ -829,25 +834,17 @@ function inlineShape(
   // short of both, leaving the part drawn as three pieces with bare pattern showing between them.
   const bodyL = L + over * 0.5;
   const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-  // The outermost two contacts, at the cut ends, exactly where this drawing has always put them: a band
-  // of lead pressed down over the full width of the copper, not a line running down the middle.
-  const endA = { x: a.x - ux * (over / 2), y: a.y - uy * (over / 2) };
-  const endB = { x: b.x + ux * (over / 2), y: b.y + uy * (over / 2) };
-  // And every terminal between them, at its own place along the part.
-  //
-  // The two the router measured the break from stay pinned to the ends, because a contact is what lies
-  // on the copper and carries the current; the rest are read off the footprint and land in proportion
-  // between them. On a break the length of the part's own `fit.gap` that proportion IS the datasheet
-  // pitch, so this is the part's spacing and not a stretch of it. The middle pin of a three-pin header
-  // had no role in the routing, so it had no lead and was not drawn at all; this is what puts it back.
-  //
-  // The guarantee is the library-part break specifically, not every break. `breakRuns` is also called
-  // at a constant width for the two fixed tools — `SWITCH_GAP_MM` and `RESISTOR_MM` — and on one of
-  // those the proportion would not be the pitch. Neither can show it today: the resistor has two
-  // terminals and so nothing between them to place, and the switch is drawn by `rowShape`, not here.
-  // A three-terminal part routed down the switch path would be the case that parts them.
+  // The outermost two contacts, their INNER edges on the cut ends: a band of lead pressed down over the full
+  // width of the copper, not a line running down the middle. Each by its own length — taking the first
+  // pad's for both drew a part with unequal outer pads (`LED_Luminus_1206`) 0.3mm off the pads its nets
+  // route to. On a break of the part's own `fit.gap` this is exactly where `placementOf` puts them.
+  const ext = (t: Pad): number => (ax.alongIsY ? padSize(t).h : padSize(t).w);
   const first = ax.along(ts[0]![1]), last = ax.along(ts[ts.length - 1]![1]);
   const span = last - first;
+  const endA = { x: a.x - ux * (ext(ts[0]![1]) / 2), y: a.y - uy * (ext(ts[0]![1]) / 2) };
+  const endB = { x: b.x + ux * (ext(ts[ts.length - 1]![1]) / 2), y: b.y + uy * (ext(ts[ts.length - 1]![1]) / 2) };
+  // And every terminal between them, in proportion: on a break the length of the part's own `fit.gap` that
+  // proportion IS the datasheet pitch. A lone pad sits mid-break.
   const leads = ts.map(([name, t], i) => {
     const size = padSize(t);
     // The pad's own extents, told apart by the axis the part is drawn on rather than by x and y: a pin
@@ -855,14 +852,11 @@ function inlineShape(
     // quarter turn.
     const alongExt = ax.alongIsY ? size.h : size.w;
     const acrossExt = ax.alongIsY ? size.w : size.h;
-    // Degenerate parts — every terminal at one point — keep the old two-contact reading, and a lone pad sits
-    // mid-break, rather than divide by nothing.
+    // Degenerate parts — every terminal at one point — keep the old two-contact reading rather than
+    // divide by nothing.
     const f = Math.abs(span) < 1e-9 ? (ts.length === 1 ? 0.5 : i === 0 ? 0 : 1) : (ax.along(t) - first) / span;
     const o = ax.across(t);
-    const c = {
-      x: endA.x + (endB.x - endA.x) * f + px * o,
-      y: endA.y + (endB.y - endA.y) * f + py * o,
-    };
+    const c = { x: endA.x + (endB.x - endA.x) * f + px * o, y: endA.y + (endB.y - endA.y) * f + py * o };
     return {
       a: { x: c.x - px * acrossExt / 2, y: c.y - py * acrossExt / 2 },
       b: { x: c.x + px * acrossExt / 2, y: c.y + py * acrossExt / 2 },
@@ -906,18 +900,10 @@ function inlineShape(
  * `common` at `a` and `live` at `row ± pitch` — exactly where this function already put them. The routing
  * anchors do not move; the other terminals stop being invented.
  *
- * Returns `null` for a one-row part, which keeps the switch on the path it was written for. There the row
- * separation is a reflection `acrossPart` fabricates (`parts.ts:184`) rather than a distance the footprint
- * has: every terminal shares one across value, so there is no second row to map a pad onto and no honest
- * position to give it.
- *
- * That leaves two parts still drawn wrong, and they are named in the test rather than hidden here:
- * `Conn_USB_microB_Socket_WurthElektronik_629105136821` and `Conn_USB_miniB_Socket_CUIDevices_UJ2_MBH_1`,
- * both five terminals in one row, both still drawn with three. They cannot be fixed from this side. Drawing
- * their five pads where the footprint actually has them — all on one row — would contradict the routing,
- * which breaks the rail across a separation the part does not have. The root cause is that `acrossPart`
- * answers "is this a switch?" and "does this part sit across the run?" with one function; splitting those
- * is the owning session's work, and this returns `null` rather than guess at it.
+ * Returns `null` for a SEATED one-row part, which keeps the switch on the path it was written for: its row
+ * separation is a reflection `acrossPart` fabricates, and the rail's copper is cut for that invented row. A
+ * FREE one has no rail, so it is mapped onto its real pads exactly as `placementOf` places them — its throws
+ * a pitch either side of the common, across the run — along with anything else `place` is asked for.
  */
 function rowLeads(
   fp: Footprint,
@@ -926,7 +912,8 @@ function rowLeads(
   pad: (c: Vec2, size?: Box) => { a: Vec2; b: Vec2; width: number },
   flip?: boolean,
   frameFlipped?: boolean,
-): { a: Vec2; b: Vec2; width: number; name: string }[] | null {
+  free?: boolean,
+): { leads: { a: Vec2; b: Vec2; width: number; name: string }[]; place: (t: Pad) => Vec2 } | null {
   const ax = padAxis(fp);
   const ts = terminals(fp);
   const common = ts.find(([n]) => n === names.common)?.[1];
@@ -934,8 +921,6 @@ function rowLeads(
   if (!common || !live) return null;
 
   const c0 = ax.across(common), a0 = ax.along(common);
-  const dC = ax.across(live) - c0;
-  if (Math.abs(dC) < 1e-9) return null; // one row: the separation is fabricated, not measured
 
   // Signs only — the magnitudes are the footprint's own. `live` must land on the far row, which is what
   // `rowShape` means by +`rowSep`.
@@ -945,32 +930,32 @@ function rowLeads(
   // REFLECTION about the common pad for 60 of the library's 87 across-parts, drawn and routed alike, so the
   // two agreed with each other and disagreed with the chip. A XIAO's pin 1 was drawn where pin 5 goes.
   const seat = seatSigns(fp);
-  if (!seat) return null;
+  if (!seat || (seat.fabricated && !free)) return null; // one row: the separation is fabricated, not measured
   const { sC, sA } = seat;
   // A rotation, so the across-run direction is the plain perpendicular rather than `acrossRun`'s
   // flip-dependent one, and the flip is a half-turn negating both signs. `px`/`py` still place the body,
   // the pegs and the three-terminal fallback, where the flip means which side the live throw takes.
-  const turn = flip ? -1 : 1;
+  const turn = flip && !seat.fabricated ? -1 : 1;
   // Turned the other way when `alongIsY` swaps the footprint's own two axes — the correction
   // `electronics-parts.ts › placementOf` makes on the same line, and without which one of the two cases is
   // orientation-reversing.
-  const fs = frameFlipped ? -1 : 1;
+  // A fabricated row keeps `placementOf`'s flip-dependent side: flipped, the switch is its own mirror image.
+  const fs = (frameFlipped ? -1 : 1) * (seat.fabricated && flip ? -1 : 1);
   const qx = (ax.alongIsY ? -uy : uy) * fs, qy = (ax.alongIsY ? ux : -ux) * fs;
-
-  return ts.map(([name, t]) => {
+  const place = (t: Pad): Vec2 => {
     const along = (ax.across(t) - c0) * sC * turn;   // the part's row axis runs along the rail
     const across = (ax.along(t) - a0) * sA * turn;   // and its pad axis runs across it
-    const c = { x: a.x + ux * along + qx * across, y: a.y + uy * along + qy * across };
-    // Normalised to the run, not raw: `pad()` reads `w` as the across-rail extent and `h` as the
-    // along-rail one, and a turned part's footprint axes are the other way round. Raw `padSize` here drew
-    // 43 of the library's 87 across-parts with their two extents swapped — see {@link padRunBox}.
-    return { ...pad(c, padRunBox(ax, t)), name };
-  });
+    return { x: a.x + ux * along + qx * across, y: a.y + uy * along + qy * across };
+  };
+  // Normalised to the run, not raw: `pad()` reads `w` as the across-rail extent and `h` as the along-rail
+  // one, and a turned part's footprint axes are the other way round. Raw `padSize` here drew 43 of the
+  // library's 87 across-parts with their two extents swapped — see {@link padRunBox}.
+  return { leads: ts.map(([name, t]) => ({ ...pad(place(t), padRunBox(ax, t)), name })), place };
 }
 
 function rowShape(
   fp: Footprint, g: AcrossPart, a: Vec2, ux: number, uy: number, flip?: boolean,
-  frameFlipped?: boolean,
+  frameFlipped?: boolean, free?: boolean,
 ): ResistorShape {
   // Across the run, towards the live throw. The router chose the side when it placed the part; drawing
   // it the other way round would put the housing over the copper the idle throw is meant to avoid.
@@ -1019,8 +1004,19 @@ function rowShape(
       r: (h.drill!.diameter * MM_PER_INCH) / 2,
     };
   });
+  const real = rowLeads(fp, names, a, ux, uy, px, py, pad, flip, frameFlipped, free);
+  // Free and fabricated: the housing and pegs follow the real pads too, the body spanning pads and pegs.
+  if (real && seatSigns(fp)?.fabricated) {
+    const pts = [...terminals(fp).map(([, t]) => real.place(t)), ...holes(fp).map(real.place)];
+    const al = pts.map((q) => q.x * ux + q.y * uy), ac = pts.map((q) => q.x * px + q.y * py);
+    const [l0, l1, c0, c1] = [Math.min(...al), Math.max(...al), Math.min(...ac), Math.max(...ac)];
+    const m = { x: ux * (l0 + l1) / 2 + px * (c0 + c1) / 2, y: uy * (l0 + l1) / 2 + py * (c0 + c1) / 2 };
+    const pegs = holes(fp).map((h) => ({ c: real.place(h), r: (h.drill!.diameter * MM_PER_INCH) / 2 }));
+    const body = { x: m.x - (c1 - c0) / 2, y: m.y - (l1 - l0) / 2, w: c1 - c0, h: l1 - l0, cx: m.x, cy: m.y };
+    return { leads: real.leads, body: { ...body, angle: (Math.atan2(py, px) * 180) / Math.PI }, holes: pegs };
+  }
   return {
-    leads: rowLeads(fp, names, a, ux, uy, px, py, pad, flip, frameFlipped) ?? [
+    leads: real?.leads ?? [
       { ...pad(idle), name: names.idle },
       { ...pad(common), name: names.common },
       { ...pad(live), name: names.live },
@@ -1066,13 +1062,15 @@ export interface PlacedPartMark {
   a: Vec2;
   b: Vec2;
   flip?: boolean;
+  /** Standing free, so drawn on its real pads — see {@link partShape}'s `free`. */
+  free?: boolean;
 }
 
 /** {@link partShape} for a placed part, or `null` if its component is not in the library. */
 function partShapeOf(r: PlacedPartMark, T: (p: Vec2) => Vec2): ResistorShape | null {
   const fp = footprintById(r.component);
   // `T` is the sheet frame, which flips Y — so the across-run direction has to be told, not re-derived.
-  return fp ? partShape(fp, T(r.a), T(r.b), r.flip, frameMirrored(T)) : null;
+  return fp ? partShape(fp, T(r.a), T(r.b), r.flip, frameMirrored(T), r.free) : null;
 }
 
 /** A part about to be drawn: which footprint, which component it is, and the break it bridges. */
@@ -1082,6 +1080,7 @@ interface DrawnPart {
   a: Vec2;
   b: Vec2;
   flip?: boolean;
+  free?: boolean;
 }
 
 /**
@@ -1103,7 +1102,7 @@ function drawnParts(
     ...switches.map((s) => ({ component: "SW_SPDT", fp: SW_SPDT, a: s.a, b: s.b, flip: s.flip })),
     ...parts.flatMap((p) => {
       const fp = footprintById(p.component);
-      return fp ? [{ component: p.component, fp, a: p.a, b: p.b, flip: p.flip }] : [];
+      return fp ? [{ component: p.component, fp, a: p.a, b: p.b, flip: p.flip, free: p.free }] : [];
     }),
     // The LEDs come last, and the editor's canvas builds its own list in this same order, so a chip is
     // the same LED1 on the screen and on both files. An LED the router could not seat is dropped here
@@ -1127,7 +1126,7 @@ function drawnParts(
 function partsLayer(drawn: DrawnPart[], T: (p: Vec2) => Vec2): string[] {
   const placed: { d: DrawnPart; sh: ResistorShape }[] = [];
   for (const d of drawn) {
-    const sh = partShape(d.fp, T(d.a), T(d.b), d.flip, frameMirrored(T)); // `T` reflects — see `partShape`
+    const sh = partShape(d.fp, T(d.a), T(d.b), d.flip, frameMirrored(T), d.free); // `T` reflects — see `partShape`
     if (sh) placed.push({ d, sh });
   }
   const names = designators(placed.map((p) => p.d));
