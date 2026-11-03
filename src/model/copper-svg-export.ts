@@ -1499,12 +1499,6 @@ export function buildCopperCarrierExport(
     quads.push(quad);
     into.push({ index, quad, s1, s2, side, q1, q2 });
   }
-    // Clipped against every other run, but not against the one they grip: a tab side starts *on* its own
-    // ring, and leaving at a shallow angle its first step reads as inside — dropped, the tab would come away
-    // from the trace it holds and the boundary would stand open across the whole tab footprint.
-    // The tab as a shape, not just its two sides: two tabs landing close on one wall overlap, and the buried
-    // halves of their sides have to go the same way a run buried in another run's strip does. Without it those
-    // sides ran on to a window edge that had already been broken across both, and ended on nothing.
 
   // Every piece of copper inside the window: the runs and the tabs holding them.
   const solid = [...rings.map((r) => r.ring), ...quads];
@@ -1568,9 +1562,6 @@ export function buildCopperCarrierExport(
   // geometry either way -- what changes is that the file now says which side of each line the copper is on,
   // which is what the strips file has always said and what a cutter reads a shape from.
   const preClosed = drawn.filter((d) => d.closed).map((d) => d.pts);
-  // One tight pass: every endpoint either was built to coincide with its neighbour's, or is a crossing point
-  // that both sides were cut at, so they agree to within rounding. A looser pass would only paper over a gap
-  // that is real, and a gap that is real is a cut that does not bound anything.
   // Tight first: every endpoint either was built to coincide with its neighbour's, or is a crossing point
   // both sides were cut at, so they agree to within rounding. Then one bounded pass at a tenth of a tape
   // width, which closes a near-tangential graze -- a tab side that just clips another run leaves entry and
