@@ -353,6 +353,31 @@ describe("model/net-routing", () => {
     }
   });
 
+  it("steps a leg sideways off its pad when the first hop is too long for a mid-way bend to clear the pin", () => {
+    // Two C_1206 on akde-hex's two biggest tiles, PWR on pad 1 and GND on pad 2. Turned a quarter, each
+    // part's pads line up with the corridor's first node 55mm off, so leaving one pad heads across the
+    // other. A bend half way along a hop that long turns it about ten degrees, which is not enough: both
+    // nets came back stranded, each blaming the other.
+    const { faces, gaps } = load("akde-hex.fkld");
+    const at = (f: number) => ({ x: faces[f]!.centroid.x, y: faces[f]!.centroid.y });
+    for (const rot of [0, 90, 180, 270]) {
+      const r = planRoutes(faces, gaps, {
+        leds: [], battery: null,
+        parts: [
+          { component: "C_1206", ...at(0), free: true, rot },
+          { component: "C_1206", ...at(21), free: true, rot },
+        ],
+        nets: [{ id: "pwr", name: "PWR" }, { id: "gnd", name: "GND" }],
+        terminals: [
+          { part: 0, pad: "1", net: "pwr" }, { part: 1, pad: "1", net: "pwr" },
+          { part: 0, pad: "2", net: "gnd" }, { part: 1, pad: "2", net: "gnd" },
+        ],
+      });
+      expect(r.nets.map((n) => n.stranded), `rot ${rot}`).toEqual([[], []]);
+      expect(nearestBetweenNets(r.traces), `rot ${rot}`).toBeGreaterThan(0);
+    }
+  });
+
   it("refuses to land on a pad that another part on another net has stacked on top of it", () => {
     // Part 1 placed exactly on part 0, their pad 1s on different nets. Each net's pad sits inside the
     // other's, so landing on either is a short; the coincident-pad allowance is for twin pads of ONE part.
@@ -461,8 +486,15 @@ describe("model/net-routing", () => {
     });
 
     it("strands a leg that can only run over air, and says the edge is why", () => {
-      const r = plan(alongEdge(6));
-      allOnSheet(r.traces);
+      // A sliver of sheet narrower than the tape: no leg between two pads on it can keep both edges on it,
+      // however it bends. (On house a far pair along an edge is now reached, stepping in from the side.)
+      const W = 0.9 * tapeW;
+      const poly = [{ x: 0, y: 0 }, { x: 20 * tapeW, y: 0 }, { x: 20 * tapeW, y: W }, { x: 0, y: W }];
+      const sliver = [{ verts: [0, 1, 2, 3], poly, centroid: { x: 10 * tapeW, y: W / 2 } }];
+      const r = planNets([{ id: "n", name: "SIG", points: [
+        { part: 0, pad: "1", at: { x: 7 * tapeW, y: W / 2 } }, { part: 1, pad: "1", at: { x: 13 * tapeW, y: W / 2 } },
+      ] }], sliver, [], tapeW);
+      expect(r.traces).toEqual([]);
       expect(r.nets[0]!.stranded).toEqual([1]);
       expect(r.nets[0]!.why).toMatch(/edge of the material/);
     });
