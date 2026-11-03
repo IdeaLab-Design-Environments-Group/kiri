@@ -141,6 +141,7 @@ import {
   byComponent,
   clearOfOtherNet,
   idleSide,
+  landsBypass,
   partFit,
   splitRun,
   switchLand,
@@ -1174,8 +1175,9 @@ export function planRoutes(
       toFlat(swPad.w) / 2,
       toFlat(SWITCH_ROW_MM),
     );
-    return clearOfOtherNet(span, laid, tapeW, toFlat(SWITCH_PITCH_MM),
-      { w: toFlat(swPad.w), h: toFlat(swPad.h) }, toFlat(SWITCH_ROW_MM)) &&
+    const pad = { w: toFlat(swPad.w), h: toFlat(swPad.h) };
+    return clearOfOtherNet(span, laid, tapeW, toFlat(SWITCH_PITCH_MM), pad, toFlat(SWITCH_ROW_MM)) &&
+      !landsBypass(span, laid, tapeW, toFlat(SWITCH_PITCH_MM), pad, toFlat(SWITCH_ROW_MM)) &&
       clearOfLeds(
         switchLand(span, toFlat(SWITCH_PITCH_MM), toFlat(swPad.w), toFlat(swPad.h), toFlat(SWITCH_ROW_MM)),
       );
@@ -1223,8 +1225,9 @@ export function planRoutes(
           toFlat(across.pad.w) / 2,
           toFlat(across.rowSep),
         );
-        return clearOfOtherNet(span, laid, tapeW, toFlat(across.pitch),
-          { w: toFlat(across.pad.w), h: toFlat(across.pad.h) }, toFlat(across.rowSep)) &&
+        const pad = { w: toFlat(across.pad.w), h: toFlat(across.pad.h) };
+        return clearOfOtherNet(span, laid, tapeW, toFlat(across.pitch), pad, toFlat(across.rowSep)) &&
+          !landsBypass(span, laid, tapeW, toFlat(across.pitch), pad, toFlat(across.rowSep)) &&
           clearOfLeds(switchLand(span, toFlat(across.pitch), toFlat(across.pad.w), toFlat(across.pad.h),
             toFlat(across.rowSep)));
       })

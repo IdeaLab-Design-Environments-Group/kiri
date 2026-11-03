@@ -473,6 +473,39 @@ describe("model/part-routing", () => {
     expect(placed, "the veto refused every placement").toBeGreaterThan(3);
   });
 
+  it("refuses a switch whose live throw lands on the copper it was meant to cut", () => {
+    // On church the GND rail bends into this break, and the incoming run passes right under the live
+    // throw: the land joins the two cut halves and the switch is on in both positions. On teapot-spout a
+    // run teed onto the incoming half passes beside a SOT-23's live land — a thin strip whose end the
+    // full-width run covers, which only shows when each strip is measured at its own width.
+    const fourLeds = (name: string) => {
+      const fold = JSON.parse(readFileSync(`${EXAMPLES}${name}`, "utf8"));
+      const faces = flatFaces(fold);
+      const gaps = gapGraph(fold, faces).gaps;
+      const seen = new Set<string>();
+      const leds = [];
+      for (const g of gaps) {
+        const l = ledOf(g.faceA, g.faceB);
+        const key = `${l.a}_${l.b}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        leds.push(l);
+        if (leds.length >= 4) break;
+      }
+      return { faces, gaps, base: { leds, battery: { face: 0 } } as Circuit };
+    };
+    const church = fourLeds("church.fkld");
+    const at = { x: 5.2763, y: 6.0075 };
+    for (const c of [{ ...church.base, switches: [at] }, { ...church.base, parts: [{ component: "SW_SPDT", ...at }] }]) {
+      const r = planRoutes(church.faces, church.gaps, c);
+      expect(r.switches.length + r.parts.length).toBe(0);
+    }
+    const spout = fourLeds("teapot-spout.fkld");
+    const r = planRoutes(spout.faces, spout.gaps,
+      { ...spout.base, parts: [{ component: "SOT_23_3", x: 32.1198, y: 38.9169 }] });
+    expect(r.parts).toEqual([]);
+  });
+
   it("leaves the rail whole under a switch it refuses", () => {
     // The veto ran after the rail was already cut, so a refused switch left its break behind: a gap in
     // the copper with no part across it, and every LED past it dark. On house's bus this spot is too

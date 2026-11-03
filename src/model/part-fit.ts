@@ -452,6 +452,31 @@ export function clearOfOtherNet(
   return true;
 }
 
+/**
+ * Whether a three-terminal part seated here is bypassed by its own copper — the switch that is on in both
+ * positions.
+ *
+ * {@link breakRuns} keeps the two cut halves apart, but the lands are laid after it and reach across the
+ * run: where the rail bends into the break, the incoming run can pass under the live throw, and its land
+ * joins the halves. The idle throw resting on the outgoing side does the same in the other position. Both
+ * are measured on `laid` with the lands and the idle pad added, each strip `w` wide where it has no width.
+ */
+export function landsBypass(
+  span: PartSpan, laid: Trace2D[], w: number,
+  pitch: number, pad: { w: number; h: number }, rowSep: number,
+): boolean {
+  const lands = switchLand(span, pitch, pad.w, pad.h, rowSep);
+  if (lands.length < 2) return false;
+  const d = sub(span.b, span.a);
+  const u = scale(d, 1 / len(d));
+  const p = acrossRun(u, span.flip);
+  const idle = add(add(span.a, scale(u, rowSep)), scale(p, -pitch));
+  const idlePad: Trace2D = { net: span.net, pts: [add(idle, scale(u, -pad.h / 2)), add(idle, scale(u, pad.h / 2))], width: pad.w };
+  const all = [...laid.filter((t) => t.net === span.net), ...lands, idlePad];
+  const [common, live, idleAt] = [all.length - 3, all.length - 2, all.length - 1];
+  return joined(all, common, live, w) || joined(all, idleAt, live, w);
+}
+
 
 /**
  * The two pieces of pad-sized copper an across-the-rail part lands on: the common, and the live throw.
@@ -586,15 +611,19 @@ function keepOutAlong(run: Trace2D, segs: { a: Vec2; b: Vec2 }[], clear: number)
  * or where the run is one side of a loop, they need not be.
  */
 function halvesJoined(traces: Trace2D[], ri: number, w: number): boolean {
-  if (!(w > 0)) return false;
-  const net = traces[ri]!.net;
-  const seen = new Set([ri]);
-  const queue = [ri];
+  return w > 0 && joined(traces, ri, ri + 1, w);
+}
+
+/** Whether runs `from` and `to` are one piece of copper, through any runs of their net — see {@link runsTouch}. */
+function joined(traces: Trace2D[], from: number, to: number, w: number): boolean {
+  const net = traces[from]!.net;
+  const seen = new Set([from]);
+  const queue = [from];
   while (queue.length) {
-    const from = traces[queue.pop()!]!;
+    const at = traces[queue.pop()!]!;
     for (const [ti, t] of traces.entries()) {
-      if (seen.has(ti) || t.net !== net || !runsTouch(from, t, w)) continue;
-      if (ti === ri + 1) return true;
+      if (seen.has(ti) || t.net !== net || !runsTouch(at, t, w)) continue;
+      if (ti === to) return true;
       seen.add(ti);
       queue.push(ti);
     }
@@ -602,25 +631,26 @@ function halvesJoined(traces: Trace2D[], ri: number, w: number): boolean {
   return false;
 }
 
-/** Whether two runs' copper overlaps anywhere, each strip `w` wide with square ends. */
+/** Whether two runs' copper overlaps anywhere, each at its own width (`w` where it has none), square-ended. */
 function runsTouch(first: Trace2D, second: Trace2D, w: number): boolean {
+  const [wa, wb] = [first.width ?? w, second.width ?? w];
   for (let i = 1; i < first.pts.length; i++) {
     for (let j = 1; j < second.pts.length; j++) {
-      if (stripsOverlap(first.pts[i - 1]!, first.pts[i]!, second.pts[j - 1]!, second.pts[j]!, w)) return true;
+      if (stripsOverlap(first.pts[i - 1]!, first.pts[i]!, second.pts[j - 1]!, second.pts[j]!, wa, wb)) return true;
     }
   }
   return false;
 }
 
-/** Whether two square-ended strips `w` wide, along `a`-`b` and `c`-`d`, overlap — separating axes. */
-function stripsOverlap(a: Vec2, b: Vec2, c: Vec2, d: Vec2, w: number): boolean {
+/** Whether two square-ended strips, `wa` wide along `a`-`b` and `wb` along `c`-`d`, overlap — separating axes. */
+function stripsOverlap(a: Vec2, b: Vec2, c: Vec2, d: Vec2, wa: number, wb: number): boolean {
   if (len(sub(b, a)) < 1e-12 || len(sub(d, c)) < 1e-12) return false;
-  const quad = (p: Vec2, q: Vec2): Vec2[] => {
+  const quad = (p: Vec2, q: Vec2, w: number): Vec2[] => {
     const u = unit(sub(q, p));
     const n = scale({ x: -u.y, y: u.x }, w / 2);
     return [add(p, n), add(q, n), sub(q, n), sub(p, n)];
   };
-  const P = quad(a, b), Q = quad(c, d);
+  const P = quad(a, b, wa), Q = quad(c, d, wb);
   for (const poly of [P, Q]) {
     for (let i = 0; i < 2; i++) {
       const e = sub(poly[i + 1]!, poly[i]!);
