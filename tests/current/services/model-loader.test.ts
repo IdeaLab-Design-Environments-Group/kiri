@@ -163,7 +163,7 @@ describe("services/model-loader", () => {
     expect(loadedStatus(fold).kind).toBe("ok");
     const mesh = parseLoaded("v 0 0 0", "shape.stl");
     expect(loadedStatus(mesh)).toEqual({
-      msg: 'Loaded STL mesh "shape.stl". Press Kirigamize ▶ to convert.',
+      msg: 'Loaded STL mesh "shape.stl". Press Cut & fold to convert.',
       kind: "",
     });
   });

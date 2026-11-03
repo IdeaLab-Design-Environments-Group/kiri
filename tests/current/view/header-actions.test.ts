@@ -14,10 +14,10 @@ describe("view/header-actions", () => {
     header.appendActionButtons();
 
     const children = Array.from(header.element.children) as any[];
-    // [Create pyramid] [Kirigamize ▶] -- "Load sample" moved into the viewer's own toolbar, where the
+    // [Create pyramid] [Cut & fold] -- "Load sample" moved into the viewer's own toolbar, where the
     // one-entry Example dropdown that loaded the same file used to be.
     expect(children.map((c) => c.tagName)).toEqual(["button", "button"]);
-    expect(children.map((c) => c.textContent)).toEqual(["create pyramid", "cut&fold ▶"]);
+    expect(children.map((c) => c.textContent)).toEqual(["Create pyramid", "Cut & fold"]);
   });
 
   it("fires registered handlers and toggles disabled state", () => {
@@ -32,10 +32,23 @@ describe("view/header-actions", () => {
     const children = Array.from(header.element.children) as HTMLButtonElement[];
     children[0]?.click(); // Create pyramid
     header.setKirigamizeEnabled(true);
-    children[1]?.click(); // Kirigamize ▶
+    children[1]?.click(); // Cut & fold
 
     expect(onCreate).toHaveBeenCalledTimes(1);
     expect(onKirigamize).toHaveBeenCalledTimes(1);
     expect(children[1]?.disabled).toBe(false);
+  });
+
+  it("refreshes the Cut & fold tooltip with its enabled and busy state", () => {
+    installDom();
+    const header = new HeaderActions();
+    header.appendActionButtons();
+    const btn = Array.from(header.element.children)[1] as HTMLButtonElement;
+    header.setKirigamizeEnabled(true);
+    expect(btn.title).toBe("Turn the loaded mesh into a cut-and-fold pattern.");
+    header.setKirigamizeEnabled(false, true);
+    expect(btn.title).toContain("Working");
+    header.setKirigamizeEnabled(false);
+    expect(btn.title).toContain("Needs a mesh");
   });
 });

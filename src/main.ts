@@ -11,6 +11,9 @@
  * This file owns no behavior beyond construction and mounting.
  */
 import "./styles.css";
+import "./styles-welcome.css";
+import { installFirstRun } from "./view/first-run.js";
+import { applyHeaderCopy } from "./view/header-copy.js";
 import { AppStore } from "./model/app-store.js";
 import { ConvertPanel } from "./view/convert-panel.js";
 import { ViewerFrame } from "./view/viewer-frame.js";
@@ -51,7 +54,7 @@ exportModal.mountTrigger(header.element); // …then Export SVG…
 electronics.mountTrigger(header.element); // …then Electronics (LED copper-tape routing)…
 examples.mountTrigger(header.element); // …then Examples (the bundled models; picks one to load)…
 tutorials.mountTrigger(header.element); // …then Tutorials (the screen recordings; reads no state)…
-header.appendActionButtons(); // …then Create / Load sample / cut&fold ▶
+header.appendActionButtons(); // …then Create pyramid / Cut & fold
 document.querySelector(".app-header")?.appendChild(header.element);
 
 // ---- Global error reporting ------------------------------------------------
@@ -73,3 +76,7 @@ examples.onPick((slug) => void controller.loadExample(slug));
 // Default state: load the bundled FKLD example so the panels, viewer, and 3D
 // Sim are all live on first paint (no-op under file:// where fetch is blocked).
 void controller.loadSample(false);
+installFirstRun(viewer.element, convert.element, controller); // first-run welcome card
+// One vocabulary: labels and tooltips for every header button; the "needs" part follows enablement.
+// Subscribed after the controller, so it runs once the buttons were enabled or disabled for this state.
+store.subscribe(() => applyHeaderCopy(header.element));

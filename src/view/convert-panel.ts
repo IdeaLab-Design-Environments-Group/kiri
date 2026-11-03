@@ -33,6 +33,7 @@ export class ConvertPanel {
     panel.append(dropzone);
 
     this.statusEl = el("p", "status");
+    this.statusEl.setAttribute("role", "status");
     this.statusEl.textContent = "no model loaded.";
     panel.append(this.statusEl);
 

@@ -203,7 +203,7 @@ export class AppController {
       return;
     }
     this.busy = true;
-    this.header.setKirigamizeEnabled(false);
+    this.header.setKirigamizeEnabled(false, true);
     this.store.setStatus(`Kirigamizing ${m.name}… (plan cuts → unfold → emit → verify)`, "");
     try {
       // The pipeline is synchronous: let the status line and the disabled button paint first.
@@ -214,7 +214,7 @@ export class AppController {
     } catch (err) {
       // PipelineError passes through with its "<stage>: <message>" text;
       // anything else is wrapped with the kirigamize prefix.
-      const { msg, kind } = statusFromError(err, "pipeline", "kirigamize failed");
+      const { msg, kind } = statusFromError(err, "pipeline", "Cut & fold failed");
       this.store.setStatus(msg, kind);
     } finally {
       this.busy = false;
@@ -265,7 +265,7 @@ export class AppController {
       this.apply(model);
       if (model.kind === "fold") this.viewer.show(model.object, model.name);
     } catch {
-      this.store.setStatus(`Could not load ${name} (serve over http to read the examples).`, "bad");
+      this.store.setStatus(`Could not load ${name}: the examples need the app served over http. Run "npm run dev" and open the printed address, or drop a model file on the left.`, "bad");
     }
   }
 
@@ -277,7 +277,7 @@ export class AppController {
       if (announce) this.store.setStatus("Loaded bundled sample into the viewer.", "ok");
     } catch {
       if (announce)
-        this.store.setStatus("Sample fetch failed (serve over http). The viewer shows it by default.", "");
+        this.store.setStatus("Could not load the house example: serve the app over http (run \"npm run dev\" and open the printed address), or drop a model file on the left.", "");
     }
   }
 
@@ -302,7 +302,7 @@ export class AppController {
       this.store.update({
         viewerShown: null,
         status: {
-          msg: `Loaded ${model.ext.toUpperCase()} mesh "${model.name}". The viewer still shows the previous pattern; press cut&fold ▶ to convert this mesh.`,
+          msg: `Loaded ${model.ext.toUpperCase()} mesh "${model.name}". The viewer still shows the previous pattern; press Cut & fold to convert this mesh.`,
           kind: "",
         },
       });

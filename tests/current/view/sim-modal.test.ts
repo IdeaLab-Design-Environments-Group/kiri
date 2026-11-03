@@ -55,8 +55,16 @@ describe("view/sim-modal", () => {
     modal.setEnabled(true);
 
     expect(host.children).toHaveLength(1);
-    expect(host.children[0]?.textContent).toBe("simulation & routing");
+    expect(host.children[0]?.textContent).toBe("Simulate");
     expect(host.children[0]?.disabled).toBe(false);
+  });
+
+  it("titles the dialog as the 3D fold simulation, not routing", async () => {
+    const { document } = installDom();
+    const { SimModal } = await import("../../../src/view/sim-modal.js");
+    new SimModal();
+    const overlay = document.body.children[0]!;
+    expect(overlay.querySelector(".sim-modal-title")!.textContent).toBe("3D fold simulation — the copper on the folded model");
   });
 
   it("opens lazily, loads a scene, updates fold percent, and can be reset/closed", async () => {
