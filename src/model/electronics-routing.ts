@@ -388,8 +388,7 @@ export function planRoutes(
    * cost, which is the sum-minimising router this one has to be compared against. A baseline routed by
    * different code from the thing it is a baseline for measures the fork as much as the ordering.
    *
-   * Defaults **off**: measured to change no route on any shipped pattern, on either sheet. See
-   * `corridor.ts › buildCorridor` for the measurement and the likely reason.
+   * Defaults **on**, at {@link STRAIN_BAND_CAP}. See `corridor.ts › buildCorridor` for what it changes.
    */
   bandCap: number = STRAIN_BAND_CAP,
   graded: boolean = true,

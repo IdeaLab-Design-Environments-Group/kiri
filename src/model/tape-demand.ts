@@ -148,7 +148,7 @@ export function tapeFitsDemand(
  * widthsFor` is already pinching runs to **1.14mm** beneath an LED pad. The catalogue does not bound a cut.
  *
  * What bounds it is the blade tracking the line and the weeding lifting the waste, which is what
- * `copper-svg-export.ts › MIN_CUTTABLE_MM` records at 3mm. This sits above that with a margin, and the
+ * `copper-svg-export.ts › MIN_CUTTABLE_MM` records at 1mm. This sits above that with a margin, and the
  * margin is a judgement rather than a measurement: a planned width is applied along a whole run, over
  * bends and across hinges, where the per-point narrowing that reaches 1.14mm is a local pinch at a pad
  * with full-width tape either side of it. Planning the whole corpus at the very edge of what a blade can

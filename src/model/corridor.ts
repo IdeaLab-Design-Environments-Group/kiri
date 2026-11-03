@@ -481,8 +481,8 @@ function patternEpsMax(gaps: GapEdge[], tapeW: number, tapeMm: number, sheet: Sh
 /**
  * `epsMax > 0` prices the crease as a graded fraction of the pattern's worst crossing; otherwise it
  * clips at the fatigue limit, which on these stacks is a threshold in all but name (see
- * {@link gradedCreaseFraction}). Closure is taken at full price either way -- a crease folded back on
- * itself can short, and that hazard is not a matter of degree.
+ * `fold-strain.ts › traceformCreaseFraction`). Closure is taken at full price either way -- a crease
+ * folded back on itself can short, and that hazard is not a matter of degree.
  */
 function creaseFraction(
   g: GapEdge, tapeW: number, tapeMm: number, sheet: SheetSpec, epsMax = 0,
@@ -519,23 +519,23 @@ export function buildCorridor(
    * Cap for the crease severity bands the search minimises before it minimises cost — see
    * `fold-strain.ts › strainBand`. Zero switches bands off entirely and gives the pure cost ordering.
    *
-   * **Off by default, because it is measured to do nothing here.** `scripts/bench-band.ts` routes all six
-   * shipped patterns both ways: on the 0.4mm sheet every tension crossing is already past the copper's
-   * fatigue strain, every band caps to the same value, and all six plan identically -- 0% change in
-   * crossings and in copper. On a 0.05mm film the physics does move (house's worst band falls from 3 to 1
-   * and three of its eleven crossings drop below fatigue) and the routes still do not.
+   * **On by default since `78286e8`.** On `akde-hex` at 12 LEDs it takes tension crossings from 23 to 19
+   * (`crease-price.test.ts`). An earlier run of `scripts/bench-band.ts` routed six shipped patterns both
+   * ways: on the 0.4mm sheet every tension crossing was already past the copper's fatigue strain, every
+   * band capped to the same value, and all six planned identically -- 0% change in crossings and in copper.
+   * On a 0.05mm film the physics did move (house's worst band fell from 3 to 1 and three of its eleven
+   * crossings dropped below fatigue) and the routes still did not.
    *
    * The reason looks structural rather than physical: this router works on a face-adjacency corridor -- face
    * centroids and two crossing points per edge, six gaps on `house` -- and an ordering can only exploit
    * routes that exist to choose between. The same algorithm on a ~17,000-node lattice cuts fatiguing
-   * crossings by up to 100% (`traceformroutebench`). Switching it on here changes routes anyway, which broke
-   * seven route-pinning tests for no measured gain, so it stays available and off.
+   * crossings by up to 100% (`traceformroutebench`).
    */
   bandCap: number = STRAIN_BAND_CAP,
   /**
    * Price creases as a graded fraction of this pattern's worst crossing rather than clipping at the
-   * fatigue limit — see {@link gradedCreaseFraction}. Clipping arrives at 3.7 degrees of fold on a
-   * 0.4mm substrate at a 1.5mm hinge, so every real crease sits at the ceiling and a 30 degree fold
+   * fatigue limit — see `fold-strain.ts › traceformCreaseFraction`. Clipping arrives at 3.7 degrees of
+   * fold on a 0.4mm substrate at a 1.5mm hinge, so every real crease sits at the ceiling and a 30 degree fold
    * and a 120 degree fold are charged alike; grading is what makes the signed strain model order
    * severity rather than merely detect it.
    */

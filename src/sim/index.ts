@@ -4,8 +4,7 @@
  * same data drives both the CPU reference solver and the GPU (GPUComputationRenderer) path.
  *
  * The Three.js view (`kirigami/view/sim-canvas.ts`) and the GPU solver (`./gpu/`) are NOT
- * re-exported here, so this barrel stays importable in plain Node (vitest). See
- * `theory/sim-ecs.md` for architecture.
+ * re-exported here, so this barrel stays importable in plain Node (vitest).
  */
 export { buildFoldNet, foldNetFromMesh } from "./foldnet.js";
 export type { FoldNet, FoldNetEdge, EdgeAssignment } from "./foldnet.js";
