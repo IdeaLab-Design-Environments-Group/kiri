@@ -34,6 +34,16 @@ export function nearestOn(
   const d = dx * fx + dy * fy, e = ex * fx + ey * fy;
   const den = a * c - b * b;
 
+  if (dx === 0 && dy === 0) {
+    // `p`-`q` is a point, which is what every pad test asks: the degenerate branch below, without building
+    // its closures and candidate arrays. Same arithmetic, so the same bits.
+    const at = (uu: number): number => Math.hypot(p.x - (r.x + ex * uu), p.y - (r.y + ey * uu));
+    let w = c > 1e-18 ? Math.max(0, Math.min(1, e / c)) : 0;
+    if (at(0) < at(w)) w = 0;
+    if (at(1) < at(w)) w = 1;
+    return { d: at(w), t: 0, u: w };
+  }
+
   let t: number, u: number;
   if (den > 1e-18) {
     // Not parallel: the unconstrained closest approach, then clamped back onto both segments.
