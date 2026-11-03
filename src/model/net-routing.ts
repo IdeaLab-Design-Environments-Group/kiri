@@ -438,7 +438,13 @@ function densifyNearFields(pts: Vec2[], tapeW: number, fields: PadField[]): Vec2
     const len = Math.hypot(b.x - a.x, b.y - a.y);
     // Only where it can matter: a segment whose closest approach to some field is beyond that field's reach
     // has one width along its whole length and nothing to interpolate.
-    const near = fields.some((f) => ptSegDist(f.at, a, b) <= f.reach + tapeW);
+    // The box test first, which only ever skips a field the distance would also have found too far.
+    const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x), y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
+    const near = fields.some((f) => {
+      const r = f.reach + tapeW;
+      if (f.at.x < x0 - r || f.at.x > x1 + r || f.at.y < y0 - r || f.at.y > y1 + r) return false;
+      return ptSegDist(f.at, a, b) <= r;
+    });
     if (near && len > step) {
       // Capped, so a long leg across a crowded board cannot turn into thousands of points.
       const n = Math.min(Math.ceil(len / step), 64);
