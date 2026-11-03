@@ -424,6 +424,27 @@ describe("model/copper-svg-export", () => {
       }
     });
 
+    it("keeps two tabs from crossing, where neither end lies near the other", () => {
+      // The same three runs, one net, wider tape: one run's tab went up past the next run and straight across
+      // that run's tab going left. Measured end to end the two never came within a tape of each other, so the
+      // crossing passed, and the sliver between them was cut as a line that bounds nothing.
+      const { fold } = load("house.fkld");
+      const run = (y: number) => ({ net: "pwr", pts: [{ x: 6, y }, { x: 8, y }] });
+      for (const tapeW of [0.11, 0.12, 0.13]) {
+        const out = buildCopperCarrierExport(fold, [run(6.5), run(7), run(7.5)], tapeW);
+        expect(out.unclosedCuts, `at ${tapeW}`).toBe(0);
+        const cr = (o: Vec2, s: Vec2, t: Vec2): number => (s.x - o.x) * (t.y - o.y) - (s.y - o.y) * (t.x - o.x);
+        const crosses = (p: Vec2[], q: Vec2[]): boolean =>
+          p.some((b, i) => i > 0 && q.some((d, j) => {
+            if (j === 0) return false;
+            const a = p[i - 1]!, c = q[j - 1]!;
+            return cr(a, b, c) * cr(a, b, d) < 0 && cr(c, d, a) * cr(c, d, b) < 0;
+          }));
+        const pairs = out.tabPaths.flatMap((p, i) => out.tabPaths.slice(i + 1).filter((q) => crosses(p, q)));
+        expect(pairs, `tabs crossing at ${tapeW}`).toEqual([]);
+      }
+    });
+
     it("reports tabs it could not route clear rather than hiding them", { timeout: 30000 }, () => {
       // puffin's window is crowded enough that some runs are enclosed by the other net with no clear line out.
       const { fold, traces, tapeW } = planned("puffin.fkld", 12);

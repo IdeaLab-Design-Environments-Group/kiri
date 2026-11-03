@@ -196,7 +196,6 @@ export function pickTab(
 function segNearRing(a: Vec2, q: Vec2, ring: Vec2[], tapeW: number): boolean {
   for (let i = 0; i < ring.length; i++) {
     const c = ring[i]!, d = ring[(i + 1) % ring.length]!;
-    if (segsIntersect(a, q, c, d)) return true;
     if (segSegDist(a, q, c, d) < tapeW) return true;
   }
   return false;
@@ -209,6 +208,8 @@ function segsIntersect(a: Vec2, b: Vec2, c: Vec2, d: Vec2): boolean {
 }
 
 function segSegDist(a: Vec2, b: Vec2, c: Vec2, d: Vec2): number {
+  // Two segments that cross are at zero, though neither one's ends need come near the other.
+  if (segsIntersect(a, b, c, d)) return 0;
   return Math.min(ptSegDist(a, c, d), ptSegDist(b, c, d), ptSegDist(c, a, b), ptSegDist(d, a, b));
 }
 
