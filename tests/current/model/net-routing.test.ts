@@ -411,6 +411,63 @@ describe("model/net-routing", () => {
     for (const t of r.traces) for (const p of t.pts) expect(Math.hypot(p.x - at.x, p.y - at.y)).toBeGreaterThan(1);
   });
 
+  describe("copper on the material, edges and all", () => {
+    // Two pads inside one tile, both hugging an outer edge: the straight leg between them has its centre on
+    // the sheet and half its width over air. Nothing in the net gate looked at the material.
+    const { faces, gaps, tapeW } = load("house.fkld");
+    const onSheet = (p: Vec2): boolean => pointInFace(faces, p) >= 0;
+    /** Two pads `apart` tape widths apart along an outer edge, 0.2 of a tape inside it. */
+    const alongEdge = (apart: number): Vec2[] => {
+      for (const f of faces) {
+        for (let k = 0; k < f.poly.length; k++) {
+          const a = f.poly[k]!, b = f.poly[(k + 1) % f.poly.length]!;
+          const L = Math.hypot(b.x - a.x, b.y - a.y);
+          if (L < (apart + 2) * tapeW) continue;
+          const ux = (b.x - a.x) / L, uy = (b.y - a.y) / L;
+          // Inward is whichever side of the edge the centroid is on.
+          const s = Math.sign((f.centroid.x - a.x) * -uy + (f.centroid.y - a.y) * ux);
+          const at = (t: number, off: number): Vec2 =>
+            ({ x: a.x + ux * t - uy * s * off, y: a.y + uy * t + ux * s * off });
+          if (onSheet(at(L / 2, -0.4 * tapeW))) continue; // a hinge, with material beyond it
+          return [at(L / 2 - (apart / 2) * tapeW, 0.2 * tapeW), at(L / 2 + (apart / 2) * tapeW, 0.2 * tapeW)];
+        }
+      }
+      throw new Error("house has no outer edge long enough for this fixture");
+    };
+    const plan = (pts: Vec2[]) =>
+      planNets([{ id: "n", name: "SIG", points: pts.map((at, k) => ({ part: k, pad: "1", at })) }], faces, gaps, tapeW);
+    const allOnSheet = (traces: Trace2D[]): void => {
+      for (const t of traces) {
+        for (let k = 1; k < t.pts.length; k++) {
+          const a = t.pts[k - 1]!, b = t.pts[k]!;
+          const w = Math.max(t.widths?.[k - 1] ?? tapeW, t.widths?.[k] ?? tapeW) * 0.98;
+          const L = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+          const nx = (-(b.y - a.y) / L) * (w / 2), ny = ((b.x - a.x) / L) * (w / 2);
+          for (let i = 0; i <= 20; i++) {
+            const m = { x: a.x + ((b.x - a.x) * i) / 20, y: a.y + ((b.y - a.y) * i) / 20 };
+            for (const p of [m, { x: m.x + nx, y: m.y + ny }, { x: m.x - nx, y: m.y - ny }]) {
+              expect(onSheet(p), `copper over air at ${JSON.stringify(p)}`).toBe(true);
+            }
+          }
+        }
+      }
+    };
+
+    it("bends a leg in off the edge when it can", () => {
+      const r = plan(alongEdge(2));
+      allOnSheet(r.traces);
+      expect(r.nets[0]!.stranded).toEqual([]);
+      expect(r.traces[0]!.pts.length, "the straight leg was laid, and it is the one over air").toBeGreaterThan(2);
+    });
+
+    it("strands a leg that can only run over air, and says the edge is why", () => {
+      const r = plan(alongEdge(6));
+      allOnSheet(r.traces);
+      expect(r.nets[0]!.stranded).toEqual([1]);
+      expect(r.nets[0]!.why).toMatch(/edge of the material/);
+    });
+  });
+
   it("says a terminal off the material is off it, not behind another net", () => {
     // A lone net has no other net to cross, and the message sent the author looking for one.
     const { faces, gaps, tapeW } = load("house.fkld");

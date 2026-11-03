@@ -59,9 +59,9 @@ import type { FlatFace, GapEdge, Vec2 } from "./electronics.js";
 import { pointInFace } from "./electronics.js";
 // Imported from the modules that own each concern rather than from the router's facade: net routing is
 // reached BY the router, so importing the router back would close a cycle.
-import { FOLD_PENALTY_FRAC, TAPE_MM, weedGapFor } from "./tape-width.js";
+import { FOLD_PENALTY_FRAC, TAPE_MM, bridgeSpanFor, weedGapFor } from "./tape-width.js";
 import { STRAIN_BAND_CAP } from "./fold-strain.js";
-import { buildCorridor, searchCorridor } from "./corridor.js";
+import { buildCorridor, crossesSeam, searchCorridor } from "./corridor.js";
 import { patternDiag, ptKey } from "./trace-geometry.js";
 import { narrowedTo } from "./pad-landing.js";
 import type { Corridor, PadField, Trace2D } from "./trace-types.js";
@@ -536,6 +536,8 @@ interface LegRules {
   faces: FlatFace[];
   /** This net's width at each point already asked about, by exact coordinates — see {@link layLeg}. */
   widthMemo: Map<string, number>;
+  /** Whether a whole leg's tape stays on the material — see {@link legOnBody}. */
+  onBody: (pts: Vec2[], widths: number[] | undefined) => boolean;
 }
 
 /**
@@ -551,10 +553,52 @@ interface LegRules {
 const DETOUR_STEPS = 6;
 const DETOUR_STEP_TAPES = 0.6;
 
+/**
+ * Whether a leg's tape — its centreline and both edges, at the width it has there — stays on the material,
+ * allowing only what the bus allows: an opening no longer than `bridgeW` with material on both sides, and no
+ * zero-width seam (`corridor.ts › tapeOnBody`).
+ *
+ * Read along the WHOLE leg rather than per segment, which is the point. Corridor nodes sit on tile edges by
+ * construction, so a per-segment reading meets air at every node of a lip and calls a hop between two lips a
+ * strip ending in mid-air; along the leg the same air is one short run with material either side, which is
+ * the bridge the corridor priced it as. Only the leg's own two ends — a pad, a rail — cannot be a bridge's
+ * bank, so a run reaching either is refused whatever its length.
+ */
+function legOnBody(
+  faces: FlatFace[], pts: Vec2[], widths: number[] | undefined, tapeW: number, bridgeW: number,
+): boolean {
+  for (let k = 1; k < pts.length; k++) if (crossesSeam(faces, pts[k - 1]!, pts[k]!)) return false;
+  const step = tapeW / 4;
+  for (const side of [0, 1, -1]) {
+    let s = 0, runFrom = -1, first = true;
+    for (let k = 1; k < pts.length; k++) {
+      const a = pts[k - 1]!, b = pts[k]!;
+      const L = Math.hypot(b.x - a.x, b.y - a.y);
+      if (L < 1e-12) continue;
+      const n = Math.ceil(L / step), last = k === pts.length - 1;
+      for (let i = 0; i <= n; i++) {
+        if (i === n && !last) break; // the next segment starts here
+        const u = i / n, half = (side * widthAt(widths, k, u, tapeW)) / 2 / L;
+        const x = a.x + (b.x - a.x) * u - (b.y - a.y) * half, y = a.y + (b.y - a.y) * u + (b.x - a.x) * half;
+        const at = s + L * u;
+        if (pointInFace(faces, { x, y }) >= 0) runFrom = -1;
+        else if (first || (last && i === n)) return false; // air at a pad or rail: tape ending over nothing
+        else if (runFrom < 0) runFrom = at;
+        else if (at - runFrom > bridgeW) return false;
+        first = false;
+      }
+      s += L;
+    }
+  }
+  return true;
+}
+
 /** Whether a whole path clears every other net AND every pad that is not this net's. */
 function pathOk(
   pts: Vec2[], widths: number[] | undefined, r: LegRules,
-): { ok: true } | { ok: false; cuts: string | null } {
+  /** False for a piece of a leg ending on a corridor node rather than a pad, which the material test skips. */
+  whole = true,
+): { ok: true } | { ok: false; cuts: string | null; edge?: true } {
   const wAt = (k: number): number => widths?.[k] ?? r.tapeW;
   for (let k = 1; k < pts.length; k++) {
     const a = pts[k - 1]!, b = pts[k]!;
@@ -568,6 +612,9 @@ function pathOk(
     // is more honest than naming whatever else its part is wired to.
     if (over) return { ok: false, cuts: over.net };
   }
+  // And the sheet itself: clear of everything else, a leg hugging a tile's outer edge still lays half its
+  // width over air.
+  if (whole && !r.onBody(pts, widths)) return { ok: false, cuts: null, edge: true };
   return { ok: true };
 }
 
@@ -582,7 +629,7 @@ function layLeg(
   a: Vec2, b: Vec2, mid: Vec2[],
   padWidthA: number | undefined, padWidthB: number | undefined,
   r: LegRules,
-): { ok: true; pts: Vec2[]; widths?: number[] } | { ok: false; cuts: string | null } {
+): { ok: true; pts: Vec2[]; widths?: number[] } | { ok: false; cuts: string | null; edge?: true } {
   // Only the metal within reach of this leg's points, which leaves every width exactly as it was.
   // Remembered per net, because every order lays most of the same legs through the same points again.
   const widthsOf = (pts: Vec2[], wp?: number, wq?: number): number[] | undefined => {
@@ -644,7 +691,7 @@ function layLeg(
   // board several times slower for no extra reach.
   const hopOk = (p: Vec2, w: Vec2, q: Vec2, wp?: number, wq?: number): boolean => {
     const pts = densifyNearFields([p, w, q], r.tapeW, r.fields);
-    return pathOk(pts, widthsOf(pts, wp, wq), r).ok;
+    return pathOk(pts, widthsOf(pts, wp, wq), r, false).ok;
   };
   const clearFirsts = firsts.filter((v) => hopOk(a, v, mid[0]!, padWidthA, undefined));
   for (const v of clearFirsts) {
@@ -657,7 +704,7 @@ function layLeg(
     const bent = build([v, ...mid, w]);
     if (pathOk(bent.pts, bent.widths, r).ok) return { ok: true, ...bent };
   }
-  return { ok: false, cuts: first.cuts };
+  return { ok: false, cuts: first.cuts, ...(first.edge ? { edge: true as const } : {}) };
 }
 
 function routeOne(
@@ -680,6 +727,8 @@ function routeOne(
   padGap: number,
   /** This net's widths from earlier orders: they depend on the pads and fields alone, never on the order. */
   widthMemo: Map<string, number>,
+  /** The material test every leg is held to — see {@link legOnBody}. */
+  onBody: (pts: Vec2[], widths: number[] | undefined) => boolean,
 ): {
   traces: Trace2D[];
   stranded: number[];
@@ -693,6 +742,8 @@ function routeOne(
   /** Whether a stranded terminal was refused by something with no net to blame — the bus, a hand-drawn
    *  wire, or a pad nobody wired. */
   walled: boolean;
+  /** Whether a stranded terminal was refused because its copper would leave the material. */
+  edged: boolean;
   /** How many of `stranded` are off the material altogether, which no other net had any part in. */
   off: number;
 } {
@@ -701,7 +752,7 @@ function routeOne(
   const used = new Set<string>();
   const lines: Trace2D[] = [];
   const blame: string[] = [];
-  let walled = false;
+  let walled = false, edged = false;
   const accuse = (who: string | null): void => {
     if (who && who !== net.id && !blame.includes(who)) blame.push(who);
   };
@@ -714,7 +765,7 @@ function routeOne(
   const mine = theirs.filter((l) => l.rail === net.id).map((l) => l.pts);
   const others = theirs.filter((l) => l.rail !== net.id);
   const rules: LegRules = {
-    others, clearance, tapeW, fields, pads: foreignPads(pads, net.id, own), padGap, faces, widthMemo,
+    others, clearance, tapeW, fields, pads: foreignPads(pads, net.id, own), padGap, faces, widthMemo, onBody,
   };
 
   // A pad that is not on the material at all can never be reached, and says so once rather than once per
@@ -769,7 +820,8 @@ function routeOne(
     if (!leg.ok) {
       if (!stranded.includes(j)) stranded.push(j);
       accuse(leg.cuts);
-      if (leg.cuts === null) walled = true;
+      if (leg.edge) edged = true;
+      else if (leg.cuts === null) walled = true;
       continue;
     }
     reached.add(j);
@@ -809,7 +861,8 @@ function routeOne(
     tapped = "laid";
     break;
   }
-  return { traces, stranded, used, lines, blame, tapped, walled, off: faceOf.filter((f) => f < 0).length };
+  const off = faceOf.filter((f) => f < 0).length;
+  return { traces, stranded, used, lines, blame, tapped, walled, edged, off };
 }
 
 /**
@@ -894,6 +947,15 @@ export function planNets(
   const clearance = weedFloorFor(tapeW, tapeMm, sheet);
   const padGap = padClearanceFor(tapeW, tapeMm);
   const memo = nets.map(() => new Map<string, number>());
+  // Remembered, since every order lays most legs again.
+  const bridgeW = bridgeSpanFor(tapeW, tapeMm);
+  const bodyMemo = new Map<string, boolean>();
+  const onBody = (pts: Vec2[], widths: number[] | undefined): boolean => {
+    const key = JSON.stringify([pts, widths]);
+    let v = bodyMemo.get(key);
+    if (v === undefined) bodyMemo.set(key, (v = legOnBody(faces, pts, widths, tapeW, bridgeW)));
+    return v;
+  };
 
   const span = (n: ResolvedNet): number => {
     const xs = n.points.map((p) => p.at.x), ys = n.points.map((p) => p.at.y);
@@ -934,7 +996,8 @@ export function planNets(
     let stranded = 0, copper = 0;
     for (const idx of order) {
       const n = nets[idx]!;
-      const r = routeOne(n, faces, c, blocked, laid, clearance, owner, tapeW, fields, pads, padGap, memo[idx]!);
+      const r = routeOne(
+        n, faces, c, blocked, laid, clearance, owner, tapeW, fields, pads, padGap, memo[idx]!, onBody);
       for (const k of r.used) {
         blocked.add(k);
         if (!owner.has(k)) owner.set(k, n.id);
@@ -960,6 +1023,7 @@ export function planNets(
       // Copper or a pad that belongs to no net is in the way too, and naming only nets would send the
       // author looking for a net that is not there.
       if (r.walled) inTheWay.push("other copper or a pad");
+      if (r.edged) inTheWay.push("the edge of the material");
       const tapWhy =
         r.tapped === "failed"
           ? `"${n.name}" could not be joined to the ${n.name} rail or wire without crossing other copper. ` +
