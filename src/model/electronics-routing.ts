@@ -17,8 +17,9 @@
  *
  * ## What is and is not guaranteed
  *
- * **Over-LED is zero** on every bundled pattern: a rail only ever runs pad to pad, and such a span was not
- * observed to cross a third chip. Measured, not proved — see the test.
+ * **Over-LED is zero** on house, church, puffin and akde-hex: a rail only ever runs pad to pad, and such a
+ * span was not observed to cross a third chip there. Measured, not proved — see the test. It does not hold
+ * on every bundled pattern: guitar-headstock at 24 LEDs runs a PWR span across LED 3's chip.
  *
  * **Crossings are reduced, not eliminated.** With 12 LEDs: akde-hex 13, akde-decagon 12, akde-square 7,
  * puffin 5, church 3, house 0. For comparison the previous graph-search router scored 78 / 31 / 13 / 36 / 5
