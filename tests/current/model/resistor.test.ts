@@ -50,6 +50,25 @@ function fixture(leds = 1) {
   return { fold, faces, gaps, base, plain, mid, tapeW: tapeWidthFor(faces), k: printScale(fold) };
 }
 
+/** puffin with four LEDs — a crowded GND rail, where breaks meet loops and zigzags. */
+function puffin() {
+  const fold = JSON.parse(readFileSync(`${EXAMPLES}puffin.fkld`, "utf8"));
+  const faces = flatFaces(fold);
+  const gaps = gapGraph(fold, faces).gaps;
+  const seen = new Set<string>();
+  const leds = [];
+  for (const g of gaps) {
+    const l = ledOf(g.faceA, g.faceB);
+    const key = `${l.a}_${l.b}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    leds.push(l);
+    if (leds.length >= 4) break;
+  }
+  const base: Circuit = { leds, battery: { face: 0 } };
+  return { faces, gaps, base, plain: planRoutes(faces, gaps, base) };
+}
+
 /** Every fill and stroke colour used in a chunk of SVG, lowercased. */
 function paintIn(svg: string): Set<string> {
   return new Set(
@@ -174,22 +193,18 @@ describe("model/resistor", () => {
     // puffin's GND rail with four LEDs is a loop here: one run crosses another, and both reach the same
     // junction further on. A break on the loop leaves its two cut ends joined the long way round, and the
     // resistor limits nothing. Refused, as a part that does not fit.
-    const fold = JSON.parse(readFileSync(`${EXAMPLES}puffin.fkld`, "utf8"));
-    const faces = flatFaces(fold);
-    const gaps = gapGraph(fold, faces).gaps;
-    const seen = new Set<string>();
-    const leds = [];
-    for (const g of gaps) {
-      const l = ledOf(g.faceA, g.faceB);
-      const key = `${l.a}_${l.b}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      leds.push(l);
-      if (leds.length >= 4) break;
-    }
-    const base: Circuit = { leds, battery: { face: 0 } };
-    const plain = planRoutes(faces, gaps, base);
+    const { faces, gaps, base, plain } = puffin();
     const r = planRoutes(faces, gaps, { ...base, resistors: [{ x: 86.0998, y: 151.2401 }] });
+    expect(r.resistors).toEqual([]);
+    expect(r.traces).toEqual(plain.traces);
+  });
+
+  it("refuses a break whose two halves pass closer than the weeding floor", () => {
+    // The break itself is a straight 1.8mm, but the run zigzags into it: an earlier stretch of the first
+    // half comes back within 0.3mm of the second half's cut end. A strip that thin tears instead of
+    // lifting, and the copper left behind bridges the part — the same floor an LED_0603 is refused at.
+    const { faces, gaps, base, plain } = puffin();
+    const r = planRoutes(faces, gaps, { ...base, resistors: [{ x: 74.528, y: 148.4578 }] });
     expect(r.resistors).toEqual([]);
     expect(r.traces).toEqual(plain.traces);
   });

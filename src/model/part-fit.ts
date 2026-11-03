@@ -25,6 +25,7 @@ import {
   distToSeg,
   len,
   scale,
+  segNearSeg,
   segsCross,
   sub,
   trimEnd,
@@ -212,7 +213,7 @@ export function breakForResistors(
   /** The tape in mm — see {@link seatLed}. */
   tapeMm: number = TAPE_MM,
   /** See {@link breakRuns}. */
-  keepOut?: { segs: { a: Vec2; b: Vec2 }[]; clear: number },
+  keepOut?: { segs: { a: Vec2; b: Vec2 }[]; clear: number; weed?: number },
 ): { traces: Trace2D[]; placed: ResistorSpan[] } {
   // The body in the pattern's own units: the tape is `tapeMm` wide and `tapeW` units, so this follows it.
   const body = (RESISTOR_MM * tapeW) / tapeMm;
@@ -245,8 +246,11 @@ export function breakRuns(
    * The LED legs are laid after the breaks, and a leg is a stub of tape on a run's own net. Cut a run
    * beside one and the stub lands across both cut ends: the part is shorted out by its neighbour's leg.
    * Measured before this existed on house, church and puffin, 3-4 of every 8 parts dropped on the bus.
+   *
+   * `weed`, where given, is the bare strip the two cut halves have to keep between them anywhere, not
+   * just across the break: a run that zigzags into its break can bring one half back beside the other.
    */
-  keepOut: { segs: { a: Vec2; b: Vec2 }[]; clear: number } = { segs: [], clear: 0 },
+  keepOut: { segs: { a: Vec2; b: Vec2 }[]; clear: number; weed?: number } = { segs: [], clear: 0 },
 ): { traces: Trace2D[]; placed: PartSpan[] } {
   const placed: PartSpan[] = [];
   if (!parts.length) return { traces, placed };
@@ -305,7 +309,7 @@ export function breakRuns(
     // A run that doubles back on itself can bring one half back beside the other's cut end, which shorts
     // the part with no other copper involved — and a run on a loop of its net's copper has its halves
     // joined the long way round. Either way the part is bypassed. Refused, as a part that does not fit.
-    if (split.span && halvesJoined(split.traces, bestRun, keepOut.clear)) {
+    if (split.span && halvesJoined(split.traces, bestRun, keepOut.clear, keepOut.weed ?? 0)) {
       split = { traces: out, span: null };
     }
     out = split.traces;
@@ -332,7 +336,7 @@ export function breakAndSeat(
   parts: { x: number; y: number }[],
   gap: number,
   reach: { before: number; after: number },
-  keepOut: { segs: { a: Vec2; b: Vec2 }[]; clear: number },
+  keepOut: { segs: { a: Vec2; b: Vec2 }[]; clear: number; weed?: number },
   seat: (span: PartSpan, traces: Trace2D[]) => boolean,
 ): { traces: Trace2D[]; placed: PartSpan[] } {
   let keep = parts.map((_, i) => i);
@@ -605,17 +609,31 @@ function keepOutAlong(run: Trace2D, segs: { a: Vec2; b: Vec2 }[], clear: number)
 }
 
 /**
- * Whether the two halves of a broken run, at `ri` and `ri + 1`, are still one piece of copper: overlapping
- * directly, or through other runs of their net, each strip `w` wide with square ends. Across a straight
- * break the ends are a body apart and clear; across a bend, where the run doubles back past its own break,
- * or where the run is one side of a loop, they need not be.
+ * Whether the two halves of a broken run, at `ri` and `ri + 1`, are still one piece of copper: touching
+ * through any runs of their net, or — the copper at either cut end, each half and any run that meets it
+ * there — passing within `weed` of the other side's, a strip too thin to lift. Each strip `w` wide with
+ * square ends. Across a straight break the ends are a body apart and clear; across a bend, where the run
+ * zigzags or doubles back past its own break, or where the run is one side of a loop, they need not be.
  */
-function halvesJoined(traces: Trace2D[], ri: number, w: number): boolean {
-  return w > 0 && joined(traces, ri, ri + 1, w);
+function halvesJoined(traces: Trace2D[], ri: number, w: number, weed: number): boolean {
+  if (!(w > 0)) return false;
+  if (joined(traces, ri, ri + 1, w)) return true;
+  if (!(weed > 0)) return false;
+  const atEnd = (half: number, end: Vec2): Trace2D[] => [traces[half]!, ...traces.filter((t, ti) =>
+    ti !== ri && ti !== ri + 1 && t.net === traces[ri]!.net &&
+    t.pts.slice(1).some((b, i) => distToSeg(end, t.pts[i]!, b) < w) && runsTouch(t, traces[half]!, w))];
+  const first = atEnd(ri, traces[ri]!.pts.at(-1)!);
+  const second = atEnd(ri + 1, traces[ri + 1]!.pts[0]!);
+  return first.some((a) => second.some((b) => runsTouch(a, b, w, weed)));
 }
 
 /** Whether runs `from` and `to` are one piece of copper, through any runs of their net — see {@link runsTouch}. */
 function joined(traces: Trace2D[], from: number, to: number, w: number): boolean {
+  return connected(traces, from, w).has(to);
+}
+
+/** Every run that is one piece of copper with run `from`, itself included. */
+function connected(traces: Trace2D[], from: number, w: number): Set<number> {
   const net = traces[from]!.net;
   const seen = new Set([from]);
   const queue = [from];
@@ -623,27 +641,30 @@ function joined(traces: Trace2D[], from: number, to: number, w: number): boolean
     const at = traces[queue.pop()!]!;
     for (const [ti, t] of traces.entries()) {
       if (seen.has(ti) || t.net !== net || !runsTouch(at, t, w)) continue;
-      if (ti === to) return true;
       seen.add(ti);
       queue.push(ti);
     }
   }
-  return false;
+  return seen;
 }
 
-/** Whether two runs' copper overlaps anywhere, each at its own width (`w` where it has none), square-ended. */
-function runsTouch(first: Trace2D, second: Trace2D, w: number): boolean {
+/** Whether two runs' copper comes within `margin` anywhere, each at its own width (`w` where it has none),
+ *  square-ended. */
+function runsTouch(first: Trace2D, second: Trace2D, w: number, margin = 0): boolean {
   const [wa, wb] = [first.width ?? w, second.width ?? w];
   for (let i = 1; i < first.pts.length; i++) {
     for (let j = 1; j < second.pts.length; j++) {
-      if (stripsOverlap(first.pts[i - 1]!, first.pts[i]!, second.pts[j - 1]!, second.pts[j]!, wa, wb)) return true;
+      if (stripsOverlap(first.pts[i - 1]!, first.pts[i]!, second.pts[j - 1]!, second.pts[j]!, wa, wb, margin)) {
+        return true;
+      }
     }
   }
   return false;
 }
 
-/** Whether two square-ended strips, `wa` wide along `a`-`b` and `wb` along `c`-`d`, overlap — separating axes. */
-function stripsOverlap(a: Vec2, b: Vec2, c: Vec2, d: Vec2, wa: number, wb: number): boolean {
+/** Whether two square-ended strips, `wa` wide along `a`-`b` and `wb` along `c`-`d`, overlap — separating
+ *  axes — or, given a `margin`, come closer than it. */
+function stripsOverlap(a: Vec2, b: Vec2, c: Vec2, d: Vec2, wa: number, wb: number, margin = 0): boolean {
   if (len(sub(b, a)) < 1e-12 || len(sub(d, c)) < 1e-12) return false;
   const quad = (p: Vec2, q: Vec2, w: number): Vec2[] => {
     const u = unit(sub(q, p));
@@ -656,7 +677,10 @@ function stripsOverlap(a: Vec2, b: Vec2, c: Vec2, d: Vec2, wa: number, wb: numbe
       const e = sub(poly[i + 1]!, poly[i]!);
       const along = (pts: Vec2[]): number[] => pts.map((p) => p.y * e.x - p.x * e.y);
       const pp = along(P), qq = along(Q);
-      if (Math.max(...pp) <= Math.min(...qq) + 1e-12 || Math.max(...qq) <= Math.min(...pp) + 1e-12) return false;
+      if (Math.max(...pp) <= Math.min(...qq) + 1e-12 || Math.max(...qq) <= Math.min(...pp) + 1e-12) {
+        return margin > 0 && P.some((p, i) =>
+          Q.some((q, j) => segNearSeg(p, P[(i + 1) % 4]!, q, Q[(j + 1) % 4]!) < margin));
+      }
     }
   }
   return true;

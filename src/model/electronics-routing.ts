@@ -1140,6 +1140,7 @@ export function planRoutes(
       return [{ a: add(pair.pwr, scale(axis, t.reach)), b: add(pair.gnd, scale(axis, -t.reach)) }];
     }),
     clear: tapeW,
+    weed: (MIN_WEED_MM * tapeW) / tapeMm,
   };
   const withRes = breakForResistors(best, circuit.resistors ?? [], tapeW, tapeMm, ledKeepOut);
   // A resistor is in line with the rail, so turning one round swaps which of its terminals lands on which
