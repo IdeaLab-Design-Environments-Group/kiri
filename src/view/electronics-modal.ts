@@ -495,7 +495,7 @@ export class ElectronicsModal {
   /** The zoom step the parts were last painted at — see {@link zoomStep}. */
   private drawnZoomStep = NaN;
 
-  private editHandler: (circuit: Circuit) => void = () => {};
+  private editHandler: (circuit: Circuit, side: Side) => void = () => {};
 
   constructor(
     /** The heavy model work this page asks for: route, measure tape, build cutter files.
@@ -734,7 +734,7 @@ export class ElectronicsModal {
   }
 
   /** Register the handler invoked whenever the authored circuit changes. */
-  onEdit(handler: (circuit: Circuit) => void): void {
+  onEdit(handler: (circuit: Circuit, side: Side) => void): void {
     this.editHandler = handler;
   }
 
@@ -925,6 +925,7 @@ export class ElectronicsModal {
   private selectSide(side: Side): void {
     if (side === this.side) return;
     this.side = side;
+    this.editHandler(cloneCircuit(this.circuit), side); // the 3D view follows the side that is open
     this.select(null);
     this.syncButtons();
     this.render();
@@ -2234,7 +2235,7 @@ export class ElectronicsModal {
     if (replan === "auto") this.render();
     else this.draw();
     this.renderNets();
-    this.editHandler(cloneCircuit(this.circuit));
+    this.editHandler(cloneCircuit(this.circuit), this.side);
   }
 
   // ---- geometry ------------------------------------------------------------

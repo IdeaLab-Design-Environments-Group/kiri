@@ -719,6 +719,33 @@ describe("view/electronics-modal", () => {
       expect(modal.circuit.battery).toEqual({ face: 0 });
     });
 
+    it("tells the controller which side each edit is on, and which side is open after a switch", () => {
+      const { document } = installDom();
+      const modal = new ElectronicsModal() as any;
+      modal.mountTrigger(document.createElement("div") as unknown as HTMLElement);
+      const edits: [any, string][] = [];
+      modal.onEdit((c: unknown, side: string) => edits.push([c, side]));
+      modal.setEnabled(true);
+      modal.setPattern(grid2x2());
+      modal.open();
+
+      modal.selectTool("battery");
+      tapFlat(modal, { x: 0.5, y: 0.5 });
+      expect(edits.at(-1)![1]).toBe("inside");
+
+      // A switch is reported with the circuit now open, so the 3D view follows the editor.
+      press(modal, "el-face", 1);
+      expect(edits.at(-1)![1]).toBe("outside");
+      expect(edits.at(-1)![0].battery).toBeNull();
+
+      modal.selectTool("battery");
+      tapFlat(modal, { x: 1.5, y: 0.5 });
+      expect(edits.at(-1)).toEqual([expect.objectContaining({ battery: { face: 1 } }), "outside"]);
+
+      press(modal, "el-face", 0);
+      expect(edits.at(-1)).toEqual([expect.objectContaining({ battery: { face: 0 } }), "inside"]);
+    });
+
     it("keeps each side's routed plan and stale flag separate", () => {
       // Manual, so switching sides cannot itself trigger a re-plan of whichever side render() lands on —
       // isolating the claim under test, which is that a side's stored plan and stale flag survive a visit

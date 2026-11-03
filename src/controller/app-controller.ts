@@ -6,7 +6,7 @@
  * the store never reference each other directly; the use-case logic itself
  * lives in `src/services/` so new features land there, not here.
  */
-import { type AppState, AppStore } from "../model/app-store.js";
+import { type AppState, AppStore, type CircuitSide } from "../model/app-store.js";
 import { deriveFacts } from "../model/derive-facts.js";
 import { type FoldFile, type LoadedModel } from "../model/fold-file.js";
 import { canSimulate } from "../sim/index.js";
@@ -33,6 +33,8 @@ import type { ExportModal } from "../view/export-modal.js";
 import type { PatternEditorModal } from "../view/pattern-editor-modal.js";
 import type { ElectronicsModal } from "../view/electronics-modal.js";
 import type { PatternGrid } from "../model/pattern-grid.js";
+
+const NO_CIRCUITS: AppState["circuits"] = { inside: null, outside: null };
 
 const SAMPLE_URL = "./examples/house.fkld";
 const SAMPLE_NAME = "house.fkld";
@@ -89,9 +91,9 @@ export class AppController {
     // A different pattern drops the circuit, as the Electronics tool's `setPattern` does: its face and gap
     // indices name nothing on the new pattern, and the sim would route them anyway.
     this.viewer.onLoaded((object, name) => {
-      const { model, viewerShown, circuit } = this.store.getState();
+      const { model, viewerShown, circuits } = this.store.getState();
       const same = resolveElectronicsTarget(model, viewerShown)?.object === object;
-      this.store.update({ viewerShown: { object, name }, circuit: same ? circuit : null });
+      this.store.update({ viewerShown: { object, name }, circuits: same ? circuits : NO_CIRCUITS });
     });
 
     // View intents → controller handlers.
@@ -106,7 +108,7 @@ export class AppController {
 
     // Electronics tool: the modal authors a Circuit; we store it and the next render
     // plans the routes and pushes the preview back (single-render path).
-    this.electronics.onEdit((circuit) => this.updateCircuit(circuit));
+    this.electronics.onEdit((circuit, side) => this.updateCircuit(circuit, side));
     // One material for the whole app. The editor's Build toggle and the sim's Vinyl/3D-printed tabs write
     // the same state, because they are not two views of one sheet: the printed build has a hinge gap cut
     // between its tiles and the vinyl build does not, and that gap is what a component bridges and what the
@@ -149,9 +151,9 @@ export class AppController {
     this.sim.setTraces(this.tracesForSim(simObject));
   }
 
-  /** Store the authored LED circuit; the render subscription redraws it. */
-  updateCircuit(circuit: Circuit): void {
-    this.store.update({ circuit });
+  /** Store one side's authored circuit, leaving the other side's alone, and make it the side shown. */
+  updateCircuit(circuit: Circuit, side: CircuitSide = "inside"): void {
+    this.store.update({ circuits: { ...this.store.getState().circuits, [side]: circuit }, circuitSide: side });
   }
 
   /** The planned copper, pinned to the mesh so the simulation can draw it on the folded model.
@@ -159,10 +161,10 @@ export class AppController {
    *  Routed here rather than read back from the Electronics modal: the modal may never have been opened, and
    *  the copper belongs on the model either way. */
   private tracesForSim(fold: FoldFile | null): AnchoredMesh[] {
-    const { circuit: stored, simTileGap } = this.store.getState();
+    const { circuits, circuitSide, simTileGap } = this.store.getState();
     return this.electronicsPlanning.foldedOverlay({
       fold,
-      circuit: stored,
+      circuit: circuits[circuitSide],
       tileGap: simTileGap,
       sheetMm: this.exporter.printSizeMm(),
     });
@@ -269,7 +271,7 @@ export class AppController {
 
   /** Commit a loaded model to the store with its standard status line (and a fresh, empty circuit). */
   private apply(model: LoadedModel): void {
-    this.store.update({ model, status: loadedStatus(model), circuit: null });
+    this.store.update({ model, status: loadedStatus(model), circuits: NO_CIRCUITS });
   }
 
   /** Commit a generated pattern and show it in the viewer. */

@@ -17,6 +17,9 @@ import { DEFAULT_MAX_SUBDIV, TILE_INSET_FRAC } from "./tile-subdiv.js";
  */
 export type SimMaterial = "vinyl" | "printed";
 
+/** Which face of the sheet a circuit is on. Mirrors the Electronics tool's own `Side`. */
+export type CircuitSide = "inside" | "outside";
+
 export type StatusKind = "" | "ok" | "bad";
 
 export interface Status {
@@ -42,11 +45,12 @@ export interface AppState {
   /** Inter-tile gap (shrink-toward-centroid fraction), shared by the 3D-printed sim render and the STL export. */
   simTileGap: number;
   /**
-   * The LED electronics authored in the Electronics tool for the displayed pattern.
-   * Transient (not persisted into the FKLD); the SVG export reads it for the copper
-   * layer. Reset to null whenever a different model is loaded.
+   * The electronics authored in the Electronics tool for the displayed pattern, one circuit per face of
+   * the sheet. Transient (not persisted into the FKLD). Reset whenever a different pattern is shown.
    */
-  circuit: Circuit | null;
+  circuits: Record<CircuitSide, Circuit | null>;
+  /** The side the Electronics tool has open — the one the 3D view draws. */
+  circuitSide: CircuitSide;
 }
 
 export type StateListener = (state: Readonly<AppState>) => void;
@@ -59,7 +63,8 @@ export class AppStore {
     simMaterial: "vinyl",
     simDetail: DEFAULT_MAX_SUBDIV,
     simTileGap: TILE_INSET_FRAC,
-    circuit: null,
+    circuits: { inside: null, outside: null },
+    circuitSide: "inside",
   };
   private readonly listeners = new Set<StateListener>();
 

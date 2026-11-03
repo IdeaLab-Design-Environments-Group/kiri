@@ -162,13 +162,13 @@ class PatternEditorModalMock {
 }
 
 class ElectronicsModalMock {
-  editHandler: ((circuit: unknown) => void) | null = null;
+  editHandler: ((circuit: unknown, side: string) => void) | null = null;
   enabledCalls: boolean[] = [];
   patternCalls: unknown[] = [];
   gapCalls: number[] = [];
   previewCalls: unknown[] = [];
 
-  onEdit(handler: (circuit: unknown) => void): void {
+  onEdit(handler: (circuit: unknown, side: string) => void): void {
     this.editHandler = handler;
   }
   setEnabled(enabled: boolean): void {
@@ -523,7 +523,7 @@ describe("controller/app-controller", () => {
     expect(sim.traces).not.toEqual([]);
 
     viewer.simulateViewerLoad(JSON.parse(text), "other.fkld"); // a pattern the viewer loaded by itself
-    expect(store.getState().circuit).toBeNull();
+    expect(store.getState().circuits).toEqual({ inside: null, outside: null });
     expect(sim.traces).toEqual([]);
   });
 
@@ -535,7 +535,31 @@ describe("controller/app-controller", () => {
     viewer.simulateViewerLoad(fold, "house.fkld");
     controller.updateCircuit({ leds: [], battery: { face: 0 } });
     viewer.simulateViewerLoad(fold, "house.fkld");
-    expect(store.getState().circuit).toEqual({ leds: [], battery: { face: 0 } });
+    expect(store.getState().circuits.inside).toEqual({ leds: [], battery: { face: 0 } });
+  });
+
+  it("keeps both sides' circuits, and shows the side the editor has open", () => {
+    // Inside and outside are separate circuits. Editing one must not replace the other in the store, and
+    // the 3D view draws whichever side the editor last reported as open.
+    const { store, sim, electronics } = setup();
+    const fold = JSON.parse(
+      readFileSync(new URL("../../../public/examples/house.fkld", import.meta.url).pathname, "utf8"),
+    );
+    store.update({ model: { kind: "fold", name: "house.fkld", object: fold } });
+    const gaps = gapGraph(fold, flatFaces(fold)).gaps;
+    const inside = { leds: [ledOf(gaps[0]!.faceA, gaps[0]!.faceB)], battery: { face: 0 } };
+    const outside = { leds: [], battery: { face: 1 } };
+    const kinds = () => new Set((sim.traces as { kind: string }[]).map((m) => m.kind));
+
+    electronics.editHandler!(inside, "inside");
+    expect(kinds().has("led-pwr")).toBe(true);
+    electronics.editHandler!(outside, "outside");
+    expect(kinds().has("led-pwr")).toBe(false); // the outside has a battery and no LED
+    expect(kinds().has("batt-pwr")).toBe(true);
+    expect(store.getState().circuits).toEqual({ inside, outside });
+
+    electronics.editHandler!(inside, "inside"); // switching back
+    expect(kinds().has("led-pwr")).toBe(true);
   });
 
   it("lays the copper on the build the sim folds — one material, whichever control moves it", () => {

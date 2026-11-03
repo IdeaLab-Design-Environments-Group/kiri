@@ -11,7 +11,9 @@ describe("model/app-store", () => {
       simMaterial: "vinyl",
       simDetail: 0,
       simTileGap: 0.16,
-      circuit: null, // the Electronics tool's authored circuit, transient and empty until authored
+      // the Electronics tool's authored circuits, one per face, transient and empty until authored
+      circuits: { inside: null, outside: null },
+      circuitSide: "inside",
     });
   });
 
