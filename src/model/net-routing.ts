@@ -722,9 +722,9 @@ function pathOk(
   const wAt = (k: number): number => widths?.[k] ?? r.tapeW;
   for (let k = 1; k < pts.length; k++) {
     const a = pts[k - 1]!, b = pts[k]!;
-    const cuts = blamedFor(a, b, r.others, r.clearance, wAt(k - 1), wAt(k), r.tapeW);
-    if (cuts !== null || !clearOf(a, b, r.others, r.clearance, wAt(k - 1), wAt(k), r.tapeW)) {
-      return { ok: false, cuts };
+    // Whether first, and whose only on a hit: the clear segment, which is nearly every one, is measured once.
+    if (!clearOf(a, b, r.others, r.clearance, wAt(k - 1), wAt(k), r.tapeW)) {
+      return { ok: false, cuts: blamedFor(a, b, r.others, r.clearance, wAt(k - 1), wAt(k), r.tapeW) };
     }
     // And the pads, which the check above cannot see: it measures against other nets' RUNS.
     const over = padHitBy(a, b, r.pads, r.padGap, wAt(k - 1), wAt(k));
