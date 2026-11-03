@@ -470,6 +470,31 @@ body {
   font-weight: 600;
 }
 
+/* Two adjacent blocks, 3D tiles then Cut files, so the STL and zip buttons sit side by side. */
+.export-footer {
+  justify-content: flex-start;
+  gap: 0.5rem 0.9rem;
+}
+
+.export-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem 0.6rem;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid #e2e2e2;
+  border-radius: 6px;
+  background: #fafafa;
+}
+
+.export-group-title {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #555;
+  white-space: nowrap;
+}
+
 .export-stl-height-label {
   display: inline-flex;
   align-items: center;
@@ -479,11 +504,19 @@ body {
   white-space: nowrap;
 }
 
+.export-stl-size,
 .export-stl-height {
-  width: 4.5rem;
+  width: 3.6rem;
   padding: 0.2rem 0.3rem;
   font-size: 0.8rem;
 }
+
+.export-stl-detail {
+  width: 2.8rem;
+  padding: 0.2rem 0.3rem;
+  font-size: 0.8rem;
+}
+
 
 .sim-detail-control[hidden],
 .sim-gap-control[hidden] {

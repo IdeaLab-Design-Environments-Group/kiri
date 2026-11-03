@@ -11,8 +11,8 @@ export type StlProvider = (heightUnits: number | null, maxSubdiv: number | null,
 
 /**
  * "Export SVG" trigger + modal for vinyl/Cricut cutting. Opening pulls a fresh {@link SvgExportPayload}
- * from the provider, shows cut / score / both previews, and offers two downloads: the registered
- * cut+score **ZIP** (assign black=Cut, blue=Score in Design Space) and a single colour-coded SVG.
+ * from the provider, shows cut / score / both previews, and offers the registered
+ * **ZIP** of cut, score and combined SVGs (assign black=Cut, blue=Score in Design Space), plus the STL tiles.
  * Mirrors `SimModal`'s trigger/provider/enabled lifecycle.
  */
 export class ExportModal {
@@ -21,7 +21,6 @@ export class ExportModal {
   private readonly statusEl: HTMLElement;
   private readonly previews: { cut: HTMLElement; score: HTMLElement; both: HTMLElement };
   private readonly zipBtn: HTMLButtonElement;
-  private readonly combinedBtn: HTMLButtonElement;
   private readonly stlBtn: HTMLButtonElement;
   private readonly stlSizeInput: HTMLInputElement;
   private printSizeHandler: (mm: number) => void = () => {};
@@ -31,6 +30,7 @@ export class ExportModal {
   private provider: ExportProvider | null = null;
   private stlProvider: StlProvider | null = null;
   private payload: SvgExportPayload | null = null;
+  private refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     this.trigger = document.createElement("button");
@@ -56,22 +56,27 @@ export class ExportModal {
             <figure><figcaption>Both</figcaption><div class="export-preview" data-k="both"></div></figure>
           </div>
         </div>
-        <footer class="sim-modal-footer">
+        <footer class="sim-modal-footer export-footer">
           <span class="sim-status" role="status"></span>
-          <button type="button" class="export-zip-btn">cut + score (zip)</button>
-          <button type="button" class="export-combined-btn">single SVG</button>
-          <label class="export-stl-height-label" title="printable sheet size — longest dimension of the flat pattern.">size
-            <input type="number" class="export-stl-size" min="1" step="1" />
-            <span>mm</span>
-          </label>
-          <label class="export-stl-height-label">tile height
-            <input type="number" class="export-stl-height" min="0" step="0.1" />
-            <span class="export-stl-unit">units</span>
-          </label>
-          <label class="export-stl-height-label" title="more subdivision on harder-folding faces. Level 0 = one tile per face; 4 splits the sharpest folds 4 deep.">detail
-            <input type="number" class="export-stl-detail" min="0" max="4" step="1" />
-          </label>
-          <button type="button" class="export-stl-btn">tiles (STL)</button>
+          <div class="export-group export-group-tiles" role="group" aria-label="3D tiles">
+            <span class="export-group-title">3D tiles</span>
+            <label class="export-stl-height-label" title="printable sheet size — longest dimension of the flat pattern.">size
+              <input type="number" class="export-stl-size" min="1" step="1" />
+              <span>mm</span>
+            </label>
+            <label class="export-stl-height-label">height
+              <input type="number" class="export-stl-height" min="0" step="0.1" />
+              <span class="export-stl-unit">units</span>
+            </label>
+            <label class="export-stl-height-label" title="more subdivision on harder-folding faces. Level 0 = one tile per face; 4 splits the sharpest folds 4 deep.">detail
+              <input type="number" class="export-stl-detail" min="0" max="4" step="1" />
+            </label>
+            <button type="button" class="export-stl-btn">tiles (STL)</button>
+          </div>
+          <div class="export-group export-group-cut" role="group" aria-label="Cut files">
+            <span class="export-group-title">Cut files</span>
+            <button type="button" class="export-zip-btn">cut + score + combined (zip)</button>
+          </div>
         </footer>
       </div>
     `;
@@ -83,7 +88,6 @@ export class ExportModal {
       both: this.overlay.querySelector('[data-k="both"]')!,
     };
     this.zipBtn = this.overlay.querySelector(".export-zip-btn")!;
-    this.combinedBtn = this.overlay.querySelector(".export-combined-btn")!;
     this.stlBtn = this.overlay.querySelector(".export-stl-btn")!;
     this.stlSizeInput = this.overlay.querySelector(".export-stl-size")!;
     // Announce edits as they happen: the copper is planned and cut at this size, so it must not go stale.
@@ -93,7 +97,6 @@ export class ExportModal {
     this.stlDetailInput = this.overlay.querySelector(".export-stl-detail")!;
 
     this.zipBtn.addEventListener("click", () => this.downloadZip());
-    this.combinedBtn.addEventListener("click", () => this.downloadCombined());
     this.stlBtn.addEventListener("click", () => this.downloadStl());
     this.overlay.querySelector(".sim-modal-close")!.addEventListener("click", () => this.close());
     this.overlay.addEventListener("click", (e) => {
@@ -150,20 +153,39 @@ export class ExportModal {
       this.stlDetailInput.value = String(stlDefault.maxSubdiv);
     }
     this.overlay.hidden = false;
+    this.writePreviews();
+  }
+
+  /**
+   * Re-run the provider and rewrite the SVG previews, for when something they depend on (the print
+   * size) changed while the modal is open. Debounced because planning is synchronous and slow on big
+   * boards; a no-op while the modal is closed.
+   */
+  refreshPreviews(delayMs = 250): void {
+    if (this.refreshTimer !== null) clearTimeout(this.refreshTimer);
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = null;
+      if (this.overlay.hidden) return;
+      this.payload = this.provider?.() ?? null;
+      this.writePreviews();
+    }, delayMs);
+  }
+
+  private writePreviews(): void {
     if (!this.payload) {
       this.previews.cut.innerHTML = this.previews.score.innerHTML = this.previews.both.innerHTML = "";
-      this.statusEl.textContent = stlDefault
-        ? "No cut pattern, but the 3D-printed tiles are exportable as STL."
-        : "No pattern to export — load a model and press Cut & fold first.";
-      this.zipBtn.disabled = this.combinedBtn.disabled = true;
+      this.statusEl.textContent = this.stlBtn.disabled
+        ? "No pattern to export — load a model and press Cut & fold first."
+        : "No cut pattern, but the 3D-printed tiles are exportable as STL.";
+      this.zipBtn.disabled = true;
       return;
     }
     this.previews.cut.innerHTML = this.payload.previews.cut;
     this.previews.score.innerHTML = this.payload.previews.score;
     this.previews.both.innerHTML = this.payload.previews.both;
-    this.zipBtn.disabled = this.combinedBtn.disabled = false;
+    this.zipBtn.disabled = false;
     this.statusEl.textContent =
-      "black = Cut, blue = Score. Import the zip's two SVGs (registered, in mm) and set the layer ops.";
+      "black = Cut, blue = Score. The zip holds cut, score and combined SVGs (registered, in mm); import the cut and score ones and set the layer ops.";
   }
 
   close(): void {
@@ -173,11 +195,6 @@ export class ExportModal {
   private downloadZip(): void {
     if (!this.payload) return;
     download(this.payload.archive.filename, new Blob([this.payload.archive.bytes], { type: "application/zip" }));
-  }
-
-  private downloadCombined(): void {
-    if (!this.payload) return;
-    download(this.payload.combined.filename, new Blob([this.payload.combined.svg], { type: "image/svg+xml" }));
   }
 
   private downloadStl(): void {

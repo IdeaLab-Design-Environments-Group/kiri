@@ -138,6 +138,11 @@ class ExportModalMock {
     return this.printSize;
   }
 
+  refreshCalls = 0;
+  refreshPreviews(): void {
+    this.refreshCalls++;
+  }
+
   setEnabled(enabled: boolean): void {
     this.enabledCalls.push(enabled);
   }
@@ -165,6 +170,10 @@ class ElectronicsModalMock {
   editHandler: ((circuit: unknown) => void) | null = null;
   enabledCalls: boolean[] = [];
   patternCalls: unknown[] = [];
+  printSizeCalls: number[] = [];
+  setPrintSize(mm: number): void {
+    this.printSizeCalls.push(mm);
+  }
   gapCalls: number[] = [];
   previewCalls: unknown[] = [];
 
@@ -575,6 +584,14 @@ describe("controller/app-controller", () => {
     electronics.formListener!();
     expect(electronics.closeCalls).toBe(1); // leaves the editor page…
     expect(sim.openCalls).toBe(1); // …and folds what it was showing
+  });
+
+  it("refreshes the open Export previews when the print size changes", () => {
+    const { store, exporter } = setup();
+    store.update({ model: { kind: "fold", name: "p.fkld", object: makeFold() } });
+    const before = exporter.refreshCalls;
+    exporter.printSizeHandler?.(200);
+    expect(exporter.refreshCalls).toBe(before + 1);
   });
 
   it("drives the Electronics tool's gap from the sim's Gap slider", () => {
