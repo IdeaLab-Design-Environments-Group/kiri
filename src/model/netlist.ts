@@ -78,6 +78,7 @@ export interface NetlistFault {
     | "no-such-pad"
     | "no-such-net"
     | "unknown-component"
+    | "bad-placement"
     | "duplicate-terminal"
     | "single-terminal-net"
     | "pads-too-close"
@@ -236,12 +237,20 @@ export function resolveNetlist(
    * otherwise transformed fourteen times over for the net points and fourteen more for the fields.
    */
   const placed = new Map<number, PlacedComponent>();
+  // A part at a non-finite point or turn puts every pad at NaN: reported once, and never placed.
+  const unplaceable = new Set<number>();
+  parts.forEach((p, i) => {
+    const rotOk = p.rot === undefined || (typeof p.rot === "number" && Number.isFinite(p.rot));
+    if (Number.isFinite(p.x) && Number.isFinite(p.y) && rotOk) return;
+    unplaceable.add(i);
+    faults.push({ kind: "bad-placement", why: `part ${i} (${p.component}) has no usable position or turn`, part: i });
+  });
   const placeOnce = (i: number): PlacedComponent | undefined => {
     const got = placed.get(i);
     if (got) return got;
     const part = parts[i];
     const comp = part ? componentById(part.component) : undefined;
-    if (!part || !comp) return undefined;
+    if (!part || !comp || unplaceable.has(i)) return undefined;
     const made = placeComponent(part, comp.footprint, tapeW, tapeMm, i);
     placed.set(i, made);
     return made;
@@ -309,6 +318,7 @@ export function resolveNetlist(
       faults.push({ kind: "no-such-part", why: `no part at index ${t.part}`, part: t.part, pad: t.pad });
       continue;
     }
+    if (unplaceable.has(t.part)) continue;
     const comp = componentById(part.component);
     if (!comp) {
       faults.push({

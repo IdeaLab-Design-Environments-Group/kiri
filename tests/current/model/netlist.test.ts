@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { resolveNetlist, padPosition } from "../../../src/model/netlist.js";
-import type { Circuit, Vec2 } from "../../../src/model/electronics.js";
+import type { Circuit, PlacedPart, Vec2 } from "../../../src/model/electronics.js";
 import { TAPE_MM, partFit } from "../../../src/model/electronics-routing.js";
 import { BatteryContact_Keystone_555, LED_1206, R_1206, SW_SPDT } from "../../../src/model/footprints.generated.js";
 import { Module_XIAO_Generic_SocketSMD } from "../../../src/model/footprints.rest.generated.js";
@@ -177,6 +177,25 @@ describe("model/netlist", () => {
       const c = circuit({ terminals: [] });
       const f = resolveNetlist(c, TAPE_W, TAPE_MM, new Set(["n1"])).faults;
       expect(f.some((x) => x.kind === "single-terminal-net" && x.why.includes("no terminals"))).toBe(true);
+    });
+
+    it("names a part placed at a non-finite point or turn, and leaves its pads out", () => {
+      // A NaN coordinate places every pad at NaN. Routed, the terminal strands with nothing saying why.
+      const bad: Partial<PlacedPart>[] = [
+        { x: NaN }, { y: Infinity }, { free: true, rot: NaN }, { free: true, rot: "90" as unknown as number },
+      ];
+      for (const over of bad) {
+        const c = circuit({
+          parts: [{ component: "R_1206", x: 10, y: 0, ...over }, { component: "LED_1206", x: 20, y: 0 }],
+        });
+        const { nets, faults, pads, fields } = resolveNetlist(c, TAPE_W, TAPE_MM);
+        expect(faults.some((x) => x.kind === "bad-placement" && x.part === 0)).toBe(true);
+        expect(nets.flatMap((n) => n.points).some((p) => p.part === 0)).toBe(false);
+        expect(pads.some((p) => p.part === 0)).toBe(false);
+        for (const v of [...pads.map((p) => p.at), ...fields.map((f) => f.at)]) {
+          expect(Number.isFinite(v.x) && Number.isFinite(v.y)).toBe(true);
+        }
+      }
     });
 
     it("keeps routing the good nets when another one is broken", () => {
