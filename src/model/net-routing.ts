@@ -534,6 +534,8 @@ interface LegRules {
   pads: ForeignPad[];
   padGap: number;
   faces: FlatFace[];
+  /** This net's width at each point already asked about, by exact coordinates — see {@link layLeg}. */
+  widthMemo: Map<string, number>;
 }
 
 /**
@@ -582,9 +584,21 @@ function layLeg(
   r: LegRules,
 ): { ok: true; pts: Vec2[]; widths?: number[] } | { ok: false; cuts: string | null } {
   // Only the metal within reach of this leg's points, which leaves every width exactly as it was.
+  // Remembered per net, because every order lays most of the same legs through the same points again.
   const widthsOf = (pts: Vec2[], wp?: number, wq?: number): number[] | undefined => {
-    const near = nearLeg(pts, r.fields, r.pads, r.padGap + r.tapeW / 2);
-    return legWidths(pts, r.tapeW, wp, wq, near.fields, (p) => padCapAt(p, near.pads, r.padGap, r.tapeW));
+    let near: ReturnType<typeof nearLeg> | undefined;
+    const at = (p: Vec2): number => {
+      const key = `${p.x},${p.y}`;
+      let w = r.widthMemo.get(key);
+      if (w === undefined) {
+        near ??= nearLeg(pts, r.fields, r.pads, r.padGap + r.tapeW / 2);
+        w = Math.min(narrowedTo(r.tapeW, p, near.fields), padCapAt(p, near.pads, r.padGap, r.tapeW));
+        r.widthMemo.set(key, w);
+      }
+      return w;
+    };
+    // No fields here: `at` has already applied them, and `narrowedTo` over none is the tape width itself.
+    return legWidths(pts, r.tapeW, wp, wq, [], at);
   };
   const build = (way: Vec2[]): { pts: Vec2[]; widths?: number[] } => {
     // Densified first, so the width profile follows the part's own pitch rather than being smeared across a
@@ -664,6 +678,8 @@ function routeOne(
   pads: PadObstacle[],
   /** How near a run's edge may come to a pad that is not its own — see {@link PAD_CLEARANCE_MM}. */
   padGap: number,
+  /** This net's widths from earlier orders: they depend on the pads and fields alone, never on the order. */
+  widthMemo: Map<string, number>,
 ): {
   traces: Trace2D[];
   stranded: number[];
@@ -696,7 +712,7 @@ function routeOne(
   const mine = theirs.filter((l) => l.rail === net.id).map((l) => l.pts);
   const others = theirs.filter((l) => l.rail !== net.id);
   const rules: LegRules = {
-    others, clearance, tapeW, fields, pads: foreignPads(pads, net.id, own), padGap, faces,
+    others, clearance, tapeW, fields, pads: foreignPads(pads, net.id, own), padGap, faces, widthMemo,
   };
 
   // A pad that is not on the material at all can never be reached, and says so once rather than once per
@@ -875,6 +891,7 @@ export function planNets(
     faces, gaps, patternDiag(faces) * FOLD_PENALTY_FRAC, tapeW, sheet, tapeMm, bandCap, graded);
   const clearance = weedFloorFor(tapeW, tapeMm, sheet);
   const padGap = padClearanceFor(tapeW, tapeMm);
+  const memo = nets.map(() => new Map<string, number>());
 
   const span = (n: ResolvedNet): number => {
     const xs = n.points.map((p) => p.at.x), ys = n.points.map((p) => p.at.y);
@@ -915,7 +932,7 @@ export function planNets(
     let stranded = 0, copper = 0;
     for (const idx of order) {
       const n = nets[idx]!;
-      const r = routeOne(n, faces, c, blocked, laid, clearance, owner, tapeW, fields, pads, padGap);
+      const r = routeOne(n, faces, c, blocked, laid, clearance, owner, tapeW, fields, pads, padGap, memo[idx]!);
       for (const k of r.used) {
         blocked.add(k);
         if (!owner.has(k)) owner.set(k, n.id);
