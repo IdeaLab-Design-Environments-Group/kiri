@@ -26,6 +26,7 @@ import {
   segNearSeg,
   segPointDist,
   segsCross,
+  segsMeet,
   sharesEnd,
   sub,
   unit,
@@ -80,7 +81,9 @@ export function flawless(k: PlanKey): boolean {
   return k.every((v) => v === 0);
 }
 
-/** Count PWR×GND proper crossings in `traces` — the property this router exists to keep at zero. */
+/** Count PWR×GND contacts in `traces` — the property this router exists to keep at zero. A contact is any
+ *  shared point ({@link segsMeet}), not only a proper crossing: two rails meeting at a waypoint or running
+ *  along each other short just as surely, and counting only crossings let them read as zero. */
 export function countNetCrossings(traces: Trace2D[]): number {
   let n = 0;
   for (let i = 0; i < traces.length; i++) {
@@ -89,7 +92,7 @@ export function countNetCrossings(traces: Trace2D[]): number {
       if (A.net === B.net) continue; // same net may overlap freely: single-sided tape, one potential
       for (let a = 1; a < A.pts.length; a++) {
         for (let b = 1; b < B.pts.length; b++) {
-          if (segsCross(A.pts[a - 1]!, A.pts[a]!, B.pts[b - 1]!, B.pts[b]!)) n++;
+          if (segsMeet(A.pts[a - 1]!, A.pts[a]!, B.pts[b - 1]!, B.pts[b]!)) n++;
         }
       }
     }

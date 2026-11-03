@@ -38,6 +38,7 @@ import {
   cross,
   crossesAny,
   intersection,
+  meetsAny,
   segPointDist,
   len,
   ptKey,
@@ -847,11 +848,15 @@ export function searchCorridor(
     // The leg from the origin to this first waypoint is not a chord, so nothing else checks it stays on the
     // material. Pricing it without checking it let a run set off across a hole.
     if (origin && legOk && !legOk(origin, m)) continue;
+    // Nor does anything else check it against the other net's tape, so a run could start by crossing it or
+    // stepping onto one of its waypoints. Held to the same rule as a chord, below.
+    const cuts = origin && theirs ? (strict ? meetsAny(origin, m, theirs) : crossesAny(origin, m, theirs)) : false;
+    if (cuts && strict) continue;
     const k = ptKey(m);
     // Priced from where the run actually begins. Seeding every node of the starting tile at zero left the first
     // leg -- terminal to first waypoint -- costing nothing, so the search would happily set off from a node
     // behind the terminal and doubled back to get going.
-    const d = cost(k, origin ? Math.sqrt(dist2(origin, m)) : 0);
+    const d = cost(k, origin ? Math.sqrt(dist2(origin, m)) : 0) * (cuts ? TERMINAL_TOLL : 1);
     const w = bandAt(k);
     if (pack(w, d) < pack(worstOf.get(k) ?? Infinity, dist.get(k) ?? Infinity)) {
       dist.set(k, d);
@@ -893,7 +898,12 @@ export function searchCorridor(
         // crosses the other net is refused outright on the strict pass -- which is what makes a run go the long
         // way round instead -- and merely very dear on the fallback, so a pad walled in by the other net stays
         // reachable.
-        const cuts = theirs ? crossesAny(here, m, theirs) : false;
+        //
+        // On the strict pass touching counts as cutting: a chord that ends on one of the other net's waypoints,
+        // or runs along its tape, puts copper on copper without ever properly crossing it, and was free here.
+        // The fallback still tolls only a proper crossing -- tolling contact there too was measured to give
+        // house a PWR/GND crossing and two more sharp joins.
+        const cuts = theirs ? (strict ? meetsAny(here, m, theirs) : crossesAny(here, m, theirs)) : false;
         if (cuts && strict) continue;
         const w = best + cost(k, Math.sqrt(dist2(here, m))) * (sweeps || cuts ? TERMINAL_TOLL : 1);
         const nextWorst = Math.max(worst, bandAt(k));
@@ -911,7 +921,7 @@ export function searchCorridor(
       const k = b.to;
       const m = c.point.get(k);
       if (!m || c.refused.has(k)) continue;
-      const cuts = theirs ? crossesAny(here, m, theirs) : false;
+      const cuts = theirs ? (strict ? meetsAny(here, m, theirs) : crossesAny(here, m, theirs)) : false;
       if (cuts && strict) continue;
       const w = best + cost(k, Math.sqrt(dist2(here, m))) * (cuts ? TERMINAL_TOLL : 1) + b.price;
       const nextWorst = Math.max(worst, banded ? b.band : 0);

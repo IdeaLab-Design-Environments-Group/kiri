@@ -175,6 +175,22 @@ describe("model/electronics-routing", () => {
     }
   });
 
+  it("counts PWR touching GND as a crossing, and one net touching itself as nothing", () => {
+    // Copper on copper is a short whether the centrelines cross, meet at a point or run along each other.
+    // Only the proper crossing used to count, so two rails sharing a waypoint read as zero.
+    const pwr: Trace2D = { net: "pwr", pts: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }] };
+    const touching: Trace2D[] = [
+      { net: "gnd", pts: [{ x: 5, y: 5 }, { x: 10, y: 0 }] }, // ends on a PWR vertex
+      { net: "gnd", pts: [{ x: 5, y: 5 }, { x: 5, y: 0 }] }, // ends on a PWR segment
+      { net: "gnd", pts: [{ x: 2, y: 0 }, { x: 6, y: 0 }] }, // lies along a PWR segment
+    ];
+    for (const gnd of touching) {
+      expect(countNetCrossings([pwr, gnd]), JSON.stringify(gnd.pts)).toBeGreaterThan(0);
+      expect(countNetCrossings([pwr, { ...gnd, net: "pwr" }])).toBe(0);
+    }
+    expect(countNetCrossings([pwr, { net: "gnd", pts: [{ x: 5, y: 1 }, { x: 9, y: 9 }] }])).toBe(0);
+  });
+
   it("prefers valleys and flat panels over mountain folds", { timeout: 20000 }, () => {
     // After Nakaya et al., "4D Leaf Circuits" (SCF '25), Algorithm 1. Their fatigue test is the reason: a trace
     // carried over a mountain fold shows a sharp rise in resistance and fractures within a hundred folding

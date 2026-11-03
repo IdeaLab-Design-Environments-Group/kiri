@@ -73,6 +73,29 @@ export function segsCross(a: Vec2, b: Vec2, c: Vec2, d: Vec2): boolean {
   return (d1 > 0) !== (d2 > 0) && (d3 > 0) !== (d4 > 0);
 }
 
+/** Whether segment ab meets any of the given polylines at all — {@link segsMeet}, not a proper crossing. */
+export function meetsAny(a: Vec2, b: Vec2, lines: Vec2[][]): boolean {
+  for (const line of lines) {
+    for (let i = 1; i < line.length; i++) {
+      if (segsMeet(a, b, line[i - 1]!, line[i]!)) return true;
+    }
+  }
+  return false;
+}
+
+/** True when segments ab and cd share any point: a proper crossing, a shared end, an end on the other
+ *  segment, or a collinear overlap — to within the tolerance {@link near} uses. {@link segsCross} counts only
+ *  the first, which is right for one net touching itself; across two nets every one of them is copper on
+ *  copper. */
+export function segsMeet(a: Vec2, b: Vec2, c: Vec2, d: Vec2): boolean {
+  // Boxes first: the corridor search asks this of every chord against every segment of the other net, and
+  // almost none of them are anywhere near each other.
+  const tol = 1e-6;
+  if (Math.max(a.x, b.x) < Math.min(c.x, d.x) - tol || Math.max(c.x, d.x) < Math.min(a.x, b.x) - tol) return false;
+  if (Math.max(a.y, b.y) < Math.min(c.y, d.y) - tol || Math.max(c.y, d.y) < Math.min(a.y, b.y) - tol) return false;
+  return segNearSeg(a, b, c, d) < tol;
+}
+
 /** True when the polyline `pts` properly crosses segment cd anywhere. */
 export function polyCrosses(pts: Vec2[], c: Vec2, d: Vec2): boolean {
   for (let i = 1; i < pts.length; i++) {
