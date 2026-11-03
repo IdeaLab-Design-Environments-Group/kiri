@@ -5,6 +5,7 @@ import {
   assignPad,
   cloneCircuit,
   cycleLedFlip,
+  deleteNet,
   editCircuit,
   removeLed,
   removeSelectedPart,
@@ -182,6 +183,29 @@ describe("circuit commands", () => {
 
     expect(editCircuit(circuit, removeLed(0))).not.toHaveProperty("wires");
     expect(editCircuit(circuit, removeSelectedPart({ kind: "part", index: 0 }))).not.toHaveProperty("wires");
+  });
+
+  it("unsets the net of hand wires on a deleted net", () => {
+    // Net ids are minted lowest-free, so a stale `wire.net` would join the next net created.
+    const circuit: Circuit = {
+      leds: [],
+      battery: null,
+      nets: [{ id: "n1", name: "SDA" }, { id: "n2", name: "SCL" }],
+      terminals: [{ part: 0, pad: "1", net: "n2" }],
+      wires: [
+        { id: "w1", net: "n2", width: 2, pts: [{ kind: "free", x: 0, y: 0 }, { kind: "free", x: 1, y: 0 }] },
+        { id: "w2", net: "n1", pts: [{ kind: "free", x: 0, y: 1 }, { kind: "free", x: 1, y: 1 }] },
+      ],
+    };
+
+    const next = editCircuit(circuit, deleteNet("n2"));
+
+    expect(next.wires).toEqual([
+      { id: "w1", width: 2, pts: [{ kind: "free", x: 0, y: 0 }, { kind: "free", x: 1, y: 0 }] },
+      { id: "w2", net: "n1", pts: [{ kind: "free", x: 0, y: 1 }, { kind: "free", x: 1, y: 1 }] },
+    ]);
+    expect(next.terminals).toEqual([]);
+    expect(editCircuit({ leds: [], battery: null, nets: [] }, deleteNet("n1"))).not.toHaveProperty("wires");
   });
 
   it("cycles authored LED orientation back to router choice", () => {

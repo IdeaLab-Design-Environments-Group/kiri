@@ -118,6 +118,8 @@ export function deleteNet(id: string): CircuitCommand {
       ...c,
       nets: (c.nets ?? []).filter((n) => n.id !== id),
       terminals: (c.terminals ?? []).filter((t) => t.net !== id),
+      // Unset rather than kept: net ids are reused, so a wire left naming this one joins the next net minted.
+      ...(c.wires ? { wires: c.wires.map((w) => (w.net === id ? withoutNet(w) : w)) } : {}),
     }),
   };
 }
@@ -299,4 +301,9 @@ function cloneWire(w: ManualWire): ManualWire {
   if (w.net !== undefined) out.net = w.net;
   if (w.width !== undefined) out.width = w.width;
   return out;
+}
+
+function withoutNet(w: ManualWire): ManualWire {
+  const { net: _drop, ...rest } = w;
+  return rest;
 }
