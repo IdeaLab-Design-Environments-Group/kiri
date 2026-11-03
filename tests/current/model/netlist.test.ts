@@ -182,6 +182,23 @@ describe("model/netlist", () => {
       expect(nets.flatMap((n) => n.points).some((p) => p.pad === "1_1")).toBe(false);
     });
 
+    it("joins two coincident pads of one pin once, rather than with a strip of no length", () => {
+      // XIAO `1` and `1_1` sit at the same point. Both wired, they came out as two points of the net with
+      // nothing between them, and the router laid a zero-length trace to join them.
+      const c = circuit({
+        parts: [
+          { component: "SeeedStudio_XIAO_ESP32C3", x: 0, y: 0, free: true },
+          { component: "R_1206", x: 40, y: 0, free: true },
+        ],
+        terminals: [
+          { part: 0, pad: "1", net: "n1" }, { part: 0, pad: "1_1", net: "n1" }, { part: 1, pad: "1", net: "n1" },
+        ],
+      });
+      const { nets, faults } = resolveNetlist(c, TAPE_W, TAPE_MM);
+      expect(faults).toEqual([]);
+      expect(nets[0]!.points.map((p) => `${p.part}:${p.pad}`)).toEqual(["0:1", "1:1"]);
+    });
+
     it("reports a net with one terminal, and leaves it out of the routing set", () => {
       // The likeliest authoring slip there is: a pad assigned to a net nothing else is on. Routed, it is a
       // zero-length success that reports nothing wrong.

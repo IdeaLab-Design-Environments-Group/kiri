@@ -377,6 +377,10 @@ export function resolveNetlist(
     const placedPad = here ? padOf(here, t.pad) : undefined;
     if (!placedPad) continue; // unreachable: `terminals()` above has already accepted this pad name
     const at = placedPad.at;
+    // A twin of a pin already on this net at the very same point (XIAO `1` and `1_1`) is one piece of metal
+    // the net already reaches. As a second point it was joined to the first by a strip of no length.
+    const twin = (q: NetPoint): boolean => q.part === t.part && padPin(q.pad) === padPin(t.pad);
+    if (points.get(t.net)!.some((q) => twin(q) && Math.hypot(q.at.x - at.x, q.at.y - at.y) < 1e-9)) continue;
     // The narrower of two bounds, so this can only ever narrow: the pad's own size, as it always was, and
     // the room between this pad and the metal beside it. On a 1206 the second is the looser and nothing
     // changes; on a 2.54mm pin header it binds, and it is the difference between copper that lands on one
