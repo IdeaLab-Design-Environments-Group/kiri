@@ -589,6 +589,40 @@ describe("model/copper-svg-export", () => {
       expect(flipped.widthMm).toBe(plain.widthMm);
     });
 
+    it("mirrors a seated part's drawing along with the copper", () => {
+      // A two-row part's pads are laid out across the run, and across flips sign under a reflection. The
+      // sheet frame always reflects once (FOLD is y-up, SVG y-down), so the parts layer has to be told, as
+      // the editor's canvas is; untold, the unmirrored file drew the part turned over, a socket's pads on
+      // the wrong side of the run, and the mirrored file was not the reflection of it.
+      const { fold, faces, gaps } = load("house.fkld");
+      const base: Circuit = { leds: ledsOn(gaps, 1), battery: { face: 0 } };
+      const t = planRoutes(faces, gaps, base).traces.find((x) => x.net === "pwr")!;
+      const at = { x: (t.pts[0]!.x + t.pts[1]!.x) / 2, y: (t.pts[0]!.y + t.pts[1]!.y) / 2 };
+      const r = planRoutes(faces, gaps, { ...base, parts: [{ component: "PinSocket_01x02_P2_54mm_Vertical_SMD", ...at }] });
+      expect(r.parts).toHaveLength(1);
+      const tapeW = tapeWidthFor(faces);
+      const partsOf = (mirror: { x: boolean; y: boolean }): string =>
+        buildCopperSvgExport(fold, r.traces, tapeW, "kiri", [], mirror, undefined, [], [], r.parts).svg
+          .split('<g id="parts">')[1]!;
+      const { w, h } = sheetFrame(fold);
+      // Every point the layer draws — path vertices and mark centres — in no particular order.
+      const points = (svg: string, mirror = { x: false, y: false }): Vec2[] => {
+        const nums = [
+          ...(svg.match(/ d="([^"]*)"/g) ?? []).flatMap((d) => d.match(/-?\d+(?:\.\d+)?/g) ?? []),
+          ...[...svg.matchAll(/cx="([^"]*)" cy="([^"]*)"/g)].flatMap((m) => [m[1]!, m[2]!]),
+        ].map(Number);
+        const out: Vec2[] = [];
+        for (let i = 0; i + 1 < nums.length; i += 2) out.push(mirrorPoint({ x: nums[i]!, y: nums[i + 1]! }, w, h, mirror));
+        return out;
+      };
+      const plain = points(partsOf({ x: false, y: false }));
+      const flipped = points(partsOf({ x: true, y: false }), { x: true, y: false });
+      expect(flipped).toHaveLength(plain.length);
+      const near = (p: Vec2, set: Vec2[]): number => Math.min(...set.map((q) => Math.hypot(p.x - q.x, p.y - q.y)));
+      for (const p of plain) expect(near(p, flipped)).toBeLessThan(0.01);
+      for (const p of flipped) expect(near(p, plain)).toBeLessThan(0.01);
+    });
+
     it("mirrors on either axis, and on both at once", () => {
       const { fold } = planned("house.fkld");
       const { w, h } = sheetFrame(fold);

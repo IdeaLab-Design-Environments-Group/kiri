@@ -1129,7 +1129,7 @@ function drawnParts(
 function partsLayer(drawn: DrawnPart[], T: (p: Vec2) => Vec2): string[] {
   const placed: { d: DrawnPart; sh: ResistorShape }[] = [];
   for (const d of drawn) {
-    const sh = partShape(d.fp, T(d.a), T(d.b), d.flip);
+    const sh = partShape(d.fp, T(d.a), T(d.b), d.flip, frameMirrored(T)); // `T` reflects — see `partShape`
     if (sh) placed.push({ d, sh });
   }
   const names = designators(placed.map((p) => p.d));
