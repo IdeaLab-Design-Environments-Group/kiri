@@ -281,6 +281,16 @@ describe("model/led-footprint", () => {
       expect(r.unseated.length).toBeGreaterThan(0);
     });
 
+    it("seats only the first of two LEDs on the same hinge", () => {
+      // The editor will not place a second one there, but a file or a caller can, and both used to get the
+      // same pads and be reported routed: two parts soldered onto one pair of pads.
+      const { faces, gaps } = load("house.fkld");
+      const [led] = ledsOn(gaps, 1);
+      const r = planRoutes(faces, gaps, { leds: [led!, { ...led! }], battery: { face: 0 } });
+      expect(r.unseated).toEqual([1]);
+      expect(r.unreachable).toEqual([1]);
+    });
+
     it("keeps pads index-aligned with circuit.leds even where some are refused", () => {
       // The modal indexes `pads` directly, so a refused LED has to keep its slot rather than being
       // squeezed out of the list.
