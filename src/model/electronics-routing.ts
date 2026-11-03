@@ -135,6 +135,7 @@ import {
   SWITCH_GAP_MM,
   SWITCH_PITCH_MM,
   SWITCH_ROW_MM,
+  breakAndSeat,
   breakForResistors,
   breakRuns,
   byComponent,
@@ -1149,24 +1150,7 @@ export function planRoutes(
   const toFlat = (mm: number): number => (mm * tapeW) / tapeMm;
   const swPad = SPDT.pad;
   const swReach = toFlat(SWITCH_GAP_MM / 2 + swPad.w);
-  const withSw = breakRuns(withRes.traces, circuit.switches ?? [], toFlat(SWITCH_GAP_MM), {
-    before: swReach,
-    after: swReach,
-  }, ledKeepOut);
-  // Which way each switch faces is decided against the copper as it now stands, before any land is laid:
-  // the lands themselves belong to the part and would otherwise vote for its own orientation.
-  const switchFlips = circuit.switches ?? [];
-  for (const span of withSw.placed) {
-    // The author's choice where there is one; otherwise the side the copper leaves free.
-    span.flip = switchFlips[span.source]?.flip ?? idleSide(
-      span,
-      withSw.traces,
-      toFlat(SWITCH_PITCH_MM),
-      toFlat(swPad.w) / 2,
-      toFlat(SWITCH_ROW_MM),
-    );
-  }
-  // A seat that shorts the two nets through the part is no seat at all — drop it and let it be reported.
+  // A seat that shorts the two nets through the part is no seat at all — refuse it and let it be reported.
   // Likewise one whose lands run over an LED: its chip, or its leg on the other net. `ledKeepOut` runs
   // from the PWR leg's end to the GND leg's, so a PWR land is kept off it from the PWR pad on.
   const clearOfLeds = (lands: Trace2D[]): boolean =>
@@ -1175,13 +1159,27 @@ export function planRoutes(
       const [from, to] = l.net === "pwr" ? [pair.pwr, s.b] : l.net === "gnd" ? [pair.gnd, s.a] : [s.a, s.b];
       return segNearSeg(l.pts[i]!, b, from, to) >= ((l.width ?? tapeW) + tapeW) / 2;
     })));
-  withSw.placed = withSw.placed.filter((span) =>
-    clearOfOtherNet(span, withSw.traces, tapeW, toFlat(SWITCH_PITCH_MM),
+  const switchFlips = circuit.switches ?? [];
+  const withSw = breakAndSeat(withRes.traces, circuit.switches ?? [], toFlat(SWITCH_GAP_MM), {
+    before: swReach,
+    after: swReach,
+  }, ledKeepOut, (span, laid) => {
+    // Which way each switch faces is decided against the copper as it now stands, before any land is laid:
+    // the lands themselves belong to the part and would otherwise vote for its own orientation.
+    // The author's choice where there is one; otherwise the side the copper leaves free.
+    span.flip = switchFlips[span.source]?.flip ?? idleSide(
+      span,
+      laid,
+      toFlat(SWITCH_PITCH_MM),
+      toFlat(swPad.w) / 2,
+      toFlat(SWITCH_ROW_MM),
+    );
+    return clearOfOtherNet(span, laid, tapeW, toFlat(SWITCH_PITCH_MM),
       { w: toFlat(swPad.w), h: toFlat(swPad.h) }, toFlat(SWITCH_ROW_MM)) &&
-    clearOfLeds(
-      switchLand(span, toFlat(SWITCH_PITCH_MM), toFlat(swPad.w), toFlat(swPad.h), toFlat(SWITCH_ROW_MM)),
-    ),
-  );
+      clearOfLeds(
+        switchLand(span, toFlat(SWITCH_PITCH_MM), toFlat(swPad.w), toFlat(swPad.h), toFlat(SWITCH_ROW_MM)),
+      );
+  });
   const swLands = withSw.placed.flatMap((span) =>
     switchLand(
       span,
@@ -1210,17 +1208,13 @@ export function planRoutes(
     // `seatLed` refuses an LED_0603 at — an 0603 bridges 0.70mm.
     if (fit.gap < MIN_WEED_MM) continue;
     const drops = group.map((g) => g.part);
-    const broke = breakRuns(partTraces, drops, toFlat(fit.gap), {
-      before: toFlat(fit.before),
-      after: toFlat(fit.after),
-    }, ledKeepOut);
-    partTraces = broke.traces;
     const across = fit.rows === 2 ? acrossPart(fp) : null;
-    if (across) {
-      // Against the copper as it now stands, its own lands excluded for the reason the switch pass
-      // gives — but every other part's land included, since that is real copper an idle throw can touch.
-      const laid = [...partTraces, ...swLands, ...partLands];
-      for (const span of broke.placed) {
+    const reach = { before: toFlat(fit.before), after: toFlat(fit.after) };
+    const broke = across
+      ? breakAndSeat(partTraces, drops, toFlat(fit.gap), reach, ledKeepOut, (span, broken) => {
+        // Against the copper as it now stands, its own lands excluded for the reason the switch pass
+        // gives — but every other part's land included, since that is real copper an idle throw can touch.
+        const laid = [...broken, ...swLands, ...partLands];
         // The author's choice where there is one, as with the switch above.
         span.flip = drops[span.source]?.flip ?? idleSide(
           span,
@@ -1229,13 +1223,14 @@ export function planRoutes(
           toFlat(across.pad.w) / 2,
           toFlat(across.rowSep),
         );
-      }
-      broke.placed = broke.placed.filter((span) =>
-        clearOfOtherNet(span, laid, tapeW, toFlat(across.pitch),
+        return clearOfOtherNet(span, laid, tapeW, toFlat(across.pitch),
           { w: toFlat(across.pad.w), h: toFlat(across.pad.h) }, toFlat(across.rowSep)) &&
-        clearOfLeds(switchLand(span, toFlat(across.pitch), toFlat(across.pad.w), toFlat(across.pad.h),
-          toFlat(across.rowSep))),
-      );
+          clearOfLeds(switchLand(span, toFlat(across.pitch), toFlat(across.pad.w), toFlat(across.pad.h),
+            toFlat(across.rowSep)));
+      })
+      : breakRuns(partTraces, drops, toFlat(fit.gap), reach, ledKeepOut);
+    partTraces = broke.traces;
+    if (across) {
       for (const span of broke.placed) {
         partLands.push(
           ...switchLand(

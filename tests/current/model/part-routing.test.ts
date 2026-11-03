@@ -473,4 +473,17 @@ describe("model/part-routing", () => {
     expect(placed, "the veto refused every placement").toBeGreaterThan(3);
   });
 
+  it("leaves the rail whole under a switch it refuses", () => {
+    // The veto ran after the rail was already cut, so a refused switch left its break behind: a gap in
+    // the copper with no part across it, and every LED past it dark. On house's bus this spot is too
+    // close to the other net for either orientation.
+    const { faces, gaps, base, plain } = fixture(4);
+    const at = { x: 5.625, y: 7.3847 };
+    for (const c of [{ ...base, switches: [at] }, { ...base, parts: [{ component: "SW_SPDT", ...at }] }]) {
+      const r = planRoutes(faces, gaps, c);
+      expect(r.switches.length + r.parts.length, "the switch was seated after all").toBe(0);
+      expect(r.traces).toEqual(plain.traces);
+    }
+  });
+
 });

@@ -318,6 +318,33 @@ export function breakRuns(
 }
 
 /**
+ * {@link breakRuns}, then a veto on each seat — and the rail left whole under every part the veto refuses.
+ *
+ * `seat` judges a span against the copper as broken (and may set its `flip`). Refusing a part after its
+ * break was cut left the break behind: a gap in the rail with nothing across it, and every LED past it
+ * dark, while the part read as merely not fitting. So the refused are taken out of the drops and the runs
+ * broken again, until every part placed is one the veto accepts. Where nothing is refused this is one
+ * call to {@link breakRuns}, unchanged. `source` indexes `parts`, as there.
+ */
+export function breakAndSeat(
+  traces: Trace2D[],
+  parts: { x: number; y: number }[],
+  gap: number,
+  reach: { before: number; after: number },
+  keepOut: { segs: { a: Vec2; b: Vec2 }[]; clear: number },
+  seat: (span: PartSpan, traces: Trace2D[]) => boolean,
+): { traces: Trace2D[]; placed: PartSpan[] } {
+  let keep = parts.map((_, i) => i);
+  for (;;) {
+    const broke = breakRuns(traces, keep.map((i) => parts[i]!), gap, reach, keepOut);
+    const placed = broke.placed.map((s) => ({ ...s, source: keep[s.source]! }));
+    const refused = new Set(placed.filter((s) => !seat(s, broke.traces)).map((s) => s.source));
+    if (!refused.size) return { traces: broke.traces, placed };
+    keep = keep.filter((i) => !refused.has(i));
+  }
+}
+
+/**
  * The land copper under a switch: a stub to the common, and a stub across to one throw.
  *
  * The rail steps across the part rather than running under it. It arrives at the common, which sits in the
