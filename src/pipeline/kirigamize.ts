@@ -10,10 +10,10 @@
  *   seamed unfold → pack & classify → emit FKLD → verify (fold + dH).
  *
  * Optimize schedule (budget = 3 attempts; "Stage 5 is a search, not a
- * solver"): (1) solve at `iterations`; if dH > ε → (2) add the worst source
- * vertex as an extra relief terminal and re-run plan→emit once; if still
- * failing → (3) re-solve at 3× iterations. Returns the best report with an
- * honest `converged` flag.
+ * solver"): (1) solve at `iterations`; if dH > ε → (2) re-solve the same
+ * pattern at 3× iterations; if still failing → (3) add the worst source
+ * vertex as an extra relief terminal and re-run plan→emit once. Returns the
+ * best report with an honest `converged` flag.
  */
 
 import { condition, assertGenusZero } from "./conditioning.js";

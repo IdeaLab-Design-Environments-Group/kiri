@@ -13,7 +13,7 @@
  *   file_frames: [{ frame_classes: ["foldedForm"], vertices_coords: goal3D }]
  *   fkld:vertices_driven[i] = 1 for every sheet-boundary vertex (lips + ∂Q)
  * with goal3D[i] = Q.vertices[origVertex[i]] (mm) — exactly what
- * src/sim/fold-adapter.ts#applyGuidedFold consumes; this is the DETC
+ * src/sim/origami-import.ts#applyDeclaredGoal consumes; this is the DETC
  * driven-boundary forward process from the algorithm spec.
  *
  * Verification semantics (honest scope): on coarse targets most sheet
@@ -46,7 +46,7 @@ import {
   type TriMesh,
 } from "./types.js";
 
-/** Per-vertex driven flag key (consumed by src/sim/fold-adapter.ts). */
+/** Per-vertex driven flag key (consumed by src/sim/origami-import.ts). */
 export const DRIVEN_KEY = "fkld:vertices_driven";
 
 export interface EmitOptions {
