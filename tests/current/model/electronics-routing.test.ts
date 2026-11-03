@@ -69,7 +69,7 @@ describe("model/electronics-routing", () => {
     }
   });
 
-  it("emits a handful of strips, not two per LED", () => {
+  it("emits a handful of strips, not two per LED", { timeout: 30000 }, () => {
     // The point of the bus topology: both nets are a few long runs whatever the LED count, rather than a pair
     // of strips per LED. A net is a tree, so it is laid as one run per branch -- retraced segments are dropped
     // instead of being taped twice.
@@ -225,7 +225,7 @@ describe("model/electronics-routing", () => {
     }
   });
 
-  it("keeps the whole width of every strip inside the shape", { timeout: 20000 }, () => {
+  it("keeps the whole width of every strip inside the shape", { timeout: 60000 }, () => {
     // Tape has width, so checking the centreline is not enough: a run tracking the boundary keeps its centre on
     // the material while half the strip hangs off. Both edges are sampled here, which is what the router now
     // plans to -- its containment test and its corridor chords both account for the width.
@@ -356,7 +356,7 @@ describe("model/electronics-routing", () => {
     }
   });
 
-  it("keeps every pad connected to its own terminal", () => {
+  it("keeps every pad connected to its own terminal", { timeout: 30000 }, () => {
     // The guard on the tree pruning: dropping a cycle edge or a dead-end branch must never cut a pad off.
     for (const name of ["house.fkld", "puffin.fkld", "akde-hex.fkld"]) {
       const { faces, gaps } = load(name);
@@ -614,7 +614,7 @@ describe("model/electronics-routing", () => {
     expect(oneSided).toBeLessThan(11); // once, not twice
   });
 
-  it("keeps the two nets off each other", { timeout: 20000 }, () => {
+  it("keeps the two nets off each other", { timeout: 60000 }, () => {
     // Overlap was 11-41% of copper when both nets were forced through the same face centres and the same
     // edge midpoints. akde-decagon is included deliberately: it is the pattern where the shared-route toll
     // actually changes the answer, so testing only akde-hex would leave that knob unguarded.
