@@ -221,13 +221,17 @@ function nearestOn(
     u = c > 1e-18 ? Math.max(0, Math.min(1, (b * t + e) / c)) : 0;
     t = a > 1e-18 ? Math.max(0, Math.min(1, (b * u - d) / a)) : 0;
   } else {
-    // Parallel or degenerate: no unique solution, so project each endpoint and keep the nearest pairing.
-    t = 0;
-    u = c > 1e-18 ? Math.max(0, Math.min(1, e / c)) : 0;
-    const alt = a > 1e-18 ? Math.max(0, Math.min(1, -d / a)) : 0;
+    // Parallel or degenerate: no unique solution, so project all four endpoints and keep the nearest
+    // pairing. All four, because the facing ends can be either segment's first or last point.
     const at = (tt: number, uu: number): number =>
       Math.hypot(p.x + dx * tt - (r.x + ex * uu), p.y + dy * tt - (r.y + ey * uu));
-    if (at(alt, 0) < at(t, u)) { t = alt; u = 0; }
+    const onRs = (tt: number): number => (c > 1e-18 ? Math.max(0, Math.min(1, (e + b * tt) / c)) : 0);
+    const onPq = (uu: number): number => (a > 1e-18 ? Math.max(0, Math.min(1, (b * uu - d) / a)) : 0);
+    t = 0;
+    u = onRs(0);
+    for (const [tt, uu] of [[1, onRs(1)], [onPq(0), 0], [onPq(1), 1]] as [number, number][]) {
+      if (at(tt, uu) < at(t, u)) { t = tt; u = uu; }
+    }
   }
   return {
     d: Math.hypot(p.x + dx * t - (r.x + ex * u), p.y + dy * t - (r.y + ey * u)),

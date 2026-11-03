@@ -7,7 +7,7 @@
  */
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { flatFaces, gapGraph, ledOf, type Circuit, type Vec2 } from "../../../src/model/electronics.js";
+import { flatFaces, gapGraph, ledOf, pointInFace, type Circuit, type Vec2 } from "../../../src/model/electronics.js";
 import { DEFAULT_SHEET, minWebMm } from "../../../src/model/fold-strain.js";
 import { planNets } from "../../../src/model/net-routing.js";
 import { TAPE_MM, planRoutes, tapeWidthFor, type Trace2D } from "../../../src/model/electronics-routing.js";
@@ -229,6 +229,41 @@ describe("model/net-routing", () => {
       expect(told.why).toMatch(/single-sided/);
       // And the rest still got their copper: one impossible connection must not cost the user everything.
       expect(r.traces.length).toBeGreaterThan(0);
+    });
+
+    it("measures the gap between collinear runs at their facing ends, whichever way each points", () => {
+      // Two collinear legs end to end in one tile, `g` tape widths apart. The gate's parallel case used to
+      // measure only from each run's FIRST point, so when both runs pointed at each other the facing ends
+      // were never compared and the two nets were laid closer than a tape width.
+      const { faces, gaps, tapeW } = load("house.fkld");
+      const f = faces.findIndex((_, i) =>
+        [-2.6, 2.6].every((k) =>
+          pointInFace(faces, { x: faces[i]!.centroid.x + k * tapeW, y: faces[i]!.centroid.y }) === i));
+      expect(f).toBeGreaterThanOrEqual(0);
+      const { x, y } = faces[f]!.centroid;
+      const net = (id: string, pts: Vec2[]): ResolvedNet =>
+        ({ id, name: id.toUpperCase(), points: pts.map((at, k) => ({ part: k, pad: "1", at })) });
+      for (const g of [0.3, 0.6, 0.9]) {
+        const aFar = { x: x - 2.5 * tapeW, y }, aNear = { x: x - (g * tapeW) / 2, y };
+        const bNear = { x: x + (g * tapeW) / 2, y }, bFar = { x: x + 2.5 * tapeW, y };
+        for (const [a, b] of [
+          [[aFar, aNear], [bFar, bNear]],
+          [[aNear, aFar], [bNear, bFar]],
+          [[aFar, aNear], [bNear, bFar]],
+          [[aNear, aFar], [bFar, bNear]],
+        ] as [Vec2[], Vec2[]][]) {
+          const r = planNets([net("a", a), net("b", b)], faces, gaps, tapeW);
+          // Too close for both: one of the two must be reported rather than laid.
+          expect(r.nets.reduce((n, x) => n + x.stranded.length, 0), `gap ${g}`).toBeGreaterThan(0);
+          expect(nearestBetweenNets(r.traces), `gap ${g}`).toBeGreaterThanOrEqual(tapeW);
+        }
+        // The same gate holds a net off immovable copper, which has no "first point" convention either.
+        const wall = [bFar, bNear];
+        for (const w of [wall, [...wall].reverse()]) {
+          const r = planNets([net("a", [aFar, aNear])], faces, gaps, tapeW, [w]);
+          expect(r.nets[0]!.stranded, `gap ${g} against a wall`).toEqual([1]);
+        }
+      }
     });
   });
 
