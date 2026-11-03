@@ -1187,6 +1187,16 @@ describe("model/copper-svg-export", () => {
     }
   }, { timeout: 30000 });
 
+  it("closes the boundary where a run's copper reaches past the window edge", () => {
+    // The window is the pattern's bounding box, and a run that turns on the silhouette's outermost point
+    // lays half a tape past it — on church with two LEDs, GND turns on the right-hand wall. The window edge
+    // was cut where it met that copper, but the run's outline carried on through the frame border, which is
+    // copper too, so the two never met and the boundary was left a millimetre open.
+    const { fold, traces, tapeW, keepOff, pads } = planned("church.fkld", 2);
+    const out = buildCopperCarrierExport(fold, traces, tapeW, "k", keepOff, undefined, undefined, pads);
+    expect(out.unclosedCuts).toBe(0);
+  });
+
   it("spreads its tabs over the walls instead of stacking them on one", () => {
     // Sorted on distance alone every tab dives for whichever wall is nearest, and they pile up: 45 of 99
     // tabs across the bundled circuits ran within a tape width of another, and puffin sent all six to the

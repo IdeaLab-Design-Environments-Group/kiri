@@ -1185,12 +1185,12 @@ export function buildCopperCarrierExport(
   // The frame's outer edge: a plain closed rectangle, cut all the way round.
   const ox0 = win.x0 - FRAME_BUFFER, oy0 = win.y0 - FRAME_BUFFER;
   const ox1 = win.x1 + FRAME_BUFFER, oy1 = win.y1 + FRAME_BUFFER;
-  cuts.push({
-    pts: [
-      { x: ox0, y: oy0 }, { x: ox1, y: oy0 }, { x: ox1, y: oy1 }, { x: ox0, y: oy1 },
-    ],
-    closed: true,
-  });
+  // The border is solid copper too: a run overhanging the window stops at it, as the window edge does.
+  const rect = (x0: number, y0: number, x1: number, y1: number): Vec2[] =>
+    [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }];
+  const border = [rect(ox0, oy0, win.x0, oy1), rect(win.x1, oy0, ox1, oy1),
+    rect(win.x0, oy0, win.x1, win.y0), rect(win.x0, win.y1, win.x1, oy1)];
+  cuts.push({ pts: rect(ox0, oy0, ox1, oy1), closed: true, self: border });
 
   // Each trace: its outline, opened where its tab attaches, plus the tab's two sides.
   //
@@ -1376,7 +1376,7 @@ export function buildCopperCarrierExport(
   // The window edge, cut in the spans between tabs.
   for (const side of SIDES) {
     for (const seg of sideSpans(side, win, gaps.filter((g) => g.side === side))) {
-      cuts.push({ pts: seg, closed: false });
+      cuts.push({ pts: seg, closed: false, self: border });
     }
   }
 
@@ -1384,7 +1384,7 @@ export function buildCopperCarrierExport(
   // overlap by design -- one net, one potential -- but each was still outlined in full, so one run's cut
   // ran clean through the other's strip and the blade would sever it. What is left is the outside of the
   // copper: a boundary that carries on across the join instead of stopping at it.
-  const drawn = cuts.flatMap((c) => clipOutside(c, solid));
+  const drawn = cuts.flatMap((c) => clipOutside(c, [...solid, ...border]));
 
   // Close the boundary back up, and emit the carrier as the solid shape it is rather than as loose lines.
   //
