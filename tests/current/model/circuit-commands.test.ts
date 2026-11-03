@@ -106,6 +106,63 @@ describe("circuit commands", () => {
     ]);
   });
 
+  it("keeps hand-wire pad vertices on their own part when a part below them is removed", () => {
+    // A wire vertex names its part by index, like a terminal. Left unshifted it re-points at whichever
+    // part slid into that index; one on the removed part is detached so it dangles instead.
+    const circuit: Circuit = {
+      leds: [],
+      battery: null,
+      parts: [
+        { component: "C_1206", x: 0, y: 0 },
+        { component: "R_1206", x: 1, y: 1 },
+        { component: "C_1206", x: 2, y: 2 },
+      ],
+      wires: [{
+        id: "w1",
+        pts: [
+          { kind: "pad", part: 0, pad: "1" },
+          { kind: "pad", part: 1, pad: "1" },
+          { kind: "pad", part: 2, pad: "2" },
+          { kind: "battery", side: "pwr" },
+        ],
+      }],
+    };
+
+    const next = editCircuit(circuit, removeSelectedPart({ kind: "part", index: 0 }));
+    const [gone, r, c] = next.wires![0]!.pts;
+
+    expect(r).toEqual({ kind: "pad", part: 0, pad: "1" });
+    expect(c).toEqual({ kind: "pad", part: 1, pad: "2" });
+    expect(next.wires![0]!.pts[3]).toEqual({ kind: "battery", side: "pwr" });
+    // Still in the wire, so the author can re-attach it, but naming no part the circuit has.
+    expect(gone!.kind).toBe("pad");
+    expect(next.parts![(gone as { part: number }).part]).toBeUndefined();
+  });
+
+  it("keeps a detached pad vertex detached through later removals", () => {
+    const circuit: Circuit = {
+      leds: [],
+      battery: null,
+      parts: [{ component: "C_1206", x: 0, y: 0 }, { component: "R_1206", x: 1, y: 1 }],
+      wires: [{ id: "w1", pts: [{ kind: "pad", part: 1, pad: "1" }, { kind: "free", x: 5, y: 5 }] }],
+    };
+
+    // The next part placed takes the freed index; the detached vertex must not attach to it.
+    const once = editCircuit(circuit, removeSelectedPart({ kind: "part", index: 1 }));
+    const placed = editCircuit(once, appendPlacedPart({ component: "R_1206", x: 3, y: 3 }));
+    const twice = editCircuit(placed, removeSelectedPart({ kind: "part", index: 0 }));
+    const at = (c: Circuit) => c.parts![(c.wires![0]!.pts[0] as { part: number }).part];
+
+    expect(at(placed)).toBeUndefined();
+    expect(at(twice)).toBeUndefined();
+  });
+
+  it("adds no wires field when removing from a circuit without wires", () => {
+    const circuit: Circuit = { leds: [], battery: null, parts: [{ component: "R_1206", x: 0, y: 0 }] };
+
+    expect(editCircuit(circuit, removeSelectedPart({ kind: "part", index: 0 }))).not.toHaveProperty("wires");
+  });
+
   it("cycles authored LED orientation back to router choice", () => {
     const circuit: Circuit = { leds: [{ a: 0, b: 1 }], battery: null };
 

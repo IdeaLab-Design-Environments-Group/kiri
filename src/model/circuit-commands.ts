@@ -20,7 +20,7 @@ import {
   type Terminal,
 } from "./electronics.js";
 import { GND_NET_ID, PWR_NET_ID } from "./net-palette.js";
-import type { ManualWire } from "./manual-wire.js";
+import type { ManualWire, WireVertex } from "./manual-wire.js";
 
 export interface CircuitCommand {
   apply(circuit: Circuit): Circuit;
@@ -140,6 +140,7 @@ export function removeSelectedPart(sel: PartSelection): CircuitCommand {
           ...c,
           parts: (c.parts ?? []).filter((_, i) => i !== sel.index),
           terminals: reindexTerminals(c.terminals ?? [], sel.index),
+          ...reindexWires(c, (v) => (v.kind === "pad" ? { ...v, part: shifted(v.part, sel.index) } : v)),
         };
       }
       const field = fieldFor(sel.kind);
@@ -221,6 +222,27 @@ export function cloneCircuit(c: Circuit): Circuit {
     terminals: (terminals ?? []).map((t) => ({ part: t.part, pad: t.pad, net: t.net })),
     wires: (wires ?? []).map(cloneWire),
   };
+}
+
+/**
+ * A wire vertex's index into `parts` or `leds` once item `removed` is gone from that list.
+ *
+ * Indices above it shift down, as {@link reindexTerminals} does. A vertex ON the removed item is not
+ * dropped: {@link ManualWire} keeps a dangling vertex so the author can re-attach it. It is parked on
+ * {@link DETACHED}, which no array index resolves to and which, being below every removed index, is never
+ * shifted back onto a real item.
+ */
+function shifted(index: number, removed: number): number {
+  if (index === removed) return DETACHED;
+  return index > removed ? index - 1 : index;
+}
+
+// Not -1: that is `BATTERY_PART`, which terminals use.
+const DETACHED = -2;
+
+function reindexWires(c: Circuit, move: (v: WireVertex) => WireVertex): Pick<Circuit, "wires"> {
+  if (!c.wires) return {};
+  return { wires: c.wires.map((w) => ({ ...w, pts: w.pts.map(move) })) };
 }
 
 export function reindexTerminals(terminals: Terminal[], removed: number): Terminal[] {
