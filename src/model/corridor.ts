@@ -180,11 +180,13 @@ export function tapeOffBodyAt(faces: FlatFace[], tapeW: number, a: Vec2, b: Vec2
   const ny = L < 1e-12 ? 0 : ((b.x - a.x) / L) * half;
   const steps = Math.max(9, Math.ceil(L / half));
   if (!(bridgeW > 0)) {
-    // The strict reading, sampled exactly as it always was: the first sample with nothing under either
-    // edge of the tape is the answer.
+    // The strict reading: the first sample with nothing under the centreline or either edge of the tape is
+    // the answer. The centreline too, or a strip laid lengthwise down a slit narrower than itself passes
+    // with both edges on material and its middle over nothing.
     for (let k = 0; k <= steps; k++) {
       const u = k / steps;
       const m = { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u };
+      if (pointInFace(faces, m) < 0) return m;
       if (pointInFace(faces, { x: m.x + nx, y: m.y + ny }) < 0) return m;
       if (pointInFace(faces, { x: m.x - nx, y: m.y - ny }) < 0) return m;
     }
