@@ -62,7 +62,8 @@ describe("model/electronics-routing", () => {
   // flakiness rather than as a budget nobody had ever chosen. 20s is picked to be loose enough that load
   // cannot trip it and tight enough that a real slowdown still can: the routing would have to get four
   // times slower to fail here, which is far past any change that should pass review unnoticed.
-  it("never runs copper over an LED chip, on any bundled pattern", { timeout: 60_000 }, () => {
+  // Solo 15s; 45s and then 60s were both beaten by a full parallel run on a loaded machine (the file alone passes in 15s); 120s.
+  it("never runs copper over an LED chip, on any bundled pattern", { timeout: 120_000 }, () => {
     // The one destructive constraint: tape over the chip shorts the part. Checked on the real patterns,
     // not a toy grid, because a toy grid satisfies it by construction.
     for (const name of ["house.fkld", "church.fkld", "puffin.fkld", "akde-hex.fkld"]) {
