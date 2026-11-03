@@ -314,6 +314,18 @@ describe("model/part-routing", () => {
     expect(breakRuns([run], [{ x: 0.5, y: 0 }], 4).placed).toEqual([]);
   });
 
+  it("leaves out a part whose break is too narrow to weed", () => {
+    // A 0603 bridges 0.70mm, under the weeding floor: the strip between the two cut ends tears rather
+    // than lifts. `seatLed` refuses an LED_0603 for the same gap, so a series 0603 is refused too.
+    const { faces, gaps, base, plain } = fixture(3);
+    const at = longestMid(plain.traces);
+    for (const id of ["C_0603", "R_0603"]) {
+      const r = planRoutes(faces, gaps, { ...base, parts: [{ component: id, x: at.x, y: at.y }] });
+      expect(r.parts, id).toEqual([]);
+      expect(r.traces, id).toEqual(plain.traces);
+    }
+  });
+
   it("routes a circuit with no parts exactly as it did before parts existed", () => {
     // Recorded from the router — every bundled pattern, at one LED and at three, run count and total
     // copper. The whole generic path hangs off `circuit.parts` being empty, so if any of these moves

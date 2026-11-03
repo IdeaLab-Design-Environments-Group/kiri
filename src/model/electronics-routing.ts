@@ -1148,6 +1148,9 @@ export function planRoutes(
     if (!fp) continue;
     const fit = partFit(fp);
     if (!(fit.gap > 0)) continue; // nothing to break a rail for
+    // The bare strip between the cut ends is weeded like an LED's, so it is refused below the same floor
+    // `seatLed` refuses an LED_0603 at — an 0603 bridges 0.70mm.
+    if (fit.gap < MIN_WEED_MM) continue;
     const drops = group.map((g) => g.part);
     const broke = breakRuns(partTraces, drops, toFlat(fit.gap), {
       before: toFlat(fit.before),
