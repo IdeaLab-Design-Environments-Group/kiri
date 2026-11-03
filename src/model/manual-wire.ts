@@ -192,11 +192,13 @@ export function resolveWire(w: ManualWire, ctx: WireContext): Trace2D | null {
   const pts: Vec2[] = [];
   for (const v of w.pts) {
     const at = resolveVertex(v, ctx);
-    if (at) pts.push(at);
+    // A non-finite point dangles as surely as a deleted part does.
+    if (at && Number.isFinite(at.x) && Number.isFinite(at.y)) pts.push(at);
   }
   if (pts.length < 2) return null;
   const trace: Trace2D = { pts, net: w.net ?? w.id };
-  if (w.width !== undefined) trace.width = w.width;
+  // Only a real width: anything else falls back to the tape, as an unset one does.
+  if (w.width !== undefined && Number.isFinite(w.width) && w.width > 0) trace.width = w.width;
   return trace;
 }
 

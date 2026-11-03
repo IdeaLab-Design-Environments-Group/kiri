@@ -152,6 +152,23 @@ describe("model/manual-wire", () => {
     expect(named.width).toBe(0.8);
   });
 
+  it("drops a non-finite vertex and a width that is not a usable number", () => {
+    // NaN in, NaN copper out: a run nothing downstream can draw, cut or measure a clearance against.
+    const ctx = bare({ parts: [{ component: "R_1206", x: NaN, y: 0 }] });
+    const pts: ManualWire["pts"] = [
+      { kind: "free", x: 0, y: 0 },
+      { kind: "free", x: NaN, y: 1 },
+      { kind: "free", x: 2, y: Infinity },
+      { kind: "pad", part: 0, pad: "1" },
+      { kind: "free", x: 5, y: 5 },
+    ];
+    for (const width of [NaN, Infinity, -1, 0]) {
+      const trace = resolveWire({ id: "w1", pts, width }, ctx)!;
+      expect(trace.pts).toEqual([{ x: 0, y: 0 }, { x: 5, y: 5 }]);
+      expect(trace.width).toBeUndefined();
+    }
+  });
+
   it("resolves an LED's leg identically however the battery is placed", { timeout: 20_000 }, () => {
     // The non-circularity property. Which leg is PWR is decided by the router, and the router's decision
     // moves with the battery; if a leg vertex depended on that decision these two would differ.
