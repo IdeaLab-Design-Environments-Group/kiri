@@ -911,7 +911,9 @@ export function searchCorridor(
       const ok = c.chords.get(f);
       for (const m of c.mids.get(f) ?? []) {
         const k = ptKey(m);
-        if (k === at) continue;
+        // A settled node is final: every edge adds cost and can only raise the band, so nothing found from
+        // here can beat it. Skipped before the chord checks below, which are most of the search's time.
+        if (k === at || seen.has(k)) continue;
         if (c.refused.has(k)) continue; // the crease there would crack the trace — see `strainLimit`
         if (ok && !ok.has(chordKey(here, m))) continue; // that chord would leave the tile
         // A chord may pass close to the other net's terminal even when both its ends are clear of it: tolling
@@ -945,7 +947,7 @@ export function searchCorridor(
     for (const b of c.bridges.get(at) ?? []) {
       const k = b.to;
       const m = c.point.get(k);
-      if (!m || c.refused.has(k)) continue;
+      if (!m || seen.has(k) || c.refused.has(k)) continue;
       const cuts = theirs ? (strict ? meetsAny(here, m, theirs) : crossesAny(here, m, theirs)) : false;
       if (cuts && strict) continue;
       const w = best + cost(k, Math.sqrt(dist2(here, m))) * (cuts ? TERMINAL_TOLL : 1) + b.price;
