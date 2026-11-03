@@ -87,7 +87,11 @@ export class ExportModal {
     this.stlBtn = this.overlay.querySelector(".export-stl-btn")!;
     this.stlSizeInput = this.overlay.querySelector(".export-stl-size")!;
     // Announce edits as they happen: the copper is planned and cut at this size, so it must not go stale.
-    this.stlSizeInput.addEventListener("change", () => this.printSizeHandler(this.printSizeMm()));
+    // The open modal's SVGs were cut at the old size too, so rebuild them.
+    this.stlSizeInput.addEventListener("change", () => {
+      this.printSizeHandler(this.printSizeMm());
+      if (!this.overlay.hidden) this.showPayload(!this.stlBtn.disabled);
+    });
     this.stlHeightInput = this.overlay.querySelector(".export-stl-height")!;
     this.stlHeightUnit = this.overlay.querySelector(".export-stl-unit")!;
     this.stlDetailInput = this.overlay.querySelector(".export-stl-detail")!;
@@ -138,7 +142,6 @@ export class ExportModal {
   }
 
   open(): void {
-    this.payload = this.provider?.() ?? null;
     // Probe the STL at the model's defaults to prefill the menu inputs and enable the button.
     if (!this.stlSizeInput.value) this.stlSizeInput.value = String(DEFAULT_PRINT_SIZE);
     const probeSize = parseFloat(this.stlSizeInput.value) || DEFAULT_PRINT_SIZE;
@@ -150,9 +153,15 @@ export class ExportModal {
       this.stlDetailInput.value = String(stlDefault.maxSubdiv);
     }
     this.overlay.hidden = false;
+    this.showPayload(!!stlDefault);
+  }
+
+  /** Pull a fresh SVG payload at the current print size and show its previews. */
+  private showPayload(stlExportable: boolean): void {
+    this.payload = this.provider?.() ?? null;
     if (!this.payload) {
       this.previews.cut.innerHTML = this.previews.score.innerHTML = this.previews.both.innerHTML = "";
-      this.statusEl.textContent = stlDefault
+      this.statusEl.textContent = stlExportable
         ? "No cut pattern, but the 3D-printed tiles are exportable as STL."
         : "No pattern to export — load or kirigamize a model first.";
       this.zipBtn.disabled = this.combinedBtn.disabled = true;

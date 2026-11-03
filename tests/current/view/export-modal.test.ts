@@ -56,6 +56,28 @@ describe("view/export-modal", () => {
     expect(overlay.querySelector(".export-combined-btn")?.disabled).toBe(false);
   });
 
+  it("rebuilds the SVGs at a print size typed after opening", async () => {
+    const { document } = installDom();
+    const modal = new ExportModal();
+    modal.setProvider(() => ({
+      previews: { cut: "", score: "", both: `<svg>${modal.printSizeMm()}</svg>` },
+      files: [],
+      archive: { filename: "cut.zip", bytes: new Uint8Array([1]) },
+      combined: { filename: "all.svg", svg: `<svg>${modal.printSizeMm()}</svg>` },
+    }));
+
+    modal.open();
+    const overlay = document.body.children[0]!;
+    const size = overlay.querySelector(".export-stl-size")!;
+    size.value = "300";
+    size.dispatch("change");
+    overlay.querySelector(".export-combined-btn")!.click();
+
+    const blob = (createObjectURL.mock.calls[0] as unknown as [Blob])[0];
+    expect(await blob.text()).toBe("<svg>300</svg>");
+    expect(overlay.querySelector('[data-k="both"]')?.innerHTML).toBe("<svg>300</svg>");
+  });
+
   it("downloads zip and combined svg using object URLs, and closes via button or Escape", () => {
     const { document } = installDom();
     const modal = new ExportModal();
