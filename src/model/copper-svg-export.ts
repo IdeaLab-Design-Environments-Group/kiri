@@ -1758,11 +1758,11 @@ function pickTab(
     });
     if (!blocked) {
       // Not on top of a tab already placed: two tabs on one another are stuck down together and snipping
-      // one cuts the other.
+      // one cuts the other. Exactly a tape apart counts too: their sides coincide and cut one line twice.
       const onAnother = placed.some((q) => {
         for (let k = 1; k < path.length; k++) {
           for (let j = 1; j < q.path.length; j++) {
-            if (segSegDist(path[k - 1]!, path[k]!, q.path[j - 1]!, q.path[j]!) < tapeW) return true;
+            if (segSegDist(path[k - 1]!, path[k]!, q.path[j - 1]!, q.path[j]!) < tapeW * (1 + 1e-6)) return true;
           }
         }
         return false;

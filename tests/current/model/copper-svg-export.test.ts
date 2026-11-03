@@ -409,6 +409,19 @@ describe("model/copper-svg-export", () => {
       expect(walls.size).toBeGreaterThanOrEqual(3);
     });
 
+    it("keeps two tabs from landing exactly a tape apart, where their sides cut one line twice", () => {
+      // Three plain parallel runs: at these widths a run's second tab sat flush against its first, and the
+      // shared side came out as a there-and-back line that bounds nothing.
+      const { fold } = load("house.fkld");
+      const run = (y: number, net: string) => ({ net, pts: [{ x: 6, y }, { x: 8, y }] });
+      for (const nets of [["pwr", "gnd", "sig"], ["pwr", "pwr", "pwr"]]) {
+        for (const tapeW of [0.08, 0.1]) {
+          const out = buildCopperCarrierExport(fold, [run(6.5, nets[0]!), run(7, nets[1]!), run(7.5, nets[2]!)], tapeW);
+          expect(out.unclosedCuts, `${nets} at ${tapeW}`).toBe(0);
+        }
+      }
+    });
+
     it("reports tabs it could not route clear rather than hiding them", { timeout: 30000 }, () => {
       // puffin's window is crowded enough that some runs are enclosed by the other net with no clear line out.
       const { fold, traces, tapeW } = planned("puffin.fkld", 12);
