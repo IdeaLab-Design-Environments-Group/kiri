@@ -8,6 +8,7 @@
 import type { Vec2 } from "./electronics.js";
 import { MIN_LAND_FRAC } from "./tape-width.js";
 import type { NetPoint, PadObstacle } from "./netlist.js";
+import type { PadField } from "./trace-types.js";
 
 /**
  * Where two segments come closest, and how close — the distance plus both parameters.
@@ -180,4 +181,28 @@ export function padCapAt(p: Vec2, pads: ForeignPad[], gap: number, tapeW: number
   }
   if (!Number.isFinite(room)) return tapeW;
   return Math.max(tapeW * MIN_LAND_FRAC, Math.min(tapeW, 2 * (room - gap)));
+}
+
+/**
+ * The fields and foreign pads that can reach any of `pts`: a field within its `reach` of the points' box, a
+ * pad whose box is nearer than `far`.
+ *
+ * Exact, not an approximation. A point's distance is never less than its box's, so whatever is dropped here
+ * is something `narrowedTo` or {@link padCapAt} would skip at every point anyway. The comparisons are
+ * negated so that a NaN keeps an entry, as those two would. Order is kept, so `padCapAt` still meets the
+ * pads in the order it breaks on.
+ */
+export function nearLeg(
+  pts: Vec2[], fields: PadField[], pads: ForeignPad[], far: number,
+): { fields: PadField[]; pads: ForeignPad[] } {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const p of pts) {
+    x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y);
+  }
+  const boxGap = (fx0: number, fy0: number, fx1: number, fy1: number): number =>
+    Math.max(fx0 - x1, x0 - fx1, fy0 - y1, y0 - fy1, 0);
+  return {
+    fields: fields.filter((f) => !(boxGap(f.at.x, f.at.y, f.at.x, f.at.y) > f.reach)),
+    pads: pads.filter((f) => !(boxGap(f.x0, f.y0, f.x1, f.y1) >= far)),
+  };
 }

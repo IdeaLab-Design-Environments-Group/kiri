@@ -67,7 +67,7 @@ import { narrowedTo } from "./pad-landing.js";
 import type { Corridor, PadField, Trace2D } from "./trace-types.js";
 import { DEFAULT_SHEET, minWebMm, type SheetSpec } from "./fold-strain.js";
 import type { NetPoint, PadObstacle, ResolvedNet } from "./netlist.js";
-import { foreignPads, nearestOn, padCapAt, padHitBy, type ForeignPad } from "./pad-clearance.js";
+import { foreignPads, nearestOn, nearLeg, padCapAt, padHitBy, type ForeignPad } from "./pad-clearance.js";
 
 /** How a net fared. */
 export interface RoutedNet {
@@ -574,12 +574,16 @@ function layLeg(
   padWidthA: number | undefined, padWidthB: number | undefined,
   r: LegRules,
 ): { ok: true; pts: Vec2[]; widths?: number[] } | { ok: false; cuts: string | null } {
-  const cap = (p: Vec2): number => padCapAt(p, r.pads, r.padGap, r.tapeW);
+  // Only the metal within reach of this leg's points, which leaves every width exactly as it was.
+  const widthsOf = (pts: Vec2[], wp?: number, wq?: number): number[] | undefined => {
+    const near = nearLeg(pts, r.fields, r.pads, r.padGap + r.tapeW / 2);
+    return legWidths(pts, r.tapeW, wp, wq, near.fields, (p) => padCapAt(p, near.pads, r.padGap, r.tapeW));
+  };
   const build = (way: Vec2[]): { pts: Vec2[]; widths?: number[] } => {
     // Densified first, so the width profile follows the part's own pitch rather than being smeared across a
     // corridor hop — and so the gate judges exactly the copper the blade will cut.
     const pts = densifyNearFields([a, ...way, b], r.tapeW, r.fields);
-    const widths = legWidths(pts, r.tapeW, padWidthA, padWidthB, r.fields, cap);
+    const widths = widthsOf(pts, padWidthA, padWidthB);
     return { pts, ...(widths ? { widths } : {}) };
   };
 
@@ -619,7 +623,7 @@ function layLeg(
   // board several times slower for no extra reach.
   const hopOk = (p: Vec2, w: Vec2, q: Vec2, wp?: number, wq?: number): boolean => {
     const pts = densifyNearFields([p, w, q], r.tapeW, r.fields);
-    return pathOk(pts, legWidths(pts, r.tapeW, wp, wq, r.fields, cap), r).ok;
+    return pathOk(pts, widthsOf(pts, wp, wq), r).ok;
   };
   const clearFirsts = firsts.filter((v) => hopOk(a, v, mid[0]!, padWidthA, undefined));
   for (const v of clearFirsts) {
