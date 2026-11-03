@@ -1110,6 +1110,7 @@ export function planRoutes(
   // Each LED's legs and body, pad to outboard pad: the copper `seatLedLegs` lays after the breaks. A break
   // keeps its bare pattern a tape's width off it, so a leg touches one cut half at most — and the other
   // half is then a whole break away, which the part loop below holds above the weeding floor.
+  const ledPads = targets.flatMap((t) => (pads[t.slot]?.component ? [pads[t.slot]!] : []));
   const ledKeepOut = {
     segs: targets.flatMap((t) => {
       const pair = pads[t.slot];
@@ -1147,9 +1148,20 @@ export function planRoutes(
     );
   }
   // A seat that shorts the two nets through the part is no seat at all — drop it and let it be reported.
+  // Likewise one whose lands run over an LED: its chip, or its leg on the other net. `ledKeepOut` runs
+  // from the PWR leg's end to the GND leg's, so a PWR land is kept off it from the PWR pad on.
+  const clearOfLeds = (lands: Trace2D[]): boolean =>
+    lands.every((l) => l.pts.slice(1).every((b, i) => ledKeepOut.segs.every((s, k) => {
+      const pair = ledPads[k]!;
+      const [from, to] = l.net === "pwr" ? [pair.pwr, s.b] : l.net === "gnd" ? [pair.gnd, s.a] : [s.a, s.b];
+      return segNearSeg(l.pts[i]!, b, from, to) >= ((l.width ?? tapeW) + tapeW) / 2;
+    })));
   withSw.placed = withSw.placed.filter((span) =>
     clearOfOtherNet(span, withSw.traces, tapeW, toFlat(SWITCH_PITCH_MM),
-      { w: toFlat(swPad.w), h: toFlat(swPad.h) }, toFlat(SWITCH_ROW_MM)),
+      { w: toFlat(swPad.w), h: toFlat(swPad.h) }, toFlat(SWITCH_ROW_MM)) &&
+    clearOfLeds(
+      switchLand(span, toFlat(SWITCH_PITCH_MM), toFlat(swPad.w), toFlat(swPad.h), toFlat(SWITCH_ROW_MM)),
+    ),
   );
   const swLands = withSw.placed.flatMap((span) =>
     switchLand(
@@ -1201,7 +1213,9 @@ export function planRoutes(
       }
       broke.placed = broke.placed.filter((span) =>
         clearOfOtherNet(span, laid, tapeW, toFlat(across.pitch),
-          { w: toFlat(across.pad.w), h: toFlat(across.pad.h) }, toFlat(across.rowSep)),
+          { w: toFlat(across.pad.w), h: toFlat(across.pad.h) }, toFlat(across.rowSep)) &&
+        clearOfLeds(switchLand(span, toFlat(across.pitch), toFlat(across.pad.w), toFlat(across.pad.h),
+          toFlat(across.rowSep))),
       );
       for (const span of broke.placed) {
         partLands.push(

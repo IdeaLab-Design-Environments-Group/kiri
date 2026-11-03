@@ -6,6 +6,7 @@ import {
   SWITCH_PITCH_MM,
   SWITCH_ROW_MM,
   breakRuns,
+  countOverLed,
   planRoutes,
   tapeWidthFor,
   totalLength,
@@ -548,6 +549,28 @@ describe("model/switch", () => {
     }
     expect(seated, "the veto has banned the switch from every run end").toBeGreaterThan(0);
     expect(seated, "two of the four run ends seat").toBe(2);
+  });
+
+  it("does not land a throw on an LED chip", () => {
+    // The seat veto looked at the other net's copper only, so a live throw's land could run straight
+    // across an LED. On teapot-spout one switch on the PWR rail did exactly that.
+    const fold = JSON.parse(readFileSync(`${EXAMPLES}teapot-spout.fkld`, "utf8"));
+    const faces = flatFaces(fold);
+    const gaps = gapGraph(fold, faces).gaps;
+    const seen = new Set<string>();
+    const leds = [];
+    for (const g of gaps) {
+      const l = ledOf(g.faceA, g.faceB);
+      if (seen.has(`${l.a}_${l.b}`)) continue;
+      seen.add(`${l.a}_${l.b}`);
+      leds.push(l);
+      if (leds.length >= 4) break;
+    }
+    const base: Circuit = { leds, battery: { face: 0 } };
+    const plain = planRoutes(faces, gaps, base);
+    expect(countOverLed(plain.traces, plain.pads)).toBe(0);
+    const r = planRoutes(faces, gaps, { ...base, switches: [{ x: 41.7156, y: 41.7156 }] });
+    expect(countOverLed(r.traces, r.pads)).toBe(0);
   });
 
   it("refuses a run too short to seat the part", () => {
