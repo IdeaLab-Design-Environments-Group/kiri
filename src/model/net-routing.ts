@@ -821,12 +821,16 @@ function routeOne(
   blame: string[];
   /** Whether this net had a bus rail to tap, and whether the tap leg reached it. */
   tapped: "none" | "laid" | "failed";
+  /** Whether a stranded terminal was refused by something with no net to blame — the bus, a hand-drawn
+   *  wire, or a pad nobody wired. */
+  walled: boolean;
 } {
   const traces: Trace2D[] = [];
   const stranded: number[] = [];
   const used = new Set<string>();
   const lines: Trace2D[] = [];
   const blame: string[] = [];
+  let walled = false;
   const accuse = (who: string | null): void => {
     if (who && who !== net.id && !blame.includes(who)) blame.push(who);
   };
@@ -892,6 +896,7 @@ function routeOne(
     if (!leg.ok) {
       if (!stranded.includes(j)) stranded.push(j);
       accuse(leg.cuts);
+      if (leg.cuts === null) walled = true;
       continue;
     }
     reached.add(j);
@@ -931,7 +936,7 @@ function routeOne(
     tapped = "laid";
     break;
   }
-  return { traces, stranded, used, lines, blame, tapped };
+  return { traces, stranded, used, lines, blame, tapped, walled };
 }
 
 /**
@@ -1077,6 +1082,9 @@ export function planNets(
       const inTheWay = r.blame
         .map((id) => nets.find((x) => x.id === id)?.name)
         .filter((x): x is string => !!x);
+      // Copper or a pad that belongs to no net is in the way too, and naming only nets would send the
+      // author looking for a net that is not there.
+      if (r.walled) inTheWay.push("other copper or a pad");
       const tapWhy =
         r.tapped === "failed"
           ? `"${n.name}" could not be joined to the ${n.name} rail without crossing other copper. ` +

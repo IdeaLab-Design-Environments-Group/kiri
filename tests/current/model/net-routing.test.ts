@@ -392,6 +392,9 @@ describe("model/net-routing", () => {
     const r = planNets([net], faces, gaps, tapeW, [ring]);
     expect([...r.nets[0]!.stranded].sort()).toEqual([1, 2]);
     expect(r.nets[0]!.ratsnest).toHaveLength(2);
+    // Blocked by immovable copper, so there is no net to name and none must be invented.
+    expect(r.nets[0]!.why).not.toMatch(/another net/);
+    expect(r.nets[0]!.why).toMatch(/other copper or a pad/);
   });
 
   it("never moves a terminal onto the material to make it reachable", () => {
