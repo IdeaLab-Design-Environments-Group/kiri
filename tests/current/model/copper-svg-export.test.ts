@@ -299,17 +299,17 @@ describe("model/copper-svg-export", () => {
     it("tabs at the tape's own width, clear of the other net, using whichever wall is free", { timeout: 90_000 }, () => {
       // A tab across another trace would be stuck down on top of it, shorting the two, and snipping it would cut
       // the trace underneath. Same-net runs are not obstacles: they meet at junctions by design.
-      // Zero on akde-hex and house. The others keep some, counted and not hidden: church 2, puffin 7 (routing
+      // Zero on akde-hex and house. The others keep some, counted and not hidden: church 1, puffin 5 (routing
       // around mountain folds sends runs down narrow corridors, leaving few clear lines out to a wall), and the
-      // akde pyramids 1 each. These are the values measured today; the real fix is better tab selection, and
+      // akde square pyramid 1. These are the values measured today; the real fix is better tab selection, and
       // the budgets are pinned so the counts cannot spread in the meantime.
       const budget: Record<string, number> = {
         "akde-hex.fkld": 0,
         "house.fkld": 0,
-        "church.fkld": 2,
-        "puffin.fkld": 7,
+        "church.fkld": 1,
+        "puffin.fkld": 5,
         "akde-square-pyramid.fkld": 1,
-        "akde-decagon-pyramid.fkld": 1,
+        "akde-decagon-pyramid.fkld": 0,
       };
       for (const [name, want] of Object.entries(budget)) {
         const { fold, traces, tapeW } = planned(name, 12);
