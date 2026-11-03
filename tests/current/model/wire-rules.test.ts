@@ -44,7 +44,7 @@ import {
   isBuildable,
   type WireFaultKind,
 } from "../../../src/model/wire-rules.js";
-import type { WireContext } from "../../../src/model/manual-wire.js";
+import { resolveWire, type ManualWire, type WireContext } from "../../../src/model/manual-wire.js";
 
 const EXAMPLES = new URL("../../../public/examples/", import.meta.url).pathname;
 
@@ -68,6 +68,32 @@ function fixture(name = "akde-hex.fkld", ledCount = 3) {
   const routed = planRoutes(faces, gaps, circuit);
   const ctx: WireContext = { faces, gaps, circuit, tapeW };
   return { faces, gaps, circuit, tapeW, routed, ctx };
+}
+
+/** Four free C_1206 parts on akde-hex's four largest faces, wired by `terminals`, routed. */
+function partsFixture(terminals: NonNullable<Circuit["terminals"]>) {
+  const fold = JSON.parse(readFileSync(`${EXAMPLES}akde-hex.fkld`, "utf8"));
+  const faces = flatFaces(fold);
+  const gaps = gapGraph(fold, faces).gaps;
+  const area = (i: number) => Math.abs(faces[i]!.poly.reduce((s, p, k, poly) => {
+    const q = poly[(k + 1) % poly.length]!; return s + p.x * q.y - q.x * p.y;
+  }, 0));
+  const big = faces.map((_, i) => i).sort((a, b) => area(b) - area(a));
+  const circuit: Circuit = {
+    leds: [], battery: null,
+    parts: big.slice(0, 4).map((f) => ({ component: "C_1206", ...faces[f]!.centroid, free: true, rot: 0 })),
+    nets: [{ id: "n1", name: "N1" }, { id: "n2", name: "N2" }],
+    terminals,
+  };
+  const tapeW = tapeWidthFor(faces, undefined, undefined, circuit);
+  const ctx: WireContext = { faces, gaps, circuit, tapeW };
+  return { ctx, routed: planRoutes(faces, gaps, circuit) };
+}
+
+/** A wire on `net` running pad to pad, resolved to copper. */
+function padWire(net: string, ends: [number, string][], ctx: WireContext): Trace2D {
+  const w: ManualWire = { id: "w", net, pts: ends.map(([part, pad]) => ({ kind: "pad" as const, part, pad })) };
+  return resolveWire(w, ctx)!;
 }
 
 const kinds = (fs: { kind: WireFaultKind }[]): WireFaultKind[] => fs.map((f) => f.kind);
@@ -553,6 +579,32 @@ describe("model/wire-rules", () => {
     expect(kinds(faults)).toContain("off-body");
     expect(kinds(faults)).not.toContain("spans-cut");
     expect(isBuildable(faults)).toBe(false);
+  });
+
+  it("reports a short where a wire lands on a pad wired to another net", { timeout: 20_000 }, () => {
+    const { ctx, routed } = partsFixture([
+      { part: 0, pad: "1", net: "n1" }, { part: 1, pad: "1", net: "n1" },
+      { part: 2, pad: "1", net: "n2" }, { part: 3, pad: "1", net: "n2" },
+    ]);
+    const wire = padWire("n1", [[0, "1"], [2, "1"]], ctx);
+    const faults = checkWire(wire, ctx, routed);
+    const hit = faults.find((f) => f.kind === "crosses-net" && f.net === "n2");
+    expect(hit).toBeDefined();
+    expect(Math.hypot(hit!.at.x - wire.pts[1]!.x, hit!.at.y - wire.pts[1]!.y)).toBeLessThan(1e-6);
+    expect(isBuildable(faults)).toBe(false);
+  });
+
+  it("reports a short where a wire bridges two pins of one part", { timeout: 20_000 }, () => {
+    const { ctx, routed } = partsFixture([{ part: 0, pad: "1", net: "n1" }, { part: 1, pad: "1", net: "n1" }]);
+    // Part 2 has nothing wired to it, so the only thing wrong is the bridge itself.
+    expect(kinds(checkWire(padWire("n2", [[2, "1"], [2, "2"]], ctx), ctx, routed))).toContain("crosses-net");
+  });
+
+  it("lets a wire join two pins of one part that are both on its own net", { timeout: 20_000 }, () => {
+    const { ctx, routed } = partsFixture([
+      { part: 0, pad: "1", net: "n1" }, { part: 0, pad: "2", net: "n1" }, { part: 1, pad: "1", net: "n1" },
+    ]);
+    expect(kinds(checkWire(padWire("n1", [[0, "1"], [0, "2"]], ctx), ctx, routed))).not.toContain("crosses-net");
   });
 
   it("splits every fault kind into exactly one severity", () => {

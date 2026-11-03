@@ -39,7 +39,9 @@ import {
   type Trace2D,
 } from "./electronics-routing.js";
 import { toFlat, type WireContext } from "./manual-wire.js";
-import { bridgeSpanFor } from "./tape-width.js";
+import { padPin, resolveNetlist } from "./netlist.js";
+import { segNearSeg } from "./trace-geometry.js";
+import { TAPE_MM, bridgeSpanFor } from "./tape-width.js";
 
 /**
  * What can be wrong with a hand-drawn wire.
@@ -116,6 +118,7 @@ export function checkWire(t: Trace2D, ctx: WireContext, routed: RoutedCircuit): 
   offBody(t, ctx, tapeW, faults);
   overLed(t, ctx, routed, before, after, faults);
   crossesNet(t, ctx, before, faults);
+  padShorts(t, ctx, faults);
   proximity(t, ctx, before, after, faults);
   foldFatigue(t, ctx, faults);
   acuteJoins(t, before, after, faults);
@@ -254,6 +257,42 @@ function crossesNet(t: Trace2D, ctx: WireContext, before: Trace2D[], out: WireFa
       at: pole,
       why: "the wire runs across a battery terminal it does not belong to — this shorts the cell",
       net: pole === term.pwr ? "pwr" : "gnd",
+    });
+  }
+}
+
+/**
+ * Part pads this wire shorts: a pad wired to another net, or two pins of one part joined together.
+ *
+ * Read off the netlist's own pad obstacles — every pad of every placed part, with the net wired to it — so
+ * this and the router agree on where the metal is. Routed copper does not stand in for it: a pad on a net
+ * with no copper yet, or a part nobody has wired, is still metal the tape is lying on.
+ *
+ * Joining two pins is a short only when one of them is not on the wire's own net. Both pins on that net is
+ * an ordinary netlist the router would lay itself; an unwired pin joined to anything shorts the part out.
+ */
+function padShorts(t: Trace2D, ctx: WireContext, out: WireFault[]): void {
+  if (!ctx.circuit.parts?.length) return;
+  const { pads } = resolveNetlist(ctx.circuit, ctx.tapeW, ctx.tapeMm ?? TAPE_MM);
+  const half = (t.width ?? ctx.tapeW) / 2;
+  const touched = pads.filter((p) => onPolygon(t.pts, p.outline, half));
+  for (const part of new Set(touched.map((p) => p.part))) {
+    const here = touched.filter((p) => p.part === part);
+    const foreign = here.find((p) => p.net !== null && p.net !== t.net);
+    if (foreign) {
+      out.push({
+        kind: "crosses-net",
+        at: foreign.at,
+        why: `the wire lands on a pad wired to ${foreign.net} — this shorts the two nets together`,
+        net: foreign.net!,
+      });
+      continue;
+    }
+    if (new Set(here.map((p) => padPin(p.pad))).size < 2 || here.every((p) => p.net === t.net)) continue;
+    out.push({
+      kind: "crosses-net",
+      at: here[0]!.at,
+      why: "the wire joins two pins of one part — this shorts the part out",
     });
   }
 }
@@ -483,6 +522,24 @@ function crossPoint(a: Vec2, b: Vec2, c: Vec2, d: Vec2): Vec2 {
   if (Math.abs(den) < 1e-18) return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
   const u = ((c.x - a.x) * sy - (c.y - a.y) * sx) / den;
   return { x: a.x + rx * u, y: a.y + ry * u };
+}
+
+/** Whether a strip of half-width `half` along `pts` overlaps the closed polygon `poly`. */
+function onPolygon(pts: Vec2[], poly: Vec2[], half: number): boolean {
+  for (let i = 1; i < pts.length; i++) {
+    for (let k = 0; k < poly.length; k++) {
+      if (segNearSeg(pts[i - 1]!, pts[i]!, poly[k]!, poly[(k + 1) % poly.length]!) < half) return true;
+    }
+  }
+  // A vertex inside the pad touches none of its edges; the crossing rule catches it.
+  return pts.some((p) => {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const a = poly[i]!, b = poly[j]!;
+      if ((a.y > p.y) !== (b.y > p.y) && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+    }
+    return inside;
+  });
 }
 
 /** Distance from `p` to the nearest point of polyline `pts`. */
