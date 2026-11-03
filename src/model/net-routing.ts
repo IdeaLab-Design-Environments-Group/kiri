@@ -1088,9 +1088,9 @@ export function planNets(
       if (r.walled) inTheWay.push("other copper or a pad");
       const tapWhy =
         r.tapped === "failed"
-          ? `"${n.name}" could not be joined to the ${n.name} rail without crossing other copper. ` +
-            `The pads on it are wired to each other but not to the battery: move the part, or bridge it ` +
-            `to the rail by hand.`
+          ? `"${n.name}" could not be joined to the ${n.name} rail or wire without crossing other copper. ` +
+            `The pads on it are wired to each other but not to that copper: move the part, or bridge it ` +
+            `by hand.`
           : "";
       const rats = ratsnestFor(n, r.stranded, r.lines);
       out[idx] = {
