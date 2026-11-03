@@ -261,9 +261,16 @@ function hitBy(
   /** Full tape width, for a run that carries no widths of its own. */
   full: number,
 ): Laid | null {
+  const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x), y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
   for (const line of lines) {
     for (let i = 1; i < line.pts.length; i++) {
-      const near = nearestOn(a, b, line.pts[i - 1]!, line.pts[i]!);
+      const p = line.pts[i - 1]!, q = line.pts[i]!;
+      // Boxes first: no closer than their gap, so a pair that far apart cannot hit at either run's widest.
+      const theirsMax = Math.max(widthAt(line.widths, i, 0, full), widthAt(line.widths, i, 1, full));
+      const boxGap = Math.max(
+        Math.min(p.x, q.x) - x1, x0 - Math.max(p.x, q.x), Math.min(p.y, q.y) - y1, y0 - Math.max(p.y, q.y));
+      if (boxGap >= gapNeeded(Math.max(wa, wb), theirsMax, weed)) continue;
+      const near = nearestOn(a, b, p, q);
       // Each run's width AT THE CLOSEST APPROACH, not the widest point of either segment. A leg out of a
       // chip's pin runs from pad width to tape width in a single segment, so the conservative reading takes
       // the tape width and refuses every such leg — which is the bug this whole change exists to fix.
