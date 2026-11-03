@@ -324,14 +324,31 @@ function padIsMine(pad: PadObstacle, mine: string, own: NetPoint[]): boolean {
  * {@link padCapAt}, which is what makes that squeeze possible rather than merely permitted.
  */
 function padHitBy(
-  a: Vec2, b: Vec2, pads: PadObstacle[], mine: string, gap: number, wa: number, wb: number,
-  own: NetPoint[] = [],
+  a: Vec2, b: Vec2, pads: ForeignPad[], gap: number, wa: number, wb: number,
 ): PadObstacle | null {
-  for (const pad of pads) {
-    if (padIsMine(pad, mine, own)) continue;
-    if (segToPoly(a, b, pad.outline) < Math.max(wa, wb) / 2 + gap) return pad;
+  const reach = Math.max(wa, wb) / 2 + gap;
+  const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x), y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
+  for (const f of pads) {
+    if (Math.max(f.x0 - x1, x0 - f.x1, f.y0 - y1, y0 - f.y1) >= reach) continue;
+    if (segToPoly(a, b, f.pad.outline) < reach) return f.pad;
   }
   return null;
+}
+
+/**
+ * A pad that is not this net's, with its bounding box.
+ *
+ * Both pad tests run per densified point against every pad, and most pads are nowhere near. The box gap
+ * never exceeds the outline distance, so a pad whose box is out of reach is skipped without changing the
+ * answer. Filtering out the net's own pads once per net, rather than per point, saves the rest.
+ */
+interface ForeignPad { pad: PadObstacle; x0: number; y0: number; x1: number; y1: number }
+
+function foreignPads(pads: PadObstacle[], mine: string, own: NetPoint[]): ForeignPad[] {
+  return pads.filter((pad) => !padIsMine(pad, mine, own)).map((pad) => {
+    const xs = pad.outline.map((q) => q.x), ys = pad.outline.map((q) => q.y);
+    return { pad, x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) };
+  });
 }
 
 /**
@@ -348,13 +365,13 @@ function padHitBy(
  * applies for a part's own pitch — and the floor is that function's floor, so copper never pinches to
  * something too thin to carry or to cut. Below the floor there is genuinely no room and the gate refuses.
  */
-function padCapAt(
-  p: Vec2, pads: PadObstacle[], mine: string, gap: number, tapeW: number, own: NetPoint[],
-): number {
+function padCapAt(p: Vec2, pads: ForeignPad[], gap: number, tapeW: number): number {
+  // Room past half a tape beyond the clearance leaves the copper at full width, so nothing farther counts.
+  const far = gap + tapeW / 2;
   let room = Infinity;
-  for (const pad of pads) {
-    if (padIsMine(pad, mine, own)) continue;
-    room = Math.min(room, segToPoly(p, p, pad.outline));
+  for (const f of pads) {
+    if (Math.max(f.x0 - p.x, p.x - f.x1, f.y0 - p.y, p.y - f.y1) >= Math.min(room, far)) continue;
+    room = Math.min(room, segToPoly(p, p, f.pad.outline));
     if (room <= gap) break;
   }
   if (!Number.isFinite(room)) return tapeW;
@@ -679,11 +696,9 @@ interface LegRules {
   clearance: number;
   tapeW: number;
   fields: PadField[];
-  pads: PadObstacle[];
+  /** Every pad that is not this net's — see {@link foreignPads}. */
+  pads: ForeignPad[];
   padGap: number;
-  netId: string;
-  /** This net's own terminals — see {@link padIsMine}. */
-  own: NetPoint[];
   faces: FlatFace[];
 }
 
@@ -712,7 +727,7 @@ function pathOk(
       return { ok: false, cuts };
     }
     // And the pads, which the check above cannot see: it measures against other nets' RUNS.
-    const over = padHitBy(a, b, r.pads, r.netId, r.padGap, wAt(k - 1), wAt(k), r.own);
+    const over = padHitBy(a, b, r.pads, r.padGap, wAt(k - 1), wAt(k));
     // Blame the net that owns the pad where there is one. An unwired pin belongs to nobody, and saying so
     // is more honest than naming whatever else its part is wired to.
     if (over) return { ok: false, cuts: over.net };
@@ -732,7 +747,7 @@ function layLeg(
   padWidthA: number | undefined, padWidthB: number | undefined,
   r: LegRules,
 ): { ok: true; pts: Vec2[]; widths?: number[] } | { ok: false; cuts: string | null } {
-  const cap = (p: Vec2): number => padCapAt(p, r.pads, r.netId, r.padGap, r.tapeW, r.own);
+  const cap = (p: Vec2): number => padCapAt(p, r.pads, r.padGap, r.tapeW);
   const build = (way: Vec2[]): { pts: Vec2[]; widths?: number[] } => {
     // Densified first, so the width profile follows the part's own pitch rather than being smeared across a
     // corridor hop — and so the gate judges exactly the copper the blade will cut.
@@ -842,7 +857,9 @@ function routeOne(
   // that came within a tape width of the GND rail is the short this gate exists to refuse.
   const mine = theirs.filter((l) => l.rail === net.id).map((l) => l.pts);
   const others = theirs.filter((l) => l.rail !== net.id);
-  const rules: LegRules = { others, clearance, tapeW, fields, pads, padGap, netId: net.id, own, faces };
+  const rules: LegRules = {
+    others, clearance, tapeW, fields, pads: foreignPads(pads, net.id, own), padGap, faces,
+  };
 
   // A pad that is not on the material at all can never be reached, and says so once rather than once per
   // tree edge that happens to touch it.
