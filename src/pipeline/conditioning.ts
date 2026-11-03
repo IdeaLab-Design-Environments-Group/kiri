@@ -18,16 +18,34 @@ import { PipelineError, type ConditionReport, type MeshTopology, type TriMesh } 
 /** Weld key quantization: 1e-4 mm (AKDE `vid()` precedent). */
 const WELD_TOL_MM = 1e-4;
 
-/** Merge coincident vertices (position quantized to `tolMm`); drop unused vertices. */
+/**
+ * Merge coincident vertices (position quantized to `tolMm`); drop unused vertices. A vertex with
+ * no weld in its own cell also welds to a neighbouring cell's vertex within `tolMm` per axis, so
+ * copies straddling a cell boundary still merge.
+ */
 export function weldVertices(mesh: TriMesh, tolMm = WELD_TOL_MM): { mesh: TriMesh; report: ConditionReport } {
-  const key = (v: { x: number; y: number; z: number }): string =>
-    `${Math.round(v.x / tolMm)},${Math.round(v.y / tolMm)},${Math.round(v.z / tolMm)}`;
+  const cell = (v: { x: number; y: number; z: number }): [number, number, number] =>
+    [Math.round(v.x / tolMm), Math.round(v.y / tolMm), Math.round(v.z / tolMm)];
   const lookup = new Map<string, number>();
   const remap: number[] = [];
   const vertices: TriMesh["vertices"] = [];
+  const neighbour = (v: { x: number; y: number; z: number }, [cx, cy, cz]: [number, number, number]): number | undefined => {
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dz = -1; dz <= 1; dz++) {
+          const id = lookup.get(`${cx + dx},${cy + dy},${cz + dz}`);
+          if (id === undefined) continue;
+          const w = vertices[id];
+          if (Math.abs(w.x - v.x) <= tolMm && Math.abs(w.y - v.y) <= tolMm && Math.abs(w.z - v.z) <= tolMm) return id;
+        }
+      }
+    }
+    return undefined;
+  };
   for (const v of mesh.vertices) {
-    const k = key(v);
-    let id = lookup.get(k);
+    const c = cell(v);
+    const k = c.join(",");
+    let id = lookup.get(k) ?? neighbour(v, c);
     if (id === undefined) {
       id = vertices.length;
       vertices.push({ ...v });

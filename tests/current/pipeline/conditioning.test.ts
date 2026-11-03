@@ -21,6 +21,33 @@ describe("weldVertices", () => {
     const topo = buildTopology(orientFaces(mesh).mesh);
     expect(eulerCharacteristic(mesh, topo)).toBe(2);
   });
+
+  it("welds copies that straddle a quantization cell boundary", () => {
+    // 0.5e-4 mm sits exactly on a cell edge; ±1e-9 noise rounds the copies apart.
+    const c = 0.5e-4;
+    const soup: TriMesh = {
+      vertices: [
+        { x: c - 1e-9, y: c - 1e-9, z: c - 1e-9 },
+        { x: 10, y: 0, z: 0 },
+        { x: 0, y: 10, z: 0 },
+        { x: c + 1e-9, y: c + 1e-9, z: c + 1e-9 },
+        { x: 0, y: 0, z: 10 },
+      ],
+      faces: [[0, 1, 2], [3, 2, 4]],
+    };
+    const { mesh, report } = weldVertices(soup);
+    expect(mesh.vertices.length).toBe(4);
+    expect(report.changed).toBe(1);
+    expect(mesh.faces[1][0]).toBe(mesh.faces[0][0]);
+  });
+
+  it("keeps vertices farther apart than the tolerance distinct", () => {
+    const soup: TriMesh = {
+      vertices: [{ x: 0, y: 0, z: 0 }, { x: 3e-4, y: 0, z: 0 }, { x: 0, y: 10, z: 0 }],
+      faces: [[0, 1, 2]],
+    };
+    expect(weldVertices(soup).mesh.vertices.length).toBe(3);
+  });
 });
 
 describe("orientFaces", () => {
