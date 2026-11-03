@@ -69,4 +69,33 @@ describe("sim/forces", () => {
   it("produces a positive stable timestep", () => {
     expect(computeDt(makeModel())).toBeGreaterThan(0);
   });
+
+  it("keeps the stiffness-only step when the bars are undamped", () => {
+    const model = makeModel();
+    model.params = { ...model.params, zeta: 0 };
+    let kMax = 0;
+    for (let i = 0; i < model.beams.count; i++) kMax = Math.max(kMax, model.beams.k[i]);
+    expect(computeDt(model)).toBeCloseTo(0.9 / (2 * Math.PI * Math.sqrt(kMax)), 9);
+  });
+
+  it("shrinks the step for heavy damping so a kicked hinge still decays", () => {
+    const model = makeModel();
+    const light = computeDt(model);
+    model.params = { ...model.params, zeta: 20 };
+    const dt = computeDt(model);
+    expect(dt).toBeLessThan(light);
+
+    model.velocity[9] = 1;
+    model.velocity[10] = -1;
+    const theta = new Float32Array(model.creases.count);
+    for (let step = 0; step < 2000; step++) {
+      computeFaceNormals(model);
+      computeThetas(model, theta);
+      accumulateForces(model, theta, 0);
+      integrate(model, dt);
+    }
+    const speed = Math.hypot(...Array.from(model.velocity));
+    expect(Number.isFinite(speed)).toBe(true);
+    expect(speed).toBeLessThan(1);
+  });
 });

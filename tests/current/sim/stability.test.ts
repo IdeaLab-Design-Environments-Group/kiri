@@ -11,6 +11,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { buildScene } from "../../../src/sim/scene.js";
 import { computeDt } from "../../../src/sim/forces.js";
+import { FoldRunner } from "../../../src/sim/fold-run.js";
 import type { BarHingeModel } from "../../../src/sim/model.js";
 import type { FoldFile } from "../../../src/model/fold-file.js";
 
@@ -91,5 +92,26 @@ describe("AKDE dt invariant (fidelity guard)", () => {
     const built = buildScene(loadExample("akde-square-pyramid.fkld"))!;
     expect(built.mode).toBe("guided");
     expect(built.scene.solver.dt).toBe(computeDt(built.scene.model));
+  });
+});
+
+// Printed tiles damp their bars harder than vinyl (zeta 1.0, scale 0.8), and on a fan apex with two
+// dozen bars that damping adds up past what an explicit step sized from stiffness alone can carry:
+// drums-tom-low doubled its extent every frame from about frame 10 and then threw.
+describe("printed fold stays bounded on a high-valence fan", () => {
+  it("drums-tom-low folds 60 frames with finite, bounded positions", () => {
+    const built = buildScene(loadExample("drums-tom-low.fkld"), "printed")!;
+    const { model, solver } = built.scene;
+    const runner = new FoldRunner(model, solver);
+    runner.setTarget(1);
+    for (let f = 0; f < 60; f++) runner.frame();
+    let maxR = 0;
+    for (let i = 0; i < model.numNodes; i++) {
+      const p = model.position;
+      maxR = Math.max(maxR, Math.hypot(p[3 * i], p[3 * i + 1], p[3 * i + 2]));
+    }
+    expect(Number.isFinite(maxR)).toBe(true);
+    // the model is normalized to a bounding-sphere radius of 1
+    expect(maxR).toBeLessThan(3);
   });
 });

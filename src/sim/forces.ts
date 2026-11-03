@@ -424,9 +424,10 @@ export function integrate(m: BarHingeModel, dt: number): void {
   }
 }
 
-/** Stable timestep dt < 1/(2π·ω_max), ω_max = max√(k_axial/m_min); paper Eqs 7–8 (0.9 margin).
- *  When self-collision is on, its penalty stiffness is another spring on the lightest node, so it
- *  enters ω_max too — otherwise a stiff contact would blow up the explicit integrator. */
+/** Stable timestep dt < 1/(2π·ω_max), ω_max = max√(k_axial/m_min); paper Eqs 7–8 (0.9 margin),
+ *  capped by the damped limit `dampedStep` for heavily damped bars. When self-collision is on, its
+ *  penalty stiffness is another spring on the lightest node, so it enters ω_max too — otherwise a
+ *  stiff contact would blow up the explicit integrator. */
 export function computeDt(m: BarHingeModel): number {
   let maxFreq = 0;
   for (let i = 0; i < m.beams.count; i++) {
@@ -449,5 +450,79 @@ export function computeDt(m: BarHingeModel): number {
     }
   }
   if (maxFreq <= 0) return 1e-3;
-  return (1 / (2 * Math.PI * maxFreq)) * 0.9;
+  return Math.min((1 / (2 * Math.PI * maxFreq)) * 0.9, dampedStep(m) * DAMPED_STEP_MARGIN);
+}
+
+/** Fraction of the damped stability limit `dampedStep` that `computeDt` will step at. */
+const DAMPED_STEP_MARGIN = 0.8;
+
+/**
+ * Largest step the integrator survives once bar damping is counted. Symplectic Euler on a mode
+ * x'' = −Ω²x − Γx' has the update matrix [[1−Ω²h², h(1−Γh)], [−Ω²h, 1−Γh]] (trace 2−Γh−Ω²h², det
+ * 1−Γh), which is stable while Ω²h² + 2Γh < 4, i.e. h < 4 / (Γ + √(Γ² + 4Ω²)). Undamped this is
+ * the familiar h < 2/Ω; stiffness-free it is h < 2/Γ.
+ *
+ * The per-bar ω in `computeDt` misses this because damping adds up at a node: every bar into it
+ * drags on it, so a fan apex with two dozen bars sees two dozen dampers. Ω² and Γ are therefore
+ * the largest eigenvalues of the mass-weighted bar Laplacians, with weights k and c = 2ζ·scale·√(k·m)
+ * (`accumulateForces`); seams count at full strength, as above. Taking both maxima together for
+ * one mode is conservative. Printed tiles (ζ 1, scale 0.8) on drums-tom-low had Ω²h² + 2Γh ≈ 6.0
+ * at the stiffness-only step and doubled every frame; vinyl sits at ≤ 3.3 on every bundled pattern.
+ */
+function dampedStep(m: BarHingeModel): number {
+  const { zeta, beamDampingScale } = m.params;
+  const n0: number[] = [];
+  const n1: number[] = [];
+  const k: number[] = [];
+  const c: number[] = [];
+  const add = (a: number, b: number, ki: number) => {
+    n0.push(a);
+    n1.push(b);
+    k.push(ki);
+    c.push(2 * zeta * beamDampingScale * Math.sqrt(ki * Math.min(m.mass[a], m.mass[b])));
+  };
+  for (let i = 0; i < m.beams.count; i++) add(m.beams.n0[i], m.beams.n1[i], m.beams.k[i]);
+  if (m.seams) for (let i = 0; i < m.seams.count; i++) add(m.seams.n0[i], m.seams.n1[i], m.seams.k);
+  const omega2 = maxLaplacianEigen(m.mass, n0, n1, k);
+  const gamma = maxLaplacianEigen(m.mass, n0, n1, c);
+  if (omega2 <= 0 && gamma <= 0) return Infinity;
+  return 4 / (gamma + Math.sqrt(gamma * gamma + 4 * omega2));
+}
+
+/**
+ * Largest eigenvalue of M^(−1)·L for the weighted graph Laplacian L of edges (n0, n1, w), by power
+ * iteration on the symmetric M^(−½)·L·M^(−½) with a Rayleigh-quotient estimate. A fixed,
+ * deterministic start keeps `computeDt` reproducible.
+ */
+function maxLaplacianEigen(mass: Float32Array, n0: number[], n1: number[], w: number[]): number {
+  const n = mass.length;
+  const s = new Float64Array(n);
+  for (let i = 0; i < n; i++) s[i] = 1 / Math.sqrt(mass[i]);
+  let x = new Float64Array(n);
+  for (let i = 0; i < n; i++) x[i] = Math.sin(1 + 1.7 * i);
+  let lambda = 0;
+  for (let it = 0; it < 100; it++) {
+    const y = new Float64Array(n);
+    for (let e = 0; e < n0.length; e++) {
+      const a = n0[e];
+      const b = n1[e];
+      const d = w[e] * (x[a] * s[a] - x[b] * s[b]);
+      y[a] += d * s[a];
+      y[b] -= d * s[b];
+    }
+    let xy = 0;
+    let xx = 0;
+    let yy = 0;
+    for (let i = 0; i < n; i++) {
+      xy += x[i] * y[i];
+      xx += x[i] * x[i];
+      yy += y[i] * y[i];
+    }
+    if (yy === 0) return 0;
+    lambda = Math.max(lambda, xy / xx);
+    const l = Math.sqrt(yy);
+    for (let i = 0; i < n; i++) y[i] /= l;
+    x = y;
+  }
+  return lambda;
 }
