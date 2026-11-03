@@ -297,15 +297,18 @@ function inPoly(p: Vec2, poly: Vec2[]): boolean {
 }
 
 /**
- * Whether this pad is, electrically, one of `mine` — its net, or a duplicate sitting on one of my own pads.
+ * Whether this pad is, electrically, one of `mine` — its net, or a duplicate on the same part sitting on one
+ * of my own pads.
  *
  * The second case is not a nicety. `footprint.ts` measured it on `SeeedStudio_XIAO_ESP32C3`: 37 terminals
  * of which 14 pairs are coincident, so pad `1_1` is the same piece of metal as pad `1`. Treated as foreign
  * it refuses every leg to pad 1 — a net blocked from its own pad by a copy of it.
  */
-function padIsMine(pad: PadObstacle, mine: string, own: Vec2[]): boolean {
+function padIsMine(pad: PadObstacle, mine: string, own: NetPoint[]): boolean {
   if (pad.net === mine) return true;
-  return own.some((q) => segToPoly(q, q, pad.outline) < 1e-9);
+  // Same part only. Another part's pad over one of mine is a different piece of metal on another net, and
+  // letting it through shorts two overlapping parts without a word.
+  return own.some((q) => q.part === pad.part && segToPoly(q.at, q.at, pad.outline) < 1e-9);
 }
 
 /**
@@ -322,7 +325,7 @@ function padIsMine(pad: PadObstacle, mine: string, own: Vec2[]): boolean {
  */
 function padHitBy(
   a: Vec2, b: Vec2, pads: PadObstacle[], mine: string, gap: number, wa: number, wb: number,
-  own: Vec2[] = [],
+  own: NetPoint[] = [],
 ): PadObstacle | null {
   for (const pad of pads) {
     if (padIsMine(pad, mine, own)) continue;
@@ -346,7 +349,7 @@ function padHitBy(
  * something too thin to carry or to cut. Below the floor there is genuinely no room and the gate refuses.
  */
 function padCapAt(
-  p: Vec2, pads: PadObstacle[], mine: string, gap: number, tapeW: number, own: Vec2[],
+  p: Vec2, pads: PadObstacle[], mine: string, gap: number, tapeW: number, own: NetPoint[],
 ): number {
   let room = Infinity;
   for (const pad of pads) {
@@ -679,8 +682,8 @@ interface LegRules {
   pads: PadObstacle[];
   padGap: number;
   netId: string;
-  /** This net's own pad centres — see {@link padIsMine}. */
-  own: Vec2[];
+  /** This net's own terminals — see {@link padIsMine}. */
+  own: NetPoint[];
   faces: FlatFace[];
 }
 
@@ -828,7 +831,7 @@ function routeOne(
     if (who && who !== net.id && !blame.includes(who)) blame.push(who);
   };
   const faceOf = net.points.map((p) => faceOfPoint(faces, p.at));
-  const own = net.points.map((p) => p.at);
+  const own = net.points;
 
   // This net's own bus rail is not an obstacle to it: the tap leg ENDS on that copper, so measured against
   // it every tap is a violation and no net could ever reach its rail. Every other rail stays in — a PWR tap

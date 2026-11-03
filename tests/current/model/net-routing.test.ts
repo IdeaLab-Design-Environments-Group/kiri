@@ -353,6 +353,27 @@ describe("model/net-routing", () => {
     }
   });
 
+  it("refuses to land on a pad that another part on another net has stacked on top of it", () => {
+    // Part 1 placed exactly on part 0, their pad 1s on different nets. Each net's pad sits inside the
+    // other's, so landing on either is a short; the coincident-pad allowance is for twin pads of ONE part.
+    const fold = JSON.parse(readFileSync(`${EXAMPLES}house.fkld`, "utf8"));
+    const faces = flatFaces(fold);
+    const gaps = gapGraph(fold, faces).gaps;
+    const tapeW = tapeWidthFor(faces);
+    const on = (f: number) => ({ component: "C_1206", x: faces[f]!.centroid.x, y: faces[f]!.centroid.y, free: true, rot: 0 });
+    const r = planRoutes(faces, gaps, {
+      leds: [], battery: null,
+      parts: [on(6), on(6), on(7), on(4)],
+      nets: [{ id: "n1", name: "N1" }, { id: "n2", name: "N2" }],
+      terminals: [
+        { part: 0, pad: "1", net: "n1" }, { part: 2, pad: "1", net: "n1" },
+        { part: 1, pad: "1", net: "n2" }, { part: 3, pad: "1", net: "n2" },
+      ],
+    });
+    for (const n of r.nets) expect(n.stranded, n.name).not.toEqual([]);
+    expect(nearestBetweenNets(r.nets.flatMap((n) => n.traces))).toBeGreaterThanOrEqual(tapeW);
+  });
+
   it("reports a terminal stranded when the only terminal it was joined through is stranded", () => {
     // p1 and p2 sit inside a closed ring of immovable copper, so p0 can reach neither. The tree joins p2
     // through p1, and the p1-p2 leg lies clear inside the ring — but laying it connects p2 to nothing the
