@@ -69,7 +69,7 @@ describe("model/electronics-routing", () => {
     }
   });
 
-  it("emits a handful of strips, not two per LED", { timeout: 30000 }, () => {
+  it("emits a handful of strips, not two per LED", () => {
     // The point of the bus topology: both nets are a few long runs whatever the LED count, rather than a pair
     // of strips per LED. A net is a tree, so it is laid as one run per branch -- retraced segments are dropped
     // instead of being taped twice.
