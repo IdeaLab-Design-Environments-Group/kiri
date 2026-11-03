@@ -301,6 +301,20 @@ describe("model/led-footprint", () => {
       expect(r.unreachable).toEqual([0, 1, 2]);
     });
 
+    it("reports an LED with more than two pads as unseated, not unreachable", () => {
+      // A WS2812 or an RGB LED is in the library, but the bus wires two-terminal LEDs, so `ledSeat` has no
+      // seat for it. That is the package's fault and was reported as the copper's: unreachable, with the
+      // hinge and the battery both fine. A part the library has never heard of stays merely unreachable.
+      const { faces, gaps } = load("house.fkld");
+      const leds = ledsOn(gaps, 4);
+      leds[0] = { ...leds[0]!, component: "LED_ADDR_Worldsemi_WS2812B" };
+      leds[1] = { ...leds[1]!, component: "LED_RGB_CreeLED_CLV1A_FKB" };
+      leds[2] = { ...leds[2]!, component: "NOT_A_PART" };
+      const r = planRoutes(faces, gaps, { leds, battery: { face: 0 } });
+      expect(r.unreachable).toEqual([0, 1, 2]);
+      expect(r.unseated).toEqual([0, 1]);
+    });
+
     it("keeps pads index-aligned with circuit.leds even where some are refused", () => {
       // The modal indexes `pads` directly, so a refused LED has to keep its slot rather than being
       // squeezed out of the list.

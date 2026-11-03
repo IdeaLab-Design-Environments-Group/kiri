@@ -183,7 +183,7 @@ export {
   tapeOffBodyAt,
   tapeOnBody,
 } from "./corridor.js";
-import { batteryTerminals, ledSeat, seatLed } from "./pad-landing.js";
+import { DEFAULT_LED, batteryTerminals, ledSeat, seatLed } from "./pad-landing.js";
 
 /** Likewise the landings, LED seats and battery terminals, which moved to `pad-landing.ts`. */
 export {
@@ -450,7 +450,8 @@ export function planRoutes(
       unreachable.push(slot);
       // The hinge and the part both exist and the part still will not sit on it — that is the package
       // against the tile, not the copper against the pattern. Kept apart so the author is told which.
-      if (gap && seat && !legs) unseated.push(slot);
+      // A library part with no two-pad seat at all (a WS2812, an RGB LED) is the same fault: the package.
+      if (gap && (seat ? !legs : !!footprintById(led.component ?? DEFAULT_LED))) unseated.push(slot);
       return;
     }
     targets.push({
