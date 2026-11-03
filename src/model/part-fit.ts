@@ -21,6 +21,7 @@ import { TAPE_MM } from "./tape-width.js";
 import {
   add,
   cross,
+  dedupe,
   distToSeg,
   len,
   scale,
@@ -210,9 +211,12 @@ export function breakForResistors(
   tapeW: number,
   /** The tape in mm — see {@link seatLed}. */
   tapeMm: number = TAPE_MM,
+  /** See {@link breakRuns}. */
+  keepOut?: { segs: { a: Vec2; b: Vec2 }[]; clear: number },
 ): { traces: Trace2D[]; placed: ResistorSpan[] } {
   // The body in the pattern's own units: the tape is `tapeMm` wide and `tapeW` units, so this follows it.
-  return breakRuns(traces, resistors, (RESISTOR_MM * tapeW) / tapeMm);
+  const body = (RESISTOR_MM * tapeW) / tapeMm;
+  return breakRuns(traces, resistors, body, { before: body, after: body }, keepOut);
 }
 
 /**
@@ -235,6 +239,14 @@ export function breakRuns(
    * connects to nothing.
    */
   reach: { before: number; after: number } = { before: gap, after: gap },
+  /**
+   * Copper the break must keep `clear` away from — each LED's legs and body, as a segment.
+   *
+   * The LED legs are laid after the breaks, and a leg is a stub of tape on a run's own net. Cut a run
+   * beside one and the stub lands across both cut ends: the part is shorted out by its neighbour's leg.
+   * Measured before this existed on house, church and puffin, 3-4 of every 8 parts dropped on the bus.
+   */
+  keepOut: { segs: { a: Vec2; b: Vec2 }[]; clear: number } = { segs: [], clear: 0 },
 ): { traces: Trace2D[]; placed: PartSpan[] } {
   const placed: PartSpan[] = [];
   if (!parts.length) return { traces, placed };
@@ -264,11 +276,37 @@ export function breakRuns(
     // nothing at all, with no way to tell why.
     // Facing the way it was dropped if the run allows it, and turned round if only the other way fits: a
     // part in series works the same either way about, and refusing to seat one on a short run helps nobody.
-    const forward = fitWithin(out[bestRun]!, bestSeg, bestT, reach.before, reach.after);
-    const moved = forward ?? fitWithin(out[bestRun]!, bestSeg, bestT, reach.after, reach.before);
-    const split = moved
+    // A break centred inside a widened keep-out would leave bare pattern within `clear` of it: the part's
+    // body would sit on the LED, or the leg land across both cut ends.
+    const run = out[bestRun]!;
+    const g = body / 2;
+    const blocked = keepOutAlong(run, keepOut.segs, keepOut.clear)
+      .map(([lo, hi]): [number, number] => [lo - g, hi + g]);
+    // The other runs of the same net count too, but they are copper of one cut half or the other already: a
+    // run meeting this one at a T is fine wherever it lands, so long as it touches exactly one half. Touching
+    // both shorts the part; touching neither — the T cut out — strands whatever that run feeds.
+    if (keepOut.clear > 0) {
+      const kin = out.flatMap((t, ti) =>
+        ti === bestRun || t.net !== run.net ? [] : t.pts.slice(1).map((b, i) => ({ a: t.pts[i]!, b })));
+      for (const [lo, hi] of keepOutAlong(run, kin, keepOut.clear)) {
+        blocked.push([Math.min(lo + g, hi - g), Math.max(lo + g, hi - g)]);
+      }
+      // And a T is never cut out from under the run that ends on it, even where the copper would still
+      // overlap: the strip it feeds would hang on by a corner of tape.
+      for (const at of endsOn(run, kin.flatMap((k) => [k.a, k.b]), keepOut.clear * 1e-6)) {
+        blocked.push([at - g, at + g]);
+      }
+    }
+    const forward = fitWithin(run, bestSeg, bestT, reach.before, reach.after, blocked);
+    const moved = forward ?? fitWithin(run, bestSeg, bestT, reach.after, reach.before, blocked);
+    let split = moved
       ? splitRun(out, bestRun, moved.seg, moved.t, body)
       : { traces: out, span: null };
+    // A run that doubles back on itself can bring one half back beside the other's cut end, which shorts
+    // the part with no other copper involved. Refused, as a part that does not fit.
+    if (split.span && halvesTouch(split.traces[bestRun]!, split.traces[bestRun + 1]!, keepOut.clear)) {
+      split = { traces: out, span: null };
+    }
     out = split.traces;
     // Turned round, the span is reported end-for-end, which is how the part knows which way it faces.
     if (split.span) {
@@ -450,6 +488,8 @@ export function fitWithin(
   t: number,
   before: number,
   after: number,
+  /** Stretches along the run, as distances from its start, the break's centre may not fall inside. */
+  blocked: [number, number][] = [],
 ): { seg: number; t: number } | null {
   const segs: number[] = [];
   let total = 0;
@@ -463,7 +503,14 @@ export function fitWithin(
   let at = 0;
   for (let i = 0; i < seg - 1; i++) at += segs[i]!;
   at += (segs[seg - 1] ?? 0) * t;
-  const want = Math.min(Math.max(at, before), total - after);
+  let want = Math.min(Math.max(at, before), total - after);
+  const inside = (s: number): boolean => blocked.some(([lo, hi]) => s > lo && s < hi);
+  if (inside(want)) {
+    // The nearest edge of a blocked stretch that is itself clear and leaves the part its reach.
+    const edges = blocked.flat().filter((s) => s >= before && s <= total - after && !inside(s));
+    if (!edges.length) return null;
+    want = edges.reduce((m, s) => (Math.abs(s - at) < Math.abs(m - at) ? s : m));
+  }
   // Back to a segment and a fraction along it.
   let acc = 0;
   for (let i = 0; i < segs.length; i++) {
@@ -474,6 +521,81 @@ export function fitWithin(
     acc += segs[i]!;
   }
   return null;
+}
+
+/**
+ * The stretches of `run`, as distances from its start, whose centreline comes within `clear` of a segment.
+ *
+ * Sampled at a twentieth of `clear` and widened by one step either side, so a stretch is never reported
+ * shorter than it is.
+ */
+function keepOutAlong(run: Trace2D, segs: { a: Vec2; b: Vec2 }[], clear: number): [number, number][] {
+  const out: [number, number][] = [];
+  if (!segs.length || !(clear > 0)) return out;
+  const step = clear / 20;
+  let at = 0;
+  for (let i = 1; i < run.pts.length; i++) {
+    const a = run.pts[i - 1]!, b = run.pts[i]!;
+    const l = len(sub(b, a));
+    const n = Math.max(1, Math.ceil(l / step));
+    for (let k = 0; k <= n; k++) {
+      const p = add(a, scale(sub(b, a), k / n));
+      if (!segs.some((s) => distToSeg(p, s.a, s.b) < clear)) continue;
+      const s = at + (l * k) / n;
+      const last = out[out.length - 1];
+      if (last && s - step <= last[1]) last[1] = s + step;
+      else out.push([s - step, s + step]);
+    }
+    at += l;
+  }
+  return out;
+}
+
+/**
+ * Whether the copper of the two halves of a broken run overlaps anywhere, each strip `w` wide with square
+ * ends. Across a straight break the ends are a body apart and clear; across a bend, or where the run
+ * doubles back past its own break, they need not be.
+ */
+function halvesTouch(first: Trace2D, second: Trace2D, w: number): boolean {
+  if (!(w > 0)) return false;
+  for (let i = 1; i < first.pts.length; i++) {
+    for (let j = 1; j < second.pts.length; j++) {
+      if (stripsOverlap(first.pts[i - 1]!, first.pts[i]!, second.pts[j - 1]!, second.pts[j]!, w)) return true;
+    }
+  }
+  return false;
+}
+
+/** Whether two square-ended strips `w` wide, along `a`-`b` and `c`-`d`, overlap — separating axes. */
+function stripsOverlap(a: Vec2, b: Vec2, c: Vec2, d: Vec2, w: number): boolean {
+  if (len(sub(b, a)) < 1e-12 || len(sub(d, c)) < 1e-12) return false;
+  const quad = (p: Vec2, q: Vec2): Vec2[] => {
+    const u = unit(sub(q, p));
+    const n = scale({ x: -u.y, y: u.x }, w / 2);
+    return [add(p, n), add(q, n), sub(q, n), sub(p, n)];
+  };
+  const P = quad(a, b), Q = quad(c, d);
+  for (const poly of [P, Q]) {
+    for (let i = 0; i < 2; i++) {
+      const e = sub(poly[i + 1]!, poly[i]!);
+      const along = (pts: Vec2[]): number[] => pts.map((p) => p.y * e.x - p.x * e.y);
+      const pp = along(P), qq = along(Q);
+      if (Math.max(...pp) <= Math.min(...qq) + 1e-12 || Math.max(...qq) <= Math.min(...pp) + 1e-12) return false;
+    }
+  }
+  return true;
+}
+
+/** The distances along `run` at which any of `pts` lies on it, within `eps`. */
+function endsOn(run: Trace2D, pts: Vec2[], eps: number): number[] {
+  const out: number[] = [];
+  let at = 0;
+  for (let i = 1; i < run.pts.length; i++) {
+    const a = run.pts[i - 1]!, b = run.pts[i]!;
+    for (const p of pts) if (distToSeg(p, a, b) < eps) out.push(at + len(sub(p, a)));
+    at += len(sub(b, a));
+  }
+  return out;
 }
 
 /** Split run `ri` at a point, leaving `body` of bare pattern between the two halves. */
@@ -490,8 +612,9 @@ export function splitRun(
   // Walk back and forward along the run by half the body, so the gap is centred on the resistor.
   const head = [...run.pts.slice(0, seg), at];
   const tail = [at, ...run.pts.slice(seg)];
-  const first = trimEnd(head, body / 2);
-  const second = trimEnd([...tail].reverse(), body / 2).reverse();
+  // Deduped: a cut that falls exactly on a vertex would otherwise leave a zero-length segment at the end.
+  const first = dedupe(trimEnd(head, body / 2));
+  const second = dedupe(trimEnd([...tail].reverse(), body / 2).reverse());
   const kept: Trace2D[] = [];
   for (const pts of [first, second]) if (pts.length >= 2) kept.push({ net: run.net, pts });
   // A run too short to break either side keeps its copper rather than vanishing: better a resistor that

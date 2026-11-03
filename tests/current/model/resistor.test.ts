@@ -18,6 +18,7 @@ import {
   switchShape,
 } from "../../../src/model/copper-svg-export.js";
 import { printScale } from "../../../src/model/print-scale.js";
+import { distToSeg } from "../../../src/model/trace-geometry.js";
 import { holes, padAt } from "../../../src/model/footprint.js";
 import { RESISTOR, SPDT } from "../../../src/model/parts.js";
 
@@ -144,6 +145,28 @@ describe("model/resistor", () => {
       expect(r.resistors).toHaveLength(1);
       expect((totalLength(plain.traces) - totalLength(r.traces)) * k).toBeCloseTo(RESISTOR_MM, 1);
     }
+  });
+
+  it("is not shorted out by an LED leg laid beside its break", () => {
+    // The legs are laid after the breaks, and a leg is a stub of the run's own net. Dropped on an LED pad,
+    // the break used to fall at the pad and the leg stub then lay across both cut ends.
+    const { faces, gaps, base, plain, tapeW } = fixture(4);
+    const pads = plain.pads.flatMap((p) => [p.pwr, p.gnd]);
+    let placed = 0;
+    for (const at of pads) {
+      const r = planRoutes(faces, gaps, { ...base, resistors: [at] });
+      if (!r.resistors.length) continue;
+      placed++;
+      const { a, b, net } = r.resistors[0]!;
+      // Copper that reaches the tape at a cut end, from any strip but the two halves the break left.
+      const covers = (t: { pts: Vec2[]; width?: number }, p: Vec2): boolean =>
+        t.pts.some((q, i) => i > 0 && distToSeg(p, t.pts[i - 1]!, q) < ((t.width ?? tapeW) + tapeW) / 2);
+      const isHalf = (t: { pts: Vec2[] }): boolean =>
+        [t.pts[0]!, t.pts.at(-1)!].some((e) => [a, b].some((c) => Math.hypot(e.x - c.x, e.y - c.y) < 1e-9));
+      const bridge = r.traces.filter((t) => t.net === net && !isHalf(t) && covers(t, a) && covers(t, b));
+      expect(bridge, `resistor dropped at ${at.x},${at.y}`).toEqual([]);
+    }
+    expect(placed, "every drop refused").toBeGreaterThan(pads.length / 2);
   });
 
   it("leaves a run too short to hold one alone", () => {

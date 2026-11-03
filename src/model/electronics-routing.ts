@@ -1092,7 +1092,19 @@ export function planRoutes(
       : { pwr: l0, gnd: l1, component: t.component };
   }
 
-  const withRes = breakForResistors(best, circuit.resistors ?? [], tapeW, tapeMm);
+  // Each LED's legs and body, pad to outboard pad: the copper `seatLedLegs` lays after the breaks. A break
+  // keeps its bare pattern a tape's width off it, so a leg touches one cut half at most — and the other
+  // half is then a whole break away, which the part loop below holds above the weeding floor.
+  const ledKeepOut = {
+    segs: targets.flatMap((t) => {
+      const pair = pads[t.slot];
+      if (!pair?.component) return [];
+      const axis = unit(sub(pair.pwr, pair.gnd));
+      return [{ a: add(pair.pwr, scale(axis, t.reach)), b: add(pair.gnd, scale(axis, -t.reach)) }];
+    }),
+    clear: tapeW,
+  };
+  const withRes = breakForResistors(best, circuit.resistors ?? [], tapeW, tapeMm, ledKeepOut);
   // A resistor is in line with the rail, so turning one round swaps which of its terminals lands on which
   // cut end. Indifferent on a resistor itself, and the whole point on anything polarised.
   const resistorFlips = circuit.resistors ?? [];
@@ -1105,7 +1117,7 @@ export function planRoutes(
   const withSw = breakRuns(withRes.traces, circuit.switches ?? [], toFlat(SWITCH_GAP_MM), {
     before: swReach,
     after: swReach,
-  });
+  }, ledKeepOut);
   // Which way each switch faces is decided against the copper as it now stands, before any land is laid:
   // the lands themselves belong to the part and would otherwise vote for its own orientation.
   const switchFlips = circuit.switches ?? [];
@@ -1155,7 +1167,7 @@ export function planRoutes(
     const broke = breakRuns(partTraces, drops, toFlat(fit.gap), {
       before: toFlat(fit.before),
       after: toFlat(fit.after),
-    });
+    }, ledKeepOut);
     partTraces = broke.traces;
     const across = fit.rows === 2 ? acrossPart(fp) : null;
     if (across) {
