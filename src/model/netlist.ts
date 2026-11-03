@@ -261,6 +261,9 @@ export function resolveNetlist(
   const seen = new Set<string>();
   /** Nets the battery is on. The bus reaches these at the battery itself — see the battery branch below. */
   const batteryNets = new Set<string>();
+  /** The net each accepted terminal's PIN is on — see {@link padPin}. A rejected terminal never lands here,
+   *  so a pad wired twice stays on the net that kept it. */
+  const wiredTo = new Map<string, string>();
   for (const t of circuit.terminals ?? []) {
     if (!byId.has(t.net)) {
       faults.push({ kind: "no-such-net", why: `no net "${t.net}"`, net: t.net, part: t.part, pad: t.pad });
@@ -356,6 +359,7 @@ export function resolveNetlist(
       continue;
     }
     seen.add(key);
+    wiredTo.set(`${t.part}\u0000${padPin(t.pad)}`, t.net);
     wiredParts.add(t.part);
     const here = placeOnce(t.part);
     const placedPad = here ? padOf(here, t.pad) : undefined;
@@ -440,8 +444,6 @@ export function resolveNetlist(
   // And the same pads again as obstacles. Built from EVERY placed part rather than only the wired ones:
   // `fields` narrows copper near a part the netlist is already talking about, but a part with nothing
   // wired to it is still metal on the sheet that another net's tape must not cross.
-  const wiredTo = new Map<string, string>();
-  for (const t of circuit.terminals ?? []) wiredTo.set(`${t.part}\u0000${padPin(t.pad)}`, t.net);
   const padObstacles: PadObstacle[] = [];
   parts.forEach((_, idx) => {
     const here = placeOnce(idx);

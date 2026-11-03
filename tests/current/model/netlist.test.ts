@@ -144,6 +144,24 @@ describe("model/netlist", () => {
       expect(hit?.pad).toBe("1");
     });
 
+    it("leaves a doubly-assigned pad on the net that kept it", () => {
+      // The pad obstacle is what keeps other nets' copper off the pad. Owned by the rejected net, it let
+      // that net's legs run straight over metal the first net lands on.
+      const { pads } = resolveNetlist(circuit({
+        nets: [
+          { id: "n1", name: "PWR" },
+          { id: "n2", name: "GND" },
+        ],
+        terminals: [
+          { part: 0, pad: "1", net: "n1" },
+          { part: 1, pad: "1", net: "n1" },
+          { part: 0, pad: "1", net: "n2" },
+          { part: 1, pad: "2", net: "n2" },
+        ],
+      }), TAPE_W, TAPE_MM);
+      expect(pads.find((p) => p.part === 0 && p.pad === "1")?.net).toBe("n1");
+    });
+
     it("reports a net with one terminal, and leaves it out of the routing set", () => {
       // The likeliest authoring slip there is: a pad assigned to a net nothing else is on. Routed, it is a
       // zero-length success that reports nothing wrong.
