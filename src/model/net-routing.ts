@@ -1042,9 +1042,9 @@ export function planNets(
     const xs = n.points.map((p) => p.at.x), ys = n.points.map((p) => p.at.y);
     return Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
   };
-  const hardest = nets
-    .map((n, i) => i)
-    .sort((a, b) => nets[b]!.points.length - nets[a]!.points.length || span(nets[b]!) - span(nets[a]!));
+  const hardest = nets.map((_, i) => i).sort((a, b) =>
+    nets[b]!.points.length - nets[a]!.points.length || span(nets[b]!) - span(nets[a]!) ||
+    +(nets[a]!.id > nets[b]!.id) - +(nets[a]!.id < nets[b]!.id));
 
   /** Route every net in this order, and report how it went. */
   const attempt = (order: number[]): {
@@ -1176,15 +1176,16 @@ export function planNets(
 
     // Rip-up, as a reordering. Take the net that lost the most and put it in front of whatever was in its
     // way; if that net has several blockers, try each. Deterministic throughout — the victim is the
-    // lowest-indexed of those that lost the most, and the blockers are tried in the order blame was
-    // assigned — so the same circuit re-plans identically.
+    // hardest-first of those that lost the most, never the first declared, and the blockers are tried in
+    // the order blame was assigned — so the same circuit re-plans identically however it was declared.
     let worst = -1, lost = 0;
     for (const [idx, list] of got.blame) {
       // A failed rail tap counts as a loss, as it does in the score — otherwise a net whose only failure is
       // its tap can never be chosen, however clearly another net was in its way.
       const net = got.nets[idx];
       const n = (net?.stranded.length ?? 0) + (net?.railTap === "failed" ? 1 : 0);
-      if (list.length && (n > lost || (n === lost && worst >= 0 && idx < worst))) { worst = idx; lost = n; }
+      const first = worst >= 0 && hardest.indexOf(idx) < hardest.indexOf(worst);
+      if (list.length && (n > lost || (n === lost && first))) { worst = idx; lost = n; }
     }
     if (worst < 0) continue;
     for (const who of got.blame.get(worst)!) {

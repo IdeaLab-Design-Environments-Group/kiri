@@ -439,6 +439,32 @@ describe("model/net-routing", () => {
     expect(plan([nets[2]!, nets[0]!, nets[4]!, nets[1]!, nets[3]!])).toBe(plan(nets));
   });
 
+  describe("declaration order, where the hardest-first sort cannot tell two nets apart", () => {
+    const { faces, gaps, tapeW } = load("house.fkld");
+    const netsOn = (on: number[][]): ResolvedNet[] =>
+      on.map((fs, k) => ({
+        id: `n${k}`,
+        name: `N${k}`,
+        points: fs.map((f, m) => ({ part: k * 10 + m, pad: "1", at: faces[f]!.centroid })),
+      }));
+    const plan = (nets: ResolvedNet[]): string =>
+      JSON.stringify(planNets(nets, faces, gaps, tapeW).nets.map((n) => [n.id, n.traces, n.stranded]).sort());
+
+    it("orders two nets of the same size and span by id", () => {
+      // Two nets over the same two faces have the same span to the last bit, so the sort fell back to
+      // whichever was declared first.
+      const nets = netsOn([[1, 0], [0, 1], [8, 13], [12, 4, 2]]);
+      expect(plan([...nets].reverse())).toBe(plan(nets));
+    });
+
+    it("picks the rip-up victim by the canonical order", () => {
+      // Two nets that lost equally were split by declaration index, so the rip-up search asked for a
+      // different order depending on how the author happened to list them.
+      const nets = netsOn([[8, 1], [12, 3], [14, 13, 0]]);
+      expect(plan([...nets].reverse())).toBe(plan(nets));
+    });
+  });
+
   it("routes a declared netlist through planRoutes, clear of the bus it shares the sheet with", () => {
     // The end-to-end path: a circuit with nets goes in, and the copper comes out on the same sheet as the
     // LED bus without touching it. Routing the nets first and the bus second would be the wrong order —
