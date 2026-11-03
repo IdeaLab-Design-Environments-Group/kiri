@@ -51,8 +51,8 @@ function crossings(name: string, ledCount: number, creaseFrac?: number, bandCap 
   const leds = ledsOn(gaps, ledCount);
   // `bandCap` defaults to 0 here, not to the shipped value: these cases measure the *crease price*, and the
   // bottleneck ordering is a second, independent thing the router does. Leaving it on would mean the
-  // "length-only" baseline was not length-only -- it comes out at 14 crossings rather than 17, because
-  // bands steer a route even when the price is zero. Bands get their own cases below.
+  // "length-only" baseline was not length-only: bands steer a route even when the price is zero (on
+  // `akde-hex` at 12 LEDs, 19 crossings rather than 23). Bands get their own cases below.
   const r = planRoutes(faces, gaps, { leds, battery: { face: 0 } },
                        undefined, undefined, creaseFrac, bandCap);
   const gapFor = new Map<string, (typeof gaps)[number]>();
@@ -154,17 +154,25 @@ describe("model/crease-price", () => {
      *  along a route and can only reduce how many creases are crossed, while fatigue is a max statistic and
      *  a trace fails at its single worst crossing. */
     it("steers a route on its own, with no crease price at all", { timeout: 60000 }, () => {
-      const flat = crossings("church.fkld", 12, 0, 0);
-      const banded = crossings("church.fkld", 12, 0, STRAIN_BAND_CAP);
-      // 15 since 2026-11-03 (was 17): the same unpriced route as in "buys tension crossings".
-      expect(flat.tension).toBe(15);
-      // 11, and it was 14 while eps_f was the chosen 1%. The ordering got STRONGER when the threshold was
-      // derived from the foil's ductility: at 1% almost every crossing capped to the same band and the
-      // search had nothing to order, and at 3% the bands separate. Same code, better-founded constant.
-      expect(banded.tension).toBe(11);
+      // Moved from `church` to `akde-hex` on 2026-11-03. On `church` at 12 LEDs the ordering took the
+      // unpriced plan from 17 crossings to 11 (it was 14 while eps_f was the chosen 1%), but that plan
+      // put GND on PWR's tape at 6 places. Once the strict corridor pass refused contact, every route the
+      // bands preferred there fell to the fallback pass, the descent dropped the plans that crossed, and
+      // banded and flat now plan identically -- a recorded negative result, pinned below.
+      const flat = crossings("akde-hex.fkld", 12, 0, 0);
+      const banded = crossings("akde-hex.fkld", 12, 0, STRAIN_BAND_CAP);
+      expect(flat.tension).toBe(23);
+      expect(banded.tension).toBe(19);
+      expect(flat.len).toBeCloseTo(1496.25, 2);
+      expect(banded.len).toBeCloseTo(1512.53, 2);
       // The same trade the price makes, bought a different way: fewer crossings, more copper.
       expect(banded.tension).toBeLessThan(flat.tension);
       expect(banded.len).toBeGreaterThan(flat.len);
+
+      // 15 crossings and 13.62 units both ways: the same unpriced route as in "buys tension crossings".
+      const church = crossings("church.fkld", 12, 0, 0);
+      expect(church.tension).toBe(15);
+      expect(crossings("church.fkld", 12, 0, STRAIN_BAND_CAP)).toEqual(church);
     });
 
     it("adds nothing on top of the crease price on the shipped sheet", { timeout: 60000 }, () => {
