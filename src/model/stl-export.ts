@@ -41,7 +41,8 @@ const edgeKey = (a: number, b: number): string => (a < b ? `${a},${b}` : `${b},$
  * `printSize` (mm) is the **opt-in** key to a printable export: the flat pattern from `kirigamize` is
  * at an arbitrary (often unit) scale and the viewer shows it fit-to-view, so the model carries no real
  * size — baking those raw coords yields a sub-millimetre, degenerate sheet. When `printSize` is given,
- * the pattern is scaled so its longest XY dimension is `printSize` and recentred (x/y centred, z based
+ * the pattern is scaled by `printScale` — up to `printSize` across when smaller, never down, the
+ * same scale the cut/score/copper SVGs use so the layers register — and recentred (x/y centred, z based
  * at 0), and the height defaults to an absolute `DEFAULT_PRINT_THICKNESS` — exactly like
  * `scripts/gen-house-door.ts`, so "Tiles (STL)" reproduces the printable joinery sheet. Omitted (tests)
  * → no scaling, model-unit output. Null if there are no faces.
@@ -71,7 +72,8 @@ export function buildStlExport(
     let xl = Infinity, xh = -Infinity, yl = Infinity, yh = -Infinity;
     for (const c of coordsXYZ) { xl = Math.min(xl, c[0]); xh = Math.max(xh, c[0]); yl = Math.min(yl, c[1]); yh = Math.max(yh, c[1]); }
     const span = Math.max(xh - xl, yh - yl) || 1;
-    const s = printSize / span, cx = (xl + xh) / 2, cy = (yl + yh) / 2;
+    // `printScale`'s rule (it imports this module, so it is restated, not called): up, never down
+    const s = span < printSize ? printSize / span : 1, cx = (xl + xh) / 2, cy = (yl + yh) / 2;
     coordsXYZ = coordsXYZ.map((c): V3 => [(c[0] - cx) * s, (c[1] - cy) * s, c[2] * s]);
   }
 

@@ -150,6 +150,18 @@ describe("buildStlExport — printed tiles (sim-matched pinched hexagons)", () =
     expect(zSet(verts(buildStlExport(fold, "t", 2)!.text))).toEqual([0, 2]);
   });
 
+  it("prints at the same scale as the SVG exports: a small pattern up to the print size, a large one at its own size", () => {
+    const longestXY = (fold: FoldFile, size: number): number => {
+      const vs = verts(buildStlExport(fold, "t", 1, null, null, size)!.text);
+      const xs = vs.map((v) => v[0]), ys = vs.map((v) => v[1]);
+      return Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+    };
+    const tri = (w: number): FoldFile => ({ vertices_coords: [[0, 0], [w, 0], [0, w / 2]], faces_vertices: [[0, 1, 2]] });
+    expect(longestXY(tri(4), 130)).toBeCloseTo(130, 4);
+    expect(longestXY(tri(200), 130)).toBeCloseTo(200, 4); // never shrunk, so the copper strips still register
+    expect(longestXY(tri(200), 400)).toBeCloseTo(400, 4);
+  });
+
   it("returns null when there are no faces", () => {
     expect(buildStlExport({ vertices_coords: [[0, 0]] })).toBeNull();
     expect(buildStlExport({ faces_vertices: [], vertices_coords: [[0, 0]] })).toBeNull();
