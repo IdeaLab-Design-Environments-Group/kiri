@@ -6,6 +6,7 @@ import {
   cloneCircuit,
   cycleLedFlip,
   editCircuit,
+  removeLed,
   removeSelectedPart,
   toggleBattery,
 } from "../../../src/model/circuit-commands.js";
@@ -157,9 +158,29 @@ describe("circuit commands", () => {
     expect(at(twice)).toBeUndefined();
   });
 
-  it("adds no wires field when removing from a circuit without wires", () => {
-    const circuit: Circuit = { leds: [], battery: null, parts: [{ component: "R_1206", x: 0, y: 0 }] };
+  it("keeps hand-wire LED vertices on their own LED when an LED below them is removed", () => {
+    const circuit: Circuit = {
+      leds: [{ a: 0, b: 1 }, { a: 1, b: 2 }, { a: 2, b: 3 }],
+      battery: null,
+      wires: [{
+        id: "w1",
+        pts: [{ kind: "led", led: 0, leg: 1 }, { kind: "led", led: 1, leg: 0 }, { kind: "led", led: 2, leg: 1 }],
+      }],
+    };
 
+    const next = editCircuit(circuit, removeLed(0));
+    const [gone, b, c] = next.wires![0]!.pts;
+
+    expect(b).toEqual({ kind: "led", led: 0, leg: 0 });
+    expect(c).toEqual({ kind: "led", led: 1, leg: 1 });
+    expect(gone!.kind).toBe("led");
+    expect(next.leds[(gone as { led: number }).led]).toBeUndefined();
+  });
+
+  it("adds no wires field when removing from a circuit without wires", () => {
+    const circuit: Circuit = { leds: [{ a: 0, b: 1 }], battery: null, parts: [{ component: "R_1206", x: 0, y: 0 }] };
+
+    expect(editCircuit(circuit, removeLed(0))).not.toHaveProperty("wires");
     expect(editCircuit(circuit, removeSelectedPart({ kind: "part", index: 0 }))).not.toHaveProperty("wires");
   });
 

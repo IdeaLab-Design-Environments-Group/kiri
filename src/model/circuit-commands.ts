@@ -153,7 +153,13 @@ export function removeSelectedPart(sel: PartSelection): CircuitCommand {
 
 export function removeLed(index: number): CircuitCommand {
   return {
-    apply: (c) => c.leds[index] ? { ...c, leds: c.leds.filter((_, i) => i !== index) } : c,
+    apply: (c) => c.leds[index]
+      ? {
+        ...c,
+        leds: c.leds.filter((_, i) => i !== index),
+        ...reindexWires(c, (v) => (v.kind === "led" ? { ...v, led: shifted(v.led, index) } : v)),
+      }
+      : c,
   };
 }
 
