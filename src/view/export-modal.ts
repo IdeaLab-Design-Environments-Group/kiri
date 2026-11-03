@@ -11,8 +11,8 @@ export type StlProvider = (heightUnits: number | null, maxSubdiv: number | null,
 
 /**
  * "Export SVG" trigger + modal for vinyl/Cricut cutting. Opening pulls a fresh {@link SvgExportPayload}
- * from the provider, shows cut / score / both previews, and offers two downloads: the registered
- * cut+score **ZIP** (assign black=Cut, blue=Score in Design Space) and a single colour-coded SVG.
+ * from the provider, shows cut / score / both previews, and offers the registered
+ * **ZIP** of cut, score and combined SVGs (assign black=Cut, blue=Score in Design Space), plus the STL tiles.
  * Mirrors `SimModal`'s trigger/provider/enabled lifecycle.
  */
 export class ExportModal {
@@ -21,7 +21,6 @@ export class ExportModal {
   private readonly statusEl: HTMLElement;
   private readonly previews: { cut: HTMLElement; score: HTMLElement; both: HTMLElement };
   private readonly zipBtn: HTMLButtonElement;
-  private readonly combinedBtn: HTMLButtonElement;
   private readonly stlBtn: HTMLButtonElement;
   private readonly stlSizeInput: HTMLInputElement;
   private printSizeHandler: (mm: number) => void = () => {};
@@ -58,8 +57,7 @@ export class ExportModal {
         </div>
         <footer class="sim-modal-footer">
           <span class="sim-status" role="status"></span>
-          <button type="button" class="export-zip-btn">cut + score (zip)</button>
-          <button type="button" class="export-combined-btn">single SVG</button>
+          <button type="button" class="export-zip-btn">cut + score + combined (zip)</button>
           <label class="export-stl-height-label" title="printable sheet size — longest dimension of the flat pattern.">size
             <input type="number" class="export-stl-size" min="1" step="1" />
             <span>mm</span>
@@ -83,7 +81,6 @@ export class ExportModal {
       both: this.overlay.querySelector('[data-k="both"]')!,
     };
     this.zipBtn = this.overlay.querySelector(".export-zip-btn")!;
-    this.combinedBtn = this.overlay.querySelector(".export-combined-btn")!;
     this.stlBtn = this.overlay.querySelector(".export-stl-btn")!;
     this.stlSizeInput = this.overlay.querySelector(".export-stl-size")!;
     // Announce edits as they happen: the copper is planned and cut at this size, so it must not go stale.
@@ -93,7 +90,6 @@ export class ExportModal {
     this.stlDetailInput = this.overlay.querySelector(".export-stl-detail")!;
 
     this.zipBtn.addEventListener("click", () => this.downloadZip());
-    this.combinedBtn.addEventListener("click", () => this.downloadCombined());
     this.stlBtn.addEventListener("click", () => this.downloadStl());
     this.overlay.querySelector(".sim-modal-close")!.addEventListener("click", () => this.close());
     this.overlay.addEventListener("click", (e) => {
@@ -155,15 +151,15 @@ export class ExportModal {
       this.statusEl.textContent = stlDefault
         ? "No cut pattern, but the 3D-printed tiles are exportable as STL."
         : "No pattern to export — load a model and press Cut & fold first.";
-      this.zipBtn.disabled = this.combinedBtn.disabled = true;
+      this.zipBtn.disabled = true;
       return;
     }
     this.previews.cut.innerHTML = this.payload.previews.cut;
     this.previews.score.innerHTML = this.payload.previews.score;
     this.previews.both.innerHTML = this.payload.previews.both;
-    this.zipBtn.disabled = this.combinedBtn.disabled = false;
+    this.zipBtn.disabled = false;
     this.statusEl.textContent =
-      "black = Cut, blue = Score. Import the zip's two SVGs (registered, in mm) and set the layer ops.";
+      "black = Cut, blue = Score. The zip holds cut, score and combined SVGs (registered, in mm); import the cut and score ones and set the layer ops.";
   }
 
   close(): void {
@@ -173,11 +169,6 @@ export class ExportModal {
   private downloadZip(): void {
     if (!this.payload) return;
     download(this.payload.archive.filename, new Blob([this.payload.archive.bytes], { type: "application/zip" }));
-  }
-
-  private downloadCombined(): void {
-    if (!this.payload) return;
-    download(this.payload.combined.filename, new Blob([this.payload.combined.svg], { type: "image/svg+xml" }));
   }
 
   private downloadStl(): void {
