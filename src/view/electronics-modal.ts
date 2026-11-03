@@ -169,7 +169,7 @@ import {
 import { TILE_INSET_FRAC } from "../model/tile-subdiv.js";
 import { type ManualWire, type WireContext, manualTraces } from "../model/manual-wire.js";
 import { WireTool, type WireHost } from "./wire-tool.js";
-import { fillPadRows } from "./electronics-pad-rows.js";
+import { fillPadRows, netChildren } from "./electronics-pad-rows.js";
 // The scene emitter, for the ratsnest overlay — see the note at its use in `draw()`.
 import type { FoldFile } from "../model/fold-file.js";
 import { HOME, currentRoute, goToRoute, onRouteChange } from "./route.js";
@@ -1650,7 +1650,7 @@ export class ElectronicsModal {
       row.appendChild(del);
       this.netList.appendChild(row);
 
-      if (net.open && net.pads.length) this.netList.appendChild(this.netChildren(net.pads, net.colour));
+      if (net.open && net.pads.length) this.netList.appendChild(netChildren(net.pads, net.colour, (part, pad) => this.assignPad(part, pad, "")));
     }
     this.renderSidebar();
   }
@@ -1672,54 +1672,6 @@ export class ElectronicsModal {
     warn.title = net.stranded.why;
     warn.setAttribute("aria-label", warn.title);
     return warn;
-  }
-
-  /**
-   * The pads on one net, as the tree's child rows.
-   *
-   * Named by designator and pad — `R1 · 2` — because that is what the author reads on the canvas beside
-   * the part. `Terminal.part` is an index into `circuit.parts`, and an index means nothing to a person
-   * looking at a board.
-   */
-  private netChildren(on: NetRow[], colour: string): HTMLElement {
-    const kids = document.createElement("div");
-    kids.className = "el-net-kids";
-    kids.setAttribute("role", "group");
-    for (const t of on) {
-      const kid = document.createElement("div");
-      kid.className = t.derived ? "el-net-kid is-derived" : "el-net-kid";
-      kid.setAttribute("role", "treeitem");
-      const dot = document.createElement("i");
-      dot.className = "el-net-kid-dot";
-      dot.setAttribute("style", `background:${colour}`);
-      const label = document.createElement("span");
-      label.className = "el-net-kid-name";
-      label.textContent = t.label;
-      kid.appendChild(dot);
-      kid.appendChild(label);
-      if (t.derived) {
-        // No control, because there is nothing here the author decides: this row states what the router
-        // did. Offered an × they would take the battery off GND, the next replan would put it back, and
-        // the app would look broken while behaving correctly.
-        label.title = `${t.label} — wired by the router, not by hand`;
-        const note = document.createElement("span");
-        note.className = "el-net-kid-note";
-        note.textContent = "router";
-        kid.appendChild(note);
-      } else {
-        label.title = `Pad ${t.pad} of ${t.label.split(" · ")[0]}`;
-        const off = document.createElement("button");
-        off.type = "button";
-        off.className = "el-net-kid-off";
-        off.textContent = "×";
-        off.title = `Take ${t.label} off this net`;
-        off.setAttribute("aria-label", `Unwire ${t.label} from this net`);
-        off.addEventListener("click", () => this.assignPad(t.part!, t.pad!, ""));
-        kid.appendChild(off);
-      }
-      kids.appendChild(kid);
-    }
-    return kids;
   }
 
   /** Open or close one net's branch. View state only — nothing here reaches the circuit or the router. */
