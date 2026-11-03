@@ -203,6 +203,23 @@ describe("model/electronics-parts — the placement transform", () => {
     expect(LIBRARY.length - DRAWING_INVENTS.length).toBe(126);
   });
 
+  it("draws a free one-terminal part, on the pad its net routes to", () => {
+    // `PinHeader_01x01` is the library's one single-pad part. Its span had no length, so `partShape` drew
+    // nothing: invisible on the canvas and in the cut files while its pad was still routed to.
+    for (const pose of POSES) {
+      const id = "PinHeader_01x01_P2_54mm_Horizontal_SMD";
+      const fp = LIBRARY.find((c) => c.id === id)!.footprint;
+      const part = free(id, pose.rot, pose.flip);
+      const span = drawnSpanMm(fp, part);
+      const shape = partShape(fp, span.a, span.b, pose.flip);
+      expect(shape, `${id} at rot ${pose.rot}`).not.toBeNull();
+      expect(shape!.leads.map((l) => l.name)).toEqual(["1"]);
+      const lead = shape!.leads[0]!, at = padOf(placeComponent(part, fp, TAPE_W, TAPE_MM), "1")!.at;
+      expect((lead.a.x + lead.b.x) / 2).toBeCloseTo(at.x * K, 6);
+      expect((lead.a.y + lead.b.y) / 2).toBeCloseTo(at.y * K, 6);
+    }
+  });
+
   it("places each pad's true outline on its own centre, at the size its datasheet gives", () => {
     // Leg 3, anchored on the footprint file rather than on either derivation: the outline's centroid must be
     // the pad's centre, and its extents must be the footprint's own — turned, but never scaled. Four places,

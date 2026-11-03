@@ -778,7 +778,7 @@ export function partShape(
   frameFlipped?: boolean,
 ): ResistorShape | null {
   const ts = inlineNamedTerminals(fp);
-  if (ts.length < 2) return null;
+  if (!ts.length) return null;
   const dx = b.x - a.x, dy = b.y - a.y;
   const L = Math.hypot(dx, dy);
   if (L < 1e-9) return null;
@@ -855,9 +855,9 @@ function inlineShape(
     // quarter turn.
     const alongExt = ax.alongIsY ? size.h : size.w;
     const acrossExt = ax.alongIsY ? size.w : size.h;
-    // Degenerate parts — every terminal at one point — keep the old two-contact reading rather than
-    // divide by nothing.
-    const f = Math.abs(span) < 1e-9 ? (i === 0 ? 0 : 1) : (ax.along(t) - first) / span;
+    // Degenerate parts — every terminal at one point — keep the old two-contact reading, and a lone pad sits
+    // mid-break, rather than divide by nothing.
+    const f = Math.abs(span) < 1e-9 ? (ts.length === 1 ? 0.5 : i === 0 ? 0 : 1) : (ax.along(t) - first) / span;
     const o = ax.across(t);
     const c = {
       x: endA.x + (endB.x - endA.x) * f + px * o,

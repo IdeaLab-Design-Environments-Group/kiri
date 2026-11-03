@@ -15,7 +15,7 @@
 import type { PlacedPart, Vec2 } from "./electronics.js";
 import type { PartFit, PartSpan, ResistorSpan, Trace2D } from "./trace-types.js";
 import { RESISTOR, SPDT, acrossPart, inlineTerminals, padAxis } from "./parts.js";
-import { type Box, type Footprint, type Pad, padSize } from "./footprint.js";
+import { type Box, type Footprint, type Pad, padSize, widestTerminal } from "./footprint.js";
 import { footprintById } from "./library.js";
 import { TAPE_MM } from "./tape-width.js";
 import {
@@ -75,7 +75,9 @@ export function freeSpan(
   tapeW: number,
   tapeMm: number,
 ): { a: Vec2; b: Vec2 } {
-  const half = ((partFit(fp).gap * tapeW) / tapeMm) / 2;
+  // A one-terminal part bridges no gap, so it takes its pad's own length: a span of none has no direction
+  // to draw the pad along, and the part was not drawn at all.
+  const half = (((partFit(fp).gap || widestTerminal(fp)) * tapeW) / tapeMm) / 2;
   const th = ((part.rot ?? 0) * Math.PI) / 180;
   const ux = Math.cos(th), uy = Math.sin(th);
   const a = { x: part.x - ux * half, y: part.y - uy * half };
