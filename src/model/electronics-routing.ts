@@ -483,7 +483,14 @@ export function planRoutes(
     faces, gaps, patternDiag(faces) * creasePenaltyFrac, tapeW, sheet, tapeMm, bandCap, graded);
   // From each terminal, over the first legs `railPts` will accept: a net that cannot leave its terminal onto
   // the sheet reaches nothing, and an LED it cannot reach is reported rather than drawn as a straight line.
-  const legOnBody = (a: Vec2, b: Vec2): boolean => tapeOnBody(faces, tapeW, a, b);
+  // Pure for this pattern and tape, and every candidate plan below asks it of the same legs again.
+  const onBodyMemo = new Map<string, boolean>();
+  const legOnBody = (a: Vec2, b: Vec2): boolean => {
+    const k = `${a.x},${a.y},${b.x},${b.y}`;
+    let v = onBodyMemo.get(k);
+    if (v === undefined) onBodyMemo.set(k, (v = tapeOnBody(faces, tapeW, a, b)));
+    return v;
+  };
   const reachPwr = reachableFaces(corridor, battery.face, term.pwr, legOnBody);
   const reachGnd = reachableFaces(corridor, battery.face, term.gnd, legOnBody);
   for (let i = targets.length - 1; i >= 0; i--) {
@@ -629,7 +636,7 @@ export function planRoutes(
     totalLength(tr),
   ];
 
-  const onBody = (a: Vec2, b: Vec2): boolean => tapeOnBody(faces, tapeW, a, b);
+  const onBody = legOnBody;
 
   /** Each LED's body as a segment between its two copper ends, and each pad with the mate it faces. */
   const bodies = targets.map((t) => [t.legs[0], t.legs[1]] as [Vec2, Vec2]);
