@@ -511,6 +511,33 @@ describe("controller/app-controller", () => {
     }
   });
 
+  it("drops the stored circuit when the viewer shows a different pattern", () => {
+    // The Electronics tool starts a fresh circuit for every new pattern, so the stored one has to go too:
+    // kept, the sim routed the old pattern's faces and gaps onto the new one until the next edit.
+    const { controller, store, sim, viewer } = setup();
+    const text = readFileSync(new URL("../../../public/examples/house.fkld", import.meta.url).pathname, "utf8");
+    const fold = JSON.parse(text);
+    store.update({ model: { kind: "fold", name: "house.fkld", object: fold } });
+    const gaps = gapGraph(fold, flatFaces(fold)).gaps;
+    controller.updateCircuit({ leds: [ledOf(gaps[0]!.faceA, gaps[0]!.faceB)], battery: { face: 0 } });
+    expect(sim.traces).not.toEqual([]);
+
+    viewer.simulateViewerLoad(JSON.parse(text), "other.fkld"); // a pattern the viewer loaded by itself
+    expect(store.getState().circuit).toBeNull();
+    expect(sim.traces).toEqual([]);
+  });
+
+  it("keeps the stored circuit when the viewer re-reports the pattern it already shows", () => {
+    const { controller, store, viewer } = setup();
+    const fold = JSON.parse(
+      readFileSync(new URL("../../../public/examples/house.fkld", import.meta.url).pathname, "utf8"),
+    );
+    viewer.simulateViewerLoad(fold, "house.fkld");
+    controller.updateCircuit({ leds: [], battery: { face: 0 } });
+    viewer.simulateViewerLoad(fold, "house.fkld");
+    expect(store.getState().circuit).toEqual({ leds: [], battery: { face: 0 } });
+  });
+
   it("lays the copper on the build the sim folds — one material, whichever control moves it", () => {
     // The two are not two views of one sheet: the printed build has a hinge gap cut between its tiles and
     // the vinyl one does not, and that gap is what a component bridges and what the crease strain is

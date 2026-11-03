@@ -86,7 +86,13 @@ export class AppController {
     });
     // The viewer can load models on its own (file picker, example dropdown, drag-drop); record
     // what it shows in the store so sim enablement/provider derive from one source of truth.
-    this.viewer.onLoaded((object, name) => this.store.update({ viewerShown: { object, name } }));
+    // A different pattern drops the circuit, as the Electronics tool's `setPattern` does: its face and gap
+    // indices name nothing on the new pattern, and the sim would route them anyway.
+    this.viewer.onLoaded((object, name) => {
+      const { model, viewerShown, circuit } = this.store.getState();
+      const same = resolveElectronicsTarget(model, viewerShown)?.object === object;
+      this.store.update({ viewerShown: { object, name }, circuit: same ? circuit : null });
+    });
 
     // View intents → controller handlers.
     this.convert.onFileChosen((file) => this.loadFromFile(file));
