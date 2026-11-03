@@ -1496,6 +1496,13 @@ function carriedBy(runs: Trace2D[], net: string, own: Vec2, anchor: Vec2, axis: 
           runs.push({ net, pts: [r.pts[j]!, anchor] });
           return true;
         }
+        // The run already leaves the pad within about 7 degrees of the leg's line: over the leg's reach that
+        // is a drift of under an eighth of the reach, so the leg is on the tape and nothing is inserted. An
+        // anchor here would be a vertex a little off the run's own line, and the sharp corner it makes
+        // with the segment arriving at the pad stops being adjacent to it -- the pair `selfOverlapLength`
+        // forgives -- so a fold that was always there is suddenly charged as the run lying on itself
+        // (akde-hex at three LEDs: 10.0 -> 18.1 units, and 5.6 charged to any wire drawn along the run).
+        if (Math.abs(cross(d, axis)) <= 0.12) return true;
         if (dist2(r.pts[j]!, anchor) > 1e-9) r.pts.splice(Math.max(i, j), 0, anchor);
         return true;
       }
