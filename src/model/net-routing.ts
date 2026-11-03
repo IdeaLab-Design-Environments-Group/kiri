@@ -960,7 +960,8 @@ export function planNets(
   gaps: GapEdge[],
   tapeW: number,
   /**
-   * Copper already on the sheet that no net may touch — the bus's runs, and any wire the author drew.
+   * Copper already on the sheet that no net may touch and no net owns. The bus and the author's wires
+   * arrive as `rails` instead, tagged with their net, so the net they belong to can join them.
    *
    * This was written as an unexercised guard: no net routed between face centres on any bundled pattern
    * came within a tape width of the bus, so removing it changed no outcome that could be found. Hand-drawn
@@ -978,11 +979,11 @@ export function planNets(
   /** The tape's width in mm, from the same call that produced `tapeW` — see `seatLed`. */
   tapeMm: number = TAPE_MM,
   /**
-   * The bus's runs, tagged with the net each is a rail for.
+   * The bus's runs and the author's wires, each tagged with the net it carries.
    *
    * A net whose id matches one of these taps it — one extra leg onto the rail, which is what joins a part
-   * wired to declared PWR to the battery. Passed here as well as in `obstacles` and not instead of it: a
-   * rail is still copper every OTHER net has to stay clear of, and only its own net is let through.
+   * wired to declared PWR to the battery. Not passed in `obstacles` as well: a rail is already copper every
+   * OTHER net has to stay clear of, and only its own net is let through.
    */
   rails: { net: string; pts: Vec2[]; widths?: number[] }[] = [],
   /**
