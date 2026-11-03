@@ -32,6 +32,24 @@ describe("services/pattern-service", () => {
     expect(Array.isArray(out.fkld.faces_vertices)).toBe(true);
   });
 
+  it("kirigamizeMesh flags a multi-shell mesh whose extra shells were dropped", () => {
+    // Two disjoint tetrahedra: the pipeline keeps the larger shell only.
+    const second = [
+      "v 10 0 0",
+      "v 11 0 0",
+      "v 10.5 0.866 0",
+      "v 10.5 0.289 0.816",
+      "f 5 7 6",
+      "f 5 6 8",
+      "f 6 7 8",
+      "f 7 5 8",
+    ];
+    const out = kirigamizeMesh([TETRA_OBJ, ...second].join("\n"), "obj", "pair.obj");
+    expect(out.ok).toBe(false);
+    expect(out.summary).toMatch(/only the largest shell was kirigamized/);
+    expect(out.summary).toMatch(/kept largest of 2 components \(4 faces\); dropped 1 \(4 faces\)/);
+  });
+
   it("kirigamizeMesh throws (PipelineError) on garbage input", () => {
     expect(() => kirigamizeMesh("not a mesh", "obj", "junk.obj")).toThrowError(/import|no vertices/i);
   });

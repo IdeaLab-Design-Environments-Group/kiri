@@ -23,7 +23,7 @@ export interface PatternOutcome {
   name: string;
   /** Human-readable result line for the status channel. */
   summary: string;
-  /** False when verification ran and did NOT converge. */
+  /** False when the pattern lost part of the input (extra shells dropped in conditioning). */
   ok: boolean;
 }
 
@@ -46,13 +46,16 @@ export function kirigamizeMesh(text: string, ext: "obj" | "stl", sourceName: str
       ? `folds from flat (d_H = ${r.foldFromFlat.dH.toFixed(2)} mm, ε = ${r.epsilon.toFixed(2)} mm)`
       : `shown at its folded form — guided (won't self-fold from flat; d_H = ${r.foldFromFlat.dH.toFixed(2)} mm)`
     : "unverified";
+  // The pipeline conditions one shell; any other shells are gone from the pattern, so say so.
+  const dropped = result.conditioning.find((c) => c.pass === "components" && c.changed > 0);
   return {
     fkld: result.fkld,
     name,
     summary:
       `Kirigamized "${sourceName}" → ${cuts} cuts${vents ? `, ${vents} vent(s)` : ""}, ` +
-      `${result.sheet.faces.length} faces — ${verdict}.`,
-    ok: true,
+      `${result.sheet.faces.length} faces — ${verdict}.` +
+      (dropped ? ` Warning: only the largest shell was kirigamized (${dropped.notes}).` : ""),
+    ok: !dropped,
   };
 }
 
