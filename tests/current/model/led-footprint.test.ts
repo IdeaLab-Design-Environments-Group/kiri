@@ -4,8 +4,10 @@ import {
   type Led,
   flatFaces,
   gapGraph,
+  type Vec2,
   ledOf,
   pinchMid,
+  pointInFace,
 } from "../../../src/model/electronics.js";
 import {
   DEFAULT_LED,
@@ -16,10 +18,12 @@ import {
   ledSeat,
   planRoutes,
   seatLed,
+  tapeMmFor,
   tapeWidthFor,
   weedGapFor,
 } from "../../../src/model/electronics-routing.js";
 import { DEFAULT_SHEET, minWebMm } from "../../../src/model/fold-strain.js";
+import { segNearSeg } from "../../../src/model/trace-geometry.js";
 
 const EXAMPLES = new URL("../../../public/examples/", import.meta.url).pathname;
 
@@ -219,6 +223,62 @@ describe("model/led-footprint", () => {
       const tapeW = tapeWidthFor(faces);
       const huge = { ...ledSeat("LED_1206")!, gap: 1e6 };
       expect(seatLed(gaps[0]!, faces, huge, tapeW)).toBeNull();
+    });
+
+    it("refuses a hinge where the leg copper would run off the tile", () => {
+      // The legs reach a pad's width outboard of each copper end, laid whether or not the route covers
+      // them. The ends were checked and the legs were not: 42 hinges, most on the bat wings, ran the leg
+      // off the material.
+      const { faces, gaps } = load("bat-wing-left.fkld");
+      const tapeW = tapeWidthFor(faces);
+      const tapeMm = tapeMmFor(faces);
+      const seat = ledSeat()!;
+      const reach = (seat.padW * tapeW) / tapeMm;
+      let refused = 0;
+      for (const g of gaps) {
+        const legs = seatLed(g, faces, seat, tapeW, tapeMm);
+        if (!legs) { refused++; continue; }
+        for (const [own, mate] of [[legs[0], legs[1]], [legs[1], legs[0]]] as const) {
+          const d = Math.hypot(own.x - mate.x, own.y - mate.y);
+          const end = { x: own.x + ((own.x - mate.x) / d) * reach, y: own.y + ((own.y - mate.y) / d) * reach };
+          expect(pointInFace(faces, end), `hinge ${g.faceA}-${g.faceB}`).toBeGreaterThanOrEqual(0);
+        }
+      }
+      expect(refused, "nothing refused: the fixture no longer shows the fault").toBeGreaterThan(0);
+    });
+
+    it("refuses an LED whose legs would land on another LED", () => {
+      // Two hinges meeting at a corner can put one LED's leg across the other's chip. The leg is laid
+      // after routing and was never checked: on bat-body at twelve LEDs, LED 10's leg crossed LED 8.
+      const { faces, gaps } = load("bat-body.fkld");
+      const tapeW = tapeWidthFor(faces);
+      const seen = new Set<string>();
+      const all: Led[] = [];
+      for (const g of gaps) {
+        const l = ledOf(g.faceA, g.faceB);
+        if (seen.has(`${l.a}_${l.b}`)) continue;
+        seen.add(`${l.a}_${l.b}`);
+        all.push(l);
+      }
+      const leds = all.slice(0, 12);
+      const r = planRoutes(faces, gaps, { leds, battery: { face: 0 } });
+      const reach = (ledSeat()!.padW * tapeW) / tapeMmFor(faces);
+      const extent = (p: { pwr: Vec2; gnd: Vec2 }): [Vec2, Vec2] => {
+        const d = Math.hypot(p.pwr.x - p.gnd.x, p.pwr.y - p.gnd.y);
+        const u = { x: (p.pwr.x - p.gnd.x) / d, y: (p.pwr.y - p.gnd.y) / d };
+        return [
+          { x: p.pwr.x + u.x * reach, y: p.pwr.y + u.y * reach },
+          { x: p.gnd.x - u.x * reach, y: p.gnd.y - u.y * reach },
+        ];
+      };
+      const seated = r.pads.filter((p) => p.component).map(extent);
+      for (let i = 0; i < seated.length; i++) {
+        for (let j = i + 1; j < seated.length; j++) {
+          const [a, b] = seated[i]!, [c, d] = seated[j]!;
+          expect(segNearSeg(a, b, c, d), `LEDs ${i} and ${j}`).toBeGreaterThanOrEqual(tapeW);
+        }
+      }
+      expect(r.unseated.length).toBeGreaterThan(0);
     });
 
     it("keeps pads index-aligned with circuit.leds even where some are refused", () => {

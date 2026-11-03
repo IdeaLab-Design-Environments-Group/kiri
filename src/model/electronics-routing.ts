@@ -427,10 +427,21 @@ export function planRoutes(
   // and neither has one whose part cannot be seated on the hinge it sits on -- see `seatLed`.
   const targets: Target[] = [];
   const unseated: number[] = [];
+  const seatedSpans: [Vec2, Vec2][] = [];
   circuit.leds.forEach((led, slot) => {
     const gap = gapForLed(gaps, led);
     const seat = ledSeat(led.component);
-    const legs = gap && seat ? seatLed(gap, faces, seat, tapeW, tapeMm) : null;
+    let legs = gap && seat ? seatLed(gap, faces, seat, tapeW, tapeMm) : null;
+    // Two hinges meeting at a corner can put this LED's legs across one already seated, and the legs are
+    // laid after routing where nothing checks them. Its whole length, leg end to leg end, keeps a tape's
+    // width off every earlier one's, or it is not seated.
+    if (legs && seat) {
+      const reach = (seat.padW * tapeW) / tapeMm;
+      const axis = unit(sub(legs[0], legs[1]));
+      const span: [Vec2, Vec2] = [add(legs[0], scale(axis, reach)), add(legs[1], scale(axis, -reach))];
+      if (seatedSpans.some(([a, b]) => segNearSeg(a, b, span[0], span[1]) < tapeW)) legs = null;
+      else seatedSpans.push(span);
+    }
     if (!gap || !seat || !legs) {
       unreachable.push(slot);
       // The hinge and the part both exist and the part still will not sit on it — that is the package

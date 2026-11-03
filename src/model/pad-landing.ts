@@ -138,6 +138,16 @@ export function seatLed(
   const padA = toward(gap.faceA);
   const padB = toward(gap.faceB);
   if (pointInFace(faces, padA) !== gap.faceA || pointInFace(faces, padB) !== gap.faceB) return null;
+  // Each leg runs a pad's width outboard of its copper end, and `seatLedLegs` lays tape the whole way
+  // whatever the route did. So the leg's far end, both corners of it, has to be on the material. Any face
+  // will do: a flat panel is cut into several, and the leg may reach into its neighbour.
+  const reach = (seat.padW * tapeW) / tapeMm;
+  const side = scale(unit(sub(pb, pa)), tapeW / 2);
+  const legOn = (pad: Vec2, mate: Vec2): boolean => {
+    const end = add(pad, scale(unit(sub(pad, mate)), reach));
+    return [end, add(end, side), sub(end, side)].every((p) => pointInFace(faces, p) >= 0);
+  };
+  if (!legOn(padA, padB) || !legOn(padB, padA)) return null;
   return [padA, padB];
 }
 
