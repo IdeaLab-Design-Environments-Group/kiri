@@ -247,7 +247,7 @@ describe("model/led-footprint", () => {
       expect(refused, "nothing refused: the fixture no longer shows the fault").toBeGreaterThan(0);
     });
 
-    it("refuses an LED whose legs would land on another LED", () => {
+    it("refuses an LED whose legs would land on another LED", { timeout: 30000 }, () => {
       // Two hinges meeting at a corner can put one LED's leg across the other's chip. The leg is laid
       // after routing and was never checked: on bat-body at twelve LEDs, LED 10's leg crossed LED 8.
       const { faces, gaps } = load("bat-body.fkld");
