@@ -1721,7 +1721,9 @@ function pickTab(
       a.index - b.index,
   );
 
-  let fallback: { index: number; side: Side; path: Vec2[]; over?: boolean } | null = null;
+  let fallback: { index: number; side: Side; path: Vec2[]; over: boolean } | null = null;
+  /** The shortest that goes over a part, used only when every candidate does. */
+  let overFallback: { index: number; side: Side; path: Vec2[]; over: boolean } | null = null;
   /** Clear of the copper and the parts, but lying on a tab already placed. Better than going over a part. */
   let crowded: { index: number; side: Side; path: Vec2[] } | null = null;
   for (const c of candidates) {
@@ -1732,7 +1734,6 @@ function pickTab(
       : { x: a.x + across.x * c.step * tapeW, y: a.y + across.y * c.step * tapeW };
     const end = onWindow(bend ?? a, c.side, win);
     const path = bend ? [a, bend, end] : [a, end];
-    if (!fallback) fallback = { index: c.index, side: c.side, path, over: false };
     // A tab may not run *over* a pad or a terminal on its way out, not merely start off one. Keeping the anchor
     // clear was not enough: the run itself passed across components on the way to the wall, where it would be
     // stuck down on top of the part and cut into it when snipped.
@@ -1745,9 +1746,10 @@ function pickTab(
     if (overComponent) {
       // Remember the shortest one anyway: if nothing at all is clear, a tab over a part still beats a trace
       // left loose in the window.
-      if (!fallback) fallback = { index: c.index, side: c.side, path, over: true };
+      if (!overFallback) overFallback = { index: c.index, side: c.side, path, over: true };
       continue;
     }
+    if (!fallback) fallback = { index: c.index, side: c.side, path, over: false };
     const blocked = others.some((o) => {
       for (let k = 1; k < path.length; k++) {
         if (segNearRing(path[k - 1]!, path[k]!, o, tapeW)) return true;
@@ -1781,10 +1783,11 @@ function pickTab(
       clear: true, onComponent: forcedOntoComponent, overComponent: false,
     };
   }
+  fallback ??= overFallback;
   return fallback
     ? {
         index: fallback.index, side: fallback.side, path: fallback.path,
-        clear: false, onComponent: forcedOntoComponent, overComponent: !!fallback.over,
+        clear: false, onComponent: forcedOntoComponent, overComponent: fallback.over,
       }
     : null;
 }
