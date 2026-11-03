@@ -358,8 +358,20 @@ export function resolveNetlist(
       });
       continue;
     }
+    // The same check one level up: `1` and `1_1` are one pin, so two nets on them are the same short.
+    const pin = `${t.part}\u0000${padPin(t.pad)}`;
+    if ((wiredTo.get(pin) ?? t.net) !== t.net) {
+      faults.push({
+        kind: "duplicate-terminal",
+        why: `pad "${t.pad}" of part ${t.part} is the same pin as a pad already on another net`,
+        part: t.part,
+        pad: t.pad,
+        net: t.net,
+      });
+      continue;
+    }
     seen.add(key);
-    wiredTo.set(`${t.part}\u0000${padPin(t.pad)}`, t.net);
+    wiredTo.set(pin, t.net);
     wiredParts.add(t.part);
     const here = placeOnce(t.part);
     const placedPad = here ? padOf(here, t.pad) : undefined;

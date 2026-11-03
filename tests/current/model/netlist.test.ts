@@ -162,6 +162,26 @@ describe("model/netlist", () => {
       expect(pads.find((p) => p.part === 0 && p.pad === "1")?.net).toBe("n1");
     });
 
+    it("refuses two nets on two pads of one pin", () => {
+      // `1` and `1_1` are one piece of metal (see `padPin`), so wiring them to different nets is the same
+      // short as wiring one pad twice, and was accepted without a word.
+      const { faults, nets } = resolveNetlist(circuit({
+        parts: [{ component: "SeeedStudio_XIAO_ESP32C3", x: 0, y: 0, free: true }],
+        nets: [
+          { id: "a", name: "A" },
+          { id: "b", name: "B" },
+        ],
+        terminals: [
+          { part: 0, pad: "1", net: "a" },
+          { part: 0, pad: "2", net: "a" },
+          { part: 0, pad: "1_1", net: "b" },
+          { part: 0, pad: "3", net: "b" },
+        ],
+      }), TAPE_W, TAPE_MM);
+      expect(faults.some((x) => x.kind === "duplicate-terminal" && x.pad === "1_1")).toBe(true);
+      expect(nets.flatMap((n) => n.points).some((p) => p.pad === "1_1")).toBe(false);
+    });
+
     it("reports a net with one terminal, and leaves it out of the routing set", () => {
       // The likeliest authoring slip there is: a pad assigned to a net nothing else is on. Routed, it is a
       // zero-length success that reports nothing wrong.
