@@ -693,6 +693,8 @@ function routeOne(
   /** Whether a stranded terminal was refused by something with no net to blame — the bus, a hand-drawn
    *  wire, or a pad nobody wired. */
   walled: boolean;
+  /** How many of `stranded` are off the material altogether, which no other net had any part in. */
+  off: number;
 } {
   const traces: Trace2D[] = [];
   const stranded: number[] = [];
@@ -807,7 +809,7 @@ function routeOne(
     tapped = "laid";
     break;
   }
-  return { traces, stranded, used, lines, blame, tapped, walled };
+  return { traces, stranded, used, lines, blame, tapped, walled, off: faceOf.filter((f) => f < 0).length };
 }
 
 /**
@@ -975,13 +977,23 @@ export function planNets(
         ...(tapWhy && !r.stranded.length ? { why: tapWhy } : {}),
         ...(r.stranded.length
           ? {
-              why:
-                `${r.stranded.length} of ${n.points.length} terminals on "${n.name}" could not be reached ` +
-                (inTheWay.length
-                  ? `without crossing ${inTheWay.length === 1 ? inTheWay[0] : inTheWay.join(" or ")}. `
-                  : `without crossing another net. `) +
-                `Copper tape is single-sided, so there is no layer to cross on: move a part, or bridge ` +
-                `this net by hand.` + (tapWhy ? ` ${tapWhy}` : ""),
+              // A pad off the sheet is said on its own: blaming a net for it sends the author after the wrong thing.
+              why: [
+                r.off
+                  ? `${r.off} of ${n.points.length} terminals on "${n.name}" ${r.off === 1 ? "is" : "are"} off ` +
+                    `the material, where no copper can reach: move the part onto the sheet.`
+                  : "",
+                r.stranded.length > r.off
+                  ? `${r.stranded.length - r.off} of ${n.points.length} terminals on "${n.name}" could not be ` +
+                    `reached ` +
+                    (inTheWay.length
+                      ? `without crossing ${inTheWay.length === 1 ? inTheWay[0] : inTheWay.join(" or ")}. `
+                      : `without crossing another net. `) +
+                    `Copper tape is single-sided, so there is no layer to cross on: move a part, or bridge ` +
+                    `this net by hand.`
+                  : "",
+                tapWhy,
+              ].filter(Boolean).join(" "),
             }
           : {}),
       };

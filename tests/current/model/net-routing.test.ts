@@ -411,6 +411,20 @@ describe("model/net-routing", () => {
     for (const t of r.traces) for (const p of t.pts) expect(Math.hypot(p.x - at.x, p.y - at.y)).toBeGreaterThan(1);
   });
 
+  it("says a terminal off the material is off it, not behind another net", () => {
+    // A lone net has no other net to cross, and the message sent the author looking for one.
+    const { faces, gaps, tapeW } = load("house.fkld");
+    const r = planNets(
+      [{ id: "n", name: "SIG", points: [{ part: 0, pad: "1", at: { x: -1e6, y: -1e6 } }, { part: 1, pad: "1", at: faces[0]!.centroid }] }],
+      faces,
+      gaps,
+      tapeW,
+    );
+    expect(r.nets[0]!.stranded).toEqual([0]);
+    expect(r.nets[0]!.why).toMatch(/off the material/);
+    expect(r.nets[0]!.why).not.toMatch(/another net/);
+  });
+
   it("routes the same circuit the same way however the nets were declared", () => {
     // Nets are put in a canonical order before routing, so the plan depends on the circuit and not on the
     // sequence the author happened to add things in. Without it, renaming a net or deleting and re-adding
