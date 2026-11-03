@@ -535,7 +535,7 @@ interface LegRules {
   padGap: number;
   faces: FlatFace[];
   /** This net's width at each point already asked about, by exact coordinates — see {@link layLeg}. */
-  widthMemo: Map<string, number>;
+  widthMemo: Map<number, Map<number, number>>;
   /** Whether a whole leg's tape stays on the material — see {@link legOnBody}. */
   onBody: (pts: Vec2[], widths: number[] | undefined) => boolean;
 }
@@ -637,12 +637,14 @@ function layLeg(
   const widthsOf = (pts: Vec2[], wp?: number, wq?: number): number[] | undefined => {
     let near: ReturnType<typeof nearLeg> | undefined;
     const at = (p: Vec2): number => {
-      const key = `${p.x},${p.y}`;
-      let w = r.widthMemo.get(key);
+      // Keyed x then y rather than on a formatted string, which cost more than the lookup it served.
+      let row = r.widthMemo.get(p.x);
+      if (!row) r.widthMemo.set(p.x, (row = new Map()));
+      let w = row.get(p.y);
       if (w === undefined) {
         near ??= nearLeg(pts, r.fields, r.pads, r.padGap + r.tapeW / 2);
         w = Math.min(narrowedTo(r.tapeW, p, near.fields), padCapAt(p, near.pads, r.padGap, r.tapeW));
-        r.widthMemo.set(key, w);
+        row.set(p.y, w);
       }
       return w;
     };
@@ -728,7 +730,7 @@ function routeOne(
   /** How near a run's edge may come to a pad that is not its own — see {@link PAD_CLEARANCE_MM}. */
   padGap: number,
   /** This net's widths from earlier orders: they depend on the pads and fields alone, never on the order. */
-  widthMemo: Map<string, number>,
+  widthMemo: Map<number, Map<number, number>>,
   /** The material test every leg is held to — see {@link legOnBody}. */
   onBody: (pts: Vec2[], widths: number[] | undefined) => boolean,
 ): {
@@ -947,7 +949,7 @@ export function planNets(
     faces, gaps, patternDiag(faces) * FOLD_PENALTY_FRAC, tapeW, sheet, tapeMm, bandCap, graded);
   const clearance = weedFloorFor(tapeW, tapeMm, sheet);
   const padGap = padClearanceFor(tapeW, tapeMm);
-  const memo = nets.map(() => new Map<string, number>());
+  const memo = nets.map(() => new Map<number, Map<number, number>>());
   const foreign = nets.map((n) => foreignPads(pads, n.id, n.points));
   // Remembered, since every order lays most legs again.
   const bridgeW = bridgeSpanFor(tapeW, tapeMm);
