@@ -76,6 +76,23 @@ export function orientFaces(mesh: TriMesh): { mesh: TriMesh; report: ConditionRe
       edgeFaces.set(ekey(a, b), list);
     }
   }
+  // Either defect also fails the winding check below; name it instead of "non-orientable".
+  const seen = new Map<string, number>();
+  for (let f = 0; f < faces.length; f++) {
+    const key = [...faces[f]].sort((p, q) => p - q).join("_");
+    const first = seen.get(key);
+    if (first !== undefined) {
+      throw new PipelineError("conditioning", `duplicate face: faces ${first} and ${f} use the same three vertices`, { faces: [first, f] });
+    }
+    seen.set(key, f);
+  }
+  for (const [key, list] of edgeFaces) {
+    if (list.length > 2) {
+      throw new PipelineError("conditioning", `non-manifold edge shared by ${list.length} faces (vertices ${key.replace("_", "–")})`, {
+        faces: list,
+      });
+    }
+  }
   const dirIn = (f: number, a: number, b: number): boolean => {
     // true if face f traverses a->b in its winding
     const [i, j, k] = faces[f];

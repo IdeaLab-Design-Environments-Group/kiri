@@ -61,6 +61,23 @@ describe("orientFaces", () => {
     expect(report.changed).toBe(1);
     expect(() => buildTopology(mesh)).not.toThrow();
   });
+
+  it("names a duplicate face instead of calling the surface non-orientable", () => {
+    const cube = makeCube();
+    const dup: TriMesh = { vertices: cube.vertices, faces: [...cube.faces, [...cube.faces[3]] as [number, number, number]] };
+    expect(() => orientFaces(dup)).toThrow(/duplicate face/);
+  });
+
+  it("names an edge shared by more than two faces", () => {
+    // A fin: a third triangle hung off one of the cube's edges.
+    const cube = makeCube();
+    const [a, b] = cube.faces[0];
+    const fin: TriMesh = {
+      vertices: [...cube.vertices, { x: -50, y: -50, z: -50 }],
+      faces: [...cube.faces, [a, b, cube.vertices.length]],
+    };
+    expect(() => orientFaces(fin)).toThrow(/non-manifold edge shared by 3 faces/);
+  });
 });
 
 describe("dropDegenerates", () => {
