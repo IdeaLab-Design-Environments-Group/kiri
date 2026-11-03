@@ -7,8 +7,8 @@
 import { describe, expect, it } from "vitest";
 import { flatFaces, gapGraph, type Vec2 } from "../../../src/model/electronics.js";
 import type { FoldFile } from "../../../src/model/fold-file.js";
-import { buildCorridor, searchCorridor, tapeOffBodyAt, tapeOnBody } from "../../../src/model/corridor.js";
-import { batteryTerminals, patternDiag, tapeMmFor, tapeWidthFor } from "../../../src/model/electronics-routing.js";
+import { buildCorridor, reachableFaces, searchCorridor, tapeOffBodyAt, tapeOnBody } from "../../../src/model/corridor.js";
+import { batteryTerminals, patternDiag, planRoutes, tapeMmFor, tapeWidthFor } from "../../../src/model/electronics-routing.js";
 import { segNearSeg, segPointDist } from "../../../src/model/trace-geometry.js";
 
 /** A FOLD of the given face outlines, with vertices shared wherever two outlines meet at a corner. */
@@ -93,5 +93,51 @@ describe("model/corridor › the strict search", () => {
     const path = searchCorridor(c, 0, 2, new Set(), new Map(), forbid, true, term.gnd, onBody, null, null);
     // Either a way round or nothing, which sends the caller to the tolled pass -- never a leg across it.
     if (path.length) expect(segPointDist(term.gnd, path[0]!, term.pwr)).toBeGreaterThanOrEqual(forbid.r);
+  });
+});
+
+describe("model/corridor › reachability", () => {
+  /** Two big tiles joined by a neck `h` wide, then a fourth tile beyond; the LED sits on the last hinge. */
+  const neck = (h: number): FoldFile => {
+    const lo = 5 - h / 2, hi = 5 + h / 2;
+    return fold([
+      [[0, 0], [10, 0], [10, lo], [10, hi], [10, 10], [0, 10]],
+      [[10, lo], [11, lo], [11, hi], [10, hi]],
+      [[11, 0], [16, 0], [16, 10], [11, 10], [11, hi], [11, lo]],
+      [[16, 0], [21, 0], [21, 10], [16, 10]],
+    ]);
+  };
+
+  it("agrees with the search: a tile no chord leads to is out of reach", () => {
+    // The neck is narrower than the tape, so no chord through it stays on the material. The tiles beyond
+    // were still called reachable because they share an edge node with the neck.
+    const { c } = corridorOf(neck(0.2));
+    const reach = reachableFaces(c, 0);
+    expect(searchCorridor(c, 0, 2, new Set(), new Map(), null, false, null, null, null, null)).toEqual([]);
+    expect(reach.has(2)).toBe(false);
+    expect(reach.has(3)).toBe(false);
+    // And a wide neck is a way through.
+    const wide = corridorOf(neck(2));
+    expect(reachableFaces(wide.c, 0).has(3)).toBe(true);
+  });
+
+  it("does not count a tile reachable when no first leg out of the origin stays on the material", () => {
+    const { c } = corridorOf(neck(2));
+    const nowhere = (): boolean => false;
+    expect([...reachableFaces(c, 0, { x: 5, y: 5 }, nowhere)]).toEqual([0]);
+  });
+
+  it("reports an LED beyond the neck unreachable instead of drawing a straight line to it", () => {
+    const f = neck(0.2);
+    const faces = flatFaces(f);
+    const gaps = gapGraph(f, faces).gaps;
+    const r = planRoutes(faces, gaps, { leds: [{ a: 2, b: 3 }], battery: { face: 0 } });
+    expect(r.unreachable).toEqual([0]);
+    const tapeW = tapeWidthFor(faces);
+    for (const t of r.traces) {
+      for (let i = 1; i < t.pts.length; i++) {
+        expect(tapeOnBody(faces, tapeW, t.pts[i - 1]!, t.pts[i]!), `${t.net} segment ${i}`).toBe(true);
+      }
+    }
   });
 });

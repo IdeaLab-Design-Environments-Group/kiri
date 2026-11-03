@@ -333,26 +333,49 @@ function pointInPolyLocal(poly: Vec2[], p: Vec2): boolean {
   return inside;
 }
 
-/** Faces reachable from `start` by travelling over the material. */
-export function reachableFaces(c: Corridor, start: number): Set<number> {
+/**
+ * Faces reachable from `start` by travelling over the material.
+ *
+ * Walked node to node over the same moves {@link searchCorridor} makes — a chord the tile allows, or a bridge —
+ * and, given an `origin` and `legOk`, only from the first nodes a leg out of the origin may reach. Walking tile
+ * to tile instead called a tile reachable whenever it shared a node with one that was, so an LED behind a neck
+ * too narrow for a chord, or behind a terminal with no leg onto the sheet, was routed with no path and drawn as
+ * a straight line through empty space.
+ */
+export function reachableFaces(
+  c: Corridor,
+  start: number,
+  origin: Vec2 | null = null,
+  legOk: ((a: Vec2, b: Vec2) => boolean) | null = null,
+): Set<number> {
   const seen = new Set<number>([start]);
-  const queue = [start];
+  const visited = new Set<string>();
+  const queue: string[] = [];
+  const visit = (k: string): void => {
+    // Refused nodes are not a way through, so a tile behind one is genuinely out of reach. This has to
+    // agree with `searchCorridor` or an LED is called reachable and then never routed — reported as
+    // wired, drawn with no copper.
+    if (visited.has(k) || c.refused.has(k)) return;
+    visited.add(k);
+    queue.push(k);
+    for (const f of c.faceOf.get(k) ?? []) seen.add(f);
+  };
+  for (const m of c.mids.get(start) ?? []) {
+    if (origin && legOk && !legOk(origin, m)) continue;
+    visit(ptKey(m));
+  }
   while (queue.length) {
     const at = queue.shift()!;
-    for (const m of c.mids.get(at) ?? []) {
-      // Refused nodes are not a way through, so a tile behind one is genuinely out of reach. This has to
-      // agree with `searchCorridor` or an LED is called reachable and then never routed — reported as
-      // wired, drawn with no copper.
-      if (c.refused.has(ptKey(m))) continue;
-      const onto = [...(c.faceOf.get(ptKey(m)) ?? [])];
-      // And across any opened cut this node bridges — the tile on the far lip is reachable too.
-      for (const b of c.bridges.get(ptKey(m)) ?? []) onto.push(...(c.faceOf.get(b.to) ?? []));
-      for (const f of onto) {
-        if (seen.has(f)) continue;
-        seen.add(f);
-        queue.push(f);
+    const here = c.point.get(at)!;
+    for (const f of c.faceOf.get(at) ?? []) {
+      const ok = c.chords.get(f);
+      for (const m of c.mids.get(f) ?? []) {
+        if (ok && !ok.has(chordKey(here, m))) continue;
+        visit(ptKey(m));
       }
     }
+    // And across any opened cut this node bridges — the tile on the far lip is reachable too.
+    for (const b of c.bridges.get(at) ?? []) visit(b.to);
   }
   return seen;
 }

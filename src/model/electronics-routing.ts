@@ -482,10 +482,15 @@ export function planRoutes(
   // in the graph, so a crease is crossed only when nothing else reaches the tile.
   const corridor = buildCorridor(
     faces, gaps, patternDiag(faces) * creasePenaltyFrac, tapeW, sheet, tapeMm, bandCap, graded);
-  const reach = reachableFaces(corridor, battery.face);
+  // From each terminal, over the first legs `railPts` will accept: a net that cannot leave its terminal onto
+  // the sheet reaches nothing, and an LED it cannot reach is reported rather than drawn as a straight line.
+  const legOnBody = (a: Vec2, b: Vec2): boolean => tapeOnBody(faces, tapeW, a, b);
+  const reachPwr = reachableFaces(corridor, battery.face, term.pwr, legOnBody);
+  const reachGnd = reachableFaces(corridor, battery.face, term.gnd, legOnBody);
   for (let i = targets.length - 1; i >= 0; i--) {
     const t = targets[i]!;
-    if (reach.has(t.legFaces[0]) || reach.has(t.legFaces[1])) continue;
+    const by = (reach: Set<number>): boolean => reach.has(t.legFaces[0]) || reach.has(t.legFaces[1]);
+    if (by(reachPwr) && by(reachGnd)) continue;
     unreachable.push(t.slot);
     targets.splice(i, 1);
   }
