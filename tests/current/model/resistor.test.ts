@@ -170,6 +170,30 @@ describe("model/resistor", () => {
     expect(placed, "every drop refused").toBeGreaterThan(pads.length / 2);
   });
 
+  it("refuses a break that the rail's own loop would bypass", () => {
+    // puffin's GND rail with four LEDs is a loop here: one run crosses another, and both reach the same
+    // junction further on. A break on the loop leaves its two cut ends joined the long way round, and the
+    // resistor limits nothing. Refused, as a part that does not fit.
+    const fold = JSON.parse(readFileSync(`${EXAMPLES}puffin.fkld`, "utf8"));
+    const faces = flatFaces(fold);
+    const gaps = gapGraph(fold, faces).gaps;
+    const seen = new Set<string>();
+    const leds = [];
+    for (const g of gaps) {
+      const l = ledOf(g.faceA, g.faceB);
+      const key = `${l.a}_${l.b}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      leds.push(l);
+      if (leds.length >= 4) break;
+    }
+    const base: Circuit = { leds, battery: { face: 0 } };
+    const plain = planRoutes(faces, gaps, base);
+    const r = planRoutes(faces, gaps, { ...base, resistors: [{ x: 86.0998, y: 151.2401 }] });
+    expect(r.resistors).toEqual([]);
+    expect(r.traces).toEqual(plain.traces);
+  });
+
   it("leaves a run too short to hold one alone", () => {
     // Breaking a run shorter than the part would take all its copper and strand whatever it feeds. Better a
     // part whose leads need bending than a branch that quietly loses its supply. Tested on `breakRuns`

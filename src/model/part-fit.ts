@@ -303,8 +303,9 @@ export function breakRuns(
       ? splitRun(out, bestRun, moved.seg, moved.t, body)
       : { traces: out, span: null };
     // A run that doubles back on itself can bring one half back beside the other's cut end, which shorts
-    // the part with no other copper involved. Refused, as a part that does not fit.
-    if (split.span && halvesTouch(split.traces[bestRun]!, split.traces[bestRun + 1]!, keepOut.clear)) {
+    // the part with no other copper involved — and a run on a loop of its net's copper has its halves
+    // joined the long way round. Either way the part is bypassed. Refused, as a part that does not fit.
+    if (split.span && halvesJoined(split.traces, bestRun, keepOut.clear)) {
       split = { traces: out, span: null };
     }
     out = split.traces;
@@ -579,12 +580,30 @@ function keepOutAlong(run: Trace2D, segs: { a: Vec2; b: Vec2 }[], clear: number)
 }
 
 /**
- * Whether the copper of the two halves of a broken run overlaps anywhere, each strip `w` wide with square
- * ends. Across a straight break the ends are a body apart and clear; across a bend, or where the run
- * doubles back past its own break, they need not be.
+ * Whether the two halves of a broken run, at `ri` and `ri + 1`, are still one piece of copper: overlapping
+ * directly, or through other runs of their net, each strip `w` wide with square ends. Across a straight
+ * break the ends are a body apart and clear; across a bend, where the run doubles back past its own break,
+ * or where the run is one side of a loop, they need not be.
  */
-function halvesTouch(first: Trace2D, second: Trace2D, w: number): boolean {
+function halvesJoined(traces: Trace2D[], ri: number, w: number): boolean {
   if (!(w > 0)) return false;
+  const net = traces[ri]!.net;
+  const seen = new Set([ri]);
+  const queue = [ri];
+  while (queue.length) {
+    const from = traces[queue.pop()!]!;
+    for (const [ti, t] of traces.entries()) {
+      if (seen.has(ti) || t.net !== net || !runsTouch(from, t, w)) continue;
+      if (ti === ri + 1) return true;
+      seen.add(ti);
+      queue.push(ti);
+    }
+  }
+  return false;
+}
+
+/** Whether two runs' copper overlaps anywhere, each strip `w` wide with square ends. */
+function runsTouch(first: Trace2D, second: Trace2D, w: number): boolean {
   for (let i = 1; i < first.pts.length; i++) {
     for (let j = 1; j < second.pts.length; j++) {
       if (stripsOverlap(first.pts[i - 1]!, first.pts[i]!, second.pts[j - 1]!, second.pts[j]!, w)) return true;
