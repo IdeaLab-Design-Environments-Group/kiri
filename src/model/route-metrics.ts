@@ -149,6 +149,9 @@ export function countUnderLed(
         t.net === "pwr" ? pad.pwr : t.net === "gnd" ? pad.gnd : null;
       for (let i = 1; i < t.pts.length && !bad; i++) {
         const a = t.pts[i - 1]!, b = t.pts[i]!;
+        // No sample can come closer than the segment does, so a segment clear of the chip is skipped
+        // unsampled. The margin keeps a rounding difference between the two measures from changing a count.
+        if (segNearSeg(a, b, pad.pwr, pad.gnd) >= clear * (1 + 1e-9)) continue;
         const L = len(sub(b, a));
         const steps = Math.max(2, Math.ceil(L / (clear * 0.5)));
         for (let k = 0; k <= steps; k++) {
