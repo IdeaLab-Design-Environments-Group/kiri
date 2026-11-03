@@ -76,6 +76,13 @@ body {
   gap: 0.5rem;
 }
 
+/* One line while it fits: the title does not break, the subtitle gives way first, and the two pattern
+   actions sit a little apart from the page triggers before them. */
+.app-header h1 { white-space: nowrap; }
+.header-actions > :nth-last-child(2) { margin-left: 0.75rem; }
+@media (max-width: 1180px) { .app-subtitle { display: none; } }
+@media (min-width: 900px) { .header-actions { flex-wrap: nowrap; } }
+
 /* ---- Grid (resizable cards: Convert · gutter · Viewer) ---- */
 .app-grid {
   flex: 1 1 auto;
