@@ -2097,3 +2097,16 @@ body.is-examples .app-legend {
 }
 .el-pad-off:hover, .el-pad-off:focus-visible { color: #a4404a; }
 .el-pad-off[hidden] { display: none; }
+/* A selected hand-drawn wire has a delete button in the sidebar. */
+.el-wire-delete {
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid #d6a2a8;
+  border-radius: 999px;
+  background: #fff;
+  color: #a4404a;
+  cursor: pointer;
+}
+.el-wire-delete:hover { background: #fbeff0; }
+.el-wire-sect[hidden] { display: none; }

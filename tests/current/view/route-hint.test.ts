@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { routeHintShown, syncRouteHint } from "../../../src/view/electronics-presenters.js";
+import { routeHintShown, syncRouteHint, syncWireDelete } from "../../../src/view/electronics-presenters.js";
 
 describe("route hint", () => {
   it("shows only with LEDs and a stale plan", () => {
@@ -24,5 +24,14 @@ describe("route hint", () => {
     expect(strip.hidden).toBe(true);
     expect(classes.has("is-stale")).toBe(false);
     expect(() => syncRouteHint(undefined, 1, true)).not.toThrow();
+  });
+
+  it("shows the delete-wire group only while a wire is selected", () => {
+    const group = { hidden: true };
+    syncWireDelete(group as unknown as Element, "w1");
+    expect(group.hidden).toBe(false);
+    syncWireDelete(group as unknown as Element, null);
+    expect(group.hidden).toBe(true);
+    expect(() => syncWireDelete(null, "w1")).not.toThrow();
   });
 });

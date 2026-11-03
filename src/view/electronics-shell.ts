@@ -85,6 +85,10 @@ export function shellMarkup(): string {
                 <input type="text" class="el-net-new" placeholder="new net name" aria-label="new net name" autocomplete="off">
                 <div class="el-net-list" role="tree" aria-label="declared nets"></div>
               </div>
+              <div class="el-side-sect el-wire-sect" hidden>
+                <div class="el-side-head"><span class="el-side-title">Wire</span></div>
+                <button type="button" class="el-wire-delete" title="delete the selected hand-drawn wire (Backspace or Delete)">delete wire</button>
+              </div>
               <div class="el-side-sect el-placed" hidden>
                 <div class="el-side-head">
                   <span class="el-side-title">Parts</span>

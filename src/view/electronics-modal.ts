@@ -131,7 +131,7 @@ import {
   netTally,
   netlistTrouble,
   partsTally,
-  statusLine, syncRouteHint,
+  statusLine, syncRouteHint, syncWireDelete,
 } from "./electronics-presenters.js";
 // Re-exported so the presenters can be reached through the modal that renders them, the same way the
 // palette's own catalog is — a caller that has the modal should not need to know which file the rows
@@ -605,6 +605,10 @@ export class ElectronicsModal {
       this.toolButtons.set(tool, btn);
     }
     this.overlay.querySelector(".el-clear")!.addEventListener("click", () => this.clear());
+    this.overlay.querySelector(".el-wire-delete")!.addEventListener("click", () => {
+      this.wire.deleteSelected();
+      this.renderStatus();
+    });
     for (const btn of this.overlay.querySelectorAll<HTMLButtonElement>(".el-export")) {
       const side: Side = btn.dataset.side === "outside" ? "outside" : "inside";
       btn.addEventListener("click", () => this.exportCopper(side));
@@ -2956,6 +2960,7 @@ export class ElectronicsModal {
     const selPart = this.partSelection();
     const sel = this.selected;
     syncRouteHint(this.routeBtn, this.circuit.leds.length, this.stale);
+    syncWireDelete(this.overlay.querySelector(".el-wire-sect"), this.wire.selected());
     this.statusEl.textContent = statusLine({
       circuit: this.circuit,
       routed: this.routed,

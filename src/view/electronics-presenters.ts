@@ -542,3 +542,8 @@ export function syncRouteHint(
   const strip = body?.querySelector(".el-route-hint");
   if (strip) strip.hidden = !routeHintShown(ledCount, stale);
 }
+
+/** Show the "delete wire" control only while a hand-drawn wire is selected. */
+export function syncWireDelete(group: Element | null | undefined, selectedWire: string | null): void {
+  if (group) (group as HTMLElement).hidden = selectedWire === null;
+}
