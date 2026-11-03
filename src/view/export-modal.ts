@@ -27,7 +27,6 @@ export class ExportModal {
   private printSizeHandler: (mm: number) => void = () => {};
   private readonly stlHeightInput: HTMLInputElement;
   private readonly stlHeightUnit: HTMLElement;
-  private readonly stlDetailInput: HTMLInputElement;
   private provider: ExportProvider | null = null;
   private stlProvider: StlProvider | null = null;
   private payload: SvgExportPayload | null = null;
@@ -68,9 +67,6 @@ export class ExportModal {
             <input type="number" class="export-stl-height" min="0" step="0.1" />
             <span class="export-stl-unit">units</span>
           </label>
-          <label class="export-stl-height-label" title="more subdivision on harder-folding faces. Level 0 = one tile per face; 4 splits the sharpest folds 4 deep.">detail
-            <input type="number" class="export-stl-detail" min="0" max="4" step="1" />
-          </label>
           <button type="button" class="export-stl-btn">tiles (STL)</button>
         </footer>
       </div>
@@ -94,7 +90,6 @@ export class ExportModal {
     });
     this.stlHeightInput = this.overlay.querySelector(".export-stl-height")!;
     this.stlHeightUnit = this.overlay.querySelector(".export-stl-unit")!;
-    this.stlDetailInput = this.overlay.querySelector(".export-stl-detail")!;
 
     this.zipBtn.addEventListener("click", () => this.downloadZip());
     this.combinedBtn.addEventListener("click", () => this.downloadCombined());
@@ -150,7 +145,6 @@ export class ExportModal {
     if (stlDefault) {
       this.stlHeightInput.value = String(Math.round(stlDefault.height * 100) / 100);
       this.stlHeightUnit.textContent = stlDefault.unit;
-      this.stlDetailInput.value = String(stlDefault.maxSubdiv);
     }
     this.overlay.hidden = false;
     this.showPayload(!!stlDefault);
@@ -192,11 +186,9 @@ export class ExportModal {
   private downloadStl(): void {
     const rawH = parseFloat(this.stlHeightInput.value);
     const height = Number.isFinite(rawH) && rawH > 0 ? rawH : null; // null → builder's default
-    const rawD = parseInt(this.stlDetailInput.value, 10);
-    const detail = Number.isFinite(rawD) && rawD >= 0 ? rawD : null; // null → builder's default
     const rawS = parseFloat(this.stlSizeInput.value);
     const size = Number.isFinite(rawS) && rawS > 0 ? rawS : null; // null → builder's print-size default
-    const stl = this.stlProvider?.(height, detail, size) ?? null;
+    const stl = this.stlProvider?.(height, null, size) ?? null;
     if (!stl) return;
     download(stl.filename, new Blob([stl.text], { type: "model/stl" }));
   }

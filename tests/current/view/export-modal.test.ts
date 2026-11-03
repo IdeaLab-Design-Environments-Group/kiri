@@ -78,6 +78,12 @@ describe("view/export-modal", () => {
     expect(overlay.querySelector('[data-k="both"]')?.innerHTML).toBe("<svg>300</svg>");
   });
 
+  it("offers no STL detail box, since the printed tiles are never subdivided", () => {
+    const { document } = installDom();
+    new ExportModal();
+    expect(document.body.children[0]!.querySelector(".export-stl-detail")).toBeFalsy();
+  });
+
   it("downloads zip and combined svg using object URLs, and closes via button or Escape", () => {
     const { document } = installDom();
     const modal = new ExportModal();
