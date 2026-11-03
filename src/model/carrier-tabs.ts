@@ -193,6 +193,14 @@ export function pickTab(
     : null;
 }
 
+/** Whether two runs' strips overlap: some stretch of one centreline within a tape width of the other. */
+export function stripsMeet(a: Vec2[], b: Vec2[], tapeW: number): boolean {
+  for (let i = 1; i < a.length; i++) {
+    for (let j = 1; j < b.length; j++) if (segSegDist(a[i - 1]!, a[i]!, b[j - 1]!, b[j]!) < tapeW) return true;
+  }
+  return false;
+}
+
 /** Whether the tab segment a-q comes within a tape width of any edge of `ring`. */
 function segNearRing(a: Vec2, q: Vec2, ring: Vec2[], tapeW: number): boolean {
   for (let i = 0; i < ring.length; i++) {

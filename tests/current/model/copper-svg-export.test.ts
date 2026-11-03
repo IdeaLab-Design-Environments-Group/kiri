@@ -315,11 +315,11 @@ describe("model/copper-svg-export", () => {
     it("tabs at the tape's own width, clear of the other net, using whichever wall is free", { timeout: 30000 }, () => {
       // A tab across another trace would be stuck down on top of it, shorting the two, and snipping it would cut
       // the trace underneath. Same-net runs are not obstacles: they meet at junctions by design.
-      // Zero on akde-hex. house and church each keep a couple: routing around mountain folds sends runs down
-      // narrower corridors, which leaves fewer clear lines out to a wall. Pinned so they cannot spread.
       // akde-hex 0 -> 6 on 2026-11-03, a recorded regression: the router began refusing copper that touches
-      // the other net, and the rerouted runs leave the frame's walls where these tabs now cross them.
-      const budget: Record<string, number> = { "akde-hex.fkld": 6, "house.fkld": 2, "church.fkld": 1 };
+      // the other net, and its PWR rail now rings GND's spurs, so every line out from them crossed it.
+      // Back to 0 on 2026-11-03: a spur fused to a held run of its own net needs no tab of its own.
+      // house and church were budgeted at 2 and 1, and read 0 on 2026-11-03; pinned there.
+      const budget: Record<string, number> = { "akde-hex.fkld": 0, "house.fkld": 0, "church.fkld": 0 };
       for (const [name, want] of Object.entries(budget)) {
         const { fold, traces, tapeW } = planned(name, 12);
         const out = buildCopperCarrierExport(fold, traces, tapeW);
@@ -445,12 +445,34 @@ describe("model/copper-svg-export", () => {
       }
     });
 
-    it("reports tabs it could not route clear rather than hiding them", { timeout: 30000 }, () => {
-      // puffin's window is crowded enough that some runs are enclosed by the other net with no clear line out.
-      const { fold, traces, tapeW } = planned("puffin.fkld", 12);
-      const out = buildCopperCarrierExport(fold, traces, tapeW);
-      expect(out.crossingTabs).toBeGreaterThan(0);
+    it("reports tabs it could not route clear rather than hiding them", () => {
+      // A run walled in by the other net, and fused to nothing of its own, has no clear line out at all.
+      // puffin used to be the example; it reads 0 since 2026-11-03, when its enclosed runs were found to be
+      // held through their own net, so the wall is built by hand.
+      const { fold } = load("house.fkld");
+      const wall = { net: "pwr", pts: [{ x: 6, y: 6 }, { x: 8, y: 6 }, { x: 8, y: 8 }, { x: 6, y: 8 }, { x: 6, y: 6 }] };
+      const inside = { net: "gnd", pts: [{ x: 6.8, y: 7 }, { x: 7.2, y: 7 }] };
+      const out = buildCopperCarrierExport(fold, [wall, inside], 0.1);
+      expect(out.crossingTabs).toBe(1);
       expect(out.crossingTabs).toBeLessThanOrEqual(out.counts.tabs);
+    });
+
+    it("holds a run fused to its own net through that net, where every tab out would cross the other", () => {
+      // akde-hex's shape: PWR rings a GND spur on every side but one corner, and the spur's GND trunk leaves
+      // through that corner on a diagonal no tab can follow. The spur is copper of a piece with the trunk, so
+      // it needs no tab of its own, and none is drawn across PWR to give it one.
+      const { fold } = load("house.fkld");
+      const ring = { net: "pwr", pts: [{ x: 6, y: 7.4 }, { x: 6, y: 6 }, { x: 8, y: 6 }, { x: 8, y: 8 }, { x: 6.6, y: 8 }] };
+      const spur = { net: "gnd", pts: [{ x: 7.4, y: 6.4 }, { x: 7.8, y: 6.4 }] };
+      const trunk = { net: "gnd", pts: [{ x: 7.6, y: 6.4 }, { x: 5.5, y: 8.5 }] };
+      const out = buildCopperCarrierExport(fold, [ring, spur, trunk], 0.1);
+      expect(out.crossingTabs).toBe(0);
+      expect(out.counts.tabs).toBeGreaterThan(0);
+      expect(out.unclosedCuts).toBe(0);
+      // Still cut as copper: the spur is solid, joined to the trunk, not left as waste or cut free.
+      const { T } = sheetFrame(fold);
+      expect(inCarrier(out.svg, T({ x: 7.75, y: 6.4 }))).toBe(true);
+      expect(inCarrier(out.svg, T({ x: 7, y: 7 }))).toBe(true);
     });
 
     it("frames the pattern with a 5mm border, inside the sheet the other layers use", () => {
