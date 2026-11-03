@@ -1003,6 +1003,15 @@ describe("view/electronics-modal", () => {
     expect(modal.svg.innerHTML).not.toContain("el-carrier");
   });
 
+  it("marks the view button that was pressed as the active one", () => {
+    const { modal } = openOn(grid2x2());
+    const views = modal.overlay.querySelectorAll(".el-view");
+    for (const i of [1, 0]) {
+      views[i].dispatch("click", {});
+      expect(views.map((b: any) => b.classList.contains("is-active"))).toEqual(views.map((_: any, j: number) => j === i));
+    }
+  });
+
   it("exports the carrier as its own file", () => {
     const anchors: any[] = [];
     const { modal } = openOn(grid2x2());

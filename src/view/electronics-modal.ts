@@ -881,15 +881,14 @@ export class ElectronicsModal {
   }
 
   /** Leave the editor. Kept for the callers that had it; it is the Back control's own path. */
-  close(): void {
-    this.goBack();
-  }
+  close(): void { this.goBack(); }
 
   // ---- editing -------------------------------------------------------------
 
   /** Switch between the two ways of showing (and cutting) the copper. */
   private selectView(mode: ViewMode): void {
     this.viewMode = mode;
+    this.syncButtons();
     this.render();
   }
 

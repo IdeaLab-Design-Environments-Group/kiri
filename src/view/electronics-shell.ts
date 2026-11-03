@@ -106,7 +106,7 @@ export function shellMarkup(): string {
               <div class="el-side-sect el-view-modes">
                 <div class="el-side-head"><span class="el-side-title">Copper</span></div>
                 <span class="el-seg">
-                  <button type="button" class="el-view" data-view="traces" title="show the copper as separate strips">strips</button>
+                  <button type="button" class="el-view" data-view="strips" title="show the copper as separate strips">strips</button>
                   <button type="button" class="el-view" data-view="carrier" title="show the copper as one carrier frame holding every trace in place">carrier</button>
                 </span>
               </div>
