@@ -468,7 +468,7 @@ export function planRoutes(
     // to reach the battery — see `netlist.ts`, the `BATTERY_PART` branch.
     const only = routeDeclaredNets(circuit, faces, gaps, tapeW, [], sheet, tapeMm, term);
     return {
-      traces: only.traces, pads, unreachable, unseated: [], resistors: [], switches: [], parts: [],
+      traces: only.traces, pads, unreachable, unseated, resistors: [], switches: [], parts: [],
       nets: only.nets, netFaults: only.faults, battery: !!circuit.battery,
       ...(term.overhang ? { batteryOverhang: true as const } : {}),
     };
@@ -509,7 +509,7 @@ export function planRoutes(
     // to reach the battery — see `netlist.ts`, the `BATTERY_PART` branch.
     const only = routeDeclaredNets(circuit, faces, gaps, tapeW, [], sheet, tapeMm, term);
     return {
-      traces: only.traces, pads, unreachable, unseated: [], resistors: [], switches: [], parts: [],
+      traces: only.traces, pads, unreachable, unseated, resistors: [], switches: [], parts: [],
       nets: only.nets, netFaults: only.faults, battery: !!circuit.battery,
       ...(term.overhang ? { batteryOverhang: true as const } : {}),
     };

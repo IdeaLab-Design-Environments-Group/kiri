@@ -291,6 +291,16 @@ describe("model/led-footprint", () => {
       expect(r.unreachable).toEqual([1]);
     });
 
+    it("still reports unseated LEDs when none of them could be seated", () => {
+      // With nothing seated there is no bus to plan, and that path returned before the list was copied
+      // over: every 0603 read as merely unreachable, the routing fault rather than the package one.
+      const { faces, gaps } = load("house.fkld");
+      const leds = ledsOn(gaps, 3, "LED_0603");
+      const r = planRoutes(faces, gaps, { leds, battery: { face: 0 } });
+      expect(r.unseated).toEqual([0, 1, 2]);
+      expect(r.unreachable).toEqual([0, 1, 2]);
+    });
+
     it("keeps pads index-aligned with circuit.leds even where some are refused", () => {
       // The modal indexes `pads` directly, so a refused LED has to keep its slot rather than being
       // squeezed out of the list.
