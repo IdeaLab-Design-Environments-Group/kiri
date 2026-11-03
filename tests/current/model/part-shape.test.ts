@@ -131,16 +131,9 @@ describe("model/part-shape", () => {
       if (!sh) continue; // a part with fewer than two terminals is not drawn on a break at all
       if (sh.leads.length !== want) wrong.push(`${c.id}: ${want} terminals, ${sh.leads.length} drawn`);
     }
-    // Two remain, and they are listed rather than tolerated by a `length <= 2` fudge, so that fixing the
-    // cause fails this test and asks for it to be tightened. Both are five terminals in ONE row, where
-    // `acrossPart` fabricates the second row by reflection (`parts.ts:184`). Drawing their pads where the
-    // footprint really has them would contradict the routing, which breaks the rail across a separation the
-    // part does not have. That is `acrossPart` conflating "is a switch" with "sits across the run", and it
-    // belongs to the session that owns `parts.ts` — not to the drawing.
-    expect(wrong).toEqual([
-      "Conn_USB_microB_Socket_WurthElektronik_629105136821: 5 terminals, 3 drawn",
-      "Conn_USB_miniB_Socket_CUIDevices_UJ2_MBH_1_SMT_TR: 5 terminals, 3 drawn",
-    ]);
+    // None remain. The last two were the five-pad USB sockets, whose second row `acrossPart` used to
+    // fabricate by reflection as it does the switch's; it now does that for three pads only.
+    expect(wrong).toEqual([]);
   });
 
   it("puts each contact where the footprint has that pad, and at that pad's own size", () => {

@@ -145,12 +145,13 @@ describe("model/electronics-parts — the placement transform", () => {
     // ORIGIN instead, so the 19 footprints whose pads are not symmetric about it routed a whole pitch away —
     // a net wired to pin 1 landing on pin 2.
     //
-    // **Left — the drawing invents or stretches contacts.** Five parts, and each is a known defect with its
+    // **Left — the drawing invents or stretches contacts.** Three parts, and each is a known defect with its
     // own note in the source:
-    //   - the two USB sockets and `SW_SPDT` are one-row parts whose second row `acrossPart` FABRICATES by
-    //     reflecting the common through the peg line, so `rowLeads` refuses them and `rowShape` falls back
-    //     to three invented contacts at places the part has no metal. `rowLeads`' docblock names this and
-    //     says it cannot be fixed from that side.
+    //   - `SW_SPDT` is a one-row part whose second row `acrossPart` FABRICATES by reflecting the common
+    //     through the peg line, so `rowLeads` refuses it and `rowShape` falls back to three contacts at
+    //     places the part has no metal. `rowLeads`' docblock names this and says it cannot be fixed from
+    //     that side. The two USB sockets were here for the same reason until the fabrication stopped at
+    //     three pads.
     //   - `LED_Luminus_1206` and `TerminalBlock_1pos_...` are two-terminal one-row parts, where
     //     `inlineShape` pins both pads to the CUT ENDS rather than to their own pitch, so the pad spread is
     //     stretched whenever that pitch is not `fit.gap` plus a pad's length.
@@ -158,8 +159,6 @@ describe("model/electronics-parts — the placement transform", () => {
     // The list may only ever SHRINK. A part leaving is the drawing being fixed; a part joining is a
     // regression, and this test says which.
     const DRAWING_INVENTS = [
-      "Conn_USB_microB_Socket_WurthElektronik_629105136821",
-      "Conn_USB_miniB_Socket_CUIDevices_UJ2_MBH_1_SMT_TR",
       "LED_Luminus_1206",
       "SW_SPDT",
       "TerminalBlock_1pos_Metz_SM99S01VBNN05G7",
@@ -198,9 +197,10 @@ describe("model/electronics-parts — the placement transform", () => {
     // always did. It used to add 24 parts — `R_1206`, `C_1206`, `LED_1206`, `SW_PUSH` and the rest.
     expect([...flipped].filter((id) => !upright.has(id)).sort()).toEqual([]);
     // And every part outside both lists agrees, which is the assertion that actually protects the transform.
-    // 124 of 129, from 85 when this test was written: 24 recovered by the in-line flip rule, 15 by reading
-    // the right axis, and 19 more by anchoring on the pad span. The five left are the drawing's own.
-    expect(LIBRARY.length - DRAWING_INVENTS.length).toBe(124);
+    // 126 of 129, from 85 when this test was written: 24 recovered by the in-line flip rule, 15 by reading
+    // the right axis, 19 more by anchoring on the pad span, and the two USB sockets by not fabricating a
+    // row for them. The three left are the drawing's own.
+    expect(LIBRARY.length - DRAWING_INVENTS.length).toBe(126);
   });
 
   it("places each pad's true outline on its own centre, at the size its datasheet gives", () => {

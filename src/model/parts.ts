@@ -205,7 +205,10 @@ function readAcrossPart(fp: Footprint): AcrossPart | null {
   const rows = terminalRows(fp, ax);
   if (rows.length === 1) {
     const row = rows[0]!;
-    if (row.pads.length < 3 || Math.abs(row.y) <= ROW_TOL_MM || holes(fp).length === 0) return null;
+    // Exactly three: the reflection is the slide switch's, and a rail passes no more than three terminals
+    // (`placement`). A five-pad USB socket can only ever stand free, where a fabricated row put two of its
+    // pins nowhere and drew three where the part has no metal.
+    if (row.pads.length !== 3 || Math.abs(row.y) <= ROW_TOL_MM || holes(fp).length === 0) return null;
     const byX = [...row.pads].sort((a, b) => ax.along(a) - ax.along(b));
     const common = byX[Math.floor(byX.length / 2)]!;
     const live = byX[byX.length - 1]!;
