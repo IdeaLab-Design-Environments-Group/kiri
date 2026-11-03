@@ -206,6 +206,13 @@ describe("model/netlist", () => {
       expect(faults.some((x) => x.kind === "duplicate-net" && x.net === "n1")).toBe(true);
     });
 
+    it("names a battery pad that does not exist, even on a net the bus lays a rail for", () => {
+      const c = circuit({ terminals: [{ part: -1, pad: "X", net: "n1" }] });
+      const pads = { pwr: { x: 0, y: 0 }, gnd: { x: 5, y: 0 } };
+      const f = resolveNetlist(c, TAPE_W, TAPE_MM, new Set(["n1"]), pads).faults;
+      expect(f.some((x) => x.kind === "no-such-part" && x.part === -1 && x.pad === "X")).toBe(true);
+    });
+
     it("keeps routing the good nets when another one is broken", () => {
       // A fault in one net must not cost the user the rest of the circuit.
       const c = circuit({

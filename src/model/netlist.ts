@@ -277,19 +277,22 @@ export function resolveNetlist(
     // it — copper wired to no power, drawn as though it worked. A terminal the author has moved onto some
     // third net routes here too, for the same reason.
     if (t.part === BATTERY_PART) {
+      // Before the rail check, which would otherwise skip a pad name the battery does not have.
+      if (t.pad !== BATTERY_PWR_PAD && t.pad !== BATTERY_GND_PAD) {
+        faults.push({
+          kind: "no-such-part", why: `the battery has no terminal "${t.pad}"`, part: t.part, pad: t.pad, net: t.net,
+        });
+        continue;
+      }
       if (railNets.has(t.net)) {
         batteryNets.add(t.net);
         continue;
       }
-      const at = batteryPads && (t.pad === BATTERY_PWR_PAD
-        ? batteryPads.pwr
-        : t.pad === BATTERY_GND_PAD ? batteryPads.gnd : undefined);
+      const at = batteryPads && (t.pad === BATTERY_PWR_PAD ? batteryPads.pwr : batteryPads.gnd);
       if (!at) {
         faults.push({
           kind: "no-such-part",
-          why: batteryPads
-            ? `the battery has no terminal "${t.pad}"`
-            : `a terminal is on the battery, and there is no battery on this side`,
+          why: `a terminal is on the battery, and there is no battery on this side`,
           part: t.part,
           pad: t.pad,
           net: t.net,
