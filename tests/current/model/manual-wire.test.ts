@@ -263,6 +263,23 @@ describe("model/manual-wire", () => {
     expect(named.map((t) => t.net)).toEqual(["w1", "gnd"]);
   });
 
+  it("keeps an unnamed wire off a net that happens to share its id", () => {
+    // Its id is its net when it has none, and a file is free to declare a net called `w1` too. Read as that
+    // net's copper, the wire would be landed on by it and never reported as shorting it.
+    const ctx = bare();
+    ctx.circuit.nets = [{ id: "w1", name: "SDA" }, { id: "pwr", name: "PWR" }];
+    ctx.circuit.wires = [
+      { id: "w1", pts: [{ kind: "free", x: 0, y: 0 }, { kind: "free", x: 10, y: 0 }] },
+      { id: "pwr", pts: [{ kind: "free", x: 0, y: 5 }, { kind: "free", x: 10, y: 5 }] },
+      { id: "w3", pts: [{ kind: "free", x: 0, y: 9 }, { kind: "free", x: 10, y: 9 }] },
+    ];
+    const nets = manualTraces(ctx).map((t) => t.net);
+    expect(nets).not.toContain("w1");
+    expect(nets).not.toContain("pwr");
+    expect(new Set(nets).size).toBe(3);
+    expect(nets[2]).toBe("w3"); // no clash, no change
+  });
+
   it("gives no runs for a circuit that has no wires", () => {
     expect(manualTraces(bare())).toEqual([]);
     const ctx = bare();

@@ -208,9 +208,14 @@ export function resolveWire(w: ManualWire, ctx: WireContext): Trace2D | null {
  * print somewhere the author never saw it.
  */
 export function manualTraces(ctx: WireContext): Trace2D[] {
+  // An unnamed wire goes by its id, which is only safe while no net goes by it too: a file may declare a
+  // net `w1`, and the bus rails are `pwr` and `gnd`. Read as that net's copper, the wire would be landed on
+  // by it and never reported as shorting it.
+  const taken = new Set(["pwr", "gnd", ...(ctx.circuit.nets ?? []).map((n) => n.id)]);
   const out: Trace2D[] = [];
   for (const w of ctx.circuit.wires ?? []) {
     const t = resolveWire(w, ctx);
+    if (t && w.net === undefined && taken.has(t.net)) t.net = `wire ${w.id}`;
     if (t) out.push(t);
   }
   return out;
