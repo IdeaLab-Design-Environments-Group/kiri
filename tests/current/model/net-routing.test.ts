@@ -329,6 +329,30 @@ describe("model/net-routing", () => {
     expect(r.traces.length).toBeGreaterThan(0); // the reachable pair still got their copper
   });
 
+  it("bends a leg out of a pad whose own neighbouring pin is in the way, whichever end the tree starts at", () => {
+    // Two C_1206 parts far apart on house, every pairing of their pads on one net. Leaving pad 1 of the
+    // left part heads straight across its own pad 2; only the landing hop used to be bent, so whether the
+    // net routed depended on which terminal the spanning tree happened to start from.
+    const fold = JSON.parse(readFileSync(`${EXAMPLES}house.fkld`, "utf8"));
+    const faces = flatFaces(fold);
+    const gaps = gapGraph(fold, faces).gaps;
+    for (const [pa, pb] of [["1", "1"], ["1", "2"], ["2", "1"], ["2", "2"]]) {
+      for (const order of [[0, 1], [1, 0]]) {
+        const ends = [{ part: 0, pad: pa! }, { part: 1, pad: pb! }];
+        const r = planRoutes(faces, gaps, {
+          leds: [], battery: null,
+          parts: [
+            { component: "C_1206", x: faces[6]!.centroid.x, y: faces[6]!.centroid.y, free: true, rot: 0 },
+            { component: "C_1206", x: faces[14]!.centroid.x, y: faces[14]!.centroid.y, free: true, rot: 0 },
+          ],
+          nets: [{ id: "n1", name: "N1" }],
+          terminals: order.map((k) => ({ ...ends[k]!, net: "n1" })),
+        });
+        expect(r.nets[0]!.stranded, `pads ${pa}->${pb}, order ${order}`).toEqual([]);
+      }
+    }
+  });
+
   it("reports a terminal stranded when the only terminal it was joined through is stranded", () => {
     // p1 and p2 sit inside a closed ring of immovable copper, so p0 can reach neither. The tree joins p2
     // through p1, and the p1-p2 leg lies clear inside the ring — but laying it connects p2 to nothing the

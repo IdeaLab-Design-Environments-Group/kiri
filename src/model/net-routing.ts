@@ -742,23 +742,50 @@ function layLeg(
   const first = pathOk(straight.pts, straight.widths, r);
   if (first.ok) return { ok: true, ...straight };
 
-  // The last hop is the one that lands on the pad, so that is the one to bend: a waypoint offset square to
-  // it brings the leg in from the side instead of straight down the row.
-  const from = mid.length ? mid[mid.length - 1]! : a;
-  const dx = b.x - from.x, dy = b.y - from.y;
-  const L = Math.hypot(dx, dy);
-  if (L > 1e-9) {
+  // The last hop is the one that lands on the pad, so that is the one to bend first: a waypoint offset
+  // square to it brings the leg in from the side instead of straight down the row. The first hop leaves a
+  // pad too, and can be just as blocked by its own part's neighbouring pin, so it is bent next, then both.
+  // Without the first hop the outcome depended on which terminal the tree happened to start from.
+  const bends = (from: Vec2, to: Vec2): Vec2[] => {
+    const dx = to.x - from.x, dy = to.y - from.y;
+    const L = Math.hypot(dx, dy);
+    const out: Vec2[] = [];
+    if (L <= 1e-9) return out;
     const px = -dy / L, py = dx / L;
     for (let step = 1; step <= DETOUR_STEPS; step++) {
       const off = step * DETOUR_STEP_TAPES * r.tapeW;
       for (const sign of [1, -1]) {
         const w = { x: from.x + dx / 2 + px * sign * off, y: from.y + dy / 2 + py * sign * off };
         // A waypoint off the material is no waypoint: copper cannot be laid where there is no sheet.
-        if (faceOfPoint(r.faces, w) < 0) continue;
-        const bent = build([...mid, w]);
-        if (pathOk(bent.pts, bent.widths, r).ok) return { ok: true, ...bent };
+        if (faceOfPoint(r.faces, w) >= 0) out.push(w);
       }
     }
+    return out;
+  };
+  const lasts = bends(mid.length ? mid[mid.length - 1]! : a, b);
+  // With no corridor nodes the first hop IS the last, and bending it twice is no new path.
+  const firsts = mid.length ? bends(a, mid[0]!) : [];
+  for (const w of lasts) {
+    const bent = build([...mid, w]);
+    if (pathOk(bent.pts, bent.widths, r).ok) return { ok: true, ...bent };
+  }
+  // A first-hop bend is judged on its own hop before the whole path is, and a pair of bends is the first
+  // that clears each end, checked whole once. Checking every bend and every pairing whole made a crowded
+  // board several times slower for no extra reach.
+  const hopOk = (p: Vec2, w: Vec2, q: Vec2, wp?: number, wq?: number): boolean => {
+    const pts = densifyNearFields([p, w, q], r.tapeW, r.fields);
+    return pathOk(pts, legWidths(pts, r.tapeW, wp, wq, r.fields, cap), r).ok;
+  };
+  const clearFirsts = firsts.filter((v) => hopOk(a, v, mid[0]!, padWidthA, undefined));
+  for (const v of clearFirsts) {
+    const bent = build([v, ...mid]);
+    if (pathOk(bent.pts, bent.widths, r).ok) return { ok: true, ...bent };
+  }
+  const v = clearFirsts[0];
+  const w = v && lasts.find((x) => hopOk(mid[mid.length - 1]!, x, b, undefined, padWidthB));
+  if (v && w) {
+    const bent = build([v, ...mid, w]);
+    if (pathOk(bent.pts, bent.widths, r).ok) return { ok: true, ...bent };
   }
   return { ok: false, cuts: first.cuts };
 }
