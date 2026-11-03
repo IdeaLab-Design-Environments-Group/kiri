@@ -496,6 +496,13 @@ describe("view/electronics-presenters > statusLine", () => {
     expect(status({ circuit, routed: one })).not.toContain("unreachable");
   });
 
+  it("says when the battery's pads hang off its tile", () => {
+    const circuit = bare({ leds: [{ a: 0, b: 1 }], battery: { face: 0, x: 0, y: 0 } as never });
+    expect(status({ circuit, routed: { ...EMPTY_ROUTE, batteryOverhang: true } }))
+      .toContain("· the battery's pads hang off its tile");
+    expect(status({ circuit })).not.toContain("hang off");
+  });
+
   it("stays quiet about unreachable LEDs while there is no battery to reach them from", () => {
     const circuit = bare({ leds: [{ a: 0, b: 1 }] });
     expect(status({ circuit, routed: { ...EMPTY_ROUTE, unreachable: [0] } })).not.toContain(

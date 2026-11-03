@@ -433,6 +433,38 @@ describe("model/electronics-routing", () => {
     }
   });
 
+  it("reports battery pads that hang off a tile too narrow to hold them", () => {
+    // The pads shrink to fit, down to a floor below which they are too small to fix a cell to. Past that
+    // floor they used to overhang the tile with nothing said; akde-decagon has 20 of 70 faces like that.
+    const inside = (p: { x: number; y: number }, poly: { x: number; y: number }[]): boolean => {
+      let w = false;
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const a = poly[i]!, b = poly[j]!;
+        if ((a.y > p.y) !== (b.y > p.y) && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) w = !w;
+      }
+      return w;
+    };
+    const { faces, gaps } = load("akde-decagon-pyramid.fkld");
+    const tapeW = tapeWidthFor(faces);
+    let over = 0, fit = 0;
+    faces.forEach((face, i) => {
+      const term = batteryTerminals(face.centroid, patternDiag(faces), face.poly, tapeW);
+      const corners = [term.pwr, term.gnd].flatMap((c) =>
+        [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([sx, sy]) => ({ x: c.x + sx! * term.half, y: c.y + sy! * term.half })));
+      const hangs = corners.some((p) => !inside(p, face.poly));
+      expect(!!term.overhang, `face ${i}`).toBe(hangs);
+      if (hangs) over++;
+      else fit++;
+      if (hangs && over === 1) {
+        expect(planRoutes(faces, gaps, { leds: ledsOn(gaps, 2), battery: { face: i } }).batteryOverhang).toBe(true);
+      }
+      if (!hangs && fit === 1) {
+        expect(planRoutes(faces, gaps, { leds: ledsOn(gaps, 2), battery: { face: i } }).batteryOverhang).toBeFalsy();
+      }
+    });
+    expect(over, "no face overhangs: the fixture no longer shows the fault").toBeGreaterThan(0);
+  });
+
   it("does not lay a net twice over itself", { timeout: 20000 }, () => {
     // Repeated tape: a net running back alongside where it has already been. It was invisible to the search --
     // only the two nets shadowing *each other* was scored -- so nothing had reason to stop it, and akde-square

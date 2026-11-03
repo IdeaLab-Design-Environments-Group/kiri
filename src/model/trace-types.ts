@@ -110,6 +110,8 @@ export interface Terminals {
   gnd: Vec2;
   /** Half-width of each pad, after clamping to what the tile can hold. */
   half: number;
+  /** Set when even the smallest pad still hangs off the tile: reported, since it cannot be drawn right. */
+  overhang?: true;
 }
 
 

@@ -173,8 +173,28 @@ export function batteryTerminals(centre: Vec2, diag: number, poly?: Vec2[], tape
     const fit = (hh: number): boolean => Math.hypot(2 * hh + tapeW * 0.7, hh) <= room;
     while (half > tapeW * 0.2 && !fit(half)) half *= 0.85;
     h = half + tapeW * 0.7;
+    // Below that floor the pad is too small to fix a cell to, so it stops shrinking — and on a tile that
+    // narrow it still hangs off. That is said rather than drawn as if it fitted.
+    const corners = [h, -h].flatMap((x) =>
+      [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([sx, sy]) => ({
+        x: centre.x + x + sx! * half,
+        y: centre.y + sy! * half,
+      })));
+    if (corners.some((p) => !inPolygon(p, poly))) {
+      return { pwr: { x: centre.x + h, y: centre.y }, gnd: { x: centre.x - h, y: centre.y }, half, overhang: true };
+    }
   }
   return { pwr: { x: centre.x + h, y: centre.y }, gnd: { x: centre.x - h, y: centre.y }, half };
+}
+
+/** Even-odd containment of `p` in one polygon. */
+function inPolygon(p: Vec2, poly: Vec2[]): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i]!, b = poly[j]!;
+    if ((a.y > p.y) !== (b.y > p.y) && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+  }
+  return inside;
 }
 
 

@@ -450,6 +450,10 @@ export function statusLine(input: StatusInput): string {
   const batt = circuit.battery ? "battery set" : "no battery";
   let msg = `${n} LED${n === 1 ? "" : "s"} · ${batt}`;
   if (!circuit.battery && n > 0) msg += " · add a battery";
+  // Its pads shrink to fit a small tile, but only so far; past that they hang off it.
+  if (circuit.battery && routed.batteryOverhang) {
+    msg += " · the battery's pads hang off its tile — move it to a bigger one";
+  }
   // Two faults, said apart. An LED the copper cannot get to and an LED whose package will not sit on its
   // hinge were both reported as "unreachable", and they send the author to different places: one is
   // solved by moving the LED or bridging by hand, the other by a smaller package. On some patterns every

@@ -287,6 +287,8 @@ export interface RoutedCircuit {
    * stand in for it. Optional: a plan object from before this field reads as no battery, the safe way.
    */
   battery?: boolean;
+  /** Set when the battery's tile is too narrow for its pads, which then hang off it — see `batteryTerminals`. */
+  batteryOverhang?: true;
   /**
    * LEDs that could not be **seated** on their hinge, as indices into `circuit.leds`.
    *
@@ -457,6 +459,7 @@ export function planRoutes(
     return {
       traces: only.traces, pads, unreachable, unseated: [], resistors: [], switches: [], parts: [],
       nets: only.nets, netFaults: only.faults, battery: !!circuit.battery,
+      ...(term.overhang ? { batteryOverhang: true as const } : {}),
     };
   }
 
@@ -485,6 +488,7 @@ export function planRoutes(
     return {
       traces: only.traces, pads, unreachable, unseated: [], resistors: [], switches: [], parts: [],
       nets: only.nets, netFaults: only.faults, battery: !!circuit.battery,
+      ...(term.overhang ? { batteryOverhang: true as const } : {}),
     };
   }
 
@@ -1228,6 +1232,7 @@ export function planRoutes(
     nets: netted.nets,
     netFaults: netted.faults,
     battery: !!circuit.battery,
+    ...(term.overhang ? { batteryOverhang: true as const } : {}),
   };
 }
 
