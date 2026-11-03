@@ -52,6 +52,23 @@ describe("circuit commands", () => {
     expect(off.terminals).toEqual([{ part: 0, pad: "1", net: "pwr" }]);
   });
 
+  it("keeps the battery's terminals when it moves to another face", () => {
+    // Moving is the same tap on a different face. The author's re-pointing of its pads is wiring, and a
+    // move is not a reason to put them back on PWR and GND.
+    const circuit: Circuit = {
+      leds: [],
+      battery: { face: 0 },
+      nets: [{ id: "pwr", name: "PWR" }, { id: "gnd", name: "GND" }, { id: "n1", name: "VBAT" }],
+      terminals: [
+        { part: BATTERY_PART, pad: "+", net: "n1" },
+        { part: BATTERY_PART, pad: "−", net: "gnd" },
+      ],
+    };
+    const moved = editCircuit(circuit, toggleBattery(3));
+    expect(moved.battery).toEqual({ face: 3 });
+    expect(moved.terminals).toEqual(circuit.terminals);
+  });
+
   it("seeds no battery terminals into a circuit that has not declared the rails", () => {
     // A file from before the netlist existed has no nets at all, and a terminal naming a net that is not
     // there is a fault rather than a wiring.

@@ -59,7 +59,8 @@ export function appendLegacyPart(kind: Exclude<PartListKind, "part">, point: Res
 }
 
 /**
- * Put the battery on this face, or take it off the face it is already on.
+ * Put the battery on this face, or take it off the face it is already on. On a battery already on another
+ * face this is a move, and its terminals stay as they are.
  *
  * Its two terminals come and go with it. They are seeded on PWR and GND, which is not a guess about the
  * author's circuit the way a placed part's pads would be: a battery's `+` IS the PWR rail and its `−` IS
@@ -73,6 +74,8 @@ export function toggleBattery(face: number): CircuitCommand {
   return {
     apply: (c) => {
       const off = c.battery?.face === face;
+      // A move to another face carries the author's wiring with it.
+      if (c.battery && !off) return { ...c, battery: { face } };
       const others = (c.terminals ?? []).filter((t) => t.part !== BATTERY_PART);
       const declared = new Set((c.nets ?? []).map((n) => n.id));
       const seeded = declared.has(PWR_NET_ID) && declared.has(GND_NET_ID)
