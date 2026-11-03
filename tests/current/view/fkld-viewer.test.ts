@@ -301,4 +301,7 @@ describe("view/fkld-viewer", () => {
     el("shape-toggle").fire("click");
     expect(el("view-group").hidden).toBe(true);
   });
+  it("has no viewer Import file input", () => {
+    expect(readFileSync(VIEWER, "utf8")).not.toContain('id="file-input"');
+  });
 });

@@ -289,10 +289,6 @@
       <button id="load-sample" title="Load the bundled sample model (house.fkld)">Load sample</button>
     </div>
     <div class="group">
-      <span class="lbl">Import:</span>
-      <input type="file" id="file-input" accept=".fkld,.fold,.json">
-    </div>
-    <div class="group">
       <span class="lbl">Property:</span>
       <select id="prop-select"><option>--</option></select>
       <span id="prop-data"></span>
@@ -858,10 +854,6 @@
 
   // ---- event wiring ---------------------------------------------------------
   buildToggles();
-
-  document.getElementById('file-input').addEventListener('change', (e) => {
-    if (e.target.files[0]) loadFromFile(e.target.files[0]);
-  });
 
   // Flat ⇄ Folded: rebuild from the same file with the other coordinate set, keeping the framing.
   document.getElementById('shape-toggle').addEventListener('click', () => {
