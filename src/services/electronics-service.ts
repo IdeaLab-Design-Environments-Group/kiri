@@ -62,7 +62,8 @@ export function resolveFoldedCopperOverlay({
   sheet = DEFAULT_SHEET,
 }: FoldedOverlayInput): AnchoredMesh[] {
   const circuit = stored ?? EMPTY_CIRCUIT;
-  if (!fold || (!circuit.leds.length && !circuit.battery && !circuit.wires?.length)) return [];
+  // Parts count: a netlist of parts alone routes copper with no LED or battery on the sheet.
+  if (!fold || (!circuit.leds.length && !circuit.battery && !circuit.wires?.length && !circuit.parts?.length)) return [];
   try {
     const faces = flatFaces(fold);
     const gaps = gapGraph(fold, faces, tileGap).gaps;
