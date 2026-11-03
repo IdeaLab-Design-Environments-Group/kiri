@@ -939,6 +939,7 @@ body.is-electronics .app-legend {
 .el-mirror,
 .el-auto,
 .el-route,
+.el-route-clear,
 .el-zoom-in,
 .el-zoom-out,
 .el-fit {
@@ -967,6 +968,7 @@ body.is-electronics .app-legend {
 .el-mirror:hover,
 .el-auto:hover,
 .el-route:hover,
+.el-route-clear:hover,
 .el-zoom-in:hover,
 .el-zoom-out:hover,
 .el-fit:hover { background: var(--surface-soft, #f3f5f9); border-color: #cdd3df; }
@@ -974,7 +976,7 @@ body.is-electronics .app-legend {
    mode. It goes amber the moment the copper on the canvas stops matching the parts on it — the one state
    in which pressing it changes anything, and the one the author has to be able to see without reading the
    status line. */
-.el-route { margin-left: 0.4rem; }
+.el-route, .el-route-clear { margin-left: 0.4rem; }
 .el-route.is-stale {
   color: #8a5a00;
   border-color: #e3c07a;
@@ -2115,4 +2117,40 @@ body.is-examples .app-legend {
   .ex-art img { transition: none; }
   .ex-tile:hover,
   .ex-tile:focus-visible { transform: none; }
+}
+/* The per-pad clear button: takes the pad off its net. Quiet until the row is reached for. */
+.el-pad-off {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 0.75rem;
+  line-height: 1;
+  padding: 0 0.2rem;
+  border: 0;
+  background: none;
+  color: var(--muted, #98a2b3);
+  cursor: pointer;
+}
+.el-pad-off:hover, .el-pad-off:focus-visible { color: #a4404a; }
+.el-pad-off[hidden] { display: none; }
+/* A selected hand-drawn wire has a delete button in the sidebar. */
+.el-wire-delete {
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid #d6a2a8;
+  border-radius: 999px;
+  background: #fff;
+  color: #a4404a;
+  cursor: pointer;
+}
+.el-wire-delete:hover { background: #fbeff0; }
+.el-wire-sect[hidden] { display: none; }
+/* Stale copper: the planned tape no longer matches the parts on it, so it is drawn dimmed and dashed rather
+   than as current. Hand-drawn wires are the author's, not the plan's, and stay as they are. */
+.el-body.is-route-stale .el-tape:not(.el-wire-copper) {
+  opacity: 0.22;
+  stroke: #7d889c;
+  stroke-width: 1px;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
 }
