@@ -166,10 +166,10 @@ function faceOfPoint(faces: FlatFace[], p: Vec2): number {
  * corridor search is the expensive part. Straight-line ordering picks nearly the same tree on the patterns
  * this app produces, where pads that are close on the sheet are close through the tiling too.
  */
-function spanningEdges(points: NetPoint[]): [number, number][] {
-  const inTree = [0];
+function spanningEdges(points: NetPoint[], root = 0): [number, number][] {
+  const inTree = [root];
   const out: [number, number][] = [];
-  const rest = points.map((_, i) => i).slice(1);
+  const rest = points.map((_, i) => i).filter((i) => i !== root);
   while (rest.length) {
     let best = Infinity, bi = 0, bj = 0;
     for (const i of inTree) {
@@ -814,8 +814,16 @@ function routeOne(
   // tree edge that happens to touch it.
   faceOf.forEach((f, i) => { if (f < 0) stranded.push(i); });
 
-  for (const [i, j] of spanningEdges(net.points)) {
-    if (faceOf[i]! < 0 || faceOf[j]! < 0) { if (!stranded.includes(j)) stranded.push(j); continue; }
+  // Rooted on the material where possible, and every edge out of a terminal that is not itself joined to
+  // the root strands its far end too: copper from a stranded terminal to the next one connects that one to
+  // nothing the rest of the net touches, and reporting it reached would hide the break.
+  const root = Math.max(0, faceOf.findIndex((f) => f >= 0));
+  const reached = new Set([root]);
+  for (const [i, j] of spanningEdges(net.points, root)) {
+    if (!reached.has(i) || faceOf[i]! < 0 || faceOf[j]! < 0) {
+      if (!stranded.includes(j)) stranded.push(j);
+      continue;
+    }
     const a = net.points[i]!.at, b = net.points[j]!.at;
     // `searchCorridor` plain: no crossing exclusion, no per-leg clearance test.
     //
@@ -856,6 +864,7 @@ function routeOne(
       accuse(leg.cuts);
       continue;
     }
+    reached.add(j);
     claim(leg.pts, used);
     const trace: Trace2D = { net: net.id, pts: leg.pts, ...(leg.widths ? { widths: leg.widths } : {}) };
     lines.push(trace);

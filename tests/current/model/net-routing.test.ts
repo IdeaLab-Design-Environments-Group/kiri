@@ -329,6 +329,26 @@ describe("model/net-routing", () => {
     expect(r.traces.length).toBeGreaterThan(0); // the reachable pair still got their copper
   });
 
+  it("reports a terminal stranded when the only terminal it was joined through is stranded", () => {
+    // p1 and p2 sit inside a closed ring of immovable copper, so p0 can reach neither. The tree joins p2
+    // through p1, and the p1-p2 leg lies clear inside the ring — but laying it connects p2 to nothing the
+    // rest of the net touches, so p2 is as cut off as p1 and has to be reported so.
+    const { faces, gaps, tapeW } = load("house.fkld");
+    const p0 = faces[6]!.centroid, p1 = faces[7]!.centroid;
+    const L = Math.hypot(p1.x - p0.x, p1.y - p0.y);
+    const p2 = { x: p1.x + ((p1.x - p0.x) / L) * tapeW * 1.5, y: p1.y + ((p1.y - p0.y) / L) * tapeW * 1.5 };
+    expect(pointInFace(faces, p2)).toBe(7);
+    const cx = (p1.x + p2.x) / 2, cy = (p1.y + p2.y) / 2;
+    const ring = Array.from({ length: 25 }, (_, k) => ({
+      x: cx + Math.cos((k / 24) * 2 * Math.PI) * tapeW * 4,
+      y: cy + Math.sin((k / 24) * 2 * Math.PI) * tapeW * 4,
+    }));
+    const net: ResolvedNet = { id: "n", name: "N", points: [p0, p1, p2].map((at, k) => ({ part: k, pad: "1", at })) };
+    const r = planNets([net], faces, gaps, tapeW, [ring]);
+    expect([...r.nets[0]!.stranded].sort()).toEqual([1, 2]);
+    expect(r.nets[0]!.ratsnest).toHaveLength(2);
+  });
+
   it("never moves a terminal onto the material to make it reachable", () => {
     // Snapping an off-tile pad to the nearest face would route copper to somewhere the part is not, and the
     // user would never be told their part had been moved.
