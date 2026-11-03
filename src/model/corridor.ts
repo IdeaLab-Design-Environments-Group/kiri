@@ -851,12 +851,14 @@ export function searchCorridor(
     // Nor does anything else check it against the other net's tape, so a run could start by crossing it or
     // stepping onto one of its waypoints. Held to the same rule as a chord, below.
     const cuts = origin && theirs ? (strict ? meetsAny(origin, m, theirs) : crossesAny(origin, m, theirs)) : false;
-    if (cuts && strict) continue;
+    // And against the other net's terminal, which a chord is measured against and this leg was not.
+    const sweeps = origin && forbid ? segPointDist(origin, m, forbid.at) < forbid.r : false;
+    if ((cuts || sweeps) && strict) continue;
     const k = ptKey(m);
     // Priced from where the run actually begins. Seeding every node of the starting tile at zero left the first
     // leg -- terminal to first waypoint -- costing nothing, so the search would happily set off from a node
     // behind the terminal and doubled back to get going.
-    const d = cost(k, origin ? Math.sqrt(dist2(origin, m)) : 0) * (cuts ? TERMINAL_TOLL : 1);
+    const d = cost(k, origin ? Math.sqrt(dist2(origin, m)) : 0) * (cuts || sweeps ? TERMINAL_TOLL : 1);
     const w = bandAt(k);
     if (pack(w, d) < pack(worstOf.get(k) ?? Infinity, dist.get(k) ?? Infinity)) {
       dist.set(k, d);

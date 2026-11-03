@@ -8,8 +8,8 @@ import { describe, expect, it } from "vitest";
 import { flatFaces, gapGraph, type Vec2 } from "../../../src/model/electronics.js";
 import type { FoldFile } from "../../../src/model/fold-file.js";
 import { buildCorridor, searchCorridor, tapeOffBodyAt, tapeOnBody } from "../../../src/model/corridor.js";
-import { tapeMmFor, tapeWidthFor } from "../../../src/model/electronics-routing.js";
-import { segNearSeg } from "../../../src/model/trace-geometry.js";
+import { batteryTerminals, patternDiag, tapeMmFor, tapeWidthFor } from "../../../src/model/electronics-routing.js";
+import { segNearSeg, segPointDist } from "../../../src/model/trace-geometry.js";
 
 /** A FOLD of the given face outlines, with vertices shared wherever two outlines meet at a corner. */
 function fold(polys: [number, number][][]): FoldFile {
@@ -73,5 +73,25 @@ describe("model/corridor › the strict search", () => {
     for (let i = 1; i < path.length; i++) {
       expect(segNearSeg(path[i - 1]!, path[i]!, onHinge[0]!, onHinge[1]!)).toBeGreaterThan(1e-6);
     }
+  });
+
+  it("does not set off past the other net's terminal", () => {
+    // Two squares joined by a short neck. GND leaves its terminal for the far side, and the nearest way into
+    // the neck runs straight past the PWR terminal. Chords near it were refused; the first leg out of the
+    // terminal was not, because it is not a chord.
+    const NECK = fold([
+      [[0, 0], [10, 0], [10, 4], [10, 6], [10, 10], [0, 10]],
+      [[10, 4], [11, 4], [11, 6], [10, 6]],
+      [[11, 0], [16, 0], [16, 10], [11, 10], [11, 6], [11, 4]],
+      [[16, 0], [21, 0], [21, 10], [16, 10]],
+    ]);
+    const { faces, c } = corridorOf(NECK);
+    const tapeW = tapeWidthFor(faces);
+    const term = batteryTerminals(faces[0]!.centroid, patternDiag(faces), faces[0]!.poly, tapeW);
+    const forbid = { at: term.pwr, r: term.half + tapeW / 2 };
+    const onBody = (a: Vec2, b: Vec2): boolean => tapeOnBody(faces, tapeW, a, b);
+    const path = searchCorridor(c, 0, 2, new Set(), new Map(), forbid, true, term.gnd, onBody, null, null);
+    // Either a way round or nothing, which sends the caller to the tolled pass -- never a leg across it.
+    if (path.length) expect(segPointDist(term.gnd, path[0]!, term.pwr)).toBeGreaterThanOrEqual(forbid.r);
   });
 });
