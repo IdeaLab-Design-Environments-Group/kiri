@@ -1451,6 +1451,9 @@ function seatLedLegs(laid: Trace2D[], targets: Target[], pads: PadPair[]): Trace
           if (atEnd) host.pts.splice(host.pts.length - 1, 0, along);
           else host.pts.splice(1, 0, along);
         }
+      } else if (carriedBy(runs, net, own, anchor, axis)) {
+        // A run passes through the pad near the leg's line: no stub from the pad, it would retrace that tape.
+        continue;
       } else {
         // A separate strip from the pad outboard along the leg, where no run ENDS on this pad.
         //
@@ -1471,3 +1474,32 @@ function seatLedLegs(laid: Trace2D[], targets: Target[], pads: PadPair[]): Trace
   return runs;
 }
 
+/** Lays a leg without a stub where a run passes through its pad near the leg's line, so no tape is retraced. */
+function carriedBy(runs: Trace2D[], net: string, own: Vec2, anchor: Vec2, axis: Vec2): boolean {
+  for (const r of runs) {
+    if (r.net !== net) continue;
+    for (let i = 1; i < r.pts.length - 1; i++) {
+      if (!near(r.pts[i]!, own)) continue;
+      for (const j of [i + 1, i - 1]) {
+        const d = unit(sub(r.pts[j]!, own));
+        if (d.x * axis.x + d.y * axis.y < Math.cos(Math.PI / 4)) continue;
+        // Out to the pad and straight back: the spike is dropped and the leg's own strip lays that copper.
+        if (near(r.pts[i - 1]!, r.pts[i + 1]!)) {
+          const tip = r.pts[i - 1]!;
+          if (Math.abs(cross(unit(sub(tip, own)), axis)) > 0.05 || dist2(tip, own) > dist2(anchor, own)) return false;
+          r.pts.splice(i, 2);
+          runs.push({ net, pts: [own, tip, anchor] });
+          return true;
+        }
+        if (dist2(r.pts[j]!, own) < dist2(anchor, own) * 0.98) {
+          if (Math.abs(cross(d, axis)) > 0.05) continue;
+          runs.push({ net, pts: [r.pts[j]!, anchor] });
+          return true;
+        }
+        if (dist2(r.pts[j]!, anchor) > 1e-9) r.pts.splice(Math.max(i, j), 0, anchor);
+        return true;
+      }
+    }
+  }
+  return false;
+}
