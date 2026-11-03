@@ -168,6 +168,19 @@ describe("buildStlExport — printed tiles (sim-matched pinched hexagons)", () =
     expect(buildStlExport({ ...fold, frame_classes: ["creasePattern"] }, "t", 2)).not.toBeNull();
   });
 
+  it("keeps a non-convex face's tiles inside it, whichever corner the face starts from", () => {
+    // An L, listed from the corner that cannot see the far arm: a fan from there lays a tile in the notch.
+    const L: [number, number][] = [[20, 10], [10, 10], [10, 20], [0, 20], [0, 0], [20, 0]];
+    const inL = ([x, y]: V3): boolean =>
+      x >= -1e-6 && y >= -1e-6 && x <= 20 + 1e-6 && y <= 20 + 1e-6 && !(x > 10 + 1e-6 && y > 10 + 1e-6);
+    for (let r = 0; r < L.length; r++) {
+      const ring = [...L.slice(r), ...L.slice(0, r)];
+      const fold: FoldFile = { vertices_coords: ring, faces_vertices: [ring.map((_, i) => i)] };
+      const vs = verts(buildStlExport(fold, "l", 2)!.text);
+      expect(vs.filter((v) => !inL(v)), `starting at corner ${r}`).toEqual([]);
+    }
+  });
+
   it("returns null when there are no faces", () => {
     expect(buildStlExport({ vertices_coords: [[0, 0]] })).toBeNull();
     expect(buildStlExport({ faces_vertices: [], vertices_coords: [[0, 0]] })).toBeNull();

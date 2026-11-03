@@ -94,11 +94,11 @@ export function buildStlExport(
   }
   const roleOf = (a: number, b: number): EdgeRole => edgeRole(assignOf.get(edgeKey(a, b)), faceCount.get(edgeKey(a, b)) ?? 1);
 
-  // fan n-gons to triangles (inner fan edges are interior → never a real cut/boundary)
+  // n-gons to triangles (inner diagonals are interior → never a real cut/boundary)
   const tris: number[][] = [];
   faces.forEach((face) => {
     if (!Array.isArray(face) || face.length < 3) return;
-    for (let k = 1; k + 1 < face.length; k++) tris.push([face[0], face[k], face[k + 1]]);
+    tris.push(...triangulateFace(face, coordsXYZ));
   });
 
   const vs = buildFoldableJoinery(tris, coordsXYZ, roleOf, { thickness: h, gap, layout: "flat" });
@@ -106,6 +106,44 @@ export function buildStlExport(
   for (let i = 0; i + 2 < vs.length; i += 3) writeFacet(out, vs[i], vs[i + 1], vs[i + 2]);
   out.push(`endsolid ${baseName}`);
   return { filename: `${baseName}.stl`, text: out.join("\n") + "\n", height: h, unit, maxSubdiv: 0 };
+}
+
+/**
+ * One face as triangles, in the face's own winding. A convex face fans from its first corner, as it always
+ * has. A non-convex one is ear-clipped: a fan from a corner that cannot see the whole face lays triangles
+ * outside it, and every tile printed from one of those is plastic where the pattern has a hole.
+ */
+function triangulateFace(face: number[], at: V3[]): number[][] {
+  const n = face.length;
+  const turn = (a: number, b: number, c: number): number => {
+    const A = at[a] ?? [0, 0, 0], B = at[b] ?? [0, 0, 0], C = at[c] ?? [0, 0, 0];
+    return (B[0] - A[0]) * (C[1] - A[1]) - (B[1] - A[1]) * (C[0] - A[0]);
+  };
+  let area = 0;
+  for (let k = 0; k < n; k++) area += turn(face[0], face[k], face[(k + 1) % n]);
+  const s = area < 0 ? -1 : 1;
+  if (face.every((_, k) => s * turn(face[k], face[(k + 1) % n], face[(k + 2) % n]) >= 0)) {
+    const fan: number[][] = [];
+    for (let k = 1; k + 1 < n; k++) fan.push([face[0], face[k], face[k + 1]]);
+    return fan;
+  }
+  const inside = (p: number, a: number, b: number, c: number): boolean =>
+    s * turn(a, b, p) >= 0 && s * turn(b, c, p) >= 0 && s * turn(c, a, p) >= 0;
+  const ring = [...face];
+  const out: number[][] = [];
+  while (ring.length > 3) {
+    const m = ring.length;
+    const corner = (k: number): [number, number, number] => [ring[(k + m - 1) % m], ring[k], ring[(k + 1) % m]];
+    let ear = ring.findIndex((_, k) => {
+      const [a, b, c] = corner(k);
+      return s * turn(a, b, c) > 0 && !ring.some((p) => p !== a && p !== b && p !== c && inside(p, a, b, c));
+    });
+    if (ear < 0) ear = 0; // a degenerate ring has no ear; clip anyway rather than loop
+    out.push(corner(ear));
+    ring.splice(ear, 1);
+  }
+  out.push(ring);
+  return out;
 }
 
 function bboxDiagonal(coords: number[][]): number {
