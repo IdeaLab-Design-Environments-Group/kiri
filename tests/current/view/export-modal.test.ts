@@ -81,4 +81,39 @@ describe("view/export-modal", () => {
     document.dispatch("keydown", { key: "Escape" });
     expect(overlay.hidden).toBe(true);
   });
+
+  it("refreshPreviews re-runs the provider after a debounce, only while open", () => {
+    vi.useFakeTimers();
+    try {
+      const { document } = installDom();
+      const modal = new ExportModal();
+      let n = 0;
+      modal.setProvider(() => {
+        n++;
+        return {
+          previews: { cut: `<svg>${n}</svg>`, score: "", both: "" },
+          files: [],
+          archive: { filename: "cut.zip", bytes: new Uint8Array([1]) },
+          combined: { filename: "all.svg", svg: "<svg />" },
+        };
+      });
+      modal.refreshPreviews();
+      vi.advanceTimersByTime(300);
+      expect(n).toBe(0); // closed: nothing planned
+
+      modal.open();
+      const overlay = document.body.children[0]!;
+      expect(overlay.querySelector('[data-k="cut"]')?.innerHTML).toBe("<svg>1</svg>");
+      modal.refreshPreviews();
+      modal.refreshPreviews();
+      modal.refreshPreviews();
+      vi.advanceTimersByTime(100);
+      expect(n).toBe(1); // still waiting
+      vi.advanceTimersByTime(200);
+      expect(n).toBe(2); // one planning run for the burst
+      expect(overlay.querySelector('[data-k="cut"]')?.innerHTML).toBe("<svg>2</svg>");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

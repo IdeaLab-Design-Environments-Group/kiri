@@ -76,6 +76,8 @@ export class AppController {
       this.electronics.setPrintSize(mm);
       // Re-render so the copper on the 3D model is re-planned at the new size too.
       this.render(this.store.getState());
+      // The open Export modal's SVG previews are cut at this size too (debounced inside).
+      this.exporter.refreshPreviews();
     });
     // STL export of the printed tiles (pinched hexagons, matched to the sim render). Height from the
     // menu; gap from the sim's shared `simTileGap` so export and sim match; `DEFAULT_PRINT_SIZE`

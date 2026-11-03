@@ -30,6 +30,7 @@ export class ExportModal {
   private provider: ExportProvider | null = null;
   private stlProvider: StlProvider | null = null;
   private payload: SvgExportPayload | null = null;
+  private refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     this.trigger = document.createElement("button");
@@ -55,21 +56,27 @@ export class ExportModal {
             <figure><figcaption>Both</figcaption><div class="export-preview" data-k="both"></div></figure>
           </div>
         </div>
-        <footer class="sim-modal-footer">
+        <footer class="sim-modal-footer export-footer">
           <span class="sim-status" role="status"></span>
-          <button type="button" class="export-zip-btn">cut + score + combined (zip)</button>
-          <label class="export-stl-height-label" title="printable sheet size — longest dimension of the flat pattern.">size
-            <input type="number" class="export-stl-size" min="1" step="1" />
-            <span>mm</span>
-          </label>
-          <label class="export-stl-height-label">tile height
-            <input type="number" class="export-stl-height" min="0" step="0.1" />
-            <span class="export-stl-unit">units</span>
-          </label>
-          <label class="export-stl-height-label" title="more subdivision on harder-folding faces. Level 0 = one tile per face; 4 splits the sharpest folds 4 deep.">detail
-            <input type="number" class="export-stl-detail" min="0" max="4" step="1" />
-          </label>
-          <button type="button" class="export-stl-btn">tiles (STL)</button>
+          <div class="export-group export-group-tiles" role="group" aria-label="3D tiles">
+            <span class="export-group-title">3D tiles</span>
+            <label class="export-stl-height-label" title="printable sheet size — longest dimension of the flat pattern.">size
+              <input type="number" class="export-stl-size" min="1" step="1" />
+              <span>mm</span>
+            </label>
+            <label class="export-stl-height-label">height
+              <input type="number" class="export-stl-height" min="0" step="0.1" />
+              <span class="export-stl-unit">units</span>
+            </label>
+            <label class="export-stl-height-label" title="more subdivision on harder-folding faces. Level 0 = one tile per face; 4 splits the sharpest folds 4 deep.">detail
+              <input type="number" class="export-stl-detail" min="0" max="4" step="1" />
+            </label>
+            <button type="button" class="export-stl-btn">tiles (STL)</button>
+          </div>
+          <div class="export-group export-group-cut" role="group" aria-label="Cut files">
+            <span class="export-group-title">Cut files</span>
+            <button type="button" class="export-zip-btn">cut + score + combined (zip)</button>
+          </div>
         </footer>
       </div>
     `;
@@ -146,11 +153,30 @@ export class ExportModal {
       this.stlDetailInput.value = String(stlDefault.maxSubdiv);
     }
     this.overlay.hidden = false;
+    this.writePreviews();
+  }
+
+  /**
+   * Re-run the provider and rewrite the SVG previews, for when something they depend on (the print
+   * size) changed while the modal is open. Debounced because planning is synchronous and slow on big
+   * boards; a no-op while the modal is closed.
+   */
+  refreshPreviews(delayMs = 250): void {
+    if (this.refreshTimer !== null) clearTimeout(this.refreshTimer);
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = null;
+      if (this.overlay.hidden) return;
+      this.payload = this.provider?.() ?? null;
+      this.writePreviews();
+    }, delayMs);
+  }
+
+  private writePreviews(): void {
     if (!this.payload) {
       this.previews.cut.innerHTML = this.previews.score.innerHTML = this.previews.both.innerHTML = "";
-      this.statusEl.textContent = stlDefault
-        ? "No cut pattern, but the 3D-printed tiles are exportable as STL."
-        : "No pattern to export — load a model and press Cut & fold first.";
+      this.statusEl.textContent = this.stlBtn.disabled
+        ? "No pattern to export — load a model and press Cut & fold first."
+        : "No cut pattern, but the 3D-printed tiles are exportable as STL.";
       this.zipBtn.disabled = true;
       return;
     }
