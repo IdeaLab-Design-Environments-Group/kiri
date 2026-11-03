@@ -272,7 +272,7 @@
       <span class="lbl">Shape:</span>
       <button id="shape-toggle" title="Switch between the flat cut pattern and the folded form">Folded</button>
     </div>
-    <div class="group">
+    <div class="group" id="view-group" hidden>
       <span class="lbl">View:</span>
       <button data-view="x">x</button>
       <button data-view="y">y</button>
@@ -287,10 +287,6 @@
     <div class="group">
       <span class="lbl">Example:</span>
       <button id="load-sample" title="Load the bundled sample model (house.fkld)">Load sample</button>
-    </div>
-    <div class="group">
-      <span class="lbl">Import:</span>
-      <input type="file" id="file-input" accept=".fkld,.fold,.json">
     </div>
     <div class="group">
       <span class="lbl">Property:</span>
@@ -386,6 +382,11 @@
       if (Array.isArray(cls) && cls.includes('foldedForm') && Array.isArray(vc)) return vc;
     }
     return null;
+  }
+  // The x/y/z camera snaps only make sense for a 3D shape; the flat pattern is a 2D sheet seen face-on.
+  function syncViewGroup() {
+    const g = document.getElementById('view-group');
+    if (g) g.hidden = !showFolded;
   }
   let showFolded = false; // when a foldedForm frame exists, the viewer can show it instead of the flat net
 
@@ -796,6 +797,7 @@
     // folded-form goal, offer a toggle to view the folded 3D shape too (the button label is the action).
     const hasFolded = !!foldedCoords(file);
     showFolded = false;
+    syncViewGroup();
     const shapeGroup = document.getElementById('shape-group');
     if (shapeGroup) shapeGroup.hidden = !hasFolded;
     const shapeBtn = document.getElementById('shape-toggle');
@@ -853,15 +855,12 @@
   // ---- event wiring ---------------------------------------------------------
   buildToggles();
 
-  document.getElementById('file-input').addEventListener('change', (e) => {
-    if (e.target.files[0]) loadFromFile(e.target.files[0]);
-  });
-
   // Flat ⇄ Folded: rebuild from the same file with the other coordinate set, keeping the framing.
   document.getElementById('shape-toggle').addEventListener('click', () => {
     if (!currentFile) return;
     showFolded = !showFolded;
     document.getElementById('shape-toggle').textContent = showFolded ? 'Flat' : 'Folded'; // label = action
+    syncViewGroup();
     frameModel(buildModel(currentFile));
     render();
   });

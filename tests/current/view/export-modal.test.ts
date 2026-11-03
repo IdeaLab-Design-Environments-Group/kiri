@@ -34,7 +34,7 @@ describe("view/export-modal", () => {
     expect(overlay.hidden).toBe(false);
     expect(overlay.querySelector(".sim-status")?.textContent).toContain("No pattern to export");
     expect(overlay.querySelector(".export-zip-btn")?.disabled).toBe(true);
-    expect(overlay.querySelector(".export-combined-btn")?.disabled).toBe(true);
+    expect(overlay.querySelector(".export-combined-btn")).toBeNull();
   });
 
   it("renders previews and enables downloads when a payload exists", () => {
@@ -53,10 +53,10 @@ describe("view/export-modal", () => {
     expect(overlay.querySelector('[data-k="score"]')?.innerHTML).toBe("<svg>score</svg>");
     expect(overlay.querySelector('[data-k="both"]')?.innerHTML).toBe("<svg>both</svg>");
     expect(overlay.querySelector(".export-zip-btn")?.disabled).toBe(false);
-    expect(overlay.querySelector(".export-combined-btn")?.disabled).toBe(false);
+    expect(overlay.querySelector(".export-combined-btn")).toBeNull(); // the zip carries the combined SVG
   });
 
-  it("downloads zip and combined svg using object URLs, and closes via button or Escape", () => {
+  it("downloads the zip using object URLs, and closes via button or Escape", () => {
     const { document } = installDom();
     const modal = new ExportModal();
     modal.setProvider(() => ({
@@ -69,12 +69,10 @@ describe("view/export-modal", () => {
     modal.open();
     const overlay = document.body.children[0]!;
     const zip = overlay.querySelector(".export-zip-btn")!;
-    const combined = overlay.querySelector(".export-combined-btn")!;
     zip.click();
-    combined.click();
 
-    expect(createObjectURL).toHaveBeenCalledTimes(2);
-    expect(revokeObjectURL).toHaveBeenCalledTimes(2);
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    expect(revokeObjectURL).toHaveBeenCalledTimes(1);
 
     overlay.querySelector(".sim-modal-close")?.click();
     expect(overlay.hidden).toBe(true);
@@ -82,5 +80,40 @@ describe("view/export-modal", () => {
     modal.open();
     document.dispatch("keydown", { key: "Escape" });
     expect(overlay.hidden).toBe(true);
+  });
+
+  it("refreshPreviews re-runs the provider after a debounce, only while open", () => {
+    vi.useFakeTimers();
+    try {
+      const { document } = installDom();
+      const modal = new ExportModal();
+      let n = 0;
+      modal.setProvider(() => {
+        n++;
+        return {
+          previews: { cut: `<svg>${n}</svg>`, score: "", both: "" },
+          files: [],
+          archive: { filename: "cut.zip", bytes: new Uint8Array([1]) },
+          combined: { filename: "all.svg", svg: "<svg />" },
+        };
+      });
+      modal.refreshPreviews();
+      vi.advanceTimersByTime(300);
+      expect(n).toBe(0); // closed: nothing planned
+
+      modal.open();
+      const overlay = document.body.children[0]!;
+      expect(overlay.querySelector('[data-k="cut"]')?.innerHTML).toBe("<svg>1</svg>");
+      modal.refreshPreviews();
+      modal.refreshPreviews();
+      modal.refreshPreviews();
+      vi.advanceTimersByTime(100);
+      expect(n).toBe(1); // still waiting
+      vi.advanceTimersByTime(200);
+      expect(n).toBe(2); // one planning run for the burst
+      expect(overlay.querySelector('[data-k="cut"]')?.innerHTML).toBe("<svg>2</svg>");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
