@@ -506,6 +506,33 @@ describe("model/part-routing", () => {
     expect(r.parts).toEqual([]);
   });
 
+  it("leaves no zero-length segment where a break ends on a corner", () => {
+    // A break that ends a hair's breadth from a vertex — here 1e-15 off one on akde-hex — left a segment
+    // that short behind: `dedupe` compared a distance against a squared tolerance, so only exact repeats
+    // went. Anything that takes a direction from such a segment reads noise.
+    const fold = JSON.parse(readFileSync(`${EXAMPLES}akde-hex.fkld`, "utf8"));
+    const faces = flatFaces(fold);
+    const gaps = gapGraph(fold, faces).gaps;
+    const seen = new Set<string>();
+    const leds = [];
+    for (const g of gaps) {
+      const l = ledOf(g.faceA, g.faceB);
+      const key = `${l.a}_${l.b}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      leds.push(l);
+      if (leds.length >= 4) break;
+    }
+    const r = planRoutes(faces, gaps,
+      { leds, battery: { face: 0 }, parts: [{ component: "R_2010", x: 18.3166, y: -33.3017 }] });
+    expect(r.parts).toHaveLength(1);
+    for (const t of r.traces) {
+      for (let i = 1; i < t.pts.length; i++) {
+        expect(Math.hypot(t.pts[i]!.x - t.pts[i - 1]!.x, t.pts[i]!.y - t.pts[i - 1]!.y)).toBeGreaterThan(1e-9);
+      }
+    }
+  });
+
   it("leaves the rail whole under a switch it refuses", () => {
     // The veto ran after the rail was already cut, so a refused switch left its break behind: a gap in
     // the copper with no part across it, and every LED past it dark. On house's bus this spot is too

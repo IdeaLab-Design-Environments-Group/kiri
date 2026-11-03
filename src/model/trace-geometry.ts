@@ -184,7 +184,7 @@ export function dedupe(pts: Vec2[]): Vec2[] {
   const out: Vec2[] = [];
   for (const p of pts) {
     const last = out[out.length - 1];
-    if (last && dist2(last, p) < 1e-18) continue;
+    if (last && dist2(last, p) < 1e-9) continue; // `dist2` is the distance, not its square
     out.push(p);
   }
   return out;
