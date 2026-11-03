@@ -1162,7 +1162,10 @@ export function planNets(
     // assigned — so the same circuit re-plans identically.
     let worst = -1, lost = 0;
     for (const [idx, list] of got.blame) {
-      const n = got.nets[idx]?.stranded.length ?? 0;
+      // A failed rail tap counts as a loss, as it does in the score — otherwise a net whose only failure is
+      // its tap can never be chosen, however clearly another net was in its way.
+      const net = got.nets[idx];
+      const n = (net?.stranded.length ?? 0) + (net?.railTap === "failed" ? 1 : 0);
       if (list.length && (n > lost || (n === lost && worst >= 0 && idx < worst))) { worst = idx; lost = n; }
     }
     if (worst < 0) continue;

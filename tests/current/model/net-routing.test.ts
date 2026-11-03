@@ -725,6 +725,27 @@ describe("model/net-routing", () => {
       if (r.nets.every((n) => !n.stranded.length)) expect(r.orders).toBe(1);
     });
 
+    it("rips up for a net whose only failure is its rail tap", () => {
+      // PWR has one pad and no pads to join, so a blocked tap is its whole loss. The victim search counted
+      // only stranded terminals and never picked it, so the order that frees the tap was never tried.
+      const { faces, gaps, tapeW } = load("house.fkld");
+      const bus = planRoutes(faces, gaps, { leds: [ledOf(gaps[0]!.faceA, gaps[0]!.faceB)], battery: { face: 0 } });
+      const rails = bus.traces.map((t) => ({ net: t.net, pts: t.pts, ...(t.widths ? { widths: t.widths } : {}) }));
+      const on = [[8, 7], [15, 0], [12, 12], [13, 2], [0, 11]];
+      const nets: ResolvedNet[] = [
+        { id: "pwr", name: "PWR", points: [{ part: 0, pad: "1", at: faces[14]!.centroid }] },
+        ...on.map((fs, k) => ({
+          id: `n${k}`,
+          name: `N${k}`,
+          points: fs.map((f, m) => ({ part: 10 + k * 2 + m, pad: "1", at: faces[f]!.centroid })),
+        })),
+      ];
+      const r = planNets(nets, faces, gaps, tapeW, [], undefined, undefined, rails);
+      expect(r.nets[0]!.railTap).toBe("laid");
+      const lost = r.nets.reduce((a, n) => a + n.stranded.length + (n.railTap === "failed" ? 1 : 0), 0);
+      expect(lost).toBeLessThanOrEqual(3);
+    });
+
     it("plans the same circuit identically however many orders it tried", () => {
       // Determinism has to survive the added search: the victim is chosen by a total order and the
       // blockers are tried in the order blame was assigned, so two runs cannot diverge.
