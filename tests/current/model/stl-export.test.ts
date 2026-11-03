@@ -162,6 +162,12 @@ describe("buildStlExport — printed tiles (sim-matched pinched hexagons)", () =
     expect(longestXY(tri(200), 400)).toBeCloseTo(400, 4);
   });
 
+  it("refuses a file whose key frame is the folded form, which is not a flat layout", () => {
+    const fold = { frame_classes: ["foldedForm"], vertices_coords: [[0, 0, 0], [10, 0, 0], [5, 0, 8]], faces_vertices: [[0, 1, 2]] } as FoldFile;
+    expect(buildStlExport(fold, "t", 2)).toBeNull();
+    expect(buildStlExport({ ...fold, frame_classes: ["creasePattern"] }, "t", 2)).not.toBeNull();
+  });
+
   it("returns null when there are no faces", () => {
     expect(buildStlExport({ vertices_coords: [[0, 0]] })).toBeNull();
     expect(buildStlExport({ faces_vertices: [], vertices_coords: [[0, 0]] })).toBeNull();

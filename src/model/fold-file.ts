@@ -27,6 +27,14 @@ export type LoadedModel =
   | { kind: "fold"; name: string; object: FoldFile }
   | { kind: "mesh"; name: string; ext: "obj" | "stl"; text: string };
 
+/**
+ * True when the file's key frame is a folded form: its coordinates are the folded 3D shape, not a layout
+ * that can be cut or printed flat. The exports refuse these rather than flatten them by dropping z.
+ */
+export function isFoldedForm(file: FoldFile): boolean {
+  return (file.frame_classes ?? []).includes("foldedForm");
+}
+
 /** True when the file carries any `fkld:` extension key. */
 export function isFkld(file: FoldFile): boolean {
   return Object.keys(file).some((k) => k.startsWith("fkld:"));

@@ -13,7 +13,7 @@
  * non-scaling-stroke previews. The dependency-free ZIP writer is reused from the AKDE module.
  */
 import { createZip } from "@kirigami/model/zip.js";
-import type { FoldFile } from "./fold-file.js";
+import { type FoldFile, isFoldedForm } from "./fold-file.js";
 import { printScale } from "./print-scale.js";
 
 const CUT_COLOR = "#000000";
@@ -45,7 +45,8 @@ type P = { x: number; y: number };
 
 const fmt = (n: number): string => (Number.isFinite(n) ? String(Math.round(n * 1000) / 1000) : "0");
 
-/** Build the full SVG export payload from a flat FKLD/FOLD pattern, or null if there's nothing to cut. */
+/** Build the full SVG export payload from a flat FKLD/FOLD pattern, or null if there's nothing to cut or
+ *  the key frame is a folded form. */
 export function buildFkldSvgExport(
   fold: FoldFile,
   baseName = "kirigami",
@@ -55,6 +56,7 @@ export function buildFkldSvgExport(
 ): SvgExportPayload | null {
   const coords = fold.vertices_coords;
   const edges = fold.edges_vertices;
+  if (isFoldedForm(fold)) return null;
   if (!Array.isArray(coords) || coords.length === 0 || !Array.isArray(edges) || edges.length === 0) {
     return null;
   }

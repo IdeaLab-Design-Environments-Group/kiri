@@ -8,7 +8,7 @@
  * Coordinates are the flat pattern `vertices_coords` (z = 0 base, extruded +height). The "Gap"
  * (`inset`) is the pinch depth (`gap·inradius·2`), kept in lock-step with the sim's Gap slider.
  */
-import type { FoldFile } from "./fold-file.js";
+import { type FoldFile, isFoldedForm } from "./fold-file.js";
 import { buildFoldableJoinery, edgeRole, type EdgeRole, type V3 } from "./printed-joinery.js";
 import { TILE_INSET_FRAC } from "./tile-subdiv.js";
 
@@ -45,7 +45,7 @@ const edgeKey = (a: number, b: number): string => (a < b ? `${a},${b}` : `${b},$
  * same scale the cut/score/copper SVGs use so the layers register — and recentred (x/y centred, z based
  * at 0), and the height defaults to an absolute `DEFAULT_PRINT_THICKNESS` — exactly like
  * `scripts/gen-house-door.ts`, so "Tiles (STL)" reproduces the printable joinery sheet. Omitted (tests)
- * → no scaling, model-unit output. Null if there are no faces.
+ * → no scaling, model-unit output. Null if there are no faces, or the key frame is a folded form.
  */
 export function buildStlExport(
   fold: FoldFile,
@@ -56,7 +56,7 @@ export function buildStlExport(
   printSize?: number | null,
 ): StlExport | null {
   const faces = fold.faces_vertices;
-  if (!Array.isArray(faces) || faces.length === 0) return null;
+  if (!Array.isArray(faces) || faces.length === 0 || isFoldedForm(fold)) return null;
   const coords = fold.vertices_coords; // flat pattern; vert() reads z = c[2] ?? 0
   if (!Array.isArray(coords) || coords.length === 0) return null;
 

@@ -99,6 +99,17 @@ describe("buildFkldSvgExport — layer mapping (synthetic)", () => {
     expect(cutOf(sq("B", "U"))).not.toContain('stroke="#000000"');
   });
 
+  it("refuses a file whose key frame is the folded form, which is not a cut layout", () => {
+    const fold: FoldFile = {
+      frame_classes: ["foldedForm"],
+      vertices_coords: [[0, 0, 0], [10, 0, 0], [10, 0, 10], [0, 0, 10]],
+      edges_vertices: [[0, 1], [1, 2], [2, 3], [3, 0]],
+      edges_assignment: ["B", "B", "B", "B"],
+    };
+    expect(buildFkldSvgExport(fold, "box")).toBeNull();
+    expect(buildFkldSvgExport({ ...fold, frame_classes: ["creasePattern"] }, "box")).not.toBeNull();
+  });
+
   it("returns null when there's nothing to cut", () => {
     expect(buildFkldSvgExport({ vertices_coords: [], edges_vertices: [] }, "x")).toBeNull();
   });
