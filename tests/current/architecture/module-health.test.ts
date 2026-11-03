@@ -166,8 +166,9 @@ const SIZE_BUDGETS: Record<string, number> = {
   // fitting moved out. What is left is planRoutes and the bus it lays; getting under
   // the limit means splitting that function, not moving more helpers.
   "model/electronics-routing.ts": 1692,
-  // 1,862 -> 1,512 as tab placement and ring opening moved to carrier-tabs.ts.
-  "model/copper-svg-export.ts": 1512,
+  // 1,862 -> 1,512 as tab placement and ring opening moved to carrier-tabs.ts; -> 1,453 as the
+  // per-point strip widths moved to pad-landing.ts, where the router can score with them.
+  "model/copper-svg-export.ts": 1453,
 };
 
 const LINE_LIMIT = 1200;

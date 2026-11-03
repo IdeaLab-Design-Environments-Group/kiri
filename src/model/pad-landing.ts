@@ -15,7 +15,7 @@
  * Widths come from `tape-width.ts` and are never re-derived here.
  */
 import { type FlatFace, type GapEdge, type Vec2, pointInFace } from "./electronics.js";
-import type { LedSeat, PadField, Terminals } from "./trace-types.js";
+import type { LedSeat, PadField, Terminals, Trace2D } from "./trace-types.js";
 import { footprintById } from "./library.js";
 import { type Pad, padAt, padSize } from "./footprint.js";
 import { LED_GAP_FRAC, MIN_LAND_FRAC, MIN_WEED_MM, TAPE_MM, weedGapFor } from "./tape-width.js";
@@ -73,6 +73,65 @@ export function narrowedTo(base: number, p: Vec2, fields: PadField[]): number {
  */
 export function padRoomFor(sep: number, tapeW: number, weed = tapeW * LED_GAP_FRAC): number {
   return sep - weed;
+}
+
+/**
+ * The tape's width at each point of a run.
+ *
+ * Full width along the way, narrowed only where it lands on an LED pad whose partner leg is close enough that a
+ * full-width strip would reach across the chip. The two nets would otherwise meet under the part and short it,
+ * and a vinyl cutter could not weed the gap between them.
+ *
+ * The narrowing rule itself is not here: it is {@link narrowedTo}, which
+ * `net-routing.ts › legWidths` asks the same question of. What differs between the two callers is only how
+ * the fields are built — an LED's mate is one named pad on the other net and the run *ends* there, while a
+ * pin's neighbours are every other pad on the part and the run *passes* them. One geometric question, one
+ * answer; two readings of it is the mistake `parts.ts › padRunBox` was written to undo.
+ */
+export function stripWidths(
+  t: Trace2D, tapeW: number, pads: { pwr: Vec2; gnd: Vec2 }[], tapeMm = TAPE_MM,
+): number[] {
+  const last = t.pts.length - 1;
+  // `tapeMm` only to convert the weeding floor: the gap the cutter has to lift between the two nets is a
+  // strip of substrate, so it is the same millimetre figure whatever width the roll is. See
+  // `tape-width.ts › weedGapFor`.
+  const weed = weedGapFor(tapeW, tapeMm);
+  // `reach: tapeW` is "is the run landing here at all": beyond a tape's width the pad has no say.
+  const fields = pads.map((pad) => {
+    const own = t.net === "pwr" ? pad.pwr : pad.gnd;
+    const mate = t.net === "pwr" ? pad.gnd : pad.pwr;
+    return { at: own, safe: landingWidth(own, mate, tapeW, weed), reach: tapeW, mate };
+  });
+  return t.pts.map((p, i) => {
+    // A run that STOPS at a pad, square to the line between the two legs, needs no narrowing: its end is
+    // capped across its own direction, so the two nets are held apart by the bare gap along the axis —
+    // the part's own `pitch - padW` — and full-width tape cannot reach over it.
+    //
+    // Narrowing regardless is what put a taper under every LED pad and pinched the strip to 1.14mm
+    // beneath a 1.70mm pad, which capped how much of the leg had copper under it at two thirds. It is
+    // needed only where a strip passes the part sideways, and that is what the angle test asks.
+    //
+    // The exemption is per (point, pad) — it depends on this point being an end of the run — so it drops
+    // the exempt fields before asking, rather than being something `narrowedTo` could express.
+    const here =
+      i === 0 || i === last
+        ? fields.filter((f) => !squareToAxis(t.pts, i, f.at, f.mate))
+        : fields;
+    return narrowedTo(tapeW, p, here);
+  });
+}
+
+/** Whether the run's end at `i` runs along the line between an LED's two legs, rather than across it. */
+function squareToAxis(pts: Vec2[], i: number, own: Vec2, mate: Vec2): boolean {
+  const prev = i === 0 ? pts[1] : pts[pts.length - 2];
+  if (!prev) return false;
+  const seg = Math.hypot(pts[i]!.x - prev.x, pts[i]!.y - prev.y);
+  const axisLen = Math.hypot(own.x - mate.x, own.y - mate.y);
+  if (seg < 1e-12 || axisLen < 1e-12) return false;
+  const dot =
+    ((pts[i]!.x - prev.x) / seg) * ((own.x - mate.x) / axisLen) +
+    ((pts[i]!.y - prev.y) / seg) * ((own.y - mate.y) / axisLen);
+  return Math.abs(dot) > 0.99;   // within about 8 degrees of the axis
 }
 
 export const DEFAULT_LED = "LED_1206";

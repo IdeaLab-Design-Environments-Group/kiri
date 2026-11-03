@@ -21,9 +21,7 @@ import {
   TAPE_MM,
   type Trace2D,
   acrossRun,
-  landingWidth,
-  narrowedTo,
-  weedGapFor,
+  stripWidths,
 } from "./electronics-routing.js";
 import { printScale } from "./print-scale.js";
 import { NET_PALETTE } from "./net-palette.js";
@@ -322,7 +320,7 @@ export function stripOutline(
 ): Vec2[] {
   // A net leg that tapers onto a part's own pad carries its own width at every point; land copper under a
   // switch or LED carries one flat narrow width; ordinary tape has neither and takes the tape's.
-  return outlineStrip(t.pts, t.widths ?? widthsFor(t, t.width ?? tapeW, pads, tapeMm));
+  return outlineStrip(t.pts, t.widths ?? stripWidths(t, t.width ?? tapeW, pads, tapeMm));
 }
 
 /**
@@ -330,14 +328,14 @@ export function stripOutline(
  *
  * **The width that reaches the blade, which is not the width the export reports.** {@link stripOutline}
  * takes a width per point, so a run narrows where it passes an LED's legs and a part's land carries its own
- * width entirely — see {@link widthsFor} and `electronics-routing.ts › switchLand`. Every one of those is
+ * width entirely — see `stripWidths` and `electronics-routing.ts › switchLand`. Every one of those is
  * narrower than the nominal tape, and none of them is visible in {@link CopperSvgExport.widthMm}.
  *
- * Reads through the same `widthsFor` the outline is built from, deliberately: a second reading of "how wide
+ * Reads through the same `stripWidths` the outline is built from, deliberately: a second reading of "how wide
  * is this strip here" is a second thing to drift, and this whole file has spent a night proving that.
  */
 export function narrowestWidth(t: Trace2D, tapeW: number, pads: LedPads[] = [], tapeMm = TAPE_MM): number {
-  const ws = t.widths ?? widthsFor(t, t.width ?? tapeW, pads, tapeMm);
+  const ws = t.widths ?? stripWidths(t, t.width ?? tapeW, pads, tapeMm);
   return ws.length ? Math.min(...ws) : tapeW;
 }
 
@@ -356,63 +354,6 @@ function narrowestMmOf(
   }
   // No copper at all is not "infinitely narrow": with nothing to cut, the nominal width is the honest answer.
   return Number.isFinite(min) ? min * scale : nominalMm;
-}
-
-/**
- * The tape's width at each point of a run.
- *
- * Full width along the way, narrowed only where it lands on an LED pad whose partner leg is close enough that a
- * full-width strip would reach across the chip. The two nets would otherwise meet under the part and short it,
- * and a vinyl cutter could not weed the gap between them.
- *
- * The narrowing rule itself is not here: it is `electronics-routing.ts › narrowedTo`, which
- * `net-routing.ts › legWidths` asks the same question of. What differs between the two callers is only how
- * the fields are built — an LED's mate is one named pad on the other net and the run *ends* there, while a
- * pin's neighbours are every other pad on the part and the run *passes* them. One geometric question, one
- * answer; two readings of it is the mistake `parts.ts › padRunBox` was written to undo.
- */
-function widthsFor(t: Trace2D, tapeW: number, pads: LedPads[], tapeMm = TAPE_MM): number[] {
-  const last = t.pts.length - 1;
-  // `tapeMm` only to convert the weeding floor: the gap the cutter has to lift between the two nets is a
-  // strip of substrate, so it is the same millimetre figure whatever width the roll is. See
-  // `electronics-routing.ts › weedGapFor`.
-  const weed = weedGapFor(tapeW, tapeMm);
-  // `reach: tapeW` is "is the run landing here at all": beyond a tape's width the pad has no say.
-  const fields = pads.map((pad) => {
-    const own = t.net === "pwr" ? pad.pwr : pad.gnd;
-    const mate = t.net === "pwr" ? pad.gnd : pad.pwr;
-    return { at: own, safe: landingWidth(own, mate, tapeW, weed), reach: tapeW, mate };
-  });
-  return t.pts.map((p, i) => {
-    // A run that STOPS at a pad, square to the line between the two legs, needs no narrowing: its end is
-    // capped across its own direction, so the two nets are held apart by the bare gap along the axis —
-    // the part's own `pitch - padW` — and full-width tape cannot reach over it.
-    //
-    // Narrowing regardless is what put a taper under every LED pad and pinched the strip to 1.14mm
-    // beneath a 1.70mm pad, which capped how much of the leg had copper under it at two thirds. It is
-    // needed only where a strip passes the part sideways, and that is what the angle test asks.
-    //
-    // The exemption is per (point, pad) — it depends on this point being an end of the run — so it drops
-    // the exempt fields before asking, rather than being something `narrowedTo` could express.
-    const here =
-      i === 0 || i === last
-        ? fields.filter((f) => !squareToAxis(t.pts, i, f.at, f.mate))
-        : fields;
-    return narrowedTo(tapeW, p, here);
-  });
-}
-
-/** Whether the run's end at `i` runs along the line between an LED's two legs, rather than across it. */
-function squareToAxis(pts: Vec2[], i: number, own: Vec2, mate: Vec2): boolean {
-  const prev = i === 0 ? pts[1] : pts[pts.length - 2];
-  if (!prev) return false;
-  const seg = Math.hypot(pts[i]!.x - prev.x, pts[i]!.y - prev.y);
-  const axisLen = Math.hypot(own.x - mate.x, own.y - mate.y);
-  if (seg < 1e-12 || axisLen < 1e-12) return false;
-  const dot =
-    ((pts[i]!.x - prev.x) / seg) * ((own.x - mate.x) / axisLen) +
-    ((pts[i]!.y - prev.y) / seg) * ((own.y - mate.y) / axisLen);
-  return Math.abs(dot) > 0.99;   // within about 8 degrees of the axis
 }
 
 /**

@@ -25,8 +25,8 @@ import {
   distToSeg,
   len,
   scale,
-  segNearSeg,
   segsCross,
+  stripsOverlap,
   sub,
   trimEnd,
   unit,
@@ -662,30 +662,6 @@ function runsTouch(first: Trace2D, second: Trace2D, w: number, margin = 0): bool
     }
   }
   return false;
-}
-
-/** Whether two square-ended strips, `wa` wide along `a`-`b` and `wb` along `c`-`d`, overlap — separating
- *  axes — or, given a `margin`, come closer than it. */
-function stripsOverlap(a: Vec2, b: Vec2, c: Vec2, d: Vec2, wa: number, wb: number, margin = 0): boolean {
-  if (len(sub(b, a)) < 1e-12 || len(sub(d, c)) < 1e-12) return false;
-  const quad = (p: Vec2, q: Vec2, w: number): Vec2[] => {
-    const u = unit(sub(q, p));
-    const n = scale({ x: -u.y, y: u.x }, w / 2);
-    return [add(p, n), add(q, n), sub(q, n), sub(p, n)];
-  };
-  const P = quad(a, b, wa), Q = quad(c, d, wb);
-  for (const poly of [P, Q]) {
-    for (let i = 0; i < 2; i++) {
-      const e = sub(poly[i + 1]!, poly[i]!);
-      const along = (pts: Vec2[]): number[] => pts.map((p) => p.y * e.x - p.x * e.y);
-      const pp = along(P), qq = along(Q);
-      if (Math.max(...pp) <= Math.min(...qq) + 1e-12 || Math.max(...qq) <= Math.min(...pp) + 1e-12) {
-        return margin > 0 && P.some((p, i) =>
-          Q.some((q, j) => segNearSeg(p, P[(i + 1) % 4]!, q, Q[(j + 1) % 4]!) < margin));
-      }
-    }
-  }
-  return true;
 }
 
 /** The distances along `run` at which any of `pts` lies on it, within `eps`. */

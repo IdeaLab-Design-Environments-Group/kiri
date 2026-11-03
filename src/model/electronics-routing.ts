@@ -194,6 +194,7 @@ export {
   narrowedTo,
   padRoomFor,
   seatLed,
+  stripWidths,
   terminalHalfWidth,
 } from "./pad-landing.js";
 import {
