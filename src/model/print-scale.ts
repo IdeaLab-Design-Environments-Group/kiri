@@ -16,7 +16,7 @@ import type { FoldFile } from "./fold-file.js";
 import { DEFAULT_PRINT_SIZE } from "./stl-export.js";
 
 /**
- * Pattern units per millimetre of cut: what to multiply flat coordinates by to get the sheet.
+ * Millimetres of cut per pattern unit: what to multiply flat coordinates by to get the sheet.
  *
  * `1` for a pattern already at a physical size — those are taken at their word, and a pattern larger than the
  * sheet is never shrunk to fit, since that would quietly cut it at a size nobody asked for.
