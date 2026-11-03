@@ -45,6 +45,8 @@ import {
   type WireFaultKind,
 } from "../../../src/model/wire-rules.js";
 import { resolveWire, type ManualWire, type WireContext } from "../../../src/model/manual-wire.js";
+import { DEFAULT_SHEET, closureFraction, foldStrain } from "../../../src/model/fold-strain.js";
+import { tapeMmFor } from "../../../src/model/tape-width.js";
 
 const EXAMPLES = new URL("../../../public/examples/", import.meta.url).pathname;
 
@@ -405,6 +407,31 @@ describe("model/wire-rules", () => {
     expect(kinds(overV)).not.toContain("fold-fatigue");
     // Costly, not forbidden: a mountain crossing on its own must never block the cut.
     expect(isBuildable(overM.filter((f) => f.kind === "fold-fatigue"))).toBe(true);
+  });
+
+  it("warns of fold fatigue exactly where the router's strain model says the copper fatigues", { timeout: 20_000 }, () => {
+    // bat-body carries shallow mountains (1.4 degrees on a 2.1mm hinge) that the router prices as
+    // survivable; the warning has to agree with it hinge by hinge, not by the assignment letter.
+    const { faces, gaps, ctx: base, routed, tapeW } = fixture("bat-body.fkld", 1);
+    const ctx: WireContext = { ...base, tapeMm: tapeMmFor(faces) };
+    const mmPerUnit = ctx.tapeMm! / tapeW;
+    let warned = 0, quiet = 0;
+    for (const g of gaps) {
+      if (g.assignment === "C" || g.dihedral == null) continue;
+      const hingeMm = Math.hypot(g.legB.x - g.legA.x, g.legB.y - g.legA.y) * mmPerUnit;
+      if (!(hingeMm > 0)) continue;
+      const fatigues = foldStrain(hingeMm, g.dihedral) >= DEFAULT_SHEET.routingThresholdStrain ||
+        closureFraction(g.dihedral) >= 1;
+      const wire: Trace2D = { pts: acrossHinge(g, tapeW * 0.6), net: "w" };
+      if (!pointInFace(faces, wire.pts[0]!) && !pointInFace(faces, wire.pts[1]!)) continue;
+      const warns = kinds(checkWire(wire, ctx, routed)).includes("fold-fatigue");
+      expect(warns, `gap ${g.mid} ${g.assignment} ${g.dihedral.toFixed(1)} deg over ${hingeMm.toFixed(2)}mm`)
+        .toBe(fatigues);
+      if (fatigues) warned++; else quiet++;
+    }
+    // Both outcomes occur, or the agreement above proves nothing.
+    expect(warned).toBeGreaterThan(0);
+    expect(quiet).toBeGreaterThan(0);
   });
 
   it("ranks proximity to another net by distance: on top of it, near it, then clear", { timeout: 20_000 }, () => {

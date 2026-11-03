@@ -38,6 +38,7 @@ import {
   type RoutedCircuit,
   type Trace2D,
 } from "./electronics-routing.js";
+import { DEFAULT_SHEET, closureFraction, foldStrain } from "./fold-strain.js";
 import { toFlat, type WireContext } from "./manual-wire.js";
 import { padPin, resolveNetlist } from "./netlist.js";
 import { segNearSeg } from "./trace-geometry.js";
@@ -91,9 +92,6 @@ export const ALL_WIRE_FAULT_KINDS: readonly WireFaultKind[] = [
 export function isBuildable(faults: WireFault[]): boolean {
   return !faults.some((f) => ERRORS.has(f.kind));
 }
-
-/** A valley folded past this many degrees closes on itself and can short across — `buildCorridor`'s test. */
-const STEEP_VALLEY_DEG = 170;
 
 /** Below this angle between two strips leaving a point, the wedge of substrate between them tears. */
 const MIN_JOIN_ANGLE = Math.PI / 6;
@@ -357,10 +355,10 @@ function proximity(
 /**
  * Hinges this wire crosses that shorten the sheet's folding life, or that it has to bridge.
  *
- * The same test {@link buildCorridor} charges the pattern diagonal for, after Nakaya et al., "4D Leaf
- * Circuits" (SCF '25), Algorithm 1: a trace over a mountain fold fractures within a hundred folding cycles
- * while the same trace on a valley stays flat, and a valley folded past 170 degrees closes on itself and
- * counts as a mountain. Cuts are worse than either — the material is severed, so the tape is bridging a hole.
+ * The same strain reading {@link buildCorridor} prices creases with (see {@link badHinge}): copper over a
+ * fold strained past the routing threshold cracks within the design life of a hundred folding cycles, and
+ * a fold that has closed on itself can short across. Cuts are worse than either — the material is severed,
+ * so the tape is bridging a hole.
  *
  * The router routes around these where it can, and takes them where a tile is reachable no other way. The
  * author's wire gets the same reading and the same verdict: allowed, and costly.
@@ -371,7 +369,7 @@ function foldFatigue(t: Trace2D, ctx: WireContext, out: WireFault[]): void {
     const a = t.pts[i - 1]!, b = t.pts[i]!;
     for (const g of ctx.gaps) {
       if (!segsCross(a, b, g.ends[0], g.ends[1])) continue;
-      if (!badHinge(g)) continue;
+      if (!badHinge(g, ctx)) continue;
       if (seen.has(g.mid)) continue;
       seen.add(g.mid);
       out.push({
@@ -379,43 +377,32 @@ function foldFatigue(t: Trace2D, ctx: WireContext, out: WireFault[]): void {
         at: g.point,
         why: g.assignment === "C"
           ? "the wire spans a cut — there is no material under the tape here"
-          : "the wire crosses a hard fold — copper here cracks after about a hundred folding cycles",
+          : "the wire crosses a fold steep enough to crack copper within about a hundred folding cycles",
       });
     }
   }
 }
 
 /**
- * Whether copper over this hinge is a fatigue risk — `buildCorridor`'s own test, stated once.
+ * Whether copper over this hinge is a fatigue risk — the router's own reading, so the two cannot disagree.
  *
- * **Two of its three terms are unreachable on every pattern we ship, and both are kept deliberately.**
- * Measured across all eight bundled patterns, reading `gapGraph`'s own output:
+ * The strain model `corridor.ts › creaseFraction` prices a crossing with: a crease is fatiguing when its
+ * outer-fibre strain reaches {@link SheetSpec.routingThresholdStrain}, or when it has folded shut. Below that
+ * the router calls the copper survivable and crosses freely, so warning there would contradict the plan.
+ * This used to classify by assignment letter — every `M` warned — and disagreed with the router on 343 of
+ * 1,464 hinges across the corpus, warning of cracks over a 1.4-degree mountain.
  *
- * - `assignment === "C"` never fires. Each pattern carries cut edges in the file — 12 in church, 96 in
- *   bistable-star-tiling, 98 in puffin — and not one becomes a `GapEdge`, because a cut here is a *lip*:
- *   two boundary edges, one per face, so it fails "exactly two faces share this edge". Copper is kept off
- *   a cut by two other mechanisms, not by this price. An OPENED cut is a hole in the silhouette, and
- *   containment refuses a route for leaving the body. An UNOPENED one — a zero-width seam, where the two
- *   lips coincide in the flat pattern — is invisible to containment, because there is material on both
- *   sides and severed material in between; `electronics-routing.ts › seamsOf` derives those from the faces
- *   and {@link tapeOnBody} refuses to span one. Measured: `kirigami-flap` has three such seams and every
- *   other bundled pattern has none, which is why an earlier reading of this comment called the case
- *   hypothetical. It was measured on the seven patterns that cannot have one.
- * - `steepValley` never fires either. The largest valley in the corpus is akde-square-pyramid's −162.8°,
- *   under {@link STEEP_VALLEY_DEG}. The threshold is not wrong — a valley folded past 170° really has
- *   closed on itself — it is simply past anything we ship.
- *
- * So the behaviour here is carried entirely by `assignment === "M"`. Both other terms are correct rules
- * about hinges that could exist, and dropping them would silently stop pricing a pattern that had one.
- * They are documented rather than deleted so the next reader does not take their silence for coverage.
- *
- * `Math.abs` is right on the dihedral despite the sign now being meaningful: the term is inside the `V`
- * branch, and a valley's angle is negative by construction. Note that a `V` edge is not a promise of a
- * fold — 16 of the 22 in the corpus carry a target of exactly 0 — so this reads the angle, never the letter.
+ * The two fallbacks are the router's too. A cut is severed material, always the worst thing to cross. A
+ * crease with no recorded fold angle, or no measurable hinge width (a vinyl score, where the legs coincide),
+ * leaves the strain model nothing to run on, and falls back to the letter: a mountain is a risk.
  */
-function badHinge(g: GapEdge): boolean {
-  const steepValley = g.dihedral != null && Math.abs(g.dihedral) > STEEP_VALLEY_DEG;
-  return g.assignment === "M" || g.assignment === "C" || (g.assignment === "V" && steepValley);
+function badHinge(g: GapEdge, ctx: WireContext): boolean {
+  if (g.assignment === "C") return true;
+  const tapeMm = ctx.tapeMm ?? TAPE_MM;
+  const hingeMm = Math.hypot(g.legB.x - g.legA.x, g.legB.y - g.legA.y) * (ctx.tapeW > 0 ? tapeMm / ctx.tapeW : 0);
+  if (g.dihedral == null || !(hingeMm > 0)) return g.assignment === "M";
+  const sheet = ctx.sheet ?? DEFAULT_SHEET;
+  return foldStrain(hingeMm, g.dihedral, sheet) >= sheet.routingThresholdStrain || closureFraction(g.dihedral) >= 1;
 }
 
 /**

@@ -29,6 +29,7 @@ import {
 // From the modules that define them, not through `electronics-routing.js`: the router resolves these
 // wires itself (see `routeDeclaredNets`), so importing it back here would be a runtime cycle.
 import { TAPE_MM } from "./tape-width.js";
+import type { SheetSpec } from "./fold-strain.js";
 import { batteryTerminals, ledSeat, seatLed } from "./pad-landing.js";
 import { patternDiag, segNearSeg } from "./trace-geometry.js";
 import type { Trace2D } from "./trace-types.js";
@@ -103,6 +104,9 @@ export interface WireContext {
    * `netlist.ts`: pad positions that look plausible and are the wrong size.
    */
   tapeMm?: number;
+  /** The sheet the router planned for, so a wire's crease strain is read as the router reads it.
+   *  {@link DEFAULT_SHEET} when left out. */
+  sheet?: SheetSpec;
 }
 
 /**

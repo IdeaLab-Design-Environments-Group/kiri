@@ -1509,7 +1509,8 @@ export class ElectronicsModal {
 
   /** The pattern a wire's ends resolve against — the same faces, gaps and tape width the router plans on. */
   private wireContext(): WireContext {
-    return { faces: this.faces, gaps: this.gaps, circuit: this.circuit, tapeW: this.tapeW() };
+    const { faces, gaps, circuit, sheetSpec: sheet } = this;
+    return { faces, gaps, circuit, tapeW: this.tapeW(), tapeMm: this.tapeMm(), sheet };
   }
 
   /**
