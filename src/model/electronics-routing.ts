@@ -128,7 +128,7 @@ export type {
   Trace2D,
 } from "./trace-types.js";
 
-export { crossesAny, patternDiag, ptKey, segsCross } from "./trace-geometry.js";
+export { crossesAny, patternDiag, ptKey, segsCross, stripsOverlap } from "./trace-geometry.js";
 import { type Target, nearestTour, tourOf, twoOpt } from "./led-tour.js";
 import { asTree, dodgeChips, junctions, straighten } from "./trace-shaping.js";
 import {
@@ -224,6 +224,7 @@ export {
 } from "./tape-width.js";
 import {
   countAcuteJoins,
+  countNetContacts,
   countNetCrossings,
   countOverLed,
   countUnderLed,
@@ -240,6 +241,7 @@ import {
 /** Likewise the plan scoring, which moved to `route-metrics.ts`. */
 export {
   countAcuteJoins,
+  countNetContacts,
   countNetCrossings,
   countOverLed,
   countUnderLed,
@@ -625,7 +627,8 @@ export function planRoutes(
     // router swap one for the other -- puffin traded its terminal fault for a chip fault and called it even.
     countUnderLed(tr, padsFor(f), clearW, clearW * 1.2) + countOverLed(tr, padsFor(f)),
     countUnderTerminal(tr, term, termClear),
-    countNetCrossings(tr),
+    // On the copper, not the centrelines — see `countNetContacts`.
+    countNetContacts(tr, tapeW, padsFor(f), tapeMm),
     // ONE tier, summed on purpose, and this is the only place in the key where two measures are traded.
     //
     // Both kinds of overlap: the two nets shadowing each other, and a net laid twice over itself. Only the

@@ -10,6 +10,7 @@ import {
 } from "../../../src/model/electronics.js";
 import {
   batteryTerminals,
+  countNetContacts,
   countNetCrossings,
   countOverLed,
   countUnderLed,
@@ -24,6 +25,9 @@ import {
   patternDiag,
   planRoutes,
   segsCross,
+  stripWidths,
+  stripsOverlap,
+  tapeMmFor,
   totalLength,
   trimAtOwnJoins,
 } from "../../../src/model/electronics-routing.js";
@@ -203,6 +207,49 @@ describe("model/electronics-routing", () => {
       expect(countNetCrossings([pwr, { ...gnd, net: "pwr" }])).toBe(0);
     }
     expect(countNetCrossings([pwr, { net: "gnd", pts: [{ x: 5, y: 1 }, { x: 9, y: 9 }] }])).toBe(0);
+  });
+
+  it("counts PWR and GND copper that overlaps without the centrelines meeting", () => {
+    // Strips are a tape wide, so two rails a little under a tape apart are copper on copper — a short in
+    // the cut file — while their centrelines never touch and `countNetCrossings` reads zero.
+    const w = 1;
+    const pwr: Trace2D = { net: "pwr", pts: [{ x: 0, y: 0 }, { x: 10, y: 0 }] };
+    const at = (y: number): Trace2D => ({ net: "gnd", pts: [{ x: 0, y }, { x: 10, y }] });
+    expect(countNetCrossings([pwr, at(0.8)])).toBe(0);
+    expect(countNetContacts([pwr, at(0.8)], w, [])).toBe(1);
+    expect(countNetContacts([pwr, at(1.2)], w, [])).toBe(0);
+    expect(countNetContacts([pwr, { ...at(0.8), net: "pwr" }], w, [])).toBe(0);
+    // Square ends: two strips meeting end to end with a gap between them do not touch at the corners.
+    expect(countNetContacts([pwr, { net: "gnd", pts: [{ x: 10.5, y: 0 }, { x: 20, y: 0 }] }], w, [])).toBe(0);
+    // A strip of its own width is measured at that width.
+    expect(countNetContacts([pwr, { ...at(0.8), width: 0.2 }], w, [])).toBe(0);
+    // Everything `countNetCrossings` counts, this counts too.
+    expect(countNetContacts([pwr, { net: "gnd", pts: [{ x: 5, y: -5 }, { x: 5, y: 5 }] }], w, [])).toBe(1);
+  });
+
+  it("keeps PWR and GND copper apart where only the strip widths would meet", () => {
+    // bat-body, one LED, battery on face 90: the plan had no centreline contact at all and still cut the two
+    // nets' strips onto each other, because nothing in the objective measured the copper.
+    const { faces, gaps } = load("bat-body.fkld");
+    const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 1), battery: { face: 90 } });
+    const tapeW = tapeWidthFor(faces);
+    const tapeMm = tapeMmFor(faces);
+    const ws = r.traces.map((t) => t.widths ?? stripWidths(t, t.width ?? tapeW, r.pads, tapeMm));
+    let touching = 0;
+    for (let i = 0; i < r.traces.length; i++) {
+      for (let j = i + 1; j < r.traces.length; j++) {
+        const A = r.traces[i]!, B = r.traces[j]!;
+        if (A.net === B.net) continue;
+        for (let a = 1; a < A.pts.length; a++) {
+          for (let b = 1; b < B.pts.length; b++) {
+            const wa = Math.min(ws[i]![a - 1]!, ws[i]![a]!), wb = Math.min(ws[j]![b - 1]!, ws[j]![b]!);
+            if (stripsOverlap(A.pts[a - 1]!, A.pts[a]!, B.pts[b - 1]!, B.pts[b]!, wa, wb)) touching++;
+          }
+        }
+      }
+    }
+    expect(touching).toBe(0);
+    expect(r.unreachable).toEqual([]);
   });
 
   it("prefers valleys and flat panels over mountain folds", { timeout: 20000 }, () => {

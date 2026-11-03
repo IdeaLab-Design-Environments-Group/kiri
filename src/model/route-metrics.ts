@@ -14,6 +14,8 @@
  */
 import type { Vec2 } from "./electronics.js";
 import type { PadPair, Trace2D } from "./trace-types.js";
+import { stripWidths } from "./pad-landing.js";
+import { TAPE_MM } from "./tape-width.js";
 import {
   cross,
   isOrigin,
@@ -27,6 +29,7 @@ import {
   segPointDist,
   segsCross,
   segsMeet,
+  stripsOverlap,
   sharesEnd,
   sub,
   unit,
@@ -93,6 +96,43 @@ export function countNetCrossings(traces: Trace2D[]): number {
       for (let a = 1; a < A.pts.length; a++) {
         for (let b = 1; b < B.pts.length; b++) {
           if (segsMeet(A.pts[a - 1]!, A.pts[a]!, B.pts[b - 1]!, B.pts[b]!)) n++;
+        }
+      }
+    }
+  }
+  return n;
+}
+
+/**
+ * {@link countNetCrossings}, measured on the copper rather than the centrelines: every pair of segments of
+ * two different nets whose strips overlap at the widths they are cut at — `stripWidths`, the strips file's
+ * own reading, narrowed at LED pads — plus every pair whose centrelines meet.
+ *
+ * A strip is a tape wide, so two rails a little under a tape apart are copper on copper and short as surely
+ * as a crossing. The centreline count read them as zero, so the search had no reason to keep them apart.
+ * Each segment is taken at the narrower of its two ends' widths, so a narrowing is never read as a touch.
+ *
+ * Scoring on it is a ranking change only; the corridor search still lays chords by centreline. Measured
+ * 2026-11-03 over 208 LED plans (13 patterns, 1206 and Luminus, three battery faces, 1-24 LEDs): plans
+ * whose cut copper touches 75 -> 71, proper crossings 98 -> 79, length and time unchanged. Making the
+ * search width-aware as well (a tape-wide strict pass, a tape-wide straightening rule) took touching plans
+ * only to 70 for +3% copper and +30% time, and made 23 plans worse, so it is not done.
+ */
+export function countNetContacts(traces: Trace2D[], tapeW: number, pads: PadPair[], tapeMm = TAPE_MM): number {
+  const ws = traces.map((t) => t.widths ?? stripWidths(t, t.width ?? tapeW, pads, tapeMm));
+  let n = 0;
+  for (let i = 0; i < traces.length; i++) {
+    for (let j = i + 1; j < traces.length; j++) {
+      const A = traces[i]!, B = traces[j]!;
+      if (A.net === B.net) continue;
+      for (let a = 1; a < A.pts.length; a++) {
+        for (let b = 1; b < B.pts.length; b++) {
+          const p = A.pts[a - 1]!, q = A.pts[a]!, c = B.pts[b - 1]!, d = B.pts[b]!;
+          if (segsMeet(p, q, c, d)) { n++; continue; }
+          const wa = Math.min(ws[i]![a - 1]!, ws[i]![a]!), wb = Math.min(ws[j]![b - 1]!, ws[j]![b]!);
+          // A square-ended strip lies inside the round-ended one, so centrelines this far apart cannot touch.
+          if (segNearSeg(p, q, c, d) >= (wa + wb) / 2) continue;
+          if (stripsOverlap(p, q, c, d, wa, wb)) n++;
         }
       }
     }

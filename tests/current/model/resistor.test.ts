@@ -200,11 +200,15 @@ describe("model/resistor", () => {
   });
 
   it("refuses a break whose two halves pass closer than the weeding floor", () => {
-    // The break itself is a straight 1.8mm, but the run zigzags into it: an earlier stretch of the first
-    // half comes back within 0.3mm of the second half's cut end. A strip that thin tears instead of
-    // lifting, and the copper left behind bridges the part — the same floor an LED_0603 is refused at.
+    // The break itself is a body's length along the run, but the run bends into it: one half comes back
+    // within 0.45mm of the other's cut end. A strip that thin tears instead of lifting, and the copper left
+    // behind bridges the part — the same floor an LED_0603 is refused at.
+    //
+    // **Moved on 2026-11-03**, from 74.528,148.4578 (0.3mm), when the router began scoring PWR/GND contact
+    // on the copper (`countNetContacts`) and puffin's GND rail was re-planned with no zigzag there. Same
+    // rule, re-found on the new plan with the same measure.
     const { faces, gaps, base, plain } = puffin();
-    const r = planRoutes(faces, gaps, { ...base, resistors: [{ x: 74.528, y: 148.4578 }] });
+    const r = planRoutes(faces, gaps, { ...base, resistors: [{ x: 90.6328, y: 148.7805 }] });
     expect(r.resistors).toEqual([]);
     expect(r.traces).toEqual(plain.traces);
   });
