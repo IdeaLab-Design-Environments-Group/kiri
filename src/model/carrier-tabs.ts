@@ -67,6 +67,12 @@ export function pickTab(
    * over while any clear spot remains.
    */
   placed: { side: Side; path: Vec2[] }[] = [],
+  /**
+   * Points a tab would rather not grip: a placed part's cut ends, which are its pads. Weaker than `avoid` —
+   * a clear tab here is still taken over one across the other net. Kept off as hard as a pad, on house and
+   * church, it sent two to four times as many tabs across a trace to spare a part's lead.
+   */
+  noGrip: Vec2[] = [],
 ): {
   index: number;
   side: Side;
@@ -78,6 +84,7 @@ export function pickTab(
   /** Whether a ring point is too close to a pad or terminal to tab onto. */
   const onComponent = (p: Vec2): boolean =>
     avoid.some((q) => Math.hypot(p.x - q.x, p.y - q.y) < tapeW * PAD_CLEAR);
+  const onPart = (p: Vec2): boolean => noGrip.some((q) => Math.hypot(p.x - q.x, p.y - q.y) < tapeW * PAD_CLEAR);
   // Nine offsets is as good as twenty-four: measured identical, so the extra reach buys nothing.
   const SIDE_STEPS = [0, 1.5, -1.5, 3, -3, 5, -5, 8, -8];
   const candidates: { index: number; side: Side; step: number; reach: number }[] = [];
@@ -127,6 +134,8 @@ export function pickTab(
   let overFallback: { index: number; side: Side; path: Vec2[]; over: boolean } | null = null;
   /** Clear of the copper and the parts, but lying on a tab already placed. Better than going over a part. */
   let crowded: { index: number; side: Side; path: Vec2[] } | null = null;
+  /** Clear, but gripping a part's cut end. Better than lying across the other net. */
+  let gripping: { index: number; side: Side; path: Vec2[] } | null = null;
   for (const c of candidates) {
     const a = ring[c.index]!;
     const across = perpTo(c.side);
@@ -175,6 +184,10 @@ export function pickTab(
         if (!crowded) crowded = { index: c.index, side: c.side, path };
         continue;
       }
+      if (onPart(a)) {
+        if (!gripping) gripping = { index: c.index, side: c.side, path };
+        continue;
+      }
       return {
         index: c.index, side: c.side, path,
         clear: true, onComponent: forcedOntoComponent, overComponent: false,
@@ -186,6 +199,9 @@ export function pickTab(
       index: crowded.index, side: crowded.side, path: crowded.path,
       clear: true, onComponent: forcedOntoComponent, overComponent: false,
     };
+  }
+  if (gripping) {
+    return { index: gripping.index, side: gripping.side, path: gripping.path, clear: true, onComponent: true, overComponent: false };
   }
   fallback ??= overFallback;
   return fallback

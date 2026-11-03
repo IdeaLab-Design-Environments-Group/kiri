@@ -55,8 +55,6 @@ const MAX_TABS_PER_RUN = 2;
 const FRAME_BUFFER = 5;
 
 
-
-
 /**
  * Which way, if either, the cut is flipped.
  *
@@ -1274,8 +1272,10 @@ export function buildCopperCarrierExport(
   }));
   // A tab must grip the trace, not the component. Anchoring on a pad puts the tab exactly where the LED sits
   // and means snipping it cuts at the pad; the same goes for a battery terminal. Those spots are excluded, so a
-  // tab lands on the run's body.
+  // tab lands on the run's body. A part's cut ends — the run ends it bridges — are only steered off.
   const avoid = keepOff.map(T);
+  const partEnds = [...resistors, ...switches, ...parts].flatMap((s) => [s.a, s.b])
+    .filter((p) => runs.some((t) => [t.pts[0]!, t.pts.at(-1)!].some((q) => q.x === p.x && q.y === p.y))).map(T);
   const gaps: { side: Side; from: number; to: number }[] = [];
   let tabs = 0;
   let crossingTabs = 0;
@@ -1315,7 +1315,7 @@ export function buildCopperCarrierExport(
     const picks: { index: number; side: Side; path: Vec2[] }[] = [];
     const taken = [...avoid];
     for (let t = 0; t < want; t++) {
-      const choice = pickTab(ring, others, win, tape, taken, chosen);
+      const choice = pickTab(ring, others, win, tape, taken, chosen, partEnds);
       if (!choice) break;
       const poor = !choice.clear || choice.onComponent || choice.overComponent;
       if (t === 0 && poor && spare && rings.some((_, j) => fused(ri, j))) return false;

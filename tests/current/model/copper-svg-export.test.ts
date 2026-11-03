@@ -364,6 +364,28 @@ describe("model/copper-svg-export", () => {
       }
     });
 
+    it("keeps a tab off the cut ends a placed part is soldered to", () => {
+      // The ends of a part's break are its pads as much as an LED's are, and the caller's keep-off list
+      // names only the LEDs and the battery. The cut ends are the outermost points of their runs, so the
+      // nearest-wall search reached them first: on house, a resistor on the bus took a tab on its lead.
+      // Only preferred off, not barred: where the alternative is a tab across the other net, that is worse.
+      const { fold, faces, gaps } = load("house.fkld");
+      const base: Circuit = { leds: ledsOn(gaps, 4), battery: { face: 0 } };
+      const r = planRoutes(faces, gaps, { ...base, resistors: [{ x: 5.7382, y: 7.525 }] });
+      expect(r.resistors).toHaveLength(1);
+      const tapeW = tapeWidthFor(faces);
+      const keepOff = r.pads.flatMap((p) => [p.pwr, p.gnd]);
+      const out = buildCopperCarrierExport(fold, r.traces, tapeW, "x", keepOff, undefined, undefined, r.pads,
+        r.resistors);
+      const { T, scale } = sheetFrame(fold);
+      const ends = r.resistors.flatMap((s) => [T(s.a), T(s.b)]);
+      for (const path of out.tabPaths) {
+        for (const q of ends) {
+          expect(Math.hypot(path[0]!.x - q.x, path[0]!.y - q.y)).toBeGreaterThanOrEqual(tapeW * scale * 0.999);
+        }
+      }
+    });
+
     it("does not run a tab over a pad or a terminal", { timeout: 30000 }, () => {
       // Keeping the *anchor* off a component was not enough: the tab still crossed parts on its way to the
       // wall, where it is stuck down on top of one and cuts into it when snipped. Zero everywhere but puffin,
