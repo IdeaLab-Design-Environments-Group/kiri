@@ -1,6 +1,6 @@
 /**
  * **View helper** — the electronics canvas's pure layers: the sheet the copper is laid on, the carrier
- * frame, the ratsnest and the battery's terminals.
+ * frame, the ratsnest, the battery's terminals and the selection ring.
  *
  * Split out of `electronics-modal.ts` because every one of them is the same shape of thing — data in, SVG
  * paths out, no state read and none written — and because the sheet in particular is the one layer that
@@ -134,6 +134,29 @@ export function ratsnestParts(
     }
   }
   return rats.length ? [sceneSvg(rats)] : [];
+}
+
+/**
+ * The smallest a selection ring may be drawn, in sheet millimetres.
+ *
+ * The ring is sized off the copper the part bridges, which is the right size for anything on a rail. It
+ * is the wrong size for the smallest parts: an `LED_0603`'s pads are 0.8mm and its legs 1.5mm apart, so
+ * a ring proportional to the part alone would be a dot inside the part rather than a mark around it.
+ * The floor is what a 1206 LED's ring has always come out at, so nothing already on screen moves.
+ */
+const SELECT_RING_FLOOR_MM = 1.7;
+
+/**
+ * A ring round the two ends a component bridges, big enough to sit outside it.
+ *
+ * One helper because it is one mark: the same circle whether it rings a part broken into a rail or an
+ * LED sat on a hinge, differing only in the class. Sized off the component's own span, floored at
+ * {@link SELECT_RING_FLOOR_MM} so the smallest parts still get a ring rather than a dot inside them.
+ */
+export function selectionRing(a: Vec2, b: Vec2, cls: string): string {
+  const c = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  const r = Math.max(Math.hypot(b.x - a.x, b.y - a.y) * 0.75, SELECT_RING_FLOOR_MM);
+  return `<circle cx="${fmt(c.x)}" cy="${fmt(c.y)}" r="${fmt(r)}" class="${cls}" />`;
 }
 
 /**

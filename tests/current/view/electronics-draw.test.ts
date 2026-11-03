@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { FlatFace, GapEdge, TilePoly, Vec2 } from "../../../src/model/electronics.js";
-import { batteryParts, ratsnestParts, substrateParts } from "../../../src/view/electronics-draw.js";
+import { batteryParts, ratsnestParts, selectionRing, substrateParts } from "../../../src/view/electronics-draw.js";
 
 const id = (p: Vec2): Vec2 => p;
 
@@ -74,5 +74,17 @@ describe("view/electronics-draw", () => {
     expect(svg).toContain("−");
     expect(svg).toContain("el-batt-pwr");
     expect(svg).toContain("el-batt-gnd");
+  });
+
+  it("rings a component at its midpoint, sized off its span", () => {
+    const svg = selectionRing({ x: 0, y: 0 }, { x: 4, y: 0 }, "el-part-selected");
+    expect(svg).toBe('<circle cx="2" cy="0" r="3" class="el-part-selected" />');
+  });
+
+  it("floors the ring so the smallest parts still get one", () => {
+    // An LED_0603's legs are 1.5mm apart, so a ring at three quarters of its span would be 1.1mm — drawn
+    // inside the part rather than around it.
+    const tiny = selectionRing({ x: 0, y: 0 }, { x: 1.5, y: 0 }, "el-led-selected");
+    expect(Number(/r="([\d.]+)"/.exec(tiny)![1])).toBeCloseTo(1.7, 6);
   });
 });

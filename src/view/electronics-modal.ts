@@ -90,7 +90,7 @@ import type { Component } from "../model/footprint.js";
 import type { SimMaterial } from "../sim/index.js";
 import {
   batteryParts, carrierFrameParts, centreOf, closedPath, fmt, inRing, isZero,
-  ratsnestParts, substrateParts,
+  ratsnestParts, selectionRing, substrateParts,
 } from "./electronics-draw.js";
 import { R_1206, SW_SPDT } from "../model/library.js";
 import {
@@ -266,16 +266,6 @@ type PlacedOnRail = { x: number; y: number; flip?: boolean };
  * honest; this floor keeps anything smaller from becoming unpickable.
  */
 const PART_PICK_FLOOR_MM = 2;
-
-/**
- * The smallest a selection ring may be drawn, in sheet millimetres.
- *
- * The ring is sized off the copper the part bridges, which is the right size for anything on a rail. It
- * is the wrong size for the smallest parts: an `LED_0603`'s pads are 0.8mm and its legs 1.5mm apart, so
- * a ring proportional to the part alone would be a dot inside the part rather than a mark around it.
- * The floor is what a 1206 LED's ring has always come out at, so nothing already on screen moves.
- */
-const SELECT_RING_FLOOR_MM = 1.7;
 
 /**
  * What an edit does to the copper plan, decided by the edit rather than by the Auto/Manual segment.
@@ -2630,7 +2620,7 @@ export class ElectronicsModal {
     const selPart = this.partSelection();
     const selSpan = selPart ? this.routedSpanFor(selPart) : null;
     if (selSpan) {
-      parts.push(this.selectionRing(this.tp(selSpan.a), this.tp(selSpan.b), "el-part-selected"));
+      parts.push(selectionRing(this.tp(selSpan.a), this.tp(selSpan.b), "el-part-selected"));
     }
     this.drawnZoomStep = this.zoomStep();
     // An LED is drawn above, with every other part, as the footprint that will be cut — two real pads at
@@ -2645,10 +2635,10 @@ export class ElectronicsModal {
       if (!pads) return;
       const a = this.tp(pads.pwr), b = this.tp(pads.gnd);
       if (this.routed.unreachable.includes(i)) {
-        parts.push(this.selectionRing(a, b, "el-led-orphan"));
+        parts.push(selectionRing(a, b, "el-led-orphan"));
       }
       if (this.selected?.kind === "led" && this.selected.index === i) {
-        parts.push(this.selectionRing(a, b, "el-led-selected"));
+        parts.push(selectionRing(a, b, "el-led-selected"));
       }
     });
     parts.push(...ratsnestParts(this.routed.nets, (p) => this.tp(p)));
@@ -2666,19 +2656,6 @@ export class ElectronicsModal {
     // The live layer was just thrown away with the rest of the canvas, so put it back.
     this.wire.paint();
     this.renderStatus();
-  }
-
-  /**
-   * A ring round the two ends a component bridges, big enough to sit outside it.
-   *
-   * One helper because it is one mark: the same circle whether it rings a part broken into a rail or an
-   * LED sat on a hinge, differing only in the class. Sized off the component's own span, floored at
-   * {@link SELECT_RING_FLOOR_MM} so the smallest parts still get a ring rather than a dot inside them.
-   */
-  private selectionRing(a: Vec2, b: Vec2, cls: string): string {
-    const c = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-    const r = Math.max(Math.hypot(b.x - a.x, b.y - a.y) * 0.75, SELECT_RING_FLOOR_MM);
-    return `<circle cx="${fmt(c.x)}" cy="${fmt(c.y)}" r="${fmt(r)}" class="${cls}" />`;
   }
 
   /**

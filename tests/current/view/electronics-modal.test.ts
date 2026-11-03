@@ -2989,10 +2989,6 @@ describe("view/electronics-modal", () => {
       )].map((m) => Number(m[1]));
       expect(r).toHaveLength(2);
       for (const x of r) expect(x).toBeGreaterThanOrEqual(1.7);
-      // And the floor itself, on the size that needs it: an LED_0603's legs are 1.5mm apart, so a ring at
-      // three quarters of its span would be 1.1mm — drawn inside the part rather than around it.
-      const tiny = modal.selectionRing({ x: 0, y: 0 }, { x: 1.5, y: 0 }, "el-led-selected");
-      expect(Number(/r="([\d.]+)"/.exec(tiny)![1])).toBeGreaterThanOrEqual(1.7);
     });
   });
 
