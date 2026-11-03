@@ -2083,3 +2083,17 @@ body.is-examples .app-legend {
   .ex-tile:hover,
   .ex-tile:focus-visible { transform: none; }
 }
+/* The per-pad clear button: takes the pad off its net. Quiet until the row is reached for. */
+.el-pad-off {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 0.75rem;
+  line-height: 1;
+  padding: 0 0.2rem;
+  border: 0;
+  background: none;
+  color: var(--muted, #98a2b3);
+  cursor: pointer;
+}
+.el-pad-off:hover, .el-pad-off:focus-visible { color: #a4404a; }
+.el-pad-off[hidden] { display: none; }

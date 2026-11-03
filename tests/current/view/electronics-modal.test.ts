@@ -2510,6 +2510,23 @@ describe("view/electronics-modal", () => {
         expect(padTerminals(modal)).toHaveLength(0);
       });
 
+      it("clears a pad with its x button, and as soon as the net box is emptied", () => {
+        const { modal, at } = withRails();
+        placeAndSelect(modal, "C_1206", at);
+        const box = (pad: string) => modal.overlay.querySelectorAll(".el-pad-net").find((p: any) => p.dataset.pad === pad);
+        const off = (pad: string) => modal.overlay.querySelectorAll(".el-pad-off")[Number(pad) - 1];
+        wirePad(modal, "1", "PWR");
+        wirePad(modal, "2", "GND");
+        expect(padTerminals(modal)).toHaveLength(2);
+        off("1").dispatch("click", {});
+        expect(padTerminals(modal)).toHaveLength(1);
+        expect(box("1").value).toBe("");
+        // Emptying the box commits on the input event, with no blur or Enter.
+        box("2").value = "";
+        box("2").dispatch("input", {});
+        expect(padTerminals(modal)).toHaveLength(0);
+      });
+
       it("renumbers the terminals when a part below them is deleted", () => {
         // `Terminal.part` is an INDEX into `circuit.parts`. Delete part 0 and every terminal above it now
         // names its neighbour: the netlist still resolves, and wires the wrong pads. Nothing errors.

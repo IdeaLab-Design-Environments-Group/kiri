@@ -169,6 +169,7 @@ import {
 import { TILE_INSET_FRAC } from "../model/tile-subdiv.js";
 import { type ManualWire, type WireContext, manualTraces } from "../model/manual-wire.js";
 import { WireTool, type WireHost } from "./wire-tool.js";
+import { fillPadRows } from "./electronics-pad-rows.js";
 // The scene emitter, for the ratsnest overlay — see the note at its use in `draw()`.
 import type { FoldFile } from "../model/fold-file.js";
 import { HOME, currentRoute, goToRoute, onRouteChange } from "./route.js";
@@ -1858,52 +1859,9 @@ export class ElectronicsModal {
     this.padsGroup.hidden = false;
     this.padPart.textContent = panel.heading;
 
-    // One list of the declared names, shared by every row. The browser draws it as the menu the `<select>`
-    // used to be, but only once the author starts typing — so it suggests without being the only way in.
-    const list = document.createElement("datalist");
-    list.id = `el-nets-${sel.index}`;
-    for (const name of panel.suggestions) {
-      const opt = document.createElement("option");
-      opt.value = name;
-      list.appendChild(opt);
-    }
-    this.padList.appendChild(list);
-
-    for (const pad of panel.rows) {
-      const row = document.createElement("div");
-      row.className = "el-pad";
-      row.setAttribute("role", "treeitem");
-      if (pad.last) row.classList.add("is-last");
-
-      const tag = document.createElement("span");
-      tag.className = "el-pad-name";
-      tag.textContent = pad.pad;
-      tag.title = pad.padTitle;
-
-      const dot = document.createElement("i");
-      dot.className = "el-pad-dot";
-      // `setAttribute`, not `.style` — the same way the nets tree colours its own dots, and the only one
-      // the test DOM implements. Held at zero size rather than dropped when the pad is on nothing, so the
-      // names stay aligned.
-      if (pad.colour) dot.setAttribute("style", `background:${pad.colour}`);
-      else dot.classList.add("is-empty");
-
-      const name = document.createElement("input");
-      name.type = "text";
-      name.className = "el-pad-net";
-      name.value = pad.netName;
-      name.placeholder = "—";
-      name.dataset.pad = pad.pad;
-      name.setAttribute("list", list.id);
-      name.setAttribute("aria-label", `Net for pad ${pad.pad}`);
-      name.title = "type a net name. A name that is not yet a net declares it; empty takes the pad off.";
-      name.addEventListener("change", () => this.wirePad(sel.index, pad.pad, name.value));
-
-      row.appendChild(tag);
-      row.appendChild(dot);
-      row.appendChild(name);
-      this.padList.appendChild(row);
-    }
+    fillPadRows(this.padList, panel, `el-nets-${sel.index}`, {
+      assign: (pad, name) => this.wirePad(sel.index, pad, name),
+    });
   }
 
   /**
