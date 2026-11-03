@@ -722,8 +722,9 @@ function routeOne(
   tapeW: number,
   /** The metal near these legs, so a run stays narrow for as long as it is over a part. */
   fields: PadField[],
-  /** Every pad on the sheet, so a leg is neither laid across one nor left wider than the room beside it. */
-  pads: PadObstacle[],
+  /** Every pad on the sheet that is not this net's — see {@link foreignPads} — so a leg is neither laid
+   *  across one nor left wider than the room beside it. Found once per net: it never depends on the order. */
+  foreign: ForeignPad[],
   /** How near a run's edge may come to a pad that is not its own — see {@link PAD_CLEARANCE_MM}. */
   padGap: number,
   /** This net's widths from earlier orders: they depend on the pads and fields alone, never on the order. */
@@ -758,7 +759,6 @@ function routeOne(
     if (who && who !== net.id && !blame.includes(who)) blame.push(who);
   };
   const faceOf = net.points.map((p) => faceOfPoint(faces, p.at));
-  const own = net.points;
 
   // This net's own bus rail is not an obstacle to it: the tap leg ENDS on that copper, so measured against
   // it every tap is a violation and no net could ever reach its rail. Every other rail stays in — a PWR tap
@@ -766,7 +766,7 @@ function routeOne(
   const mine = theirs.filter((l) => l.rail === net.id).map((l) => l.pts);
   const others = theirs.filter((l) => l.rail !== net.id);
   const rules: LegRules = {
-    others, clearance, tapeW, fields, pads: foreignPads(pads, net.id, own), padGap, faces, widthMemo, onBody,
+    others, clearance, tapeW, fields, pads: foreign, padGap, faces, widthMemo, onBody,
   };
 
   // A pad that is not on the material at all can never be reached, and says so once rather than once per
@@ -948,6 +948,7 @@ export function planNets(
   const clearance = weedFloorFor(tapeW, tapeMm, sheet);
   const padGap = padClearanceFor(tapeW, tapeMm);
   const memo = nets.map(() => new Map<string, number>());
+  const foreign = nets.map((n) => foreignPads(pads, n.id, n.points));
   // Remembered, since every order lays most legs again.
   const bridgeW = bridgeSpanFor(tapeW, tapeMm);
   const bodyMemo = new Map<string, boolean>();
@@ -998,7 +999,7 @@ export function planNets(
     for (const idx of order) {
       const n = nets[idx]!;
       const r = routeOne(
-        n, faces, c, blocked, laid, clearance, owner, tapeW, fields, pads, padGap, memo[idx]!, onBody);
+        n, faces, c, blocked, laid, clearance, owner, tapeW, fields, foreign[idx]!, padGap, memo[idx]!, onBody);
       for (const k of r.used) {
         blocked.add(k);
         if (!owner.has(k)) owner.set(k, n.id);
