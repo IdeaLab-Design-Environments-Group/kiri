@@ -63,7 +63,8 @@ describe("verify: the user's flow", () => {
     rows[0].dispatch("click", {});
     expect(modal.padPart.textContent).toContain("R_1206");
     const back = padSelects(modal).find((r: any) => r.dataset.pad === "1");
-    expect(back.value).toBe("pwr");
+    // The box holds a net NAME: "pwr" matched the seeded PWR net case-insensitively, and reads back as it.
+    expect(back.value).toBe("PWR");
     expect(modal.partList.querySelectorAll(".el-placed-row")[0].classList.contains("is-active")).toBe(true);
   });
 
