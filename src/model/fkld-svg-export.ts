@@ -87,6 +87,13 @@ export function buildFkldSvgExport(
   // slits/darts/vents) and the score layer (M,V); F is excluded. B and C are kept SEPARATE so the
   // silhouette can be filled while every performed cut is always stroked on top of it (never
   // swallowed by the fill) — so all cuts to perform on the paper stay visible.
+  // FOLD's "U" (unassigned) on a rim is still the rim; between two faces it is an unknown fold, left out.
+  const facesOn = new Map<string, number>();
+  for (const f of (fold.faces_vertices as number[][] | undefined) ?? [])
+    for (let j = 0; j < f.length; j++) {
+      const p = f[j]!, q = f[(j + 1) % f.length]!, key = p < q ? `${p},${q}` : `${q},${p}`;
+      facesOn.set(key, (facesOn.get(key) ?? 0) + 1);
+    }
   const boundaryEdges: [number, number][] = [];
   const cutEdges: [number, number][] = [];
   const scoreSegs: string[] = [];
@@ -95,7 +102,8 @@ export function buildFkldSvgExport(
     if (!e) continue;
     const a = e[0], b = e[1];
     if (a == null || b == null || a >= pts.length || b >= pts.length) continue;
-    const role = assign[i] ?? "B";
+    let role = (assign[i] ?? "B").toUpperCase();
+    if (role === "U" && (facesOn.get(a < b ? `${a},${b}` : `${b},${a}`) ?? 0) <= 1) role = "B";
     if (role === "B") {
       boundaryEdges.push([a, b]);
     } else if (role === "C") {

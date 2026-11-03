@@ -80,6 +80,25 @@ describe("buildFkldSvgExport — layer mapping (synthetic)", () => {
     expect(cut).toContain('stroke="#000000"'); // C slit stroked on top, separately — not swallowed
   });
 
+  it("cuts a rim assigned U or lower-case b, and scores lower-case creases", () => {
+    const sq = (rim: string, diag: string): FoldFile => ({
+      frame_unit: "mm",
+      vertices_coords: [[0, 0], [10, 0], [10, 10], [0, 10]],
+      edges_vertices: [[0, 1], [1, 2], [2, 3], [3, 0], [0, 2]],
+      edges_assignment: [rim, rim, rim, rim, diag],
+      faces_vertices: [[0, 1, 2], [0, 2, 3]],
+    });
+    const cutOf = (f: FoldFile) => buildFkldSvgExport(f, "sq")!.files.find((x) => x.filename === "sq-cut.svg")?.svg;
+    const scoreOf = (f: FoldFile) => buildFkldSvgExport(f, "sq")!.files.find((x) => x.filename === "sq-score.svg")?.svg;
+    for (const rim of ["U", "b"]) {
+      expect(cutOf(sq(rim, "V"))).toContain('fill="#000000"');
+      expect(cutOf(sq(rim, "V"))).toContain("Z");
+    }
+    expect(scoreOf(sq("B", "v"))).toContain("#0000ff");
+    // an unassigned edge between two faces is an unknown fold, not part of the outline
+    expect(cutOf(sq("B", "U"))).not.toContain('stroke="#000000"');
+  });
+
   it("returns null when there's nothing to cut", () => {
     expect(buildFkldSvgExport({ vertices_coords: [], edges_vertices: [] }, "x")).toBeNull();
   });
