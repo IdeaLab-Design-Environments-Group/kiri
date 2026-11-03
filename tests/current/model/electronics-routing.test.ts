@@ -69,6 +69,15 @@ describe("model/electronics-routing", () => {
     }
   });
 
+  it("steps a chord running along a hinge off that hinge's chip", { timeout: 60_000 }, () => {
+    // Guitar-headstock at 24 LEDs: a GND chord leaves a crossing point a quarter of the way along LED 3's
+    // hinge and runs nearly parallel to it, over the chip at the hinge's middle. The sidestep at the
+    // chord's midpoint was too far down the chord to clear it.
+    const { faces, gaps } = load("guitar-headstock.fkld");
+    const r = planRoutes(faces, gaps, { leds: ledsOn(gaps, 24), battery: { face: 0 } });
+    expect(countOverLed(r.traces, r.pads)).toBe(0);
+  });
+
   it("emits a handful of strips, not two per LED", { timeout: 30000 }, () => {
     // The point of the bus topology: both nets are a few long runs whatever the LED count, rather than a pair
     // of strips per LED. A net is a tree, so it is laid as one run per branch -- retraced segments are dropped

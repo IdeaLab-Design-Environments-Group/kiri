@@ -874,12 +874,19 @@ export function planRoutes(
             const n = leftOf(d);
             const side = sideOf(a, d, c) > 0 ? -1 : 1;
             const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-            const w = add(mid, scale(n, side * clearW * 1.6));
-            const better =
-              segNearSeg(a, w, hit.pwr, hit.gnd) >= clearW &&
-              segNearSeg(w, b, hit.pwr, hit.gnd) >= clearW &&
-              onBody(a, w) && onBody(w, b);
-            if (better) out.push(w);
+            // The sidestep at the span's midpoint first, then one abreast of the chip and clear of its whole
+            // length: a long chord running nearly along the hinge crosses the chip far from the span's middle,
+            // where the first cannot reach it. Guitar-headstock at 24 LEDs left GND across LED 3 that way.
+            const along = (c.x - a.x) * d.x + (c.y - a.y) * d.y;
+            const foot = add(a, scale(d, Math.max(0, Math.min(len(sub(b, a)), along))));
+            const abreast = add(foot, scale(n, side * (len(sub(hit.pwr, hit.gnd)) / 2 + clearW * 1.6)));
+            const w = [add(mid, scale(n, side * clearW * 1.6)), abreast].find(
+              (q) =>
+                segNearSeg(a, q, hit.pwr, hit.gnd) >= clearW &&
+                segNearSeg(q, b, hit.pwr, hit.gnd) >= clearW &&
+                onBody(a, q) && onBody(q, b),
+            );
+            if (w) out.push(w);
           }
           out.push(b);
         }
