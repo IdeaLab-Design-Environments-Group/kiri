@@ -538,7 +538,12 @@ export function syncRouteHint(
   stale: boolean,
 ): void {
   routeBtn?.classList.toggle("is-stale", stale);
-  const body = routeBtn?.closest?.(".el-body") as { querySelector(sel: string): { hidden: boolean } | null } | null | undefined;
+  const body = routeBtn?.closest?.(".el-body") as
+    | { querySelector(sel: string): { hidden: boolean } | null; classList?: { toggle(name: string, force?: boolean): unknown } }
+    | null | undefined;
+  // The stylesheet draws the planned copper dimmed and dashed under this class, so old copper is not read as
+  // current. Hand-drawn wires are not the plan's and stay solid.
+  body?.classList?.toggle("is-route-stale", stale);
   const strip = body?.querySelector(".el-route-hint");
   if (strip) strip.hidden = !routeHintShown(ledCount, stale);
 }

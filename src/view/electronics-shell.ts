@@ -122,6 +122,7 @@ export function shellMarkup(): string {
                   <button type="button" class="el-auto" data-auto="off" title="the default: leave the copper alone while you place and wire things. The canvas keeps showing the last plan until you press Route">manual</button>
                 </span>
                 <button type="button" class="el-route" title="re-plan the copper now">route</button>
+                <button type="button" class="el-route-clear" title="remove the planned copper only. Parts, nets and hand-drawn wires stay">clear routes</button>
               </div>
               <div class="el-side-sect el-mirror-modes">
                 <div class="el-side-head"><span class="el-side-title">Mirror</span></div>

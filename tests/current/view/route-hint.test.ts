@@ -26,6 +26,19 @@ describe("route hint", () => {
     expect(() => syncRouteHint(undefined, 1, true)).not.toThrow();
   });
 
+  it("marks the editor body while the plan is stale, so the stylesheet can dim the old copper", () => {
+    const bodyClasses = new Set<string>();
+    const body = {
+      querySelector: () => ({ hidden: true }),
+      classList: { toggle: (n: string, f?: boolean) => (f ? bodyClasses.add(n) : bodyClasses.delete(n)) },
+    };
+    const btn = { classList: { toggle: () => undefined }, closest: () => body };
+    syncRouteHint(btn, 1, true);
+    expect(bodyClasses.has("is-route-stale")).toBe(true);
+    syncRouteHint(btn, 1, false);
+    expect(bodyClasses.has("is-route-stale")).toBe(false);
+  });
+
   it("shows the delete-wire group only while a wire is selected", () => {
     const group = { hidden: true };
     syncWireDelete(group as unknown as Element, "w1");

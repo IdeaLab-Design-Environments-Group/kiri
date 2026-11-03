@@ -629,6 +629,7 @@ export class ElectronicsModal {
     }
     this.routeBtn = this.overlay.querySelector<HTMLButtonElement>(".el-route")!;
     this.routeBtn.addEventListener("click", () => this.routeNowWithFeedback());
+    this.overlay.querySelector(".el-route-clear")!.addEventListener("click", () => this.clearRoutes());
     for (const btn of this.overlay.querySelectorAll<HTMLButtonElement>(".el-place")) {
       const mode = btn.dataset.place === "free" ? "free" : "gap";
       btn.addEventListener("click", () => this.selectPlaceMode(mode));
@@ -2535,6 +2536,16 @@ export class ElectronicsModal {
         this.routeBtn.disabled = false;
       }
     }));
+  }
+
+  /** Empty the router's traces and keep everything the author made: parts, nets and hand-drawn wires.
+   *  Not an edit — the circuit is unchanged — so nothing is stored. Marked stale when there is something
+   *  to route, so the Route button says the copper is gone and not just hidden. */
+  private clearRoutes(): void {
+    this.routed = EMPTY_ROUTE;
+    this.stale = this.circuit.leds.length > 0 || this.placedCount() > 0;
+    this.draw();
+    this.renderNets();
   }
 
   private routeNow(): void {

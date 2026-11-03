@@ -547,6 +547,22 @@ describe("view/electronics-modal", () => {
       modal.overlay.querySelectorAll(`.${cls}`)[i].dispatch("click", {});
     }
 
+    it("clear routes empties the traces and keeps the parts, the nets and the hand-drawn wires", () => {
+      const { modal } = withCopper();
+      const wire = { id: "w1", pts: [{ x: 0.2, y: 1.4 }, { x: 0.8, y: 1.4 }] };
+      modal.circuit = { ...modal.circuit, wires: [wire] };
+      expect(modal.routed.traces.length).toBeGreaterThan(0);
+      const leds = modal.circuit.leds.length, nets = modal.circuit.nets;
+      press(modal, "el-route-clear");
+      expect(modal.routed.traces).toHaveLength(0);
+      expect(modal.circuit.leds).toHaveLength(leds);
+      expect(modal.circuit.nets).toEqual(nets);
+      expect(modal.circuit.wires).toEqual([wire]);
+      expect(modal.circuit.battery).toBeTruthy();
+      // The plan is gone, so the Route button and the strip say so.
+      expect(modal.stale).toBe(true);
+    });
+
     it("re-plans a part seated in a run on the spot once Auto is turned on", () => {
       // Placing a part in a run is an edit that still asks the segment, so under Auto it plans there and
       // then. What it is NOT asserted on any more is an LED or the battery: those two are the PWR and GND
