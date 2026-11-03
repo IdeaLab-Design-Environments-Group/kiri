@@ -1520,8 +1520,8 @@ export class ElectronicsModal {
    * the plan alone would leave the author holding a canvas that shows a wire and a sheet that has none.
    * `manualTraces` hands back plain {@link Trace2D}s precisely so no export needs a branch for them.
    *
-   * NOT what the router sees. `planRoutes` does not read `circuit.wires`, so it still plans as though the
-   * drawn copper were not there; that gap is known and is not this method's to close.
+   * `routed.traces` never includes the wires: `planRoutes` routes declared nets around them and reports
+   * bus copper laid through one as a `wire-short` netlist fault, but does not return them as its own.
    */
   private allTraces(): Trace2D[] {
     return [...this.routed.traces, ...manualTraces(this.wireContext())];

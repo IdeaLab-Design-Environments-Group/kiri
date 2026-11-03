@@ -80,7 +80,8 @@ export interface NetlistFault {
     | "unknown-component"
     | "duplicate-terminal"
     | "single-terminal-net"
-    | "pads-too-close";
+    | "pads-too-close"
+    | "wire-short";
   /** Human-readable, and specific enough to act on. */
   why: string;
   part?: number;

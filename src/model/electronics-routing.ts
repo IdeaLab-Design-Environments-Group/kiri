@@ -61,6 +61,7 @@ import {
 import { CALIBRATED_DEMAND, tapeMmForDemand, traceDemand } from "./tape-demand.js";
 import { resolveNetlist, type NetlistFault } from "./netlist.js";
 import { planNets, type RoutedNet } from "./net-routing.js";
+import { manualTraces, wireShorts } from "./manual-wire.js";
 import { type Box, type Footprint, type Pad, padAt, padSize } from "./footprint.js";
 import {
   add,
@@ -1254,23 +1255,34 @@ function routeDeclaredNets(
    *  running a rail out of them — see `netlist.ts`, the `BATTERY_PART` branch. */
   batteryPads?: { pwr: Vec2; gnd: Vec2 },
 ): { traces: Trace2D[]; nets: RoutedNet[]; faults: NetlistFault[] } {
-  if (!circuit.nets?.length) return { traces: [], nets: [], faults: [] };
+  // The author's wires are copper the nets must route around, and the bus, laid without them, may already
+  // run through one: that is reported here as a short, since nothing else would.
+  const drawn = manualTraces({ faces, gaps, circuit, tapeW, tapeMm });
+  if (!circuit.nets?.length) return { traces: [], nets: [], faults: wireShorts(drawn, bus, tapeW) };
   // Widths carried over, not dropped. A rail pinches to about a third of the tape where it passes an LED,
   // and handing the clearance gate a bare polyline made every net keep a full tape width from copper that
   // narrow — room given away for nothing.
-  const rails = bus.map((t) => ({
+  const asRail = (t: Trace2D): { net: string; pts: Vec2[]; widths?: number[] } => ({
     net: t.net,
     pts: t.pts,
     ...(t.widths ? { widths: t.widths } : t.width !== undefined ? { widths: t.pts.map(() => t.width!) } : {}),
-  }));
+  });
+  const rails = bus.map(asRail);
   const { nets, faults, fields, pads } =
     resolveNetlist(circuit, tapeW, tapeMm, new Set(rails.map((r) => r.net)), batteryPads);
-  if (!nets.length) return { traces: [], nets: [], faults };
+  if (!nets.length) return { traces: [], nets: [], faults: [...faults, ...wireShorts(drawn, bus, tapeW)] };
   // The bus goes over as `rails` and NOT also as `obstacles`. Passed twice it arrives twice — once tagged
   // with the net it is a rail for and once anonymously — and the anonymous copy is not excluded from a
   // net's own clearance test, so every tap is refused by the very rail it is trying to reach.
-  const routed = planNets(nets, faces, gaps, tapeW, [], sheet, tapeMm, rails, fields, pads);
-  return { traces: routed.traces, nets: routed.nets, faults };
+  // Hand wires go the same way, tagged with their own net, so a declared net may land on (and tap) a wire
+  // drawn on it while every other net keeps clear. They stay out of `resolveNetlist`'s rail set above: a
+  // wire does not run out of the battery's squares the way a bus rail does.
+  const routed = planNets(nets, faces, gaps, tapeW, [], sheet, tapeMm, [...rails, ...drawn.map(asRail)], fields, pads);
+  return {
+    traces: routed.traces,
+    nets: routed.nets,
+    faults: [...faults, ...wireShorts(drawn, [...bus, ...routed.traces], tapeW)],
+  };
 }
 
 /**

@@ -627,3 +627,64 @@ describe("model/electronics-routing", () => {
     });
   });
 });
+
+describe("hand-drawn wires", () => {
+  /** A free-point wire on `net`, three tape widths long, square across the middle of `t`'s longest segment. */
+  function across(t: Trace2D, tapeW: number, net: string) {
+    let best = 1, bl = 0;
+    for (let k = 1; k < t.pts.length; k++) {
+      const L = Math.hypot(t.pts[k]!.x - t.pts[k - 1]!.x, t.pts[k]!.y - t.pts[k - 1]!.y);
+      if (L > bl) { bl = L; best = k; }
+    }
+    const p = t.pts[best - 1]!, q = t.pts[best]!;
+    const mx = (p.x + q.x) / 2, my = (p.y + q.y) / 2;
+    const ux = (q.x - p.x) / bl, uy = (q.y - p.y) / bl, h = tapeW * 1.5;
+    return {
+      id: "w1",
+      net,
+      pts: [{ kind: "free" as const, x: mx - uy * h, y: my + ux * h }, { kind: "free" as const, x: mx + uy * h, y: my - ux * h }],
+    };
+  }
+
+  it("routes a declared net clear of a wire drawn across its path", { timeout: 60_000 }, () => {
+    const { faces, gaps } = load("akde-hex.fkld");
+    const area = (i: number) => Math.abs(faces[i]!.poly.reduce((s, p, k, poly) => {
+      const q = poly[(k + 1) % poly.length]!; return s + p.x * q.y - q.x * p.y;
+    }, 0));
+    const big = faces.map((_, i) => i).sort((a, b) => area(b) - area(a));
+    const A = big[0]!;
+    const far = (k: number) => Math.hypot(faces[k]!.centroid.x - faces[A]!.centroid.x, faces[k]!.centroid.y - faces[A]!.centroid.y);
+    const B = big.slice(1).sort((x, y) => far(y) - far(x))[0]!;
+    const base: Circuit = {
+      leds: [], battery: null,
+      parts: [
+        { component: "C_1206", ...faces[A]!.centroid, free: true, rot: 0 },
+        { component: "C_1206", ...faces[B]!.centroid, free: true, rot: 0 },
+      ],
+      nets: [{ id: "n1", name: "N1" }, { id: "n2", name: "N2" }],
+      terminals: [{ part: 0, pad: "1", net: "n1" }, { part: 1, pad: "1", net: "n1" }],
+    };
+    const before = planRoutes(faces, gaps, base).traces.filter((t) => t.net === "n1");
+    expect(before.length).toBeGreaterThan(0);
+    const wire = across(before[0]!, tapeWidthFor(faces, undefined, undefined, base), "n2");
+    const withWire: Circuit = { ...base, wires: [wire] };
+    const tapeW = tapeWidthFor(faces, undefined, undefined, withWire);
+    const drawn: Trace2D = { net: "n2", pts: wire.pts.map((p) => ({ x: p.x, y: p.y })) };
+    const after = planRoutes(faces, gaps, withWire);
+    expect(countNetCrossings([...after.traces, drawn])).toBe(0);
+    expect(overlapLength([...after.traces, drawn], tapeW)).toBe(0);
+  });
+
+  it("reports a wire-short where the bus is laid through a wire of another net", { timeout: 60_000 }, () => {
+    const { faces, gaps } = load("akde-hex.fkld");
+    const base: Circuit = { leds: ledsOn(gaps, 3), battery: { face: 0 } };
+    const rail = planRoutes(faces, gaps, base).traces.find((t) => t.net === "pwr")!;
+    const tapeW = tapeWidthFor(faces, undefined, undefined, base);
+    const shorted = planRoutes(faces, gaps, { ...base, wires: [across(rail, tapeW, "w1")] });
+    expect(shorted.netFaults.map((f) => f.kind)).toContain("wire-short");
+    expect(shorted.netFaults.find((f) => f.kind === "wire-short")!.net).toBe("w1");
+    // The same wire on the rail's own net joins it and shorts nothing.
+    const joined = planRoutes(faces, gaps, { ...base, wires: [across(rail, tapeW, "pwr")] });
+    expect(joined.netFaults.map((f) => f.kind)).not.toContain("wire-short");
+  });
+});

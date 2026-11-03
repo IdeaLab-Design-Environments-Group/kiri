@@ -26,15 +26,13 @@ import {
   type GapEdge,
   type Vec2,
 } from "./electronics.js";
-import {
-  TAPE_MM,
-  batteryTerminals,
-  ledSeat,
-  patternDiag,
-  seatLed,
-  type Trace2D,
-} from "./electronics-routing.js";
-import { padPosition } from "./netlist.js";
+// From the modules that define them, not through `electronics-routing.js`: the router resolves these
+// wires itself (see `routeDeclaredNets`), so importing it back here would be a runtime cycle.
+import { TAPE_MM } from "./tape-width.js";
+import { batteryTerminals, ledSeat, seatLed } from "./pad-landing.js";
+import { patternDiag, segNearSeg } from "./trace-geometry.js";
+import type { Trace2D } from "./trace-types.js";
+import { padPosition, type NetlistFault } from "./netlist.js";
 import { footprintById } from "./library.js";
 
 /**
@@ -212,4 +210,36 @@ export function manualTraces(ctx: WireContext): Trace2D[] {
     if (t) out.push(t);
   }
   return out;
+}
+
+/**
+ * Where routed copper touches a hand-drawn wire of another net, one fault per wire.
+ *
+ * The declared nets are routed around the wires (they go to `planNets` as immovable copper), but the bus is
+ * laid first and does not see them, so a rail can still run straight through a wire. That is a short on the
+ * sheet, and this is what says so rather than leaving it to a draft check that only ever ran while drawing.
+ *
+ * "Touching" is the router's own rule for two runs: centrelines closer than half the two widths summed.
+ */
+export function wireShorts(wires: Trace2D[], routed: Trace2D[], tapeW: number): NetlistFault[] {
+  const faults: NetlistFault[] = [];
+  const touches = (a: Trace2D, b: Trace2D): boolean => {
+    const gap = ((a.width ?? tapeW) + (b.width ?? tapeW)) / 2;
+    for (let i = 1; i < a.pts.length; i++) {
+      for (let j = 1; j < b.pts.length; j++) {
+        if (segNearSeg(a.pts[i - 1]!, a.pts[i]!, b.pts[j - 1]!, b.pts[j]!) < gap) return true;
+      }
+    }
+    return false;
+  };
+  for (const w of wires) {
+    const hit = routed.find((o) => o.net !== w.net && touches(w, o));
+    if (!hit) continue;
+    faults.push({
+      kind: "wire-short",
+      why: `routed ${hit.net} copper runs into the hand-drawn wire on ${w.net}: move the wire or re-route`,
+      net: w.net,
+    });
+  }
+  return faults;
 }
