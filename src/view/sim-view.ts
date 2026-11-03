@@ -28,9 +28,10 @@ export interface SimView {
    * Report how the fold is doing, whenever it changes: `stretch` is the mean tensile bar strain
    * (0.01 = 1%), `held` says the guide is still holding the shape and has not been let go of yet.
    * Origami Simulator keeps the same number on screen at all times, and that is what makes a fold
-   * that is really a shape-blend visible instead of plausible.
+   * that is really a shape-blend visible instead of plausible. `error` is set once, when the solver
+   * threw and the fold has stopped.
    */
-  setStatusListener(fn: (s: { stretch: number; held: boolean; drive: FoldDrive }) => void): void;
+  setStatusListener(fn: (s: { stretch: number; held: boolean; drive: FoldDrive; error?: string }) => void): void;
   warmToTarget(): void;
   start(): void;
   stop(): void;

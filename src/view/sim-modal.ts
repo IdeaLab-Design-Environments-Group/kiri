@@ -271,7 +271,11 @@ export class SimModal {
       // against the previous scene would point at vertices that no longer exist.
       this.canvas.setOverlay(this.traces);
       this.canvas.setOverlayVisible(this.showElectronics);
-      this.canvas.setStatusListener(({ stretch, held, drive }) => {
+      this.canvas.setStatusListener(({ stretch, held, drive, error }) => {
+        if (error) {
+          this.statusEl.textContent = `Fold stopped: ${error}`;
+          return;
+        }
         const pct = stretch * 100;
         // Origami Simulator paints strain red past 5%; the same threshold reads here as "this is no
         // longer a fold the sheet could make".

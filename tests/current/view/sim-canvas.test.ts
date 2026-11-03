@@ -360,6 +360,32 @@ describe("view/sim-canvas", () => {
     expect(seen.at(-1)).toBe(false); // and it says so when it lets go
   });
 
+  it("stops the fold and reports it when the solver throws", async () => {
+    // A frame that threw used to escape `loop` before it asked for the next frame, so the viewer
+    // froze with nothing on screen to say why.
+    const { SimCanvas } = await import("../../../src/view/sim-canvas.js");
+    const container = { clientWidth: 400, clientHeight: 300, appendChild: vi.fn() } as any;
+    const canvas = new SimCanvas(container);
+    const scene = makeScene({ pinned: false });
+    scene.solver.step.mockImplementation(() => {
+      throw new RangeError("Map maximum size exceeded");
+    });
+    gpuCreate.mockReturnValueOnce(null);
+    canvas.setScene(scene);
+
+    const errors: (string | undefined)[] = [];
+    canvas.setStatusListener(({ error }: { error?: string }) => errors.push(error));
+    canvas.setFoldPercent(1);
+    canvas.start();
+    const loop = raf.mock.calls[0]?.[0] as (() => void) | undefined;
+    loop?.();
+    loop?.();
+
+    expect(errors).toEqual(["Map maximum size exceeded"]);
+    expect(scene.solver.step).toHaveBeenCalledTimes(1);
+    expect(raf.mock.calls.length).toBeGreaterThan(2); // still rendering, so the model can be orbited
+  });
+
   it("splits the printed tiles when Detail is turned up, and puts them back when it is turned down", async () => {
     // The Detail slider had no effect at all: `tileDetail` was stored and the tile builder never read
     // it, so every level drew one tile per face. The default level still must -- that is the base

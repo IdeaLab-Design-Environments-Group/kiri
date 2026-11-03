@@ -158,6 +158,24 @@ describe("view/sim-modal", () => {
     expect(canvasInstances[0]?.stop).toHaveBeenCalled();
   });
 
+  it("shows why the fold stopped when the solver throws", async () => {
+    const { document } = installDom();
+    const { SimModal } = await import("../../../src/view/sim-modal.js");
+    const modal = new SimModal();
+    const scene = {
+      net: { vertices: [{}], faces: [[0, 0, 0]], edges: [] },
+      model: { creases: { count: 0 } },
+    } as unknown as FoldScene;
+    modal.setProvider(() => ({ scene, title: "sample" }));
+
+    await modal.open();
+    const listener = canvasInstances[0]!.setStatusListener.mock.calls.at(-1)![0];
+    listener({ stretch: 0, held: false, drive: "chord", error: "Map maximum size exceeded" });
+
+    const status = document.body.children[0]!.querySelector(".sim-status")!;
+    expect(status.textContent).toBe("Fold stopped: Map maximum size exceeded");
+  });
+
   it("offers an electronics toggle only when there is something to show", async () => {
     const { document } = installDom();
     const { SimModal } = await import("../../../src/view/sim-modal.js");

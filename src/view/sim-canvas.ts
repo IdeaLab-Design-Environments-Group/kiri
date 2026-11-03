@@ -169,7 +169,7 @@ export class SimCanvas implements SimView {
   private running = false;
   /** Drives the solver over time — owns foldPercent and the cadence. See `sim/fold-run.ts`. */
   private runner: FoldRunner | null = null;
-  private onStatus: ((s: { stretch: number; held: boolean; drive: FoldDrive }) => void) | null = null;
+  private onStatus: ((s: { stretch: number; held: boolean; drive: FoldDrive; error?: string }) => void) | null = null;
   private lastReported = -1;
   /** Last `held` flag sent to the status listener, so a change in it is reported on its own. */
   private lastHeld: boolean | null = null;
@@ -355,7 +355,7 @@ export class SimCanvas implements SimView {
   }
 
   /** Subscribe to fold-quality updates (mean tensile strain + whether the guide is still held). */
-  setStatusListener(fn: (s: { stretch: number; held: boolean; drive: FoldDrive }) => void): void {
+  setStatusListener(fn: (s: { stretch: number; held: boolean; drive: FoldDrive; error?: string }) => void): void {
     this.onStatus = fn;
     this.lastReported = -1;
   }
@@ -422,7 +422,20 @@ export class SimCanvas implements SimView {
 
   private advance(): void {
     if (!this.fold || this.frozen || !this.runner) return; // frozen: hold the pose, orbit only
-    this.runner.frame();
+    try {
+      this.runner.frame();
+    } catch (err) {
+      // A solver that throws mid-fold would otherwise take the render loop down with it. Hold the
+      // last pose and say why it stopped; scrubbing the fold tries again.
+      this.frozen = true;
+      this.onStatus?.({
+        stretch: meanTensileStrain(this.fold.model),
+        held: false,
+        drive: this.fold.model.foldDrive ?? "chord",
+        error: (err as Error).message ?? String(err),
+      });
+      return;
+    }
     this.flushGeometry();
     this.reportStatus();
     this.maybeFreeze();
