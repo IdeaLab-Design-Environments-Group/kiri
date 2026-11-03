@@ -231,26 +231,72 @@ describe("model/manual-override", () => {
       const tapeW = tapeWidthFor(faces);
       const traces = planRoutes(faces, gaps, circuit).traces;
       const rail = traces.find((t) => t.net === "pwr")!;
-      const [v, w2] = [rail.pts[2]!, rail.pts[3]!];
+      // The first segment of the rail that is a stretch of rail rather than the LED's own leg: more than ten
+      // tape widths long, taken from the vertex it starts at. This used to be `pts[2]`/`pts[3]`, which was
+      // such a segment only while an LED's leg was laid as a separate stub; since e7bdc6a the leg is the
+      // short first piece of the run that passes the pad (0.043 units here, a tape width), and that index
+      // lands on it. What that short piece costs is pinned separately, below.
+      const k = rail.pts.findIndex(
+        (p, i) => i > 0 && Math.hypot(p.x - rail.pts[i - 1]!.x, p.y - rail.pts[i - 1]!.y) > tapeW * 10,
+      );
+      const [v, w2] = [rail.pts[k - 1]!, rail.pts[k]!];
       const along = (u: number): Vec2 => ({ x: v.x + (w2.x - v.x) * u, y: v.y + (w2.y - v.y) * u });
       const tol = tapeW * 0.75;
       const cost = (pts: Vec2[]): number =>
         selfOverlapLength([...traces, { net: "pwr", pts }], tol) - selfOverlapLength(traces, tol);
-      return { v, along, cost };
+      return { v, w2, along, cost };
     };
 
     it("charges nothing for a wire snapped to the exact vertex it joins", { timeout: 20_000 }, () => {
-      const { v, along, cost } = spine();
+      const { v, w2, along, cost } = spine();
       expect(cost([{ ...v }, along(0.6)]), "along the rail from its vertex").toBe(0);
-      expect(cost([{ ...v }, { x: v.x, y: v.y + 0.25 }]), "away from the rail from its vertex").toBe(0);
+      // Away from the rail: square to the segment, 0.25 units out. This was straight up (`v.y + 0.25`),
+      // which met the old vertex at 45 degrees to the way the rail came in; the vertex is now the one after
+      // the LED's leg, where straight up runs back down the leg and past the pad, so the direction is taken
+      // from the segment instead of from the page. The side is the one with no other run of the net inside a
+      // tolerance: square to the segment the other way it lies across the neighbouring strip and is charged
+      // 0.4705 -- crowding, as in the pinned limitation in snap-identity, not a failure of the shared end.
+      const L = Math.hypot(w2.x - v.x, w2.y - v.y);
+      const out = { x: v.x + ((w2.y - v.y) / L) * 0.25, y: v.y - ((w2.x - v.x) / L) * 0.25 };
+      expect(cost([{ ...v }, out]), "away from the rail from its vertex").toBe(0);
+    });
+
+    it("charges a wire drawn along an LED's own leg, which is shorter than the tape is wide", { timeout: 20_000 }, () => {
+      // The case the fixture used to be and no longer is. The rail's third vertex is the LED's pad and the
+      // segment after it is the leg itself, 0.043 units on house -- under one tape width (0.046) -- followed
+      // by a turn onto the rest of the run. A wire snapped to the pad and drawn 60% of the way along the leg
+      // shares its end with the leg and the segment before it, but the segment after the leg starts less
+      // than a tolerance from where it stops, and shares nothing with it. Measured 0.047310 (units of copper
+      // lying on its own net) against the 0 this stretch cost when the leg was a separate stub; the wire
+      // that leaves the leg at a right angle, away from the rail, is still free. Not a defect of the tape:
+      // there is one strip here, laid once, and the charge is `selfOverlapLength` reading two segments of
+      // one strip that happen to be a tape width apart.
+      const { faces, gaps, circuit } = house(6);
+      const tapeW = tapeWidthFor(faces);
+      const traces = planRoutes(faces, gaps, circuit).traces;
+      const rail = traces.find((t) => t.net === "pwr")!;
+      const [v, w2] = [rail.pts[2]!, rail.pts[3]!];
+      const tol = tapeW * 0.75;
+      const cost = (pts: Vec2[]): number =>
+        selfOverlapLength([...traces, { net: "pwr", pts }], tol) - selfOverlapLength(traces, tol);
+      const along = { x: v.x + (w2.x - v.x) * 0.6, y: v.y + (w2.y - v.y) * 0.6 };
+      expect(Math.hypot(w2.x - v.x, w2.y - v.y), "the leg is shorter than a tape width").toBeLessThan(tapeW);
+      expect(cost([{ ...v }, along])).toBeCloseTo(0.04731, 4);
+      expect(cost([{ ...v }, { x: v.x, y: v.y + 0.25 }])).toBe(0);
     });
 
     it("charges in full for a wire that misses the vertex, however narrowly", { timeout: 20_000 }, () => {
       // This is the hazard the router change has to answer, and the reason a same-net exemption for fixed
       // copper cannot just lean on `sharesEnd`.
-      const { v, along, cost } = spine();
-      expect(cost([{ x: v.x + 1e-6, y: v.y }, along(0.6)]), "a millionth off the vertex").toBeGreaterThan(1);
-      expect(cost([along(0.2), along(0.8)]), "drawn along the rail, touching no vertex").toBeGreaterThan(1);
+      const { v, w2, along, cost } = spine();
+      // "More than 1" was a figure for a 0.83-unit segment: the charge is the wire's own length lying on the
+      // rail plus the rail's lying on the wire, so it is 1.2 times the segment, about the segment's own
+      // length again. The segment is now 0.79 (it starts at the leg's far end, not at the pad), so the bar
+      // is stated as that 1.2 times the segment, which is what the number always meant: the wire along
+      // the rail measured 0.9916 against a bar of 0.95.
+      const bar = 1.2 * Math.hypot(w2.x - v.x, w2.y - v.y);
+      expect(cost([{ x: v.x + 1e-6, y: v.y }, along(0.6)]), "a millionth off the vertex").toBeGreaterThan(bar);
+      expect(cost([along(0.2), along(0.8)]), "drawn along the rail, touching no vertex").toBeGreaterThan(bar);
     });
   });
 
