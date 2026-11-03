@@ -141,16 +141,20 @@ export const SWITCH_KEEPOUT_MM = 1;
  * Written once and used for every part, so the switch's number and a new part's come out of the same
  * arithmetic rather than one being the constant and the other a re-derivation that drifts from it.
  */
-export function neckFor(part: { pitch: number; pad: Box }): number {
+export function neckFor(
+  part: { pitch: number; pad: Box },
+  /**
+   * The tape the plan is cut from, in mm. The module-level constants (`SWITCH_NECK_MM` and friends) are
+   * computed once at load and take `TAPE_MM`; the router passes the plan's own `tapeMmFor`. They are not
+   * interchangeable on a wider roll: the tape's edge then reaches further out towards the idle pad, so the
+   * neck has to be LONGER. Read off the 1.5mm constant under `tapeChoice: "area"`, house's 5.17mm tape
+   * ended flush against the idle pad.
+   */
+  tapeMm: number = TAPE_MM,
+): number {
   const reach = part.pad.h / 2 + SWITCH_KEEPOUT_MM;
   // How far past the tape's edge the idle pad's column sits — sideways clearance we get for free.
-  //
-  // `TAPE_MM`, not the roll the router actually chose, and knowingly: this feeds module-level constants
-  // (`SWITCH_NECK_MM` and friends) that are computed once at load, so it cannot see a per-pattern choice.
-  // Under `tapeChoice: "area"` on a large-tiled model the tape is wider than this assumes and the neck
-  // comes out slightly generous — the part gets a little more room than it strictly needs, which is the
-  // safe direction to be wrong in. Making it exact means making those constants per-pattern.
-  const lateral = Math.max(0, part.pitch - TAPE_MM / 2);
+  const lateral = Math.max(0, part.pitch - tapeMm / 2);
   // Sideways alone may already clear it, on a part whose pads are far enough out; then the neck is only
   // what keeps the tape from ending inside the housing.
   const along = reach * reach - lateral * lateral;
@@ -161,7 +165,7 @@ export const SWITCH_NECK_MM = neckFor({ pitch: SWITCH_PITCH_MM, pad: SPDT.pad })
 
 export const SWITCH_GAP_MM = SWITCH_ROW_MM + SWITCH_NECK_MM;
 
-export function partFit(fp: Footprint): PartFit {
+export function partFit(fp: Footprint, /** See {@link neckFor}. */ tapeMm: number = TAPE_MM): PartFit {
   const across = acrossPart(fp);
   if (!across) {
     const row = inlineTerminals(fp);
@@ -181,7 +185,7 @@ export function partFit(fp: Footprint): PartFit {
     const gap = Math.abs(ax.along(last) - ax.along(first)) - (alongExt(first) + alongExt(last)) / 2;
     return { rows: 1, gap, before: gap, after: gap };
   }
-  const gap = across.rowSep + neckFor(across);
+  const gap = across.rowSep + neckFor(across, tapeMm);
   // As the switch pass has always reserved it: the part's own half-gap plus a pad, either side.
   //
   // `pad.h`, the ALONG-run extent, because that is the axis a reserve is measured in — `before`/`after` are

@@ -17,15 +17,20 @@ import {
   SWITCH_PITCH_MM,
   SWITCH_ROW_MM,
   TAPE_MM,
+  SWITCH_KEEPOUT_MM,
+  acrossRun,
   breakRuns,
   partFit,
   planRoutes,
+  tapeMmFor,
   tapeWidthFor,
   totalLength,
 } from "../../../src/model/electronics-routing.js";
 import { printScale } from "../../../src/model/print-scale.js";
+import { stripsOverlap } from "../../../src/model/trace-geometry.js";
 import { MM_PER_INCH, type Footprint } from "../../../src/model/footprint.js";
 import { RESISTOR, SPDT } from "../../../src/model/parts.js";
+import { DEFAULT_SHEET, type SheetSpec } from "../../../src/model/fold-strain.js";
 import {
   C_1206,
   LED_1206,
@@ -504,6 +509,48 @@ describe("model/part-routing", () => {
     const r = planRoutes(spout.faces, spout.gaps,
       { ...spout.base, parts: [{ component: "SOT_23_3", x: 32.1198, y: 38.9169 }] });
     expect(r.parts).toEqual([]);
+  });
+
+  it("pulls the tape back from a switch's idle throw by the plan's own tape width", () => {
+    // The neck is solved against how far the idle pad sits outside the tape's edge, and it read that edge off
+    // the 1.5mm constant. Under `tapeChoice: "area"` house gets 5.17mm tape, whose edge reaches past the idle
+    // pad's centre: the neck came out at half a pad, and the outgoing tape ended flush against the pad.
+    // Now 0.97mm: the run turns just past the cut, and the turn's corner shaves a little off the 1mm keep-out.
+    const fold = JSON.parse(readFileSync(`${EXAMPLES}house.fkld`, "utf8"));
+    const faces = flatFaces(fold);
+    const gaps = gapGraph(fold, faces).gaps;
+    const seen = new Set<string>();
+    const leds = [];
+    for (const g of gaps) {
+      const l = ledOf(g.faceA, g.faceB);
+      const key = `${l.a}_${l.b}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      leds.push(l);
+      if (leds.length >= 2) break;
+    }
+    const sheet: SheetSpec = { ...DEFAULT_SHEET, tapeChoice: "area" };
+    const base: Circuit = { leds, battery: { face: 0 } };
+    const tapeW = tapeWidthFor(faces, undefined, sheet, base);
+    const k = tapeW / tapeMmFor(faces, undefined, sheet, base);
+    expect(tapeW / k).toBeGreaterThan(3);
+    const r = planRoutes(faces, gaps, { ...base, switches: [{ x: 5.7849, y: 7.525 }] }, undefined, sheet);
+    const s = r.switches[0]!;
+    expect(s).toBeDefined();
+    const L = Math.hypot(s.b.x - s.a.x, s.b.y - s.a.y);
+    const u = { x: (s.b.x - s.a.x) / L, y: (s.b.y - s.a.y) / L };
+    const p = acrossRun(u, s.flip);
+    const idle = {
+      x: s.a.x + u.x * SWITCH_ROW_MM * k - p.x * SWITCH_PITCH_MM * k,
+      y: s.a.y + u.y * SWITCH_ROW_MM * k - p.y * SWITCH_PITCH_MM * k,
+    };
+    const h = (SPDT.pad.h * k) / 2;
+    const [i0, i1] = [{ x: idle.x - u.x * h, y: idle.y - u.y * h }, { x: idle.x + u.x * h, y: idle.y + u.y * h }];
+    const out = r.traces.find((t) => t.width === undefined && t.pts[0]!.x === s.b.x && t.pts[0]!.y === s.b.y)!;
+    for (let i = 1; i < out.pts.length; i++) {
+      expect(stripsOverlap(i0, i1, out.pts[i - 1]!, out.pts[i]!, SPDT.pad.w * k, tapeW, SWITCH_KEEPOUT_MM * k * 0.9))
+        .toBe(false);
+    }
   });
 
   it("leaves no zero-length segment where a break ends on a corner", () => {

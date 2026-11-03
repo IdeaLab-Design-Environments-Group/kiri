@@ -132,7 +132,6 @@ export { crossesAny, patternDiag, ptKey, segsCross } from "./trace-geometry.js";
 import { type Target, nearestTour, tourOf, twoOpt } from "./led-tour.js";
 import { asTree, dodgeChips, junctions, straighten } from "./trace-shaping.js";
 import {
-  SWITCH_GAP_MM,
   SWITCH_PITCH_MM,
   SWITCH_ROW_MM,
   breakAndSeat,
@@ -142,6 +141,7 @@ import {
   clearOfOtherNet,
   idleSide,
   landsBypass,
+  neckFor,
   partFit,
   splitRun,
   switchLand,
@@ -152,6 +152,7 @@ import {
 export {
   RESISTOR_MM,
   SWITCH_GAP_MM,
+  SWITCH_KEEPOUT_MM,
   SWITCH_NECK_MM,
   SWITCH_PITCH_MM,
   SWITCH_ROW_MM,
@@ -1152,7 +1153,9 @@ export function planRoutes(
   // to the rail now, not along it, so a much shorter run will take one.
   const toFlat = (mm: number): number => (mm * tapeW) / tapeMm;
   const swPad = SPDT.pad;
-  const swReach = toFlat(SWITCH_GAP_MM / 2 + swPad.w);
+  // The plan's own tape, not the module constant: a wider roll needs a longer neck — see `neckFor`.
+  const swGap = SWITCH_ROW_MM + neckFor({ pitch: SWITCH_PITCH_MM, pad: swPad }, tapeMm);
+  const swReach = toFlat(swGap / 2 + swPad.w);
   // A seat that shorts the two nets through the part is no seat at all — refuse it and let it be reported.
   // Likewise one whose lands run over an LED: its chip, or its leg on the other net. `ledKeepOut` runs
   // from the PWR leg's end to the GND leg's, so a PWR land is kept off it from the PWR pad on.
@@ -1163,7 +1166,7 @@ export function planRoutes(
       return segNearSeg(l.pts[i]!, b, from, to) >= ((l.width ?? tapeW) + tapeW) / 2;
     })));
   const switchFlips = circuit.switches ?? [];
-  const withSw = breakAndSeat(withRes.traces, circuit.switches ?? [], toFlat(SWITCH_GAP_MM), {
+  const withSw = breakAndSeat(withRes.traces, circuit.switches ?? [], toFlat(swGap), {
     before: swReach,
     after: swReach,
   }, ledKeepOut, (span, laid) => {
@@ -1206,7 +1209,7 @@ export function planRoutes(
     // A part the library no longer has is left unplaced rather than guessed at — same as one that
     // does not fit, and the status line reports it the same way.
     if (!fp) continue;
-    const fit = partFit(fp);
+    const fit = partFit(fp, tapeMm);
     if (!(fit.gap > 0)) continue; // nothing to break a rail for
     // The bare strip between the cut ends is weeded like an LED's, so it is refused below the same floor
     // `seatLed` refuses an LED_0603 at — an 0603 bridges 0.70mm.
