@@ -32,8 +32,10 @@ import { type AcrossPart, acrossPart, inlineNamedTerminals, padAxis, padRunBox, 
 import { R_1206, SW_SPDT } from "./footprints.generated.js";
 import { footprintById } from "./library.js";
 import { designators, partSvg } from "./part-render.js";
-import { type Side, type Win, SIDES, alongSide, densify, onWindow, pickTab, sideSpans } from "./carrier-tabs.js";
-export type { Win } from "./carrier-tabs.js";
+import {
+  type Side, type Win, SIDES, alongSide, densify, onWindow, openAtMany, pickTab, sideSpans,
+} from "./carrier-tabs.js";
+export { type Win, openAround, openAtMany } from "./carrier-tabs.js";
 
 const MARGIN = 8; // mm — must match the FKLD SVG export or the layers import misaligned
 
@@ -639,134 +641,6 @@ function pointInRing(p: Vec2, ring: Vec2[]): boolean {
     } else if (b.y <= p.y && side < 0) wind--;
   }
   return wind !== 0;
-}
-
-/**
- * A closed ring, opened by `width` at each of several attachment points — one arc per gap between them.
- *
- * The single-tab case is {@link openAround}. With more than one tab the ring is no longer one arc but
- * several, and each has to be emitted once for the whole ring rather than once per tab: opening it separately
- * for each would emit a near-complete ring per tab, and the boundary would be cut two and three times over.
- *
- * Openings that overlap are merged, so two tabs landing within a tape width of each other leave one gap
- * rather than a sliver of cut between them.
- */
-export function openAtMany(
-  ring: Vec2[],
-  indices: number[],
-  width: number,
-): { arcs: Vec2[][]; openings: { from: Vec2; to: Vec2 }[] } {
-  const n = ring.length;
-  if (n < 3 || !indices.length) return { arcs: [ring.slice()], openings: [] };
-  const seg: number[] = [];
-  let total = 0;
-  for (let i = 0; i < n; i++) {
-    const a = ring[i]!, b = ring[(i + 1) % n]!;
-    const l = Math.hypot(b.x - a.x, b.y - a.y);
-    seg.push(l);
-    total += l;
-  }
-  if (!(total > 0)) return { arcs: [ring.slice()], openings: [] };
-  const at = (i: number): number => {
-    let acc = 0;
-    for (let k = 0; k < i; k++) acc += seg[k]!;
-    return acc;
-  };
-  const wrap = (v: number): number => ((v % total) + total) % total;
-  const pointAt = (v: number): Vec2 => {
-    let t = wrap(v);
-    for (let i = 0; i < n; i++) {
-      if (t <= seg[i]! || i === n - 1) {
-        const a = ring[i]!, b = ring[(i + 1) % n]!;
-        const f = seg[i]! > 0 ? Math.min(t / seg[i]!, 1) : 0;
-        return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
-      }
-      t -= seg[i]!;
-    }
-    return ring[0]!;
-  };
-  // Never open away more than half the ring in total, however many tabs land on it.
-  // Independent of how many tabs there are: a tab that turns out to be redundant is dropped later, and if
-  // the width depended on the count the survivors' openings would move when it did — leaving their sides
-  // landed on points the arcs were no longer cut at, and the boundary unable to close.
-  const half = Math.min(width / 2, total / 8);
-  // Reported back in the caller's own order, so each tab can land its sides on the very points its opening
-  // was cut at. Landing them on separately-computed points is what left the boundary unable to close: the
-  // two halves differed, and the ends missed each other by the difference.
-  const openings = indices.map((i) => ({
-    from: pointAt(at(i) - half),
-    to: pointAt(at(i) + half),
-  }));
-  const cuts = indices
-    .map((i) => ({ from: wrap(at(i) - half), to: wrap(at(i) + half) }))
-    .sort((a, b) => a.from - b.from);
-
-  const arcs: Vec2[][] = [];
-  for (let k = 0; k < cuts.length; k++) {
-    const start = cuts[k]!.to;
-    const end = cuts[(k + 1) % cuts.length]!.from;
-    const span = wrap(end - start);
-    if (span < 1e-9) continue; // the two openings meet: no copper edge between them to cut
-    // In order ALONG the arc, not in ring-index order: an arc starts wherever its opening ended, so walking
-    // the vertices from index 0 hands them over out of sequence and the outline doubles back on itself.
-    const between = [];
-    for (let i = 0; i < n; i++) {
-      const d = wrap(at(i) - start);
-      if (d > 1e-9 && d < span) between.push({ d, p: ring[i]! });
-    }
-    between.sort((x, y) => x.d - y.d);
-    const arc: Vec2[] = [pointAt(start), ...between.map((b) => b.p), pointAt(end)];
-    if (arc.length >= 2) arcs.push(arc);
-  }
-  return { arcs, openings };
-}
-
-export function openAround(ring: Vec2[], index: number, width: number): Vec2[] {
-  const n = ring.length;
-  if (n < 3) return ring.slice();
-  // Arc length to each vertex, once round.
-  const seg: number[] = [];
-  let total = 0;
-  for (let i = 0; i < n; i++) {
-    const a = ring[i]!, b = ring[(i + 1) % n]!;
-    const l = Math.hypot(b.x - a.x, b.y - a.y);
-    seg.push(l);
-    total += l;
-  }
-  if (!(total > 0)) return ring.slice();
-  // Half the tab either side of the attachment point; a tab wider than the whole ring would leave nothing
-  // to cut, so it is capped well short of that.
-  const half = Math.min(width / 2, total / 4);
-  const at = (i: number): number => {
-    let s = 0;
-    for (let k = 0; k < i; k++) s += seg[k]!;
-    return s;
-  };
-  const wrap = (s: number): number => ((s % total) + total) % total;
-  const pointAt = (s: number): Vec2 => {
-    let t = wrap(s);
-    for (let i = 0; i < n; i++) {
-      if (t <= seg[i]! || i === n - 1) {
-        const a = ring[i]!, b = ring[(i + 1) % n]!;
-        const f = seg[i]! > 0 ? Math.min(t / seg[i]!, 1) : 0;
-        return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
-      }
-      t -= seg[i]!;
-    }
-    return ring[0]!;
-  };
-
-  const s0 = wrap(at(index) + half);  // the far side of the tab: where the cut resumes
-  const s1 = wrap(at(index) - half);  // the near side: where it stops
-  const out: Vec2[] = [pointAt(s0)];
-  // Every vertex strictly between s0 and s1, walking forward and wrapping once.
-  for (let k = 1; k <= n; k++) {
-    const i = (index + k) % n;
-    const si = wrap(at(i) - s0);
-    if (si > 0 && si < wrap(s1 - s0)) out.push(ring[i]!);
-  }
-  out.push(pointAt(s1));
-  return out;
 }
 
 function ringPath(ring: Vec2[]): string {
