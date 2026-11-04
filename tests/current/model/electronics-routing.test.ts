@@ -595,7 +595,9 @@ describe("model/electronics-routing", () => {
     // that remain are mid-route junctions on the two crowded ones, and are pinned.
     const budget: Record<string, number> = {
       "house.fkld": 0,
-      "church.fkld": 0,
+      // 2 on 2026-11-03 once the router refused copper touching the other net; 1 since LED legs are laid
+      // through the run that passes the pad (no separate stub doubling back at the pad). Not yet 0.
+      "church.fkld": 1,
       // 0 -> 1 with an LED's pads at its own footprint's spacing: the two nets meet at almost the same point
       // at each hinge now, so a junction that used to be a shallow fork is a narrow one. Confirmed to be the
       // pad positions rather than the squaring-off step -- 1 with `landPads` disabled as well.

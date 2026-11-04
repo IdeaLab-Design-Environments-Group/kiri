@@ -272,7 +272,10 @@ describe("model/part-routing", () => {
       expect(r.parts, id).toHaveLength(1);
       const removed = (totalLength(plain.traces) - totalLength(r.traces)) * k;
       const fp = { R_1206, C_1206, R_2010, SW_PUSH }[id as "R_1206"]!;
-      expect(removed, id).toBeCloseTo(partFit(fp).gap, 6);
+      // Within 0.05mm, not exact: a break is cut before the LED legs are seated, and a leg that rides the
+      // run adds a vertex a few degrees off its line, so the run is a hair shorter than gap-for-gap
+      // (0.02-0.03mm on a 1.8-5.5mm gap). Without the leg change this was exact to 6 places.
+      expect(removed, id).toBeCloseTo(partFit(fp).gap, 1);
       // And the run it sat on really is in two pieces now.
       expect(r.traces.length, id).toBe(plain.traces.length + 1);
     }
@@ -291,7 +294,8 @@ describe("model/part-routing", () => {
     });
     expect(r.parts.map((p) => p.component).sort()).toEqual(["R_1206", "R_2010"]);
     const removed = (totalLength(plain.traces) - totalLength(r.traces)) * k;
-    expect(removed).toBeCloseTo(partFit(R_1206).gap + partFit(R_2010).gap, 6);
+    // Within 0.1mm: each of the two breaks is off by up to 0.05mm, see "takes out each part's own length".
+    expect(Math.abs(removed - (partFit(R_1206).gap + partFit(R_2010).gap))).toBeLessThan(0.1);
   });
 
   it("leaves out a part that will not fit, and one the library no longer has", () => {
@@ -368,9 +372,12 @@ describe("model/part-routing", () => {
       // Re-recorded on 2026-11-03, when the router began refusing PWR touching GND. akde-decagon at three
       // went 6 runs / 403 units -> 5 / 913: the old plan had 4 PWR/GND contacts, and avoiding them costs
       // the copper. akde-hex and church at three grew 6% and 51%; puffin at three lost a run.
-      ["akde-decagon-pyramid", 3, 5, 913.0393885657775],
+      // Re-recorded on 2026-11-04, for LED legs laid through the run that passes the pad instead of as a
+      // separate stub: akde-hex at three 6 -> 5 runs and 371.86 -> 369.04, house 6 -> 5 and 4.39 -> 4.36,
+      // akde-decagon 913.04 -> 912.33 (5 runs still). Nothing moved at one LED, nor on church or puffin.
+      ["akde-decagon-pyramid", 3, 5, 912.332282491698],
       ["akde-hex", 1, 2, 105.15717799886949],
-      ["akde-hex", 3, 6, 371.8569352700687],
+      ["akde-hex", 3, 5, 369.04272592190995],
       ["akde-square-pyramid", 1, 0, 0],
       ["akde-square-pyramid", 3, 2, 49.15677510965487],
       ["bistable-star-tiling", 1, 0, 0],
@@ -378,7 +385,7 @@ describe("model/part-routing", () => {
       ["church", 1, 2, 0.5390219396942254],
       ["church", 3, 6, 10.291695030652605],
       ["house", 1, 2, 0.8038265682751792],
-      ["house", 3, 6, 4.387003709496385],
+      ["house", 3, 5, 4.355771002912102],
       ["kirigami-flap", 1, 2, 68.50569501309963],
       ["kirigami-flap", 3, 2, 68.50569501309963],
       ["puffin", 1, 2, 12.996160368450141],
