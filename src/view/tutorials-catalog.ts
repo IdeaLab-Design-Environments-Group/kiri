@@ -227,6 +227,20 @@ export const TUTORIAL_SECTIONS: TutorialSection[] = [
   },
 ];
 
+/**
+ * The walkthroughs tab: long recordings that build something end to end, with narration. Their files
+ * live under `public/tutorials/walkthroughs/`, apart from the short usage clips.
+ */
+export const WALKTHROUGHS: Tutorial[] = [
+  {
+    slug: "kiri-zero-to-hero",
+    title: "kiri zero to hero",
+    blurb:
+      "One project from start to finish: load a model, cut and fold it, place and route the "
+      + "electronics, and export everything for fabrication.",
+  },
+];
+
 /** Every tutorial on the page, flat — for the tests and for the search filter. */
 export function allTutorials(): Tutorial[] {
   return TUTORIAL_SECTIONS.flatMap((s) => s.items);

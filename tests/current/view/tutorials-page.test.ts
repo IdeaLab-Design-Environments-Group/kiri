@@ -12,10 +12,11 @@ import { readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { TutorialsPage } from "../../../src/view/tutorials-page.js";
-import { TUTORIAL_SECTIONS, allTutorials } from "../../../src/view/tutorials-catalog.js";
+import { TUTORIAL_SECTIONS, WALKTHROUGHS, allTutorials } from "../../../src/view/tutorials-catalog.js";
 import { installDom, childByClass, childrenByClass, childrenByTag, type MockElement } from "./mock-dom.js";
 
 const MEDIA = fileURLToPath(new URL("../../../public/tutorials/", import.meta.url));
+const WALK_MEDIA = fileURLToPath(new URL("../../../public/tutorials/walkthroughs/", import.meta.url));
 
 /** Build the page and hand back the pieces a test drives it by. */
 function makePage(): { page: TutorialsPage; overlay: MockElement; header: MockElement } {
@@ -27,8 +28,21 @@ function makePage(): { page: TutorialsPage; overlay: MockElement; header: MockEl
   return { page, overlay, header };
 }
 
+/** The usage tab: the short clips, and everything the autoplay machinery drives. */
+function usage(overlay: MockElement): MockElement {
+  return childByClass(overlay, "tut-usage")!;
+}
+
+function walkthroughs(overlay: MockElement): MockElement {
+  return childByClass(overlay, "tut-walkthroughs")!;
+}
+
+function tab(overlay: MockElement, name: string): MockElement {
+  return childrenByClass(overlay, "tut-tab").find((b) => b.dataset.tab === name)!;
+}
+
 function cards(overlay: MockElement): MockElement[] {
-  return childrenByClass(overlay, "tut-card");
+  return childrenByClass(usage(overlay), "tut-card");
 }
 
 function visibleCards(overlay: MockElement): MockElement[] {
@@ -89,16 +103,16 @@ describe("view/tutorials-page", () => {
 
   it("builds one card per tutorial, in catalogue order", () => {
     const { overlay } = makePage();
-    const titles = childrenByClass(overlay, "tut-card-title").map((n) => n.textContent);
+    const titles = childrenByClass(usage(overlay), "tut-card-title").map((n) => n.textContent);
     expect(titles).toEqual(allTutorials().map((t) => t.title));
-    expect(childrenByClass(overlay, "tut-section")).toHaveLength(TUTORIAL_SECTIONS.length);
+    expect(childrenByClass(usage(overlay), "tut-section")).toHaveLength(TUTORIAL_SECTIONS.length);
   });
 
   it("downloads nothing until a clip is asked for", () => {
     // The page is twenty-odd videos. Opening it must cost the posters and no footage, or a workshop on
     // a shared connection spends its first minute downloading tutorials nobody chose to watch.
     const { overlay } = makePage();
-    const videos = childrenByTag(overlay, "video");
+    const videos = childrenByTag(usage(overlay), "video");
     expect(videos).toHaveLength(allTutorials().length);
     for (const video of videos) {
       expect((video as any).preload).toBe("none");
@@ -136,7 +150,7 @@ describe("view/tutorials-page", () => {
     // No IntersectionObserver: nothing can report visibility, so the fallback is what was asked for --
     // the clips run while the page is up -- and it must not be a silent no-op.
     const { overlay, header } = makePage();
-    const videos = childrenByTag(overlay, "video").map(stubPlayback);
+    const videos = childrenByTag(usage(overlay), "video").map(stubPlayback);
     trigger(header).click();
     expect(videos.every((v) => v.playing), "a clip stayed on its poster").toBe(true);
   });
@@ -153,7 +167,7 @@ describe("view/tutorials-page", () => {
     };
     try {
       const { overlay, header } = makePage();
-      const videos = childrenByTag(overlay, "video").map(stubPlayback);
+      const videos = childrenByTag(usage(overlay), "video").map(stubPlayback);
       expect(observed).toHaveLength(videos.length);
       trigger(header).click();
       expect(videos.some((v) => v.playing), "the observer decides, not `show`").toBe(false);
@@ -206,5 +220,66 @@ describe("view/tutorials-page", () => {
     search.dispatch("input");
     expect(visibleCards(overlay)).toHaveLength(0);
     expect(childByClass(overlay, "tut-tally")!.textContent).toBe(`0 of ${allTutorials().length}`);
+  });
+
+  it("names a file and a poster that exist for every walkthrough, and lists every one made", () => {
+    const onDisk = readdirSync(WALK_MEDIA);
+    for (const item of WALKTHROUGHS) {
+      expect(onDisk.includes(`${item.slug}.mp4`), `no clip for "${item.title}"`).toBe(true);
+      expect(onDisk.includes(`${item.slug}.jpg`), `no poster for "${item.title}"`).toBe(true);
+    }
+    const listed = new Set(WALKTHROUGHS.map((t) => t.slug));
+    const unlisted = onDisk.filter((f) => f.endsWith(".mp4")).map((f) => f.replace(/\.mp4$/, ""))
+      .filter((slug) => !listed.has(slug));
+    expect(unlisted).toEqual([]);
+  });
+
+  it("opens on the usage tab, and the walkthroughs tab swaps the panels", () => {
+    const { overlay } = makePage();
+    expect(usage(overlay).hidden).toBe(false);
+    expect(walkthroughs(overlay).hidden).toBe(true);
+    expect(tab(overlay, "usage").classList.contains("is-active")).toBe(true);
+
+    tab(overlay, "walkthroughs").click();
+    expect(usage(overlay).hidden).toBe(true);
+    expect(walkthroughs(overlay).hidden).toBe(false);
+    expect(tab(overlay, "walkthroughs").classList.contains("is-active")).toBe(true);
+    expect(tab(overlay, "usage").classList.contains("is-active")).toBe(false);
+    expect(childByClass(overlay, "tut-tally")!.textContent).toBe(`${WALKTHROUGHS.length} walkthroughs`);
+  });
+
+  it("builds a walkthrough card that waits to be played, unmuted", () => {
+    // A seven-minute recording that starts by itself would run past whoever opened the tab to read.
+    const { overlay, header } = makePage();
+    const videos = childrenByTag(walkthroughs(overlay), "video");
+    expect(videos).toHaveLength(WALKTHROUGHS.length);
+    const states = videos.map(stubPlayback);
+    trigger(header).click();
+    tab(overlay, "walkthroughs").click();
+    for (const video of videos) {
+      expect(video.src).toMatch(/^tutorials\/walkthroughs\/.+\.mp4$/);
+      expect((video as any).preload).toBe("none");
+      expect((video as any).muted).toBe(false);
+      expect((video as any).loop).toBe(false);
+    }
+    expect(states.some((v) => v.playing)).toBe(false);
+  });
+
+  it("stops a walkthrough that is playing when the page is left", () => {
+    const { overlay, header } = makePage();
+    const [video] = childrenByTag(walkthroughs(overlay), "video").map(stubPlayback);
+    trigger(header).click();
+    tab(overlay, "walkthroughs").click();
+    (video!.node as any).play();
+    childByClass(overlay, "tut-back")!.click();
+    expect(video!.playing).toBe(false);
+  });
+
+  it("stops the short clips when the walkthroughs tab is chosen", () => {
+    const { overlay, header } = makePage();
+    const videos = childrenByTag(usage(overlay), "video").map(stubPlayback);
+    trigger(header).click();
+    tab(overlay, "walkthroughs").click();
+    expect(videos.some((v) => v.playing), "a clip kept running behind the other tab").toBe(false);
   });
 });

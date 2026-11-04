@@ -19,12 +19,17 @@
  * `IntersectionObserver` — the test DOM, an old browser — the page falls back to playing every clip while
  * it is up, which is the behaviour asked for, just without the thrift.
  *
+ * **Two tabs.** "usage" holds the short clips above; "walkthroughs" holds long recordings of a whole
+ * project, with the narration burned into the frame. Those are the opposite case: they run for minutes, so they never
+ * start on their own, never loop, and sit outside the autoplay machinery. Switching tabs stops whatever the other
+ * tab was playing.
+ *
  * Paths are relative (`tutorials/x.mp4`, not `/tutorials/x.mp4`) because `main.ts` is built to work from
  * `file://`, where a root-relative path leaves the project entirely.
  */
 import { el } from "./dom.js";
 import { HOME, currentRoute, goToRoute, onRouteChange } from "./route.js";
-import { TUTORIAL_SECTIONS, type Tutorial } from "./tutorials-catalog.js";
+import { TUTORIAL_SECTIONS, WALKTHROUGHS, type Tutorial } from "./tutorials-catalog.js";
 
 /** The route this page answers to. `#/tutorials`. */
 const ROUTE = "tutorials";
@@ -32,13 +37,23 @@ const ROUTE = "tutorials";
 /** Where the clips and their poster frames live, relative to the document. */
 const MEDIA = "tutorials/";
 
+/** Where the walkthroughs live, apart from the short clips. */
+const WALK_MEDIA = "tutorials/walkthroughs/";
+
+type Tab = "usage" | "walkthroughs";
+
 export class TutorialsPage {
   private readonly trigger: HTMLButtonElement;
   private readonly overlay: HTMLElement;
   private readonly search: HTMLInputElement;
   /** Card element ↔ the words it can be searched by, built once. */
-  private readonly cards: { node: HTMLElement; haystack: string; section: HTMLElement }[] = [];
+  private readonly cards: { node: HTMLElement; haystack: string; section: HTMLElement; tab: Tab }[] = [];
   private readonly sections: HTMLElement[] = [];
+  private readonly panels: Record<Tab, HTMLElement>;
+  private readonly tabButtons: Record<Tab, HTMLButtonElement>;
+  private tab: Tab = "usage";
+  /** The walkthroughs: played only when asked, but still stopped when the page or the tab is left. */
+  private readonly walkVideos: HTMLVideoElement[] = [];
   private readonly tally: HTMLElement;
   /** Every clip on the page, in card order — what the autoplay machinery drives. */
   private readonly videos: HTMLVideoElement[] = [];
@@ -74,9 +89,22 @@ export class TutorialsPage {
     this.search.addEventListener("input", () => this.applyFilter());
     this.tally = el("span", "tut-tally");
     this.tally.setAttribute("aria-live", "polite");
-    header.append(back, title, this.search, this.tally);
+    const tabs = el("span", "el-seg tut-tabs");
+    tabs.setAttribute("role", "tablist");
+    const tabButton = (name: Tab, label: string): HTMLButtonElement => {
+      const b = el("button", "tut-tab") as HTMLButtonElement;
+      b.type = "button";
+      b.dataset.tab = name;
+      b.textContent = label;
+      b.setAttribute("role", "tab");
+      b.addEventListener("click", () => this.selectTab(name));
+      tabs.append(b);
+      return b;
+    };
+    this.tabButtons = { usage: tabButton("usage", "usage"), walkthroughs: tabButton("walkthroughs", "walkthroughs") };
+    header.append(back, title, tabs, this.search, this.tally);
 
-    const body = el("div", "tut-body");
+    const body = el("div", "tut-body tut-usage");
     for (const section of TUTORIAL_SECTIONS) {
       const node = el("section", "tut-section");
       const h = el("h2", "tut-section-title");
@@ -91,6 +119,7 @@ export class TutorialsPage {
           node: card,
           haystack: `${item.title} ${item.blurb}`.toLowerCase(),
           section: node,
+          tab: "usage",
         });
       }
       node.append(h, intro, grid);
@@ -98,7 +127,25 @@ export class TutorialsPage {
       this.sections.push(node);
     }
 
-    inner.append(header, body);
+    const walk = el("div", "tut-body tut-walkthroughs");
+    const walkSection = el("section", "tut-section");
+    const walkGrid = el("div", "tut-grid tut-walk-grid");
+    for (const item of WALKTHROUGHS) {
+      const card = this.buildCard(item, true);
+      walkGrid.append(card);
+      this.cards.push({
+        node: card,
+        haystack: `${item.title} ${item.blurb}`.toLowerCase(),
+        section: walkSection,
+        tab: "walkthroughs",
+      });
+    }
+    walkSection.append(walkGrid);
+    walk.append(walkSection);
+    this.sections.push(walkSection);
+    this.panels = { usage: body, walkthroughs: walk };
+
+    inner.append(header, body, walk);
     this.overlay.append(inner);
 
     const appRoot = document.querySelector("#app");
@@ -108,15 +155,15 @@ export class TutorialsPage {
       document.body?.appendChild(this.overlay);
     }
 
-    this.applyFilter();
+    this.selectTab("usage");
     this.watchVisibility();
     onRouteChange((route) => this.syncRoute(route));
     if (currentRoute() === ROUTE) this.show();
   }
 
   /** One card: heading, the clip behind its poster, and the sentence under it. */
-  private buildCard(item: Tutorial): HTMLElement {
-    const card = el("article", "tut-card");
+  private buildCard(item: Tutorial, walkthrough = false): HTMLElement {
+    const card = el("article", walkthrough ? "tut-card tut-walk-card" : "tut-card");
     const head = el("div", "tut-card-head");
     const h = el("h3", "tut-card-title");
     h.textContent = item.title;
@@ -124,15 +171,18 @@ export class TutorialsPage {
 
     const video = document.createElement("video");
     video.className = "tut-video";
-    video.src = `${MEDIA}${item.slug}.mp4`;
-    video.poster = `${MEDIA}${item.slug}.jpg`;
+    const dir = walkthrough ? WALK_MEDIA : MEDIA;
+    video.src = `${dir}${item.slug}.mp4`;
+    video.poster = `${dir}${item.slug}.jpg`;
     video.controls = true;
-    video.loop = true;
-    video.muted = true; // the recordings carry no audio track at all; this keeps autoplay policies happy
+    // The clips carry no audio track at all, so muting them keeps autoplay policies happy. A walkthrough
+    // is long: it plays once, starts only when asked, and keeps any sound it has.
+    video.loop = !walkthrough;
+    video.muted = !walkthrough;
     video.playsInline = true;
     video.preload = "none";
     video.setAttribute("aria-label", item.title);
-    this.videos.push(video);
+    (walkthrough ? this.walkVideos : this.videos).push(video);
 
     const blurb = el("p", "tut-card-blurb");
     blurb.textContent = item.blurb;
@@ -167,7 +217,8 @@ export class TutorialsPage {
     if (typeof Observer !== "function") return;
     this.observer = new Observer(
       (entries) => {
-        if (this.overlay.hidden) return; // a page on its way out must not restart anything
+        // A page on its way out, or a tab not shown, must not restart anything.
+        if (this.overlay.hidden || this.tab !== "usage") return;
         for (const entry of entries) {
           const video = entry.target as HTMLVideoElement;
           if (entry.isIntersecting) TutorialsPage.play(video);
@@ -183,7 +234,24 @@ export class TutorialsPage {
 
   /** Stop every clip. What leaving the page does, and what a paused decoder costs nothing to redo. */
   private pauseAll(): void {
-    for (const video of this.videos) TutorialsPage.pause(video);
+    for (const video of [...this.videos, ...this.walkVideos]) TutorialsPage.pause(video);
+  }
+
+  /** Show one tab's panel, stop what the other was playing, and recount for the filter. */
+  private selectTab(tab: Tab): void {
+    this.tab = tab;
+    for (const name of ["usage", "walkthroughs"] as const) {
+      this.panels[name].hidden = name !== tab;
+      this.tabButtons[name].classList.toggle("is-active", name === tab);
+      this.tabButtons[name].setAttribute("aria-selected", String(name === tab));
+    }
+    if (tab === "usage") {
+      for (const video of this.walkVideos) TutorialsPage.pause(video);
+      if (!this.observer && !this.overlay.hidden) for (const video of this.videos) TutorialsPage.play(video);
+    } else {
+      for (const video of this.videos) TutorialsPage.pause(video);
+    }
+    this.applyFilter();
   }
 
   /** Show only the cards matching the filter box, and hide a section left with nothing in it. */
@@ -191,13 +259,14 @@ export class TutorialsPage {
     const needle = this.search.value.trim().toLowerCase();
     const shown = new Set<HTMLElement>();
     let count = 0;
+    let total = 0;
     for (const card of this.cards) {
       const hit = needle === "" || card.haystack.includes(needle);
       card.node.hidden = !hit;
-      if (hit) {
-        shown.add(card.section);
-        count++;
-      }
+      if (hit) shown.add(card.section);
+      if (card.tab !== this.tab) continue;
+      total++;
+      if (hit) count++;
     }
     for (const section of this.sections) section.hidden = !shown.has(section);
     // A hidden card is not "off screen" to an observer that has already reported it, so a clip filtered
@@ -207,7 +276,8 @@ export class TutorialsPage {
       const video = card.node.querySelector("video");
       if (video) TutorialsPage.pause(video as HTMLVideoElement);
     }
-    this.tally.textContent = needle === "" ? `${count} tutorials` : `${count} of ${this.cards.length}`;
+    const noun = this.tab === "usage" ? "tutorials" : "walkthroughs";
+    this.tally.textContent = needle === "" ? `${count} ${noun}` : `${count} of ${total}`;
   }
 
   /** Show or hide the page to match the URL — Back, Forward and a pasted link all arrive here. */
@@ -222,7 +292,7 @@ export class TutorialsPage {
     this.trigger.classList.add("is-active");
     // With an observer, the clips that are on screen start on their own as it reports them. Without one,
     // there is nothing to report anything, so every clip runs while the page is up.
-    if (!this.observer) for (const video of this.videos) TutorialsPage.play(video);
+    if (!this.observer && this.tab === "usage") for (const video of this.videos) TutorialsPage.play(video);
   }
 
   /** Leaving stops whatever was playing: a clip running behind a hidden page is a download for nothing. */

@@ -1882,6 +1882,25 @@ body.is-tutorials .app-legend {
 .tut-search:focus {
   border-color: var(--accent, #2563eb);
 }
+.tut-tab {
+  font: inherit;
+  font-size: 0.82rem;
+  padding: 0.28rem 0.75rem;
+  background: #fff;
+  color: #344054;
+  cursor: pointer;
+}
+.tut-tab:hover { background: var(--surface-soft, #f8f9fb); }
+.tut-tab.is-active {
+  background: var(--accent, #2563eb);
+  color: #fff;
+}
+.tut-body[hidden] { display: none; }
+/* One walkthrough runs the width of the page: it is the one thing on the tab, and a long recording
+   of a dense editor needs the room. */
+.tut-grid.tut-walk-grid { grid-template-columns: minmax(0, 1fr); max-width: 1100px; }
+/* Recorded at 1600 x 1160, not the clips' 16:9. Capped in height so the controls stay on screen. */
+.tut-walk-card .tut-video { aspect-ratio: 1600 / 1160; max-height: calc(100vh - 220px); }
 .tut-tally {
   font-size: 0.78rem;
   color: #667085;
