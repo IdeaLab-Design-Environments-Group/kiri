@@ -19,10 +19,18 @@ permissions:
   pages: write
   id-token: write
 
-# One deployment at a time; a newer push supersedes a running one.
+# One deployment at a time. A newer push waits for the running one instead of cancelling it.
+#
+# This was `cancel-in-progress: true`. On 4 Nov two pull requests were merged back to back: the first run was
+# cancelled in the middle of `deploy-pages`, and every deployment after it then sat in the Pages queue until it
+# timed out after ten minutes. The site stayed on the old version, and redeploying the same commit failed
+# three more times, because a Pages deployment is keyed by the commit and that key was already cancelled. The
+# cancelled run is the only odd thing in that sequence, so this stops cancelling; it is the most likely cause,
+# not a proven one. A run that is waiting is still replaced by a newer one, so a quick series of merges ends
+# with the latest commit deployed.
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
