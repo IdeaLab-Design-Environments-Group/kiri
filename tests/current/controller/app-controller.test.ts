@@ -52,13 +52,8 @@ class ViewerFrameMock {
 }
 
 class HeaderActionsMock {
-  createPyramidHandler: (() => void) | null = null;
   kirigamizeHandler: (() => void) | null = null;
   enabledCalls: boolean[] = [];
-
-  onCreatePyramid(handler: () => void): void {
-    this.createPyramidHandler = handler;
-  }
 
   onKirigamize(handler: () => void): void {
     this.kirigamizeHandler = handler;
@@ -348,22 +343,6 @@ describe("controller/app-controller", () => {
       msg: "Loaded bundled sample into the viewer.",
       kind: "ok",
     });
-  });
-
-  it("creates the default AKDE pyramid and sends it to the viewer", () => {
-    const { header, viewer, convert, sim } = setup();
-
-    header.createPyramidHandler?.();
-
-    expect(viewer.showCalls).toHaveLength(1);
-    expect(viewer.showCalls[0]?.name).toBe("akde-pyramid.fkld");
-    expect(viewer.showCalls[0]?.object.vertices_coords?.length).toBeGreaterThan(0);
-    expect(canSimulate(viewer.showCalls[0]!.object)).toBe(true);
-    expect(convert.statusCalls.at(-1)).toEqual({
-      msg: "Created AKDE pyramid via the transferred creation pipeline. Open 3D Sim to fold it.",
-      kind: "ok",
-    });
-    expect(sim.enabledCalls.at(-1)).toBe(true);
   });
 
   it("commits a drawn crease pattern (editor → FKLD) to the viewer and closes the modal", () => {

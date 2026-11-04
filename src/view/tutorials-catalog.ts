@@ -43,7 +43,7 @@ export const TUTORIAL_SECTIONS: TutorialSection[] = [
         title: "use the top bar",
         blurb:
           "What each header button is for: Simulate, Export, Pattern editor, Electronics, "
-          + "Create pyramid, Load sample and Cut & fold.",
+          + "Load sample and Cut & fold.",
       },
       {
         slug: "adjust-zoom-and-viewing-axis-main-page",

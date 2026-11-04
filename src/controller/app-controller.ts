@@ -14,7 +14,6 @@ import { statusFromError } from "../core/errors.js";
 import { loadedStatus, readModelFile, fetchSample } from "../services/model-loader.js";
 import {
   kirigamizeMesh,
-  createAkdePyramid,
   fkldFromPatternGrid,
   serializePatternGrid,
 } from "../services/pattern-service.js";
@@ -100,7 +99,6 @@ export class AppController {
 
     // View intents → controller handlers.
     this.convert.onFileChosen((file) => this.loadFromFile(file));
-    this.header.onCreatePyramid(() => this.createPyramid());
     this.header.onKirigamize(() => void this.kirigamize());
 
     // Secondary design path: the pattern editor commits a drawn grid as FKLD,
@@ -244,18 +242,6 @@ export class AppController {
       this.patternEditor.close();
     } catch (err) {
       const { msg, kind } = statusFromError(err, "create", "pattern editor failed");
-      this.store.setStatus(msg, kind);
-    }
-  }
-
-  /** Generate an AKDE pyramid via the transferred creation pipeline (see pattern-service). */
-  createPyramid(): void {
-    try {
-      const outcome = createAkdePyramid();
-      this.showPattern(outcome.fkld, outcome.name);
-      this.store.setStatus(outcome.summary, "ok");
-    } catch (err) {
-      const { msg, kind } = statusFromError(err, "create");
       this.store.setStatus(msg, kind);
     }
   }

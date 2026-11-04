@@ -47,7 +47,7 @@ describe("view/header-copy", () => {
 
   it("covers every label the header mounts", () => {
     const labels = HEADER_COPY.map((c) => c.label);
-    for (const l of ["Simulate", "Export", "Electronics", "Examples", "Tutorials", "Create pyramid", "Cut & fold"]) {
+    for (const l of ["Simulate", "Export", "Electronics", "Examples", "Tutorials", "Cut & fold"]) {
       expect(labels).toContain(l);
     }
     for (const c of HEADER_COPY) expect(c.title.length).toBeGreaterThan(10);

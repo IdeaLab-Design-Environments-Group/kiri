@@ -22,7 +22,6 @@ export const HEADER_COPY: readonly HeaderCopy[] = [
   { label: "Electronics", title: "Place LEDs and route copper tape on the pattern.", needs: PATTERN },
   { label: "Examples", title: "Open one of the bundled models, already cut and ready to fold." },
   { label: "Tutorials", title: "Short screen recordings of every part of kiri." },
-  { label: "Create pyramid", title: "Generate a pyramid pattern. Needs nothing loaded." },
   { label: "Cut & fold", title: "Turn the loaded mesh into a cut-and-fold pattern.", needs: "Needs a mesh: drop a model first." },
 ];
 
