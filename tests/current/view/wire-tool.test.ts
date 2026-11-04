@@ -454,6 +454,23 @@ describe("WireTool editing", () => {
     expect(tool.selected()).toBeNull();
   });
 
+  it("removes the selected wire on Backspace when nothing is being drawn", () => {
+    const { tool, now } = drawn();
+    expect(tool.selected()).toBe("w1");
+    expect(tool.onKey(key("Backspace"))).toBe(true);
+    expect(now().wires).toEqual([]);
+    expect(tool.selected()).toBeNull();
+    // With nothing selected it falls through to the editor.
+    expect(tool.onKey(key("Backspace"))).toBe(false);
+  });
+
+  it("deleteSelected is what the on-screen button calls", () => {
+    const { tool, now } = drawn();
+    expect(tool.deleteSelected()).toBe(true);
+    expect(now().wires).toEqual([]);
+    expect(tool.deleteSelected()).toBe(false);
+  });
+
   it("ignores Delete with nothing selected, and mid-draw", () => {
     const { tool, commits } = drawn();
     tool.onKey(key("Escape"));

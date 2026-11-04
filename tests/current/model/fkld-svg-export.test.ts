@@ -126,10 +126,11 @@ describe("buildFkldSvgExport — real patterns", () => {
     expect(viewBoxOf(cut)).toBe(viewBoxOf(score)); // registered
     expect(cut).toContain("#000000");
     expect(score).toContain("#0000ff");
-    // the zip carries both files under the base folder (names appear in the archive bytes)
+    // the zip carries cut, score and combined under the base folder (names appear in the archive bytes)
     const bytes = Buffer.from(out.archive.bytes).toString("latin1");
     expect(bytes).toContain("akde-hex/akde-hex-cut.svg");
     expect(bytes).toContain("akde-hex/akde-hex-score.svg");
+    expect(bytes).toContain("akde-hex/akde-hex-combined.svg");
     expect(out.archive.bytes.length).toBeGreaterThan(0);
   });
 

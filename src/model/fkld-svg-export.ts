@@ -137,10 +137,11 @@ export function buildFkldSvgExport(
     both: previewWrap(w, h, cutBody + scoreBody),
   };
 
+  // The zip carries cut, score and the combined colour-coded SVG, so one download covers every use.
   const enc = new TextEncoder();
   const archive: SvgArchive = {
     filename: `${baseName}.zip`,
-    bytes: createZip(files.map((f) => ({ name: `${baseName}/${f.filename}`, data: enc.encode(f.svg) }))),
+    bytes: createZip([...files, combined].map((f) => ({ name: `${baseName}/${f.filename}`, data: enc.encode(f.svg) }))),
   };
 
   return { previews, files, combined, archive };

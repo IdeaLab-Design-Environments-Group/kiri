@@ -24,7 +24,7 @@ import { parseMesh } from "./import.js";
 import { buildTopology } from "./mesh.js";
 import { planCuts } from "./plan-cuts.js";
 import { placeSheet } from "./route-seams.js";
-import { seamedUnfold } from "./unfold.js";
+import { ReliefBudgetError, seamedUnfold } from "./unfold.js";
 import { DEFAULT_VERIFY, verifyFold, type VentHole } from "./verify.js";
 import type { FoldFile } from "../model/fold-file.js";
 import {
@@ -134,7 +134,10 @@ export function kirigamize(input: TriMesh, options: Partial<KirigamizeOptions> =
     try {
       unfold = seamedUnfold(mesh, topo, plan, defects, { pruneRelief: opts.pruneRelief });
     } catch (err) {
-      if (err instanceof PipelineError && err.stage === "unfold" && tuckSet.length > 0) {
+      if (
+        err instanceof PipelineError && err.stage === "unfold" &&
+        !(err instanceof ReliefBudgetError) && tuckSet.length > 0
+      ) {
         // Honest scope: tucked δ>0 vertices stay interior, so the patch is not
         // developable — full Origamizer tuck crease generation is deferred.
         throw new PipelineError(

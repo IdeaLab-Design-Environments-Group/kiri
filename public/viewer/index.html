@@ -272,7 +272,7 @@
       <span class="lbl">Shape:</span>
       <button id="shape-toggle" title="Switch between the flat cut pattern and the folded form">Folded</button>
     </div>
-    <div class="group">
+    <div class="group" id="view-group" hidden>
       <span class="lbl">View:</span>
       <button data-view="x">x</button>
       <button data-view="y">y</button>
@@ -287,10 +287,6 @@
     <div class="group">
       <span class="lbl">Example:</span>
       <button id="load-sample" title="Load the bundled sample model (house.fkld)">Load sample</button>
-    </div>
-    <div class="group">
-      <span class="lbl">Import:</span>
-      <input type="file" id="file-input" accept=".fkld,.fold,.json">
     </div>
     <div class="group">
       <span class="lbl">Property:</span>
@@ -386,6 +382,11 @@
       if (Array.isArray(cls) && cls.includes('foldedForm') && Array.isArray(vc)) return vc;
     }
     return null;
+  }
+  // The x/y/z camera snaps only make sense for a 3D shape; the flat pattern is a 2D sheet seen face-on.
+  function syncViewGroup() {
+    const g = document.getElementById('view-group');
+    if (g) g.hidden = !showFolded;
   }
   let showFolded = false; // when a foldedForm frame exists, the viewer can show it instead of the flat net
 
@@ -671,9 +672,9 @@
       <h2>File</h2>
       <div class="row"><span class="label">creator</span><span class="value">${escape(file.file_creator) ?? '—'}</span></div>
       <div class="row"><span class="label">frame_title</span><span class="value">${escape(file.frame_title) ?? '—'}</span></div>
-      <div class="row"><span class="label">unit</span><span class="value">${file.frame_unit ?? '—'}</span></div>
-      <div class="row"><span class="label">attributes</span><span class="value">${(file.frame_attributes || []).join(', ') || '—'}</span></div>
-      <div class="row"><span class="label">FKLD spec</span><span class="value">${file['fkld:meta_fkldSpec'] || '—'}</span></div>
+      <div class="row"><span class="label">unit</span><span class="value">${escape(file.frame_unit) ?? '—'}</span></div>
+      <div class="row"><span class="label">attributes</span><span class="value">${escape((file.frame_attributes || []).join(', ')) || '—'}</span></div>
+      <div class="row"><span class="label">FKLD spec</span><span class="value">${escape(file['fkld:meta_fkldSpec']) || '—'}</span></div>
 
       <h2>Topology</h2>
       <div class="row"><span class="label">vertices</span><span class="value">${v}</span></div>
@@ -681,20 +682,20 @@
       <div class="row"><span class="label">edges</span><span class="value">${e}</span></div>
 
       <h2>Edge assignments</h2>
-      ${Object.entries(ah).map(([k,n]) => `<div class="row"><span class="label">${k}</span><span class="value">${n}</span></div>`).join('') || '<div class="row" style="border:none;color:var(--muted)"><em>none</em></div>'}
+      ${Object.entries(ah).map(([k,n]) => `<div class="row"><span class="label">${escape(k)}</span><span class="value">${n}</span></div>`).join('') || '<div class="row" style="border:none;color:var(--muted)"><em>none</em></div>'}
 
       <h2>Cut subtypes</h2>
-      ${Object.keys(ch).length ? Object.entries(ch).map(([k,n]) => `<div class="row"><span class="label">${k}</span><span class="value">${n}</span></div>`).join('') : '<div class="row" style="border:none;color:var(--muted)"><em>none</em></div>'}
+      ${Object.keys(ch).length ? Object.entries(ch).map(([k,n]) => `<div class="row"><span class="label">${escape(k)}</span><span class="value">${n}</span></div>`).join('') : '<div class="row" style="border:none;color:var(--muted)"><em>none</em></div>'}
 
       <h2>Vertex curvature</h2>
-      ${Object.keys(vh).length ? Object.entries(vh).map(([k,n]) => `<div class="row"><span class="label">${k}</span><span class="value">${n}</span></div>`).join('') : '<div class="row" style="border:none;color:var(--muted)"><em>not recorded</em></div>'}
+      ${Object.keys(vh).length ? Object.entries(vh).map(([k,n]) => `<div class="row"><span class="label">${escape(k)}</span><span class="value">${n}</span></div>`).join('') : '<div class="row" style="border:none;color:var(--muted)"><em>not recorded</em></div>'}
 
       <h2>Molecules</h2>
       <div class="row"><span class="label">edges with θ + w</span><span class="value">${molCount}</span></div>
       ${molCount > 0 ? `<div class="row"><span class="label">θ range (rad)</span><span class="value">${(() => { const xs = thetas.filter(x => x != null); return `${Math.min(...xs).toFixed(3)} – ${Math.max(...xs).toFixed(3)}`; })()}</span></div>` : ''}
 
       <h2>Materials</h2>
-      ${matSet.length ? matSet.map(id => `<div class="row"><span class="label">${id}</span><span class="value">${matIds.filter(x => x === id).length} faces</span></div>`).join('') : '<div class="row" style="border:none;color:var(--muted)"><em>none</em></div>'}
+      ${matSet.length ? matSet.map(id => `<div class="row"><span class="label">${escape(id)}</span><span class="value">${matIds.filter(x => x === id).length} faces</span></div>`).join('') : '<div class="row" style="border:none;color:var(--muted)"><em>none</em></div>'}
     `;
     if (kirigami) {
       html += `<h2>Universal kirigami</h2><pre>${escape(JSON.stringify(kirigami, null, 2))}</pre>`;
@@ -796,6 +797,7 @@
     // folded-form goal, offer a toggle to view the folded 3D shape too (the button label is the action).
     const hasFolded = !!foldedCoords(file);
     showFolded = false;
+    syncViewGroup();
     const shapeGroup = document.getElementById('shape-group');
     if (shapeGroup) shapeGroup.hidden = !hasFolded;
     const shapeBtn = document.getElementById('shape-toggle');
@@ -812,7 +814,7 @@
     // what the viewer shows — regardless of how it was loaded (host postMessage, file picker,
     // example dropdown, or drag-and-drop).
     if (window.parent && window.parent !== window) {
-      window.parent.postMessage({ type: 'kirigamizer:viewer-loaded', fkld: file, name: sourceName }, '*');
+      window.parent.postMessage({ type: 'kirigamizer:viewer-loaded', fkld: file, name: sourceName }, window.location.origin);
     }
   }
   function loadJsonString(text, name) {
@@ -853,15 +855,12 @@
   // ---- event wiring ---------------------------------------------------------
   buildToggles();
 
-  document.getElementById('file-input').addEventListener('change', (e) => {
-    if (e.target.files[0]) loadFromFile(e.target.files[0]);
-  });
-
   // Flat ⇄ Folded: rebuild from the same file with the other coordinate set, keeping the framing.
   document.getElementById('shape-toggle').addEventListener('click', () => {
     if (!currentFile) return;
     showFolded = !showFolded;
     document.getElementById('shape-toggle').textContent = showFolded ? 'Flat' : 'Folded'; // label = action
+    syncViewGroup();
     frameModel(buildModel(currentFile));
     render();
   });
@@ -871,6 +870,8 @@
   // model with postMessage: { type:'kirigamizer:load', fkld, name } where
   // `fkld` is either a JSON string or a parsed FKLD/FOLD object.
   window.addEventListener('message', (e) => {
+    // Only the embedding app (same origin) may hand us a model.
+    if (e.source !== window.parent || e.origin !== window.location.origin) return;
     const msg = e.data;
     if (!msg || msg.type !== 'kirigamizer:load') return;
     const name = msg.name || 'kirigamizer-model';
@@ -879,7 +880,7 @@
   });
   // Announce readiness so the host can flush any queued model.
   if (window.parent && window.parent !== window) {
-    window.parent.postMessage({ type: 'kirigamizer:viewer-ready' }, '*');
+    window.parent.postMessage({ type: 'kirigamizer:viewer-ready' }, window.location.origin);
   }
 
   document.body.addEventListener('dragover', (e) => e.preventDefault());

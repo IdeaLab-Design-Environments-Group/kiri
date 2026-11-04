@@ -132,7 +132,7 @@ import {
   netTally,
   netlistTrouble,
   partsTally,
-  statusLine,
+  statusLine, syncRouteHint, syncWireDelete,
 } from "./electronics-presenters.js";
 // Re-exported so the presenters can be reached through the modal that renders them, the same way the
 // palette's own catalog is — a caller that has the modal should not need to know which file the rows
@@ -170,6 +170,7 @@ import {
 import { TILE_INSET_FRAC } from "../model/tile-subdiv.js";
 import { type ManualWire, type WireContext, manualTraces } from "../model/manual-wire.js";
 import { WireTool, type WireHost } from "./wire-tool.js";
+import { fillPadRows, netChildren } from "./electronics-pad-rows.js";
 // The scene emitter, for the ratsnest overlay — see the note at its use in `draw()`.
 import type { FoldFile } from "../model/fold-file.js";
 import { HOME, currentRoute, goToRoute, onRouteChange } from "./route.js";
@@ -304,6 +305,9 @@ const PAD_LABEL_VIEW_FRACTION = 0.035;
 
 /** The canvas width in pixels to assume when the element cannot say (a headless DOM, mostly). */
 const CANVAS_PX = 900;
+
+/** LED count from which Route is slow enough to deserve a "routing…" frame before it blocks. */
+const BUSY_FEEDBACK_LEDS = 8;
 
 /**
  * How many screen pixels one "rendered millimetre" is taken to be.
@@ -592,6 +596,10 @@ export class ElectronicsModal {
       this.toolButtons.set(tool, btn);
     }
     this.overlay.querySelector(".el-clear")!.addEventListener("click", () => this.clear());
+    this.overlay.querySelector(".el-wire-delete")!.addEventListener("click", () => {
+      this.wire.deleteSelected();
+      this.renderStatus();
+    });
     for (const btn of this.overlay.querySelectorAll<HTMLButtonElement>(".el-export")) {
       const side: Side = btn.dataset.side === "outside" ? "outside" : "inside";
       btn.addEventListener("click", () => this.exportCopper(side));
@@ -611,7 +619,8 @@ export class ElectronicsModal {
       this.autoButtons.set(on, btn);
     }
     this.routeBtn = this.overlay.querySelector<HTMLButtonElement>(".el-route")!;
-    this.routeBtn.addEventListener("click", () => this.routeNow());
+    this.routeBtn.addEventListener("click", () => this.routeNowWithFeedback());
+    this.overlay.querySelector(".el-route-clear")!.addEventListener("click", () => this.clearRoutes());
     for (const btn of this.overlay.querySelectorAll<HTMLButtonElement>(".el-place")) {
       const mode = btn.dataset.place === "free" ? "free" : "gap";
       btn.addEventListener("click", () => this.selectPlaceMode(mode));
@@ -1617,7 +1626,7 @@ export class ElectronicsModal {
       row.appendChild(del);
       this.netList.appendChild(row);
 
-      if (net.open && net.pads.length) this.netList.appendChild(this.netChildren(net.pads, net.colour));
+      if (net.open && net.pads.length) this.netList.appendChild(netChildren(net.pads, net.colour, (part, pad) => this.assignPad(part, pad, "")));
     }
     this.renderSidebar();
   }
@@ -1639,54 +1648,6 @@ export class ElectronicsModal {
     warn.title = net.stranded.why;
     warn.setAttribute("aria-label", warn.title);
     return warn;
-  }
-
-  /**
-   * The pads on one net, as the tree's child rows.
-   *
-   * Named by designator and pad — `R1 · 2` — because that is what the author reads on the canvas beside
-   * the part. `Terminal.part` is an index into `circuit.parts`, and an index means nothing to a person
-   * looking at a board.
-   */
-  private netChildren(on: NetRow[], colour: string): HTMLElement {
-    const kids = document.createElement("div");
-    kids.className = "el-net-kids";
-    kids.setAttribute("role", "group");
-    for (const t of on) {
-      const kid = document.createElement("div");
-      kid.className = t.derived ? "el-net-kid is-derived" : "el-net-kid";
-      kid.setAttribute("role", "treeitem");
-      const dot = document.createElement("i");
-      dot.className = "el-net-kid-dot";
-      dot.setAttribute("style", `background:${colour}`);
-      const label = document.createElement("span");
-      label.className = "el-net-kid-name";
-      label.textContent = t.label;
-      kid.appendChild(dot);
-      kid.appendChild(label);
-      if (t.derived) {
-        // No control, because there is nothing here the author decides: this row states what the router
-        // did. Offered an × they would take the battery off GND, the next replan would put it back, and
-        // the app would look broken while behaving correctly.
-        label.title = `${t.label} — wired by the router, not by hand`;
-        const note = document.createElement("span");
-        note.className = "el-net-kid-note";
-        note.textContent = "router";
-        kid.appendChild(note);
-      } else {
-        label.title = `Pad ${t.pad} of ${t.label.split(" · ")[0]}`;
-        const off = document.createElement("button");
-        off.type = "button";
-        off.className = "el-net-kid-off";
-        off.textContent = "×";
-        off.title = `Take ${t.label} off this net`;
-        off.setAttribute("aria-label", `Unwire ${t.label} from this net`);
-        off.addEventListener("click", () => this.assignPad(t.part!, t.pad!, ""));
-        kid.appendChild(off);
-      }
-      kids.appendChild(kid);
-    }
-    return kids;
   }
 
   /** Open or close one net's branch. View state only — nothing here reaches the circuit or the router. */
@@ -1831,52 +1792,9 @@ export class ElectronicsModal {
     this.padsGroup.hidden = false;
     this.padPart.textContent = panel.heading;
 
-    // One list of the declared names, shared by every row. The browser draws it as the menu the `<select>`
-    // used to be, but only once the author starts typing — so it suggests without being the only way in.
-    const list = document.createElement("datalist");
-    list.id = `el-nets-${sel.index}`;
-    for (const name of panel.suggestions) {
-      const opt = document.createElement("option");
-      opt.value = name;
-      list.appendChild(opt);
-    }
-    this.padList.appendChild(list);
-
-    for (const pad of panel.rows) {
-      const row = document.createElement("div");
-      row.className = "el-pad";
-      row.setAttribute("role", "treeitem");
-      if (pad.last) row.classList.add("is-last");
-
-      const tag = document.createElement("span");
-      tag.className = "el-pad-name";
-      tag.textContent = pad.pad;
-      tag.title = pad.padTitle;
-
-      const dot = document.createElement("i");
-      dot.className = "el-pad-dot";
-      // `setAttribute`, not `.style` — the same way the nets tree colours its own dots, and the only one
-      // the test DOM implements. Held at zero size rather than dropped when the pad is on nothing, so the
-      // names stay aligned.
-      if (pad.colour) dot.setAttribute("style", `background:${pad.colour}`);
-      else dot.classList.add("is-empty");
-
-      const name = document.createElement("input");
-      name.type = "text";
-      name.className = "el-pad-net";
-      name.value = pad.netName;
-      name.placeholder = "—";
-      name.dataset.pad = pad.pad;
-      name.setAttribute("list", list.id);
-      name.setAttribute("aria-label", `Net for pad ${pad.pad}`);
-      name.title = "type a net name. A name that is not yet a net declares it; empty takes the pad off.";
-      name.addEventListener("change", () => this.wirePad(sel.index, pad.pad, name.value));
-
-      row.appendChild(tag);
-      row.appendChild(dot);
-      row.appendChild(name);
-      this.padList.appendChild(row);
-    }
+    fillPadRows(this.padList, panel, `el-nets-${sel.index}`, {
+      assign: (pad, name) => this.wirePad(sel.index, pad, name),
+    });
   }
 
   /**
@@ -2092,7 +2010,7 @@ export class ElectronicsModal {
    * duration of one export call is enough to make every one of them answer for the requested side instead
    * of the one on screen. Nothing renders in between, so the canvas never flashes the other side.
    */
-  private withSide<T>(side: Side, fn: () => T): T {
+  private withSide<T>(side: Side, fn: () => T): T | undefined {
     const prior = this.side;
     this.side = side;
     try {
@@ -2106,7 +2024,11 @@ export class ElectronicsModal {
       // Not an identity check against EMPTY_ROUTE: a side auto-planned once while empty holds a *fresh*
       // empty plan rather than that singleton, so `=== EMPTY_ROUTE` silently stopped firing for exactly
       // the side this feature exists to export — one edited while the author was looking at the other.
-      if (this.stale) this.forceReplan();
+      if (this.stale && !this.forceReplan()) {
+        // The re-plan failed, so the plan in hand is the stale one: say so and make no file from it.
+        this.statusEl.textContent += " — export cancelled";
+        return undefined;
+      }
       return fn();
     } finally {
       this.side = prior;
@@ -2485,13 +2407,22 @@ export class ElectronicsModal {
 
   /** Plan, whatever the mode. Every path that must not show old copper — a new pattern, Clear all, the
    *  Route button — goes through here rather than through {@link replan}. */
-  private forceReplan(): void {
-    this.routed = this.fold
-      ? this.design.route({
-          faces: this.faces, gaps: this.gaps, circuit: this.circuit, sheetMm: this.sheetMm, sheet: this.sheetSpec,
-        })
-      : EMPTY_ROUTE;
-    this.stale = false;
+  private forceReplan(): boolean {
+    try {
+      this.routed = this.fold
+        ? this.design.route({
+            faces: this.faces, gaps: this.gaps, circuit: this.circuit, sheetMm: this.sheetMm, sheet: this.sheetSpec,
+          })
+        : EMPTY_ROUTE;
+      this.stale = false;
+      return true;
+    } catch (err) {
+      // Keep the last plan on screen (still marked stale) and say why, rather than letting the click die silently.
+      console.error(err);
+      this.stale = true;
+      this.statusEl.textContent = `routing failed: ${err instanceof Error ? err.message : String(err)}`;
+      return false;
+    }
   }
 
   /**
@@ -2516,11 +2447,42 @@ export class ElectronicsModal {
    * store. The nets panel is repainted with the canvas because its battery and hinge-LED rows are derived
    * from the plan (see {@link derivedRows}) — left alone they would describe the plan before this one.
    */
+  /** Route button. Routing is synchronous and takes seconds on big boards (8+ LEDs), so there paint
+   *  "routing…" first — two frames, so the browser actually shows it before the thread is busy. Small
+   *  boards route on the spot, as before. */
+  private routeNowWithFeedback(): void {
+    if (this.circuit.leds.length < BUSY_FEEDBACK_LEDS) {
+      this.routeNow();
+      return;
+    }
+    this.routeBtn.disabled = true;
+    this.statusEl.textContent = "routing…";
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      try {
+        this.routeNow();
+      } finally {
+        this.routeBtn.disabled = false;
+      }
+    }));
+  }
+
+  /** Empty the router's traces and keep everything the author made: parts, nets and hand-drawn wires.
+   *  Not an edit — the circuit is unchanged — so nothing is stored. Marked stale when there is something
+   *  to route, so the Route button says the copper is gone and not just hidden. */
+  private clearRoutes(): void {
+    this.routed = EMPTY_ROUTE;
+    this.stale = this.circuit.leds.length > 0 || this.placedCount() > 0;
+    this.draw();
+    this.renderNets();
+  }
+
   private routeNow(): void {
-    this.forceReplan();
+    const ok = this.forceReplan();
+    const failure = this.statusEl.textContent;
     this.draw();
     this.renderNets();
     this.renderStatus();
+    if (!ok) this.statusEl.textContent = failure; // renderStatus would paint over the reason
   }
 
   private render(): void {
@@ -2914,7 +2876,8 @@ export class ElectronicsModal {
   private renderStatus(): void {
     const selPart = this.partSelection();
     const sel = this.selected;
-    this.routeBtn?.classList.toggle("is-stale", this.stale);
+    syncRouteHint(this.routeBtn, this.circuit.leds.length, this.stale);
+    syncWireDelete(this.overlay.querySelector(".el-wire-sect"), this.wire.selected());
     this.statusEl.textContent = statusLine({
       circuit: this.circuit,
       routed: this.routed,

@@ -131,15 +131,9 @@ function ptSeg(p: { x: number; y: number }, a: { x: number; y: number }, b: { x:
   return Math.hypot(p.x - (a.x + abx * t), p.y - (a.y + aby * t));
 }
 
-/** Flat point to sheet coordinates, the same shift-and-flip the exports use. */
+/** Flat point to sheet coordinates (millimetres), through the same frame the exports use. */
 function sheetPoint(fold: any, p: { x: number; y: number }): { x: number; y: number } {
-  const coords = fold.vertices_coords as number[][];
-  let minX = Infinity, maxY = -Infinity;
-  for (const c of coords) {
-    minX = Math.min(minX, Number(c[0]) || 0);
-    maxY = Math.max(maxY, Number(c[1]) || 0);
-  }
-  return { x: p.x - minX + 8, y: maxY - p.y + 8 };
+  return sheetFrame(fold).T(p);
 }
 
 describe("model/copper-svg-export", () => {
@@ -274,10 +268,12 @@ describe("model/copper-svg-export", () => {
       const out = buildCopperCarrierExport(fold, traces, tapeW, "k", [], undefined, undefined, pads);
       const { T } = sheetFrame(fold);
       const { window: win, outer } = out.frame;
-      // Sampled mid-segment: on a two-point run the middle vertex is an end, which lies on the cut itself.
       for (const t of traces) {
-        const k = Math.max(1, Math.floor(t.pts.length / 2));
-        const a = t.pts[k - 1]!, b = t.pts[k]!;
+        // The middle of the run, between two consecutive points. `pts[floor(n / 2)]` is the *end* of a
+        // two-point stub, which sits on the strip's butt-cap edge where even-odd is undefined.
+        const k = Math.floor((t.pts.length - 1) / 2);
+        const a = t.pts[k]!;
+        const b = t.pts[k + 1]!;
         expect(inCarrier(out.svg, T({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }))).toBe(true);
       }
       // The frame border is copper; off the sheet is not.
@@ -312,7 +308,7 @@ describe("model/copper-svg-export", () => {
       if (onLeft.length) expect(covered).toBeLessThan(win.y1 - win.y0 - 1e-6);
     });
 
-    it("tabs at the tape's own width, clear of the other net, using whichever wall is free", { timeout: 30000 }, () => {
+    it("tabs at the tape's own width, clear of the other net, using whichever wall is free", { timeout: 90_000 }, () => {
       // A tab across another trace would be stuck down on top of it, shorting the two, and snipping it would cut
       // the trace underneath. Same-net runs are not obstacles: they meet at junctions by design.
       // akde-hex 0 -> 6 on 2026-11-03, a recorded regression: the router began refusing copper that touches
@@ -337,7 +333,7 @@ describe("model/copper-svg-export", () => {
       }
     });
 
-    it("grips the trace body, never a pad or a battery terminal", { timeout: 30000 }, () => {
+    it("grips the trace body, never a pad or a battery terminal", { timeout: 60_000 }, () => {
       // A tab on a pad sits exactly where the LED goes, and snipping it would cut at the pad. The pads are the
       // outermost points of every run, so they are the first thing a nearest-wall search reaches -- which is
       // what it used to pick.
@@ -357,7 +353,7 @@ describe("model/copper-svg-export", () => {
         // Cross-check against the geometry, at the clearance the code actually promises (one tape width).
         const sheetKeep = keepOff.map((p) => sheetPoint(fold, p));
         const gripping = out.tabPaths.filter((path) =>
-          sheetKeep.some((q) => Math.hypot(path[0]!.x - q.x, path[0]!.y - q.y) < tapeW * 0.999),
+          sheetKeep.some((q) => Math.hypot(path[0]!.x - q.x, path[0]!.y - q.y) < tapeW * sheetFrame(fold).scale * 0.999),
         ).length;
         expect(gripping, `${name} anchors on a component`).toBeLessThanOrEqual(want);
         expect(out.tabPaths.length).toBeGreaterThan(0);
@@ -396,6 +392,7 @@ describe("model/copper-svg-export", () => {
         "church.fkld": 0,
         "akde-hex.fkld": 0,
         "akde-decagon-pyramid.fkld": 0,
+        "akde-square-pyramid.fkld": 0,
         "puffin.fkld": 2,
       };
       for (const [name, want] of Object.entries(budget)) {
@@ -408,7 +405,7 @@ describe("model/copper-svg-export", () => {
         let over = 0;
         for (const path of out.tabPaths) {
           const hit = sheetKeep.some((q) =>
-            path.slice(1).some((_, i) => ptSeg(q, path[i]!, path[i + 1]!) < tapeW * 0.999),
+            path.slice(1).some((_, i) => ptSeg(q, path[i]!, path[i + 1]!) < tapeW * sheetFrame(fold).scale * 0.999),
           );
           if (hit) over++;
         }

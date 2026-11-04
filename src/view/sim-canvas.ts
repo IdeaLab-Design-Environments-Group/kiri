@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { SimCameraFollow } from "./sim-camera-follow";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { BarHingeModel, FoldDrive, FoldNet, FoldScene, FoldSolver, SimMaterial } from "../sim/index.js";
 import { applyPrintedClosure, FoldRunner, FOLD_REACHED_EPS, meanTensileStrain } from "../sim/index.js";
@@ -175,6 +176,7 @@ export class SimCanvas implements SimView {
   private lastHeld: boolean | null = null;
   /** Freeze stepping once folded + settled so the pose is dead still (no twitch). */
   private frozen = false;
+  private readonly follow = new SimCameraFollow();
   /** Previous frame's node positions, for the position-delta settle test. */
   private prevPos: Float32Array | null = null;
   private settledFrames = 0;
@@ -201,6 +203,8 @@ export class SimCanvas implements SimView {
     this.controls.enableDamping = true;
     this.controls.zoomToCursor = true; // KiCad-style: wheel zooms toward the cursor
     this.controls.screenSpacePanning = true;
+    this.controls.addEventListener("start", () => this.follow.stop()); // the user took the camera
+    this.renderer.domElement.addEventListener("dblclick", this.onDoubleClick);
 
     this.scene.add(this.ambient);
     this.keyLight.position.set(1, -1, 2);
@@ -352,6 +356,7 @@ export class SimCanvas implements SimView {
     this.camera.updateProjectionMatrix();
     this.controls.target.set(cx, cy, cz);
     this.controls.update();
+    this.follow.resume(); // a freshly loaded pattern is followed again
   }
 
   /** Subscribe to fold-quality updates (mean tensile strain + whether the guide is still held). */
@@ -418,6 +423,20 @@ export class SimCanvas implements SimView {
     this.renderer.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    this.followPose(true);
+  }
+
+  /** Double-click: re-centre on the current pose and resume following. */
+  private readonly onDoubleClick = (): void => {
+    this.follow.resume();
+    this.followPose(true);
+  };
+
+  /** Move target and camera by the same delta towards the current pose centre (pan only). */
+  private followPose(snap: boolean): void {
+    if (!this.fold) return;
+    const m = this.fold.model;
+    if (this.follow.step(m.position, m.numNodes, this.controls.target, this.camera.position, snap)) this.controls.update();
   }
 
   private advance(): void {
@@ -439,6 +458,7 @@ export class SimCanvas implements SimView {
     this.flushGeometry();
     this.reportStatus();
     this.maybeFreeze();
+    this.followPose(this.frozen); // one O(N) pass while folding; on the freeze frame settle fully
   }
 
   private reportStatus(): void {

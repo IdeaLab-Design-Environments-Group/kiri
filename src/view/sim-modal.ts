@@ -7,7 +7,7 @@ import type { SimView } from "./sim-view.js";
 export type SimSceneProvider = (material?: SimMaterial) => { scene: FoldScene; title: string } | null;
 
 /**
- * "Simulation & Routing" trigger + modal hosting the Three.js fold simulation, with the planned copper drawn
+ * "Simulate" trigger + modal hosting the Three.js fold simulation, with the planned copper drawn
  * on the folded model. The copper is *placed* in the Electronics modal; this is where it is seen in 3D. Opening
  * builds the scene from the current model and starts the CPU solver; the
  * fold slider scrubs `foldPercent` 0→1; "Reset fold" rebuilds from the
@@ -50,7 +50,7 @@ export class SimModal {
     this.trigger = document.createElement("button");
     this.trigger.type = "button";
     this.trigger.className = "sim-trigger";
-    this.trigger.textContent = "simulation & routing";
+    this.trigger.textContent = "Simulate";
     this.trigger.disabled = true;
     this.trigger.addEventListener("click", () => {
       this.open().catch((err) => {
@@ -70,7 +70,7 @@ export class SimModal {
     this.overlay.innerHTML = `
       <div class="sim-modal" role="dialog" aria-modal="true" aria-label="3D fold simulation">
         <header class="sim-modal-header">
-          <span class="sim-modal-title">Simulation &amp; routing — the copper on the folded model</span>
+          <span class="sim-modal-title">3D fold simulation — the copper on the folded model</span>
           <button type="button" class="sim-modal-close" aria-label="close">×</button>
         </header>
         <div class="sim-modal-body">
@@ -81,7 +81,7 @@ export class SimModal {
           <div class="sim-canvas-mount"></div>
         </div>
         <footer class="sim-modal-footer">
-          <span class="sim-status"></span>
+          <span class="sim-status" role="status"></span>
           <span class="sim-strain" title="mean stretch of the sheet. Paper bends, it does not stretch, so a real fold stays near 0% — a large figure means what you are looking at is not a fold the material could make."></span>
           <label class="sim-fold-control sim-detail-control" title="pave the harder-folding faces with more, smaller tiles. Level 0 = one tile per face; 4 splits the sharpest folds 4 deep. Finer tiles leave narrower gaps, so the model folds less far.">
             detail <span class="sim-detail-value">0</span>
@@ -238,7 +238,18 @@ export class SimModal {
     if (!this.canvas) {
       this.statusEl.textContent = "loading 3D viewer…";
       const Canvas = await loadSimCanvas(this.reloads++);
-      this.canvas = new Canvas(this.mount);
+      try {
+        this.canvas = new Canvas(this.mount);
+      } catch (err) {
+        // The chunk loaded, so a retry will not help: this is the renderer itself (typically no WebGL).
+        // Stay open so the reason is visible, with nothing half-built left behind.
+        this.canvas = null;
+        this.mount.textContent = "";
+        this.statusEl.textContent =
+          `3D rendering is not available in this browser (WebGL could not start: ${(err as Error).message ?? err}).`;
+        console.error(err);
+        return;
+      }
       if (this.overlay.hidden) return;
     }
     this.loadWorld();
@@ -256,7 +267,15 @@ export class SimModal {
 
   private loadWorld(): void {
     this.cancelIdleWarm();
-    const built = this.provider?.(this.material) ?? null;
+    let built: ReturnType<SimSceneProvider> = null;
+    try {
+      built = this.provider?.(this.material) ?? null;
+    } catch (err) {
+      this.statusEl.textContent = `Cannot build the 3D scene for this model: ${(err as Error).message ?? err}`;
+      console.error(err);
+      this.canvas?.stop();
+      return;
+    }
     if (!built) {
       this.statusEl.textContent = "no foldable model — load a FOLD/FKLD crease pattern, then reopen.";
       this.canvas?.stop();

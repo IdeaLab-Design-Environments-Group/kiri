@@ -85,6 +85,10 @@ export function shellMarkup(): string {
                 <input type="text" class="el-net-new" placeholder="new net name" aria-label="new net name" autocomplete="off">
                 <div class="el-net-list" role="tree" aria-label="declared nets"></div>
               </div>
+              <div class="el-side-sect el-wire-sect" hidden>
+                <div class="el-side-head"><span class="el-side-title">Wire</span></div>
+                <button type="button" class="el-wire-delete" title="delete the selected hand-drawn wire (Backspace or Delete)">delete wire</button>
+              </div>
               <div class="el-side-sect el-placed" hidden>
                 <div class="el-side-head">
                   <span class="el-side-title">Parts</span>
@@ -100,6 +104,7 @@ export function shellMarkup(): string {
               </div>
             </aside>
             <div class="el-canvas-wrap">
+              <div class="el-route-hint" role="status" hidden>Not routed yet — press Route</div>
               <svg class="el-svg" xmlns="${SVG_NS}" aria-label="electronics flat-pattern canvas"></svg>
             </div>
             <aside class="el-tools" aria-label="view and output">
@@ -110,6 +115,7 @@ export function shellMarkup(): string {
                   <button type="button" class="el-auto" data-auto="off" title="the default: leave the copper alone while you place and wire things. The canvas keeps showing the last plan until you press Route">manual</button>
                 </span>
                 <button type="button" class="el-route" title="re-plan the copper now">route now</button>
+                <button type="button" class="el-route-clear" title="remove the planned copper only. Parts, nets and hand-drawn wires stay">clear routes</button>
               </div>
               <div class="el-side-sect el-view-modes">
                 <div class="el-side-head"><span class="el-side-title">View</span></div>
@@ -155,7 +161,7 @@ export function shellMarkup(): string {
               <span class="el-key"><i class="el-swatch" style="background:${SVGPCB_COLOURS.componentLabel}"></i>Part label (R1)</span>
               <span class="el-key"><i class="el-swatch el-swatch-ring el-key-led"></i>LED the copper never reached</span>
             </p>
-            <span class="sim-status el-status"></span>
+            <span class="sim-status el-status" role="status"></span>
           </div>
         </div>
       </div>

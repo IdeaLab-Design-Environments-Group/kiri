@@ -42,8 +42,8 @@ export const TUTORIAL_SECTIONS: TutorialSection[] = [
         slug: "using-top-bar-on-main-page",
         title: "use the top bar",
         blurb:
-          "What each header button is for: Simulation & Routing, Export, Pattern editor, Electronics, "
-          + "Create pyramid, Load sample and cut&fold ▶.",
+          "What each header button is for: Simulate, Export, Pattern editor, Electronics, "
+          + "Create pyramid, Load sample and Cut & fold.",
       },
       {
         slug: "adjust-zoom-and-viewing-axis-main-page",
@@ -73,7 +73,7 @@ export const TUTORIAL_SECTIONS: TutorialSection[] = [
     intro: "From a mesh — or from nothing — to a crease pattern you can fold.",
     items: [
       {
-        slug: "creating-pyriamid-model-base-for-simulation",
+        slug: "creating-pyramid-model-base-for-simulation",
         title: "create a pyramid",
         blurb:
           "Create pyramid builds the AKDE pyramid from the creation pipeline: the small, well-behaved "
@@ -81,8 +81,8 @@ export const TUTORIAL_SECTIONS: TutorialSection[] = [
       },
       {
         slug: "kirigamize-a-model",
-        title: "kirigamize a model",
-        blurb: "cut&fold ▶ turns the loaded mesh into a cut-and-fold kirigami pattern.",
+        title: "cut & fold a model",
+        blurb: "Cut & fold turns the loaded mesh into a cut-and-fold kirigami pattern.",
       },
       {
         slug: "adjust-relief-width-and-face-detail-in-3d",
@@ -101,7 +101,7 @@ export const TUTORIAL_SECTIONS: TutorialSection[] = [
         slug: "folding-3d-modality",
         title: "fold the 3D-printed build",
         blurb:
-          "Simulation & Routing folds the tiled build — rigid tiles with a bare hinge gap, which is what "
+          "Simulate folds the tiled build — rigid tiles with a bare hinge gap, which is what "
           + "stops it closing flat.",
       },
       {

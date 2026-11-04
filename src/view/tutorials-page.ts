@@ -48,7 +48,7 @@ export class TutorialsPage {
     this.trigger = document.createElement("button");
     this.trigger.type = "button";
     this.trigger.className = "sim-trigger tut-nav";
-    this.trigger.textContent = "tutorials";
+    this.trigger.textContent = "Tutorials";
     this.trigger.title = "short screen recordings of every part of kiri";
     this.trigger.addEventListener("click", () => this.open());
 

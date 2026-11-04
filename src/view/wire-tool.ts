@@ -242,25 +242,32 @@ export class WireTool {
       return true;
     }
     if (e.key === "Backspace") {
-      if (!this.draft.length) return false;
+      // Mid-draw it steps the draft back; with nothing being drawn it is the same as Delete, so a selected
+      // wire goes rather than the part the editor would otherwise fall through to.
+      if (!this.draft.length) return this.deleteSelected();
       this.draft = this.draft.slice(0, -1);
       this.recheck();
       this.paint();
       return true;
     }
-    if (e.key === "Delete") {
-      // Only ever the selected wire, and only when nothing is part-drawn: `Delete` mid-draw is a slip, and
-      // taking a finished wire off the board because of one is not an edit the author can see coming.
-      if (this.draft.length || !this.sel) return false;
-      const wires = this.wires();
-      const kept = wires.filter((w) => w.id !== this.sel);
-      if (kept.length === wires.length) return false;
-      this.sel = null;
-      this.commitWires(kept);
-      this.paint();
-      return true;
-    }
+    if (e.key === "Delete") return this.deleteSelected();
     return false;
+  }
+
+  /**
+   * Delete the selected wire. Only ever the selected one, and only when nothing is part-drawn: a key
+   * mid-draw is a slip, and taking a finished wire off the board because of one is not an edit the author
+   * can see coming. False when there is nothing to delete, so the key falls through.
+   */
+  deleteSelected(): boolean {
+    if (this.draft.length || !this.sel) return false;
+    const wires = this.wires();
+    const kept = wires.filter((w) => w.id !== this.sel);
+    if (kept.length === wires.length) return false;
+    this.sel = null;
+    this.commitWires(kept);
+    this.paint();
+    return true;
   }
 
   // ---- gestures ------------------------------------------------------------

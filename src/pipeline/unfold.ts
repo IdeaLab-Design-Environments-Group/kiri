@@ -42,6 +42,25 @@ export { findSelfOverlap, trianglesOverlap, unfoldPatch } from "./flat-layout.js
 /** Hard cap on relief-loop iterations (each adds ≥1 cut edge, so ≤E anyway). */
 export const RELIEF_MAX = 64;
 
+/** Wall-clock cap on one seamedUnfold relief loop (ms). Meshes that reach it (many-vent saddles)
+ *  otherwise run for minutes on the main thread; ordinary meshes finish in well under a second. */
+export const RELIEF_SEARCH_BUDGET_MS = 20000;
+
+/** Thrown when the budget runs out. A subclass so the "this candidate failed, try the next" catches in the
+ *  relief search can tell it apart from an ordinary unfold failure and let it through. */
+export class ReliefBudgetError extends PipelineError {
+  constructor() {
+    super("unfold", `relief search ran past ${RELIEF_SEARCH_BUDGET_MS / 1000}s on this surface — try a simpler mesh or fewer vents`);
+  }
+}
+
+/** Deadline of the seamedUnfold call in progress (Infinity outside one). Module state so the budget also
+ *  reaches inside a single cutAlongEdges, which is where one candidate can spend minutes. */
+let reliefDeadline = Number.POSITIVE_INFINITY;
+const checkReliefBudget = (): void => {
+  if (Date.now() > reliefDeadline) throw new ReliefBudgetError();
+};
+
 /**
  * Cap on post-relief pruning passes. Each pass re-tries every still-present
  * relief edge; removing one can make another removable, so we iterate to a
@@ -356,73 +375,6 @@ export function cutAlongEdges(
       };
     })();
 
-    /** Synthesize a vertex at the apex inside live face (p0, p1, p2), barycentric in all coordinate sets. */
-    const apexVertex = (p0: number, p1: number, p2: number): number => {
-      const [a, b, c] = [flat[p0], flat[p1], flat[p2]];
-      const area = cross2(b.x - a.x, b.y - a.y, c.x - a.x, c.y - a.y);
-      const w1 = cross2(apex.x - a.x, apex.y - a.y, c.x - a.x, c.y - a.y) / area;
-      const w2 = cross2(b.x - a.x, b.y - a.y, apex.x - a.x, apex.y - a.y) / area;
-      const w0 = 1 - w1 - w2;
-      const mix = (q: TriMesh["vertices"]) => ({
-        x: w0 * q[p0].x + w1 * q[p1].x + w2 * q[p2].x,
-        y: w0 * q[p0].y + w1 * q[p1].y + w2 * q[p2].y,
-        z: w0 * q[p0].z + w1 * q[p1].z + w2 * q[p2].z,
-      });
-      const id = vertices.length;
-      vertices.push(mix(vertices));
-      goalPos.push(mix(goalPos));
-      origVertex.push(-1);
-      flat.push({ x: apex.x, y: apex.y });
-      return id;
-    };
-
-    /**
-     * Conformity split of the live face across (u1, u2) at `mid`, which lies
-     * on `ray`. The plain split joins mid to the far face's third corner; when
-     * that diagonal crosses the other ray it runs through the cone, becomes
-     * the next frontier, and every chord after it spawns another — a Zeno
-     * zigzag that never leaves the face. Split along `ray` to where it exits
-     * the face instead (conforming the next face the same way), so the carve
-     * crosses each face once. A face with no forward exit that covers the
-     * apex (the development overlaps itself there) is split at the apex, so
-     * the cone ends at a vertex.
-     */
-    const splitFarAlongRay = (u1: number, u2: number, mid: number, exclude: number, ray: Vec2, depth = 0): void => {
-      const far = faces.findIndex((g, gi) => gi !== exclude && g !== null && g.includes(u1) && g.includes(u2));
-      if (far === -1) return;
-      const ntri = faces[far]!;
-      if (ntri.includes(mid)) return;
-      const third = ntri.find((x) => x !== u1 && x !== u2)!;
-      const other = ray === d1 ? d2 : d1;
-      if (depth >= 64 || crossingOn(other, mid, third) === null) {
-        splitFarAt(u1, u2, mid, exclude);
-        return;
-      }
-      // Winding order p0 → p1 → p2 with mid on (p0, p1).
-      const ia = ntri.indexOf(u1);
-      const [p0, p1] = ntri[(ia + 1) % 3] === u2 ? [u1, u2] : [u2, u1];
-      const p2 = third;
-      const r12 = crossingOn(ray, p1, p2);
-      const r20 = r12 === null ? crossingOn(ray, p2, p0) : null;
-      if (r12 !== null) {
-        const q = lerpOnEdge(p1, p2, r12);
-        faces[far] = [mid, p1, q];
-        faces.push([p0, mid, q], [p0, q, p2]);
-        splitFarAlongRay(p1, p2, q, -1, ray, depth + 1);
-      } else if (r20 !== null) {
-        const q = lerpOnEdge(p2, p0, r20);
-        faces[far] = [p0, mid, q];
-        faces.push([mid, p1, p2], [mid, p2, q]);
-        splitFarAlongRay(p2, p0, q, -1, ray, depth + 1);
-      } else if (strictlyInside(apex, flat[p0], flat[p1], flat[p2])) {
-        const a = apexVertex(p0, p1, p2);
-        faces[far] = [p0, mid, a];
-        faces.push([mid, p1, a], [p1, p2, a], [p2, p0, a]);
-      } else {
-        splitFarAt(u1, u2, mid, exclude);
-      }
-    };
-
     const queue = [...frontier];
     const done = new Set<string>();
     const pending = new Set<string>();
@@ -434,9 +386,10 @@ export function cutAlongEdges(
       queue.push([a, b]);
     };
 
-    const guardMax = Math.max(64, faces.length * 8);
+    const guardMax = Math.max(64, mesh.faces.length * 8);
     let guard = 0;
     while (queue.length > 0 && guard++ < guardMax) {
+      checkReliefBudget();
       const [x, y] = queue.pop()!;
       const key = edgeKey(x, y);
       pending.delete(key);
@@ -458,6 +411,14 @@ export function cutAlongEdges(
           carved = true;
           continue;
         }
+        // A zero-area (collinear) live face holds no material to chord: its ray
+        // crossing lands back on a vertex, so chording would re-create the same
+        // sliver (+1 vertex) and ping-pong forever with its far neighbour.
+        const ex = flat[y].x - flat[x].x;
+        const ey = flat[y].y - flat[x].y;
+        const fx = flat[t].x - flat[x].x;
+        const fy = flat[t].y - flat[x].y;
+        if (Math.abs(cross2(ex, ey, fx, fy)) <= 1e-9 * Math.hypot(ex, ey) * Math.hypot(fx, fy)) continue;
         // Exactly one ray separates t from the cone; chord it off.
         const ray = s1 < 0 ? d1 : d2;
         const rx = crossingOn(ray, x, t);
@@ -468,8 +429,8 @@ export function cutAlongEdges(
           const wb = lerpOnEdge(y, t, ry);
           faces[gi] = tri.map((vv) => (vv === x ? wa : vv === y ? wb : vv)) as [number, number, number];
           ventEdges.push([wa, wb]);
-          splitFarAlongRay(x, t, wa, gi, ray);
-          splitFarAlongRay(y, t, wb, gi, ray);
+          splitFarAt(x, t, wa, gi);
+          splitFarAt(y, t, wb, gi);
           pushEdge(x, wa);
           pushEdge(y, wb);
           carved = true;
@@ -478,7 +439,7 @@ export function cutAlongEdges(
           const w = lerpOnEdge(y, t, ry);
           faces[gi] = tri.map((vv) => (vv === y ? w : vv)) as [number, number, number];
           ventEdges.push([x, w]);
-          splitFarAlongRay(y, t, w, gi, ray);
+          splitFarAt(y, t, w, gi);
           pushEdge(y, w);
           carved = true;
         } else if (rx !== null) {
@@ -486,7 +447,7 @@ export function cutAlongEdges(
           const w = lerpOnEdge(x, t, rx);
           faces[gi] = tri.map((vv) => (vv === x ? w : vv)) as [number, number, number];
           ventEdges.push([y, w]);
-          splitFarAlongRay(x, t, w, gi, ray);
+          splitFarAt(x, t, w, gi);
           pushEdge(x, w);
           carved = true;
         }
@@ -637,7 +598,9 @@ export function cutAlongEdges(
         carveDone = carveCone(apex, d1, d2, frontier, ventEdges);
       }
 
-      const fits = ok && carveDone && remaining <= 1e-6 && liveComponents() === baseComponents;
+      // A carve that cuts through an earlier vent's vertex would leave it short of 2π.
+      const intact = vents.every((vt) => (wedgesOf.get(vt.sourceVertex) ?? []).reduce((a, w) => a + liveAngleAt(w.copy), 0) > TAU - 1e-6);
+      const fits = ok && carveDone && remaining <= 1e-6 && intact && liveComponents() === baseComponents;
       return { fits, ventEdges };
     };
 
@@ -767,14 +730,6 @@ export function cutAlongEdges(
   return { mesh: { vertices: outVerts, faces: remappedFaces }, origVertex: outOrig, goalPos: outGoal, lips: outLips, vents: outVents };
 }
 
-/** True iff p lies inside triangle (a, b, c) at least SNAP_LEN from every edge. */
-function strictlyInside(p: Vec2, a: Vec2, b: Vec2, c: Vec2): boolean {
-  const edgeDist = (u: Vec2, v: Vec2): number =>
-    cross2(v.x - u.x, v.y - u.y, p.x - u.x, p.y - u.y) / Math.hypot(v.x - u.x, v.y - u.y);
-  const d = [edgeDist(a, b), edgeDist(b, c), edgeDist(c, a)];
-  return d.every((x) => x > SNAP_LEN) || d.every((x) => x < -SNAP_LEN);
-}
-
 /**
  * Cut → vent → flatten → relief loop, under the proper-kirigami invariants:
  * the sheet must stay ONE connected piece (a disconnecting plan is a planner
@@ -788,6 +743,21 @@ export function seamedUnfold(
   plan: CutPlan,
   defects: DefectReport,
   opts: { pruneRelief?: boolean } = {},
+): UnfoldResult {
+  reliefDeadline = Date.now() + RELIEF_SEARCH_BUDGET_MS; // one budget for the whole relief loop
+  try {
+    return seamedUnfoldWithinBudget(mesh, topo, plan, defects, opts);
+  } finally {
+    reliefDeadline = Number.POSITIVE_INFINITY;
+  }
+}
+
+function seamedUnfoldWithinBudget(
+  mesh: TriMesh,
+  topo: MeshTopology,
+  plan: CutPlan,
+  defects: DefectReport,
+  opts: { pruneRelief?: boolean },
 ): UnfoldResult {
   const pruneRelief = opts.pruneRelief ?? false;
   const cutSet = new Set(plan.cutEdges);
@@ -827,7 +797,15 @@ export function seamedUnfold(
       let finalComponents = components;
       let reliefPruned = 0;
       if (pruneRelief && reliefEdges.length > 0) {
-        reliefPruned = pruneReliefEdges(mesh, topo, cutSet, reliefEdges, ventAngles);
+        try {
+          reliefPruned = pruneReliefEdges(mesh, topo, cutSet, reliefEdges, ventAngles);
+        } catch (err) {
+          if (!(err instanceof ReliefBudgetError)) throw err;
+          // Pruning is optional: keep the removals already verified clean and stop, rather than throw away a
+          // development that is already valid. Lift the budget so re-deriving the artifacts below can finish.
+          reliefPruned = reliefEdges.filter((e) => !cutSet.has(e)).length;
+          reliefDeadline = Number.POSITIVE_INFINITY;
+        }
         if (reliefPruned > 0) {
           finalCut = cutAlongEdges(mesh, topo, [...cutSet], ventAngles);
           finalComponents = labelComponents(finalCut.mesh);
@@ -925,6 +903,7 @@ function developsCleanly(
     const flat = unfoldPatch(trial, trial.mesh.faces.map((_, f) => f));
     return findSelfOverlap(flat, trial.mesh.faces) === null;
   } catch (err) {
+    if (err instanceof ReliefBudgetError) throw err;
     if (err instanceof PipelineError && err.stage === "unfold") return false;
     throw err;
   }
@@ -1003,6 +982,7 @@ function addReliefCut(
       const trial = cutAlongEdges(mesh, topo, [...cutSet, ...fresh], ventAngles);
       return labelComponents(trial.mesh).count === 1;
     } catch (err) {
+      if (err instanceof ReliefBudgetError) throw err;
       if (err instanceof PipelineError && err.stage === "unfold") return false;
       throw err;
     }
@@ -1068,12 +1048,14 @@ function addReliefCut(
   // slits toward radial form. Pick the move that STRICTLY reduces the flat
   // self-overlap pair count; the strict integer descent terminates.
   const overlapsFor = (edges: number[], cap: number): number => {
+    checkReliefBudget();
     try {
       const trial = cutAlongEdges(mesh, topo, edges, ventAngles);
       if (labelComponents(trial.mesh).count !== 1) return Number.POSITIVE_INFINITY;
       const tflat = unfoldPatch(trial, trial.mesh.faces.map((_, f) => f));
       return countFlatOverlaps(tflat, trial.mesh.faces, cap);
     } catch (err) {
+      if (err instanceof ReliefBudgetError) throw err;
       if (err instanceof PipelineError) return Number.POSITIVE_INFINITY;
       throw err;
     }

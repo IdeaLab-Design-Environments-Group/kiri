@@ -4,10 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>kiri</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231f6feb'/%3E%3Cpath d='M8 8h16L8 24h16' fill='none' stroke='white' stroke-width='3' stroke-linejoin='round'/%3E%3C/svg%3E" />
+    <meta name="description" content="Turn a 3D model into a foldable kirigami sheet, then add LED copper-tape circuits. Runs in the browser." />
   </head>
   <body>
     <header class="app-header">
-      <h1>kiri <span class="app-subtitle">— model → kirigami, viewed in FKLD</span></h1>
+      <h1>kiri <span class="app-subtitle">— turn a 3D model into a foldable kirigami sheet, then add LED copper-tape circuits.</span></h1>
     </header>
     <main id="app" class="app-grid"></main>
     <footer class="app-legend">
@@ -16,6 +18,7 @@
       <span class="lg lg-v">—— valley</span>
       <span class="lg lg-b">—— boundary</span>
       <span class="lg lg-c">—— cut</span>
+      &nbsp;·&nbsp; Drop a model to start, or open the house example.
       &nbsp;·&nbsp; viewer reused from <code>FKLD/examples/viewer</code>
     </footer>
     <script type="module" src="/src/main.ts"></script>

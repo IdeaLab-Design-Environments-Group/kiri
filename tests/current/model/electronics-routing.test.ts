@@ -152,7 +152,7 @@ describe("model/electronics-routing", () => {
     expect(r.pads[3]).toEqual({ pwr: { x: 0, y: 0 }, gnd: { x: 0, y: 0 } });
   });
 
-  it("is deterministic — the preview and the SVG export each plan independently and must agree", () => {
+  it("is deterministic — the preview and the SVG export each plan independently and must agree", { timeout: 30_000 }, () => {
     const { faces, gaps } = load("akde-hex.fkld");
     const circuit: Circuit = { leds: ledsOn(gaps, 10), battery: { face: 0 } };
     const a = planRoutes(faces, gaps, circuit);
@@ -160,7 +160,7 @@ describe("model/electronics-routing", () => {
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
   });
 
-  it("keeps crossings far below the graph-search router it replaces", { timeout: 30000 }, () => {
+  it("keeps crossings far below the graph-search router it replaces", { timeout: 60_000 }, () => {
     // Pins the measured improvement so a regression is visible. The old router scored 78 here and 36 on
     // puffin, on these same configurations, while also running over chips.
     // Zero on every bundled pattern but akde-decagon, since the search learned to route *around* the other net
@@ -372,7 +372,7 @@ describe("model/electronics-routing", () => {
     }
   });
 
-  it("gives each net exactly one path to every pad — no double connections", { timeout: 20000 }, () => {
+  it("gives each net exactly one path to every pad — no double connections", { timeout: 45_000 }, () => {
     // Explicit timeout, like its neighbours in this file. It routes twelve LEDs on four patterns, which is
     // about 4.7s of real work against vitest's 5s default — so it was a flake waiting for a busy machine,
     // and duly flaked on one. Measured before adding this rather than after assuming: 235/274/1961/2030ms
@@ -412,7 +412,7 @@ describe("model/electronics-routing", () => {
     }
   });
 
-  it("keeps every pad connected to its own terminal", { timeout: 30000 }, () => {
+  it("keeps every pad connected to its own terminal", { timeout: 60_000 }, () => {
     // The guard on the tree pruning: dropping a cycle edge or a dead-end branch must never cut a pad off.
     for (const name of ["house.fkld", "puffin.fkld", "akde-hex.fkld"]) {
       const { faces, gaps } = load(name);

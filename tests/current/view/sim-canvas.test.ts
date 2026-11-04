@@ -8,6 +8,7 @@ class MockOrbitControls {
   target = { set: vi.fn() };
   enableDamping = false;
   update = vi.fn();
+  addEventListener = vi.fn();
   dispose = vi.fn();
   constructor(public camera: any, public domElement: any) {}
 }

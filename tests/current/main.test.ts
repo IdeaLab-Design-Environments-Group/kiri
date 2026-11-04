@@ -6,6 +6,8 @@ const state = {
   loadSampleCalls: [] as any[],
   controllerArgs: [] as any[],
   viewCalls: [] as string[],
+  statuses: [] as Array<{ msg: string; kind: string }>,
+  listeners: {} as Record<string, (e: any) => void>,
 };
 
 const appRoot = {
@@ -17,9 +19,19 @@ const headerRoot = {
 };
 
 vi.mock("../../src/styles.css", () => ({}));
+vi.mock("../../src/styles-welcome.css", () => ({}));
+vi.mock("../../src/view/first-run.js", () => ({ installFirstRun: vi.fn() }));
+vi.mock("../../src/view/header-copy.js", () => ({ applyHeaderCopy: vi.fn() }));
 
 vi.mock("../../src/model/app-store.js", () => ({
-  AppStore: class AppStore {},
+  AppStore: class AppStore {
+    subscribe(listener: (s: unknown) => void) {
+      listener({});
+    }
+    setStatus(msg: string, kind: string) {
+      state.statuses.push({ msg, kind });
+    }
+  },
 }));
 
 vi.mock("../../src/view/convert-panel.js", () => ({
@@ -115,7 +127,14 @@ describe("main.ts", () => {
     state.loadSampleCalls = [];
     state.controllerArgs = [];
     state.viewCalls = [];
+    state.statuses = [];
+    state.listeners = {};
     vi.resetModules();
+    (globalThis as any).window = {
+      addEventListener: (type: string, fn: (e: any) => void) => {
+        state.listeners[type] = fn;
+      },
+    };
     (globalThis as any).document = {
       getElementById: vi.fn((id: string) => (id === "app" ? appRoot : null)),
       querySelector: vi.fn((selector: string) => (selector === ".app-header" ? headerRoot : null)),
@@ -124,6 +143,19 @@ describe("main.ts", () => {
 
   afterEach(() => {
     delete (globalThis as any).document;
+    delete (globalThis as any).window;
+  });
+
+  it("reports uncaught errors and unhandled rejections on the status line", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await import("../../src/main.js");
+    state.listeners.error!({ error: new Error("kaboom"), message: "kaboom" });
+    state.listeners.unhandledrejection!({ reason: "nope" });
+    expect(state.statuses).toEqual([
+      { msg: "Unexpected error: kaboom", kind: "bad" },
+      { msg: "Unexpected error: nope", kind: "bad" },
+    ]);
+    spy.mockRestore();
   });
 
   it("wires the composition root and loads the sample quietly", async () => {

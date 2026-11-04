@@ -21,12 +21,17 @@ class MockCanvas implements SimView {
   readonly warmToTarget = vi.fn();
 
   constructor(mount: MockElement) {
+    if (failNextConstruct) {
+      failNextConstruct = false;
+      throw new Error("no WebGL");
+    }
     this.mount = mount;
     canvasInstances.push(this);
   }
 }
 
 const canvasInstances: MockCanvas[] = [];
+let failNextConstruct = false;
 
 vi.mock("../../../src/view/sim-canvas.js", () => ({ SimCanvas: MockCanvas }));
 
@@ -50,8 +55,16 @@ describe("view/sim-modal", () => {
     modal.setEnabled(true);
 
     expect(host.children).toHaveLength(1);
-    expect(host.children[0]?.textContent).toBe("simulation & routing");
+    expect(host.children[0]?.textContent).toBe("Simulate");
     expect(host.children[0]?.disabled).toBe(false);
+  });
+
+  it("titles the dialog as the 3D fold simulation, not routing", async () => {
+    const { document } = installDom();
+    const { SimModal } = await import("../../../src/view/sim-modal.js");
+    new SimModal();
+    const overlay = document.body.children[0]!;
+    expect(overlay.querySelector(".sim-modal-title")!.textContent).toBe("3D fold simulation — the copper on the folded model");
   });
 
   it("opens lazily, loads a scene, updates fold percent, and can be reset/closed", async () => {
@@ -135,6 +148,33 @@ describe("view/sim-modal", () => {
     await modal.open();
     document.dispatch("keydown", { key: "Escape" });
     expect(overlay.hidden).toBe(true);
+  });
+
+  it("reports a provider exception as a scene error, not a viewer-load failure", async () => {
+    const { document } = installDom();
+    const { SimModal } = await import("../../../src/view/sim-modal.js");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const modal = new SimModal();
+    modal.setProvider(() => {
+      throw new Error("bad scene");
+    });
+    await modal.open();
+    const status = document.body.children[0]!.querySelector(".sim-status")!;
+    expect(status.textContent).toContain("Cannot build the 3D scene for this model: bad scene");
+    expect(status.textContent).not.toContain("Click again");
+  });
+
+  it("says WebGL is unavailable when the canvas cannot be constructed", async () => {
+    const { document } = installDom();
+    const { SimModal } = await import("../../../src/view/sim-modal.js");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const modal = new SimModal();
+    modal.setProvider(() => null);
+    failNextConstruct = true;
+    await modal.open();
+    const status = document.body.children[0]!.querySelector(".sim-status")!;
+    expect(status.textContent).toContain("3D rendering is not available");
+    expect(canvasInstances).toHaveLength(0);
   });
 
   it("surfaces scene-loading failures without crashing", async () => {
