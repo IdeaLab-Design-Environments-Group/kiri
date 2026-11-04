@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { WireTool, type WireHost } from "../../../src/view/wire-tool.js";
+import { WireTool, WIRE_MAX_MM, WIRE_MIN_MM, type WireHost } from "../../../src/view/wire-tool.js";
 import { flatFaces, gapGraph, ledOf, type Circuit, type Vec2 } from "../../../src/model/electronics.js";
 import type { RoutedCircuit } from "../../../src/model/electronics-routing.js";
-import { resolveVertex, type WireContext } from "../../../src/model/manual-wire.js";
+import { manualTraces, resolveVertex, type WireContext } from "../../../src/model/manual-wire.js";
 import { isBuildable } from "../../../src/model/wire-rules.js";
 import { terminals } from "../../../src/model/footprint.js";
 import { LIBRARY } from "../../../src/model/library.js";
@@ -462,6 +462,95 @@ describe("WireTool editing", () => {
     expect(tool.selected()).toBeNull();
     // With nothing selected it falls through to the editor.
     expect(tool.onKey(key("Backspace"))).toBe(false);
+  });
+
+  describe("a width of its own", () => {
+    // The fake host's tape is 0.05 pattern units and, with no `tapeMm`, 1.5mm: 1mm is 1/30 of a unit.
+    const UNITS_PER_MM = 0.05 / 1.5;
+
+    it("reads as auto until one is set, and with nothing selected", () => {
+      const { tool } = drawn();
+      expect(tool.selectedWidthMm()).toBeNull();
+      tool.onKey(key("Escape"));
+      expect(tool.selectedWidthMm()).toBeNull();
+    });
+
+    it("stores the width in pattern units and reads it back in millimetres", () => {
+      const { tool, now, commits } = drawn();
+      expect(tool.setSelectedWidthMm(3)).toBe(true);
+      expect(now().wires![0]!.width).toBeCloseTo(3 * UNITS_PER_MM, 12);
+      expect(tool.selectedWidthMm()).toBeCloseTo(3, 12);
+      expect(commits).toHaveLength(2); // the wire, then its width
+    });
+
+    it("changes only the width: the wire keeps its points, net and selection", () => {
+      const { tool, now } = drawn();
+      const before = now().wires![0]!;
+      tool.setSelectedWidthMm(2);
+      const after = now().wires![0]!;
+      expect(after.pts).toEqual(before.pts);
+      expect(after.id).toBe(before.id);
+      expect(after.net).toBe(before.net);
+      expect(tool.selected()).toBe("w1");
+    });
+
+    it("hands the wire back to the plan's tape on null", () => {
+      const { tool, now } = drawn();
+      tool.setSelectedWidthMm(3);
+      expect(tool.setSelectedWidthMm(null)).toBe(true);
+      expect("width" in now().wires![0]!).toBe(false);
+      expect(tool.selectedWidthMm()).toBeNull();
+    });
+
+    it("holds the width to the allowed range instead of refusing it", () => {
+      const { tool } = drawn();
+      tool.setSelectedWidthMm(20);
+      expect(tool.selectedWidthMm()).toBeCloseTo(WIRE_MAX_MM, 12);
+      tool.setSelectedWidthMm(0.01);
+      expect(tool.selectedWidthMm()).toBeCloseTo(WIRE_MIN_MM, 12);
+    });
+
+    it("refuses what is not a width, and changes nothing for it", () => {
+      const { tool, commits } = drawn();
+      for (const bad of [NaN, Infinity, 0, -2]) expect(tool.setSelectedWidthMm(bad)).toBe(false);
+      expect(tool.selectedWidthMm()).toBeNull();
+      expect(commits).toHaveLength(1);
+    });
+
+    it("commits nothing when the width is already that", () => {
+      const { tool, commits } = drawn();
+      tool.setSelectedWidthMm(3);
+      expect(tool.setSelectedWidthMm(3)).toBe(false);
+      expect(tool.setSelectedWidthMm(null)).toBe(true);
+      expect(tool.setSelectedWidthMm(null)).toBe(false); // already auto
+      expect(commits).toHaveLength(3);
+    });
+
+    it("does nothing with no wire selected, or mid-draw", () => {
+      const { tool, commits } = drawn();
+      tool.onKey(key("Escape"));
+      expect(tool.setSelectedWidthMm(3)).toBe(false);
+      tap(tool, { x: 0.3, y: 1.4 }); // starts a new wire
+      expect(tool.setSelectedWidthMm(3)).toBe(false);
+      expect(commits).toHaveLength(1);
+    });
+
+    it("keeps the width when a vertex is dragged", () => {
+      const { tool, now } = drawn();
+      tool.setSelectedWidthMm(3);
+      drag(tool, { x: 1.6, y: 0.2 }, { x: 1.6, y: 0.8 });
+      expect(now().wires![0]!.width).toBeCloseTo(3 * UNITS_PER_MM, 12);
+    });
+
+    it("reaches the copper: the wire resolves to a trace of that width, and to the tape when auto", () => {
+      const { tool, ctx, now } = drawn();
+      const width = () => manualTraces({ ...ctx, circuit: now() })[0]!.width;
+      expect(width()).toBeUndefined(); // the plan's tape
+      tool.setSelectedWidthMm(6);
+      expect(width()).toBeCloseTo(6 * UNITS_PER_MM, 12);
+      tool.setSelectedWidthMm(null);
+      expect(width()).toBeUndefined();
+    });
   });
 
   it("deleteSelected is what the on-screen button calls", () => {

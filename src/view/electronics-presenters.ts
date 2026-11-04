@@ -552,6 +552,26 @@ export function syncRouteHint(
   if (strip) strip.hidden = !routeHintShown(ledCount, stale);
 }
 
+/**
+ * Show the selected wire's width in the sidebar: its own width in millimetres, or empty with the plan's tape
+ * as the placeholder when it takes that. Left alone while the box has focus, so a refresh does not rewrite
+ * what the author is in the middle of typing.
+ */
+export function syncWireWidth(
+  group: Element | null | undefined,
+  widthMm: number | null,
+  autoMm: number,
+): void {
+  const box = (group as { querySelector?(sel: string): unknown } | null | undefined)
+    ?.querySelector?.(".el-wire-width") as
+    | { value: string; placeholder: string; ownerDocument?: { activeElement: unknown } }
+    | null | undefined;
+  if (!box) return;
+  box.placeholder = `auto (${Math.round(autoMm * 100) / 100})`;
+  if (box.ownerDocument?.activeElement === box) return;
+  box.value = widthMm === null ? "" : String(Math.round(widthMm * 100) / 100);
+}
+
 /** Show the "delete wire" control only while a hand-drawn wire is selected. */
 export function syncWireDelete(group: Element | null | undefined, selectedWire: string | null): void {
   if (group) (group as HTMLElement).hidden = selectedWire === null;

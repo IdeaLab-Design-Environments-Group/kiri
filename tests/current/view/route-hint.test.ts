@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { routeHintShown, syncRouteHint, syncWireDelete } from "../../../src/view/electronics-presenters.js";
+import { routeHintShown, syncRouteHint, syncWireDelete, syncWireWidth } from "../../../src/view/electronics-presenters.js";
 
 describe("route hint", () => {
   it("shows only with LEDs and a stale plan", () => {
@@ -37,6 +37,28 @@ describe("route hint", () => {
     expect(bodyClasses.has("is-route-stale")).toBe(true);
     syncRouteHint(btn, 1, false);
     expect(bodyClasses.has("is-route-stale")).toBe(false);
+  });
+
+  it("shows the selected wire's width, or empty with the plan's tape as the hint", () => {
+    const box = { value: "stale", placeholder: "", ownerDocument: { activeElement: null as unknown } };
+    const group = { querySelector: () => box };
+    syncWireWidth(group as unknown as Element, 2.25, 1.5);
+    expect(box.value).toBe("2.25");
+    expect(box.placeholder).toBe("auto (1.5)");
+    syncWireDelete({ hidden: true } as unknown as Element, "w1");
+    syncWireWidth(group as unknown as Element, null, 1.5);
+    expect(box.value).toBe("");
+    expect(() => syncWireWidth(null, 1, 1.5)).not.toThrow();
+  });
+
+  it("leaves the width box alone while it has focus", () => {
+    const box: { value: string; placeholder: string; ownerDocument: { activeElement: unknown } } = {
+      value: "3.", placeholder: "", ownerDocument: { activeElement: null },
+    };
+    box.ownerDocument.activeElement = box;
+    syncWireWidth({ querySelector: () => box } as unknown as Element, 3, 1.5);
+    expect(box.value).toBe("3."); // not rewritten under the cursor
+    expect(box.placeholder).toBe("auto (1.5)"); // the hint still follows the plan
   });
 
   it("shows the delete-wire group only while a wire is selected", () => {
