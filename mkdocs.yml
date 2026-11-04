@@ -1,0 +1,71 @@
+site_name: Traceform
+site_description: A shared geometric representation for form and strain-aware routed circuits
+repo_url: https://github.com/IdeaLab-Design-Environments-Group/Kiri
+repo_name: IdeaLab-Design-Environments-Group/Kiri
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.footer
+    - content.code.copy
+    - content.code.annotate
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+nav:
+  - Home: index.md
+  - Architecture:
+      - Overview: architecture/overview.md
+      - Import boundaries: import-boundaries.md
+      - Design decisions: architecture/design-decisions.md
+  - Kirigami:
+      - Pipeline: kirigami/pipeline.md
+      - FKLD and flat patterns: kirigami/fkld.md
+      - Folding simulation: kirigami/simulation.md
+      - Bistable star tilings: kirigami/bistable.md
+  - Electronics:
+      - Overview: electronics/overview.md
+      - Fold strain: electronics/fold-strain.md
+      - Routing: electronics/routing.md
+      - Netlist and wires: electronics/netlist.md
+      - Parts and footprints: electronics/parts.md
+      - Editor: electronics/editor.md
+      - Cut files and export: electronics/export.md
+  - Development:
+      - Setup: development/setup.md
+      - Testing: development/testing.md
+      - History: development/history.md
