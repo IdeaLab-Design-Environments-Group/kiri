@@ -12,6 +12,17 @@ class ConvertPanelMock {
   factsCalls: [string, string][][] = [];
   statusCalls: Array<{ msg: string; kind: string }> = [];
   chosenHandler: ((file: File) => void) | null = null;
+  cutHandler: (() => void) | null = null;
+  /** Every state the Cut & fold button was put in, in order. */
+  cutCalls: Array<{ enabled: boolean; busy?: boolean; hint: string }> = [];
+
+  onCutAndFold(handler: () => void): void {
+    this.cutHandler = handler;
+  }
+
+  setCutAndFold(state: { enabled: boolean; busy?: boolean; hint: string }): void {
+    this.cutCalls.push(state);
+  }
 
   onFileChosen(handler: (file: File) => void): void {
     this.chosenHandler = handler;
@@ -48,19 +59,6 @@ class ViewerFrameMock {
   simulateViewerLoad(object: FoldFile, name: string): void {
     this.shown = { object, name };
     this.loadedHandler?.(object, name);
-  }
-}
-
-class HeaderActionsMock {
-  kirigamizeHandler: (() => void) | null = null;
-  enabledCalls: boolean[] = [];
-
-  onKirigamize(handler: () => void): void {
-    this.kirigamizeHandler = handler;
-  }
-
-  setKirigamizeEnabled(enabled: boolean): void {
-    this.enabledCalls.push(enabled);
   }
 }
 
@@ -226,7 +224,6 @@ function setup() {
   const store = new AppStore();
   const convert = new ConvertPanelMock();
   const viewer = new ViewerFrameMock();
-  const header = new HeaderActionsMock();
   const sim = new SimModalMock();
   const exporter = new ExportModalMock();
   const patternEditor = new PatternEditorModalMock();
@@ -235,13 +232,12 @@ function setup() {
     store,
     convert as never,
     viewer as never,
-    header as never,
     sim as never,
     exporter as never,
     patternEditor as never,
     electronics as never,
   );
-  return { controller, store, convert, viewer, header, sim, exporter, patternEditor, electronics };
+  return { controller, store, convert, viewer, sim, exporter, patternEditor, electronics };
 }
 
 describe("controller/app-controller", () => {
@@ -258,11 +254,12 @@ describe("controller/app-controller", () => {
   });
 
   it("renders initial empty state and wires a sim provider", () => {
-    const { convert, header, sim } = setup();
+    const { convert, sim } = setup();
 
     expect(convert.factsCalls[0]).toEqual([]);
     expect(convert.statusCalls[0]).toEqual({ msg: "No model loaded.", kind: "" });
-    expect(header.enabledCalls[0]).toBe(false);
+    expect(convert.cutCalls[0]).toMatchObject({ enabled: false });
+    expect(convert.cutCalls[0]!.hint).toContain("Load a 3D model");
     expect(sim.enabledCalls[0]).toBe(false);
     expect(sim.provider?.()).toBeNull();
   });
@@ -379,7 +376,7 @@ describe("controller/app-controller", () => {
   });
 
   it("parses loaded FOLD files through FileReader", () => {
-    const { convert, sim, header } = setup();
+    const { convert, sim } = setup();
     const fold = makeFold();
 
     class FileReaderMock {
@@ -395,21 +392,48 @@ describe("controller/app-controller", () => {
     globalThis.FileReader = FileReaderMock as unknown as typeof FileReader;
     convert.chosenHandler?.({ name: "ok.fold" } as File);
 
-    expect(header.enabledCalls.at(-1)).toBe(true);
+    // A FOLD file is already a pattern: Cut & fold is off for it, and the hint says why.
+    expect(convert.cutCalls.at(-1)).toMatchObject({ enabled: false });
+    expect(convert.cutCalls.at(-1)!.hint).toContain("already a pattern");
     expect(sim.enabledCalls.at(-1)).toBe(true);
   });
 
   it("keeps the kirigamize button disabled and shows the status before the heavy work runs", async () => {
-    const { controller, store, header, convert } = setup();
+    const { controller, store, convert } = setup();
     store.update({ model: { kind: "mesh", name: "broken.obj", ext: "obj", text: "v 0 0 0" } });
     const pending = controller.kirigamize();
-    expect(header.enabledCalls.at(-1)).toBe(false);
+    expect(convert.cutCalls.at(-1)).toMatchObject({ enabled: false, busy: true });
     expect(convert.statusCalls.at(-1)?.msg).toContain("Kirigamizing broken.obj");
     // nothing has run yet: the failure status only arrives after the yield
     expect(convert.statusCalls.at(-1)?.kind).toBe("");
     await pending;
     expect(convert.statusCalls.at(-1)?.kind).toBe("bad");
-    expect(header.enabledCalls.at(-1)).toBe(true);
+    expect(convert.cutCalls.at(-1)).toMatchObject({ enabled: true });
+  });
+
+  it("turns Cut & fold on for a 3D mesh only, with a hint for each case", () => {
+    const { store, convert } = setup();
+    expect(convert.cutCalls.at(-1)).toMatchObject({ enabled: false });
+    expect(convert.cutCalls.at(-1)!.hint).toContain("Load a 3D model");
+
+    store.update({ model: { kind: "mesh", name: "cube.stl", ext: "stl", text: "solid" } });
+    expect(convert.cutCalls.at(-1)).toMatchObject({ enabled: true });
+    expect(convert.cutCalls.at(-1)!.hint).toContain("Cuts the mesh");
+
+    store.update({ model: { kind: "fold", name: "house.fkld", object: { file_spec: 1 } as unknown as FoldFile } });
+    expect(convert.cutCalls.at(-1)).toMatchObject({ enabled: false });
+    expect(convert.cutCalls.at(-1)!.hint).toContain("already a pattern");
+
+    store.update({ model: null });
+    expect(convert.cutCalls.at(-1)).toMatchObject({ enabled: false });
+  });
+
+  it("runs the pipeline when the panel's Cut & fold button is pressed", async () => {
+    const { store, convert } = setup();
+    store.update({ model: { kind: "mesh", name: "broken.obj", ext: "obj", text: "v 0 0 0" } });
+    convert.cutHandler?.();
+    expect(convert.cutCalls.at(-1)).toMatchObject({ busy: true }); // it started
+    await Promise.resolve();
   });
 
   function readerReturning(text: string): typeof FileReader {

@@ -24,9 +24,8 @@ import { DEFAULT_PRINT_SIZE } from "../model/stl-export.js";
 import { type Circuit } from "../model/electronics.js";
 import { resolveElectronicsTarget, type ElectronicsPlanningAdapter, defaultElectronicsPlanning } from "../services/electronics-service.js";
 import type { AnchoredMesh } from "../model/trace-anchor.js";
-import type { ConvertPanel } from "../view/convert-panel.js";
+import type { ConvertPanel, CutAndFoldState } from "../view/convert-panel.js";
 import type { ViewerFrame } from "../view/viewer-frame.js";
-import type { HeaderActions } from "../view/header-actions.js";
 import type { SimModal } from "../view/sim-modal.js";
 import type { ExportModal } from "../view/export-modal.js";
 import type { PatternEditorModal } from "../view/pattern-editor-modal.js";
@@ -43,7 +42,6 @@ export class AppController {
     private readonly store: AppStore,
     private readonly convert: ConvertPanel,
     private readonly viewer: ViewerFrame,
-    private readonly header: HeaderActions,
     private readonly sim: SimModal,
     private readonly exporter: ExportModal,
     private readonly patternEditor: PatternEditorModal,
@@ -99,7 +97,7 @@ export class AppController {
 
     // View intents → controller handlers.
     this.convert.onFileChosen((file) => this.loadFromFile(file));
-    this.header.onKirigamize(() => void this.kirigamize());
+    this.convert.onCutAndFold(() => void this.kirigamize());
 
     // Secondary design path: the pattern editor commits a drawn grid as FKLD,
     // then shows it like any other pattern. The serializer feeds its download.
@@ -130,7 +128,7 @@ export class AppController {
     const m = state.model;
     this.convert.renderFacts(m ? deriveFacts(m) : []);
     this.convert.setStatus(state.status.msg, state.status.kind);
-    this.header.setKirigamizeEnabled(!!m && !this.busy);
+    this.convert.setCutAndFold(this.cutAndFoldState(m));
     // Sim enablement follows what would actually be simulated: the viewer's
     // model first, else the loaded fold model. (Previously the viewer-driven
     // enablement was silently overridden by the next render — now it derives
@@ -211,7 +209,7 @@ export class AppController {
       return;
     }
     this.busy = true;
-    this.header.setKirigamizeEnabled(false, true);
+    this.convert.setCutAndFold(this.cutAndFoldState(m));
     this.store.setStatus(`Kirigamizing ${m.name}… (plan cuts → unfold → emit → verify)`, "");
     try {
       // The pipeline is synchronous: let the status line and the disabled button paint first.
@@ -226,12 +224,26 @@ export class AppController {
       this.store.setStatus(msg, kind);
     } finally {
       this.busy = false;
-      this.header.setKirigamizeEnabled(!!this.store.model);
+      this.convert.setCutAndFold(this.cutAndFoldState(this.store.model));
     }
   }
 
   /** True while a kirigamize run is in flight (blocks re-entry). */
   private busy = false;
+
+  /**
+   * What the Cut & fold button should say and do for the model in hand. It is for a 3D mesh only: a FOLD or
+   * FKLD file is already a pattern, so the button used to be lit and then merely re-showed the same file.
+   * The hint is what tells you which case you are in.
+   */
+  private cutAndFoldState(model: Readonly<AppState>["model"]): CutAndFoldState {
+    if (this.busy) return { enabled: false, busy: true, hint: "Working… the button comes back when the pattern is ready." };
+    if (!model) return { enabled: false, hint: "Load a 3D model (.obj or .stl) to turn it into a pattern." };
+    if (model.kind === "fold") {
+      return { enabled: false, hint: "This is already a pattern, so there is nothing to cut. Use Simulate to fold it." };
+    }
+    return { enabled: true, hint: "Cuts the mesh into a flat pattern that folds back into the model." };
+  }
 
   /** Commit a hand-drawn crease pattern (the editor's lattice) as an FKLD pattern and show it. */
   usePattern(grid: PatternGrid): void {

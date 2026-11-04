@@ -106,8 +106,10 @@ export async function fetchSample(url: string, name: string): Promise<LoadedMode
 export function loadedStatus(model: LoadedModel): Status {
   if (model.kind === "fold") {
     const kind = isFkld(model.object) ? "FKLD" : "FOLD";
-    const sim = canSimulate(model.object) ? " 3D Sim ready." : "";
-    return { msg: `Loaded ${kind} model "${model.name}". Ready to cut & fold.${sim}`, kind: "ok" };
+    // A FOLD or FKLD file is already a pattern: there is nothing to cut and fold, so this must not say so (the
+    // Cut & fold button is off for it, and its hint says why). What it can do next is fold in Simulate.
+    const next = canSimulate(model.object) ? ": open Simulate to see it fold" : "";
+    return { msg: `Loaded ${kind} model "${model.name}". It is already a pattern${next}.`, kind: "ok" };
   }
   return {
     msg: `Loaded ${model.ext.toUpperCase()} mesh "${model.name}". Press Cut & fold to convert.`,

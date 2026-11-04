@@ -46,15 +46,18 @@ const electronics = new ElectronicsModal();
 const examples = new ExamplesPage();
 const tutorials = new TutorialsPage();
 const header = new HeaderActions();
-simModal.mountTrigger(header.element); // 3D Sim trigger first…
-exportModal.mountTrigger(header.element); // …then Export SVG…
+// The header is navigation, in two groups. What you do with a pattern, in the order you come to it: look at it
+// fold (Simulate), put a circuit on it (Electronics), send it to be made (Export). Then, apart and quieter, where
+// to find a model (Examples) and how to use the app (Tutorials). "Cut & fold" is not here: it acts on the loaded
+// model, so it is in the Model column beside the file.
+simModal.mountTrigger(header.workflow);
+electronics.mountTrigger(header.workflow); // LED copper-tape routing
+exportModal.mountTrigger(header.workflow);
 // The Pattern editor's trigger is deliberately NOT mounted: the top bar was asked to lose the button.
 // The modal itself is still built and still wired to the controller, so nothing it feeds has changed —
 // it simply has no way in from the header any more.
-electronics.mountTrigger(header.element); // …then Electronics (LED copper-tape routing)…
-examples.mountTrigger(header.element); // …then Examples (the bundled models; picks one to load)…
-tutorials.mountTrigger(header.element); // …then Tutorials (the screen recordings; reads no state)…
-header.appendActionButtons(); // …then Cut & fold
+examples.mountTrigger(header.library); // the bundled models; picks one to load
+tutorials.mountTrigger(header.library); // the screen recordings; reads no state
 document.querySelector(".app-header")?.appendChild(header.element);
 
 // ---- Global error reporting ------------------------------------------------
@@ -68,7 +71,7 @@ window.addEventListener("error", (e) => reportFailure("Uncaught error", e.error 
 window.addEventListener("unhandledrejection", (e) => reportFailure("Unhandled rejection", e.reason));
 
 // ---- Controller -----------------------------------------------------------
-const controller = new AppController(store, convert, viewer, header, simModal, exportModal, patternEditor, electronics);
+const controller = new AppController(store, convert, viewer, simModal, exportModal, patternEditor, electronics);
 
 // The Examples page's one intent: a model was chosen, so load it the way the bundled sample loads.
 examples.onPick((slug) => void controller.loadExample(slug));
