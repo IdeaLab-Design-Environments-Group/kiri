@@ -59,11 +59,11 @@ export class ExportModal {
           <span class="sim-status" role="status"></span>
           <div class="export-group export-group-tiles" role="group" aria-label="3D tiles">
             <span class="export-group-title">3D tiles</span>
-            <label class="export-stl-height-label" title="printable sheet size — longest dimension of the flat pattern.">size
+            <label class="export-stl-height-label" title="How big the pattern prints, measured along its longest side. The cut files are made at the same size, so the layers still line up.">longest side
               <input type="number" class="export-stl-size" min="1" step="1" />
               <span>mm</span>
             </label>
-            <label class="export-stl-height-label">height
+            <label class="export-stl-height-label" title="How thick each printed tile is.">tile thickness
               <input type="number" class="export-stl-height" min="0" step="0.1" />
               <span class="export-stl-unit">units</span>
             </label>
