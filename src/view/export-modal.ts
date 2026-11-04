@@ -1,5 +1,6 @@
 import type { SvgExportPayload } from "../model/fkld-svg-export.js";
 import { DEFAULT_PRINT_SIZE, type StlExport } from "../model/stl-export.js";
+import { enterFocusScope } from "./dialog-focus.js";
 
 /** Returns the export payload for the current pattern when the modal opens, or null if none. */
 export type ExportProvider = () => SvgExportPayload | null;
@@ -18,6 +19,8 @@ export type StlProvider = (heightUnits: number | null, maxSubdiv: number | null,
 export class ExportModal {
   private readonly overlay: HTMLElement;
   private readonly trigger: HTMLButtonElement;
+  /** Undoes {@link enterFocusScope}: set while open, so closing gives focus back to what opened it. */
+  private leaveFocus: (() => void) | null = null;
   private readonly statusEl: HTMLElement;
   private readonly previews: { cut: HTMLElement; score: HTMLElement; both: HTMLElement };
   private readonly zipBtn: HTMLButtonElement;
@@ -147,6 +150,7 @@ export class ExportModal {
       this.stlHeightUnit.textContent = stlDefault.unit;
     }
     this.overlay.hidden = false;
+    this.leaveFocus ??= enterFocusScope(this.overlay, this.trigger, { trap: true });
     this.writePreviews();
   }
 
@@ -184,6 +188,8 @@ export class ExportModal {
 
   close(): void {
     this.overlay.hidden = true;
+    this.leaveFocus?.();
+    this.leaveFocus = null;
   }
 
   private downloadZip(): void {

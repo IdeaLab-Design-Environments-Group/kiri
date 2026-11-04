@@ -174,6 +174,7 @@ import { fillPadRows, netChildren } from "./electronics-pad-rows.js";
 // The scene emitter, for the ratsnest overlay — see the note at its use in `draw()`.
 import type { FoldFile } from "../model/fold-file.js";
 import { HOME, currentRoute, goToRoute, onRouteChange } from "./route.js";
+import { enterFocusScope } from "./dialog-focus.js";
 
 /**
  * Whether a key event landed in something the author is typing into.
@@ -324,6 +325,8 @@ const PX_PER_RENDERED_MM = 18;
 export class ElectronicsModal {
   private readonly overlay: HTMLElement;
   private readonly trigger: HTMLButtonElement;
+  /** Undoes {@link enterFocusScope}: set while open, so closing gives focus back to what opened it. */
+  private leaveFocus: (() => void) | null = null;
   private readonly svg: SVGSVGElement;
   private readonly statusEl: HTMLElement;
   private readonly toolButtons = new Map<Tool, HTMLButtonElement>();
@@ -719,6 +722,8 @@ export class ElectronicsModal {
     this.overlay.hidden = false;
     document.body?.classList.add("is-electronics");
     this.trigger.classList.add("is-active");
+    // A page, not a dialog: focus goes in, with no trap, and back to the Electronics button on the way out.
+    this.leaveFocus ??= enterFocusScope(this.overlay, this.trigger);
     // The rest of the library is not in the main bundle. Ask for it now rather than at start-up, and
     // redraw the picker when it lands, so a search can turn up the parts that cannot be placed and say
     // why. Held so a caller — a test, mostly — can wait for the library to be whole.
@@ -734,6 +739,8 @@ export class ElectronicsModal {
     this.overlay.hidden = true;
     document.body?.classList.remove("is-electronics");
     this.trigger.classList.remove("is-active");
+    this.leaveFocus?.();
+    this.leaveFocus = null;
   }
 
   /** Leave the editor for the model page. What the Back control does; the browser's own Back does the

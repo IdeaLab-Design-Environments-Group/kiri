@@ -81,7 +81,7 @@
     }
     .toolbar button:active { transform: translateY(0.5px); }
     .toolbar button:focus-visible, .toolbar select:focus-visible {
-      outline: 2px solid rgba(31, 111, 235, 0.45); outline-offset: 1px;
+      outline: 2px solid #1f6feb; outline-offset: 1px; /* solid: at 45% it measured about 1.8:1, under the 3:1 a focus ring needs */
     }
     .toolbar input[type=file]::file-selector-button {
       font: inherit; font-size: 11px; margin-right: 8px;
@@ -114,7 +114,13 @@
       background: #1f6feb; border-color: #1f6feb; color: #fff;
       box-shadow: 0 1px 2px rgba(31, 111, 235, 0.3);
     }
-    .toolbar label.toggle input { display: none; }
+    /* Visually hidden, not display:none: a display:none checkbox cannot take focus, so these toggles could not be
+       reached from the keyboard. The ring is drawn on the pill, which is what the eye sees as the control. */
+    .toolbar label.toggle { position: relative; }
+    .toolbar label.toggle input {
+      position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; pointer-events: none;
+    }
+    .toolbar label.toggle:has(input:focus-visible) { outline: 2px solid #1f6feb; outline-offset: 2px; }
     .toolbar #prop-data {
       max-width: 480px; overflow: hidden; text-overflow: ellipsis;
       white-space: nowrap;
