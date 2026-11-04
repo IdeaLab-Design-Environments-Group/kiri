@@ -90,8 +90,8 @@
       transition: background 0.13s;
     }
     .toolbar input[type=file]::file-selector-button:hover { background: #efe9da; }
-    /* View x/y/z + Zoom +/−/Fit read as compact buttons */
-    .toolbar button[data-view], .toolbar #zoom-in, .toolbar #zoom-out, .toolbar #zoom-fit {
+    /* Zoom +/−/Fit read as compact buttons */
+    .toolbar #zoom-in, .toolbar #zoom-out, .toolbar #zoom-fit {
       min-width: 30px; padding: 4px 8px; text-align: center; font-weight: 600;
     }
     /* Toggle chips — pill toggles, blue when on */
@@ -272,12 +272,6 @@
       <span class="lbl">Shape:</span>
       <button id="shape-toggle" title="Switch between the flat cut pattern and the folded form">Folded</button>
     </div>
-    <div class="group" id="view-group" hidden>
-      <span class="lbl">View:</span>
-      <button data-view="x">x</button>
-      <button data-view="y">y</button>
-      <button data-view="z">z</button>
-    </div>
     <div class="group">
       <span class="lbl">Zoom:</span>
       <button id="zoom-in"  title="Zoom in (+ or =)">+</button>
@@ -382,11 +376,6 @@
       if (Array.isArray(cls) && cls.includes('foldedForm') && Array.isArray(vc)) return vc;
     }
     return null;
-  }
-  // The x/y/z camera snaps only make sense for a 3D shape; the flat pattern is a 2D sheet seen face-on.
-  function syncViewGroup() {
-    const g = document.getElementById('view-group');
-    if (g) g.hidden = !showFolded;
   }
   let showFolded = false; // when a foldedForm frame exists, the viewer can show it instead of the flat net
 
@@ -797,7 +786,6 @@
     // folded-form goal, offer a toggle to view the folded 3D shape too (the button label is the action).
     const hasFolded = !!foldedCoords(file);
     showFolded = false;
-    syncViewGroup();
     const shapeGroup = document.getElementById('shape-group');
     if (shapeGroup) shapeGroup.hidden = !hasFolded;
     const shapeBtn = document.getElementById('shape-toggle');
@@ -860,7 +848,6 @@
     if (!currentFile) return;
     showFolded = !showFolded;
     document.getElementById('shape-toggle').textContent = showFolded ? 'Flat' : 'Folded'; // label = action
-    syncViewGroup();
     frameModel(buildModel(currentFile));
     render();
   });
@@ -887,16 +874,6 @@
   document.body.addEventListener('drop', (e) => {
     e.preventDefault();
     if (e.dataTransfer.files[0]) loadFromFile(e.dataTransfer.files[0]);
-  });
-  document.querySelectorAll('button[data-view]').forEach(b => {
-    b.addEventListener('click', () => {
-      const v = b.dataset.view;
-      // FOLD convention:  x-view = look along +x → x-axis points right (y world), y-axis points up (z world)
-      if (v === 'x') setCamAxes([0,1,0], [0,0,1]);
-      if (v === 'y') setCamAxes([0,0,1], [1,0,0]);
-      if (v === 'z') setCamAxes([1,0,0], [0,1,0]);
-      render();
-    });
   });
   // ---- Sidebar: toolbar toggle + drag-resizer + collapse chevron ----
   (function () {

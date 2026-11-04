@@ -283,23 +283,12 @@ describe("view/fkld-viewer", () => {
     send(parent, "http://localhost:4173");
     expect(status()).toMatch(/m\.fkld/);
   });
-  it("shows the x/y/z view buttons only while the folded shape is on screen", () => {
-    const viewer = loadViewer();
-    const house = example("house.fkld") as { vertices_coords: number[][]; file_frames?: unknown[] };
-    const withFold = {
-      ...house,
-      file_frames: [{
-        frame_classes: ["foldedForm"],
-        vertices_coords: house.vertices_coords.map((c) => [c[0] ?? 0, c[1] ?? 0, 0]),
-      }],
-    };
-    const el = (id: string) => (viewer.win.__el as (i: string) => StubEl)(id);
-    viewer.loadObject(withFold, "fold.fkld");
-    expect(el("view-group").hidden).toBe(true); // flat pattern: a 2D sheet, no axis snaps
-    el("shape-toggle").fire("click");
-    expect(el("view-group").hidden).toBe(false); // Folded mode
-    el("shape-toggle").fire("click");
-    expect(el("view-group").hidden).toBe(true);
+  it("has no x/y/z View buttons", () => {
+    // They snapped the camera to a fixed axis: a single line on the flat sheet, an instant jump on the folded
+    // shape, and a relative turn rather than an absolute one, so there was nothing to follow. Dragging orbits.
+    const html = readFileSync(VIEWER, "utf8");
+    expect(html).not.toContain("data-view");
+    expect(html).not.toContain('id="view-group"');
   });
   it("has no viewer Import file input", () => {
     expect(readFileSync(VIEWER, "utf8")).not.toContain('id="file-input"');
