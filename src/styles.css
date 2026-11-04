@@ -2198,6 +2198,15 @@ body.is-examples .app-legend {
   cursor: pointer;
 }
 .el-wire-delete:hover { background: #fbeff0; }
+.el-wire-width-row { display: flex; align-items: center; gap: 0.4rem; font-size: 0.78rem; margin-bottom: 0.4rem; }
+.el-wire-width {
+  width: 5.5rem;
+  font: inherit;
+  padding: 0.15rem 0.4rem;
+  border: 1px solid var(--border, #d0d5dd);
+  border-radius: 6px;
+}
+.el-wire-width:focus { border-color: var(--accent, #1f6feb); }
 .el-wire-sect[hidden] { display: none; }
 /* Stale copper: the planned tape no longer matches the parts on it, so it is drawn dimmed and dashed rather
    than as current. Hand-drawn wires are the author's, not the plan's, and stay as they are. */

@@ -31,11 +31,13 @@ import type { RoutedCircuit } from "../model/electronics-routing.js";
 import {
   resolveVertex,
   resolveWire,
+  toFlat,
   type ManualWire,
   type WireContext,
   type WireVertex,
 } from "../model/manual-wire.js";
 import { checkWire, type WireFault } from "../model/wire-rules.js";
+import { TAPE_MM } from "../model/tape-width.js";
 import { terminals } from "../model/footprint.js";
 import { footprintById } from "../model/library.js";
 import { ptStr, sceneSvg, type SceneItem } from "./pcb-scene.js";
@@ -87,6 +89,13 @@ interface Placed {
   at: Vec2;
   dangling: boolean;
 }
+
+/**
+ * The range a hand-set wire width is held to, in millimetres. Below the floor the strip is too fine to
+ * cut and weed; above the ceiling it is wider than any roll the author could buy.
+ */
+export const WIRE_MIN_MM = 0.5;
+export const WIRE_MAX_MM = 10;
 
 /** The wire being drawn resolves under this net while it is still a draft — see {@link recheck}. */
 const DRAFT_ID = "wire-draft";
@@ -252,6 +261,46 @@ export class WireTool {
     }
     if (e.key === "Delete") return this.deleteSelected();
     return false;
+  }
+
+  /**
+   * The selected wire's own width in millimetres, or null when it has none and takes the plan's tape.
+   * Null too when no wire is selected, so the control reads "auto" rather than a stale number.
+   */
+  selectedWidthMm(): number | null {
+    const w = this.wires().find((x) => x.id === this.sel);
+    if (!w || !(w.width !== undefined && w.width > 0)) return null;
+    const ctx = this.host.context();
+    return (w.width * (ctx.tapeMm ?? TAPE_MM)) / ctx.tapeW;
+  }
+
+  /**
+   * Give the selected wire a width of its own, in millimetres, or `null` to hand it back to the plan's tape.
+   *
+   * The range is {@link WIRE_MIN_MM}..{@link WIRE_MAX_MM}: a value outside it is clamped, not refused, so
+   * typing 20 gets the widest wire there is. Anything that is not a number is refused. Like
+   * {@link deleteSelected} it does nothing mid-draw, and answers whether it changed anything. The width is
+   * stored in pattern units, the space every other wire dimension is in.
+   */
+  setSelectedWidthMm(mm: number | null): boolean {
+    if (this.draft.length || !this.sel) return false;
+    const ctx = this.host.context();
+    let width: number | undefined;
+    if (mm !== null) {
+      if (!Number.isFinite(mm) || mm <= 0) return false;
+      width = toFlat(Math.min(WIRE_MAX_MM, Math.max(WIRE_MIN_MM, mm)), ctx.tapeW, ctx.tapeMm ?? TAPE_MM);
+    }
+    const wires = this.wires();
+    const at = wires.findIndex((w) => w.id === this.sel);
+    if (at < 0 || wires[at]!.width === width) return false;
+    const next = wires.map((w, i) => {
+      if (i !== at) return w;
+      const { width: _drop, ...rest } = w;
+      return width === undefined ? rest : { ...rest, width };
+    });
+    this.commitWires(next);
+    this.paint();
+    return true;
   }
 
   /**

@@ -132,7 +132,7 @@ import {
   netTally,
   netlistTrouble,
   partsTally,
-  statusLine, syncRouteHint, syncWireDelete,
+  statusLine, syncRouteHint, syncWireDelete, syncWireWidth,
 } from "./electronics-presenters.js";
 // Re-exported so the presenters can be reached through the modal that renders them, the same way the
 // palette's own catalog is — a caller that has the modal should not need to know which file the rows
@@ -598,6 +598,16 @@ export class ElectronicsModal {
     this.overlay.querySelector(".el-clear")!.addEventListener("click", () => this.clear());
     this.overlay.querySelector(".el-wire-delete")!.addEventListener("click", () => {
       this.wire.deleteSelected();
+      this.renderStatus();
+    });
+    const widthBox = this.overlay.querySelector<HTMLInputElement>(".el-wire-width")!;
+    widthBox.addEventListener("change", () => {
+      // Empty is "auto": hand the wire back to the plan's tape. Something unreadable is put back as it was.
+      const text = widthBox.value.trim();
+      this.wire.setSelectedWidthMm(text === "" ? null : Number(text));
+      // Show what was kept: a clamped 20 reads 10, an unreadable entry reads as the wire still is.
+      const kept = this.wire.selectedWidthMm();
+      widthBox.value = kept === null ? "" : String(Math.round(kept * 100) / 100);
       this.renderStatus();
     });
     for (const btn of this.overlay.querySelectorAll<HTMLButtonElement>(".el-export")) {
@@ -2878,6 +2888,7 @@ export class ElectronicsModal {
     const sel = this.selected;
     syncRouteHint(this.routeBtn, this.circuit.leds.length, this.stale);
     syncWireDelete(this.overlay.querySelector(".el-wire-sect"), this.wire.selected());
+    syncWireWidth(this.overlay.querySelector(".el-wire-sect"), this.wire.selectedWidthMm(), this.tapeMm());
     this.statusEl.textContent = statusLine({
       circuit: this.circuit,
       routed: this.routed,
