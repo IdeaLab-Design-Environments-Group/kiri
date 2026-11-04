@@ -101,7 +101,6 @@ vi.mock("../../src/view/header-actions.js", () => ({
   HeaderActions: class HeaderActions {
     element = { id: "header-actions" };
     appendActionButtons = vi.fn(() => state.viewCalls.push("header.appendActionButtons"));
-    onCreatePyramid = vi.fn();
     onLoadSample = vi.fn();
     onKirigamize = vi.fn();
     setKirigamizeEnabled = vi.fn();

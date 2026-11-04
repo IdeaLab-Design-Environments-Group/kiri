@@ -110,7 +110,6 @@ Views render what they are given and report what the user did through callbacks.
 ```ts title="src/controller/app-controller.ts › AppController constructor"
 // View intents → controller handlers.
 this.convert.onFileChosen((file) => this.loadFromFile(file));
-this.header.onCreatePyramid(() => this.createPyramid());
 this.header.onKirigamize(() => this.kirigamize());
 // …
 this.electronics.onEdit((circuit) => this.updateCircuit(circuit));
