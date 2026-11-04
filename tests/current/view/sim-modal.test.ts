@@ -59,6 +59,17 @@ describe("view/sim-modal", () => {
     expect(host.children[0]?.disabled).toBe(false);
   });
 
+  it("says whether Simulate is on, so the welcome card offers it only then", async () => {
+    installDom();
+    const { SimModal } = await import("../../../src/view/sim-modal.js");
+    const modal = new SimModal();
+    expect(modal.isEnabled()).toBe(false); // off until a model that can be simulated is open
+    modal.setEnabled(true);
+    expect(modal.isEnabled()).toBe(true);
+    modal.setEnabled(false);
+    expect(modal.isEnabled()).toBe(false);
+  });
+
   it("titles the dialog as the 3D fold simulation, not routing", async () => {
     const { document } = installDom();
     const { SimModal } = await import("../../../src/view/sim-modal.js");

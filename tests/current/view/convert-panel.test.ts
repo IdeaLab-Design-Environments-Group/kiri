@@ -99,4 +99,20 @@ describe("view/convert-panel", () => {
     expect(hint.textContent).toBe("This is already a pattern.");
     expect(btn.getAttribute("aria-busy")).toBe("false");
   });
+
+  it("keeps the derived facts in a collapsed File details section, not an always-open table", () => {
+    installDom();
+    const panel = new ConvertPanel();
+    const root = panel.element as unknown as MockElement;
+    const derived = childByClass(root, "derived")!;
+    const summary = childByClass(root, "derived-summary")!;
+
+    expect(derived.tagName).toBe("details");
+    expect(summary.tagName).toBe("summary");
+    expect(summary.textContent).toBe("File details");
+    // Collapsed unless opened: no `open` attribute is set by default.
+    expect(derived.getAttribute("open")).toBeFalsy();
+    // The table is still inside it, one click away.
+    expect(childByClass(derived, "derived-list")).toBeTruthy();
+  });
 });

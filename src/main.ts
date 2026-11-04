@@ -79,7 +79,12 @@ examples.onPick((slug) => void controller.loadExample(slug));
 // Default state: load the bundled FKLD example so the panels, viewer, and 3D
 // Sim are all live on first paint (no-op under file:// where fetch is blocked).
 void controller.loadSample(false);
-installFirstRun(viewer.element, convert.element, controller); // first-run welcome card
+// First-run welcome card: it follows what is loaded, and offers Simulate once a pattern is open.
+installFirstRun(viewer.element, convert.element, controller, {
+  store,
+  simulate: () => void simModal.open(),
+  canSimulate: () => simModal.isEnabled(),
+});
 // One vocabulary: labels and tooltips for every header button; the "needs" part follows enablement.
 // Subscribed after the controller, so it runs once the buttons were enabled or disabled for this state.
 store.subscribe(() => applyHeaderCopy(header.element));

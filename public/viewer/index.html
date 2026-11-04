@@ -256,17 +256,28 @@
     svg .edge.C.vent        { stroke: var(--vent); }
     svg .edge.C.tab         { stroke: var(--tab); }
     svg .edge.C.perforation { stroke: var(--perforation); stroke-dasharray: 3 2; }
+
+    /* Layers that only matter when reading a file (Vertices, Face Text, Molecules, Curvature) and the raw property
+       box stay behind "More layers" until it is pressed. */
+    .toolbar:not(.show-adv) .adv { display: none; }
+    #more-layers[aria-expanded="true"] { background: #eef3ff; border-color: #1f6feb; color: #1741c4; }
+    /* The edge codes in the side panel, spelled out first and the one-letter code after. */
+    #sidebar .label .code { color: var(--muted); font-size: 0.85em; }
   </style>
 </head>
 <body>
   <header>
-    <h1>FKLD Viewer <small>— SVG renderer for any .fkld / .fold file, with 3D rotation</small></h1>
+    <h1>Pattern <small>— the flat sheet to cut and fold. Drag to turn it, scroll to zoom.</small></h1>
   </header>
 
   <div class="toolbar">
     <div class="group" id="toggle-group">
       <span class="lbl">Toggle:</span>
       <!-- toggles inserted by JS -->
+    </div>
+    <div class="group">
+      <button id="more-layers" type="button" aria-expanded="false" aria-controls="toggle-group prop-group"
+        title="Show the layers and the property box that only matter when reading a file: Vertices, Face Text, Molecules, Curvature">More layers</button>
     </div>
     <div class="group" id="shape-group" hidden>
       <span class="lbl">Shape:</span>
@@ -282,13 +293,13 @@
       <span class="lbl">Example:</span>
       <button id="load-sample" title="Load the bundled sample model (house.fkld)">Load sample</button>
     </div>
-    <div class="group">
+    <div class="group adv" id="prop-group">
       <span class="lbl">Property:</span>
       <select id="prop-select"><option>--</option></select>
       <span id="prop-data"></span>
     </div>
     <div class="group" style="margin-left:auto">
-      <button id="toggle-sidebar">Toggle sidebar</button>
+      <button id="toggle-sidebar" title="Show or hide the details of the pattern: counts, edge kinds, validation">Pattern details</button>
     </div>
   </div>
 
@@ -355,6 +366,8 @@
     Molecules: { on: false },       // overlay θ labels
     Curvature: { on: false },       // colour vertices by class
   };
+  // Shown only after "More layers": they matter to someone reading an FKLD file, not to someone folding a pattern.
+  const ADVANCED_LAYERS = new Set(['Vertices', 'Face Text', 'Molecules', 'Curvature']);
   let currentFile = null;
 
   function setStatus(msg, level = '') {
@@ -621,7 +634,7 @@
     const g = document.getElementById('toggle-group');
     for (const name of Object.keys(layers)) {
       const label = document.createElement('label');
-      label.className = 'toggle' + (layers[name].on ? ' on' : '');
+      label.className = 'toggle' + (layers[name].on ? ' on' : '') + (ADVANCED_LAYERS.has(name) ? ' adv' : '');
       label.textContent = name;
       const cb = document.createElement('input');
       cb.type = 'checkbox';
@@ -638,6 +651,13 @@
   }
 
   // ---- sidebar --------------------------------------------------------------
+  // The FOLD edge codes in words, with the one-letter code after, so nothing is lost for someone who reads files.
+  const EDGE_KIND = { M: 'mountain fold', V: 'valley fold', B: 'outline', F: 'flat, not folded', C: 'cut', U: 'not marked' };
+  function edgeKindLabel(code) {
+    const word = EDGE_KIND[code];
+    return word ? `${escape(word)} <span class="code">(${escape(code)})</span>` : escape(code);
+  }
+
   function drawSidebar(file) {
     const a = document.getElementById('sidebar');
     const v = file.vertices_coords?.length || 0;
@@ -659,19 +679,19 @@
 
     let html = `
       <h2>File</h2>
-      <div class="row"><span class="label">creator</span><span class="value">${escape(file.file_creator) ?? '—'}</span></div>
-      <div class="row"><span class="label">frame_title</span><span class="value">${escape(file.frame_title) ?? '—'}</span></div>
+      <div class="row"><span class="label">made by</span><span class="value">${escape(file.file_creator) ?? '—'}</span></div>
+      <div class="row"><span class="label">title</span><span class="value">${escape(file.frame_title) ?? '—'}</span></div>
       <div class="row"><span class="label">unit</span><span class="value">${escape(file.frame_unit) ?? '—'}</span></div>
       <div class="row"><span class="label">attributes</span><span class="value">${escape((file.frame_attributes || []).join(', ')) || '—'}</span></div>
-      <div class="row"><span class="label">FKLD spec</span><span class="value">${escape(file['fkld:meta_fkldSpec']) || '—'}</span></div>
+      <div class="row"><span class="label">format version</span><span class="value">${escape(file['fkld:meta_fkldSpec']) || '—'}</span></div>
 
-      <h2>Topology</h2>
+      <h2>Counts</h2>
       <div class="row"><span class="label">vertices</span><span class="value">${v}</span></div>
       <div class="row"><span class="label">faces</span><span class="value">${f}</span></div>
       <div class="row"><span class="label">edges</span><span class="value">${e}</span></div>
 
-      <h2>Edge assignments</h2>
-      ${Object.entries(ah).map(([k,n]) => `<div class="row"><span class="label">${escape(k)}</span><span class="value">${n}</span></div>`).join('') || '<div class="row" style="border:none;color:var(--muted)"><em>none</em></div>'}
+      <h2>Folds and cuts</h2>
+      ${Object.entries(ah).map(([k,n]) => `<div class="row"><span class="label">${edgeKindLabel(k)}</span><span class="value">${n}</span></div>`).join('') || '<div class="row" style="border:none;color:var(--muted)"><em>none</em></div>'}
 
       <h2>Cut subtypes</h2>
       ${Object.keys(ch).length ? Object.entries(ch).map(([k,n]) => `<div class="row"><span class="label">${escape(k)}</span><span class="value">${n}</span></div>`).join('') : '<div class="row" style="border:none;color:var(--muted)"><em>none</em></div>'}
@@ -842,6 +862,16 @@
 
   // ---- event wiring ---------------------------------------------------------
   buildToggles();
+  (function () {
+    const btn = document.getElementById('more-layers');
+    const bar = document.querySelector('.toolbar');
+    btn.addEventListener('click', () => {
+      const open = btn.getAttribute('aria-expanded') !== 'true';
+      btn.setAttribute('aria-expanded', String(open));
+      btn.textContent = open ? 'Fewer layers' : 'More layers';
+      bar.classList.toggle('show-adv', open);
+    });
+  })();
 
   // Flat ⇄ Folded: rebuild from the same file with the other coordinate set, keeping the framing.
   document.getElementById('shape-toggle').addEventListener('click', () => {
@@ -884,12 +914,15 @@
       mainEl.classList.toggle('no-sidebar', collapsed);
       if (chev) {
         chev.textContent = collapsed ? '‹' : '›';
-        chev.title = collapsed ? 'Show sidebar' : 'Hide sidebar';
+        chev.title = collapsed ? 'Show pattern details' : 'Hide pattern details';
       }
     }
     const toggle = () => setSidebar(!mainEl.classList.contains('no-sidebar'));
     document.getElementById('toggle-sidebar').addEventListener('click', toggle);
     if (chev) chev.addEventListener('click', (e) => { e.stopPropagation(); toggle(); });
+    // Starts closed: the panel is the file's own fields, useful to someone debugging a file and noise to someone
+    // folding a pattern. "Pattern details" opens it, and the model gets the room until then.
+    setSidebar(true);
     if (rez) {
       const clamp = (w) => Math.max(180, Math.min(640, w));
       let startX = 0, startW = 0;

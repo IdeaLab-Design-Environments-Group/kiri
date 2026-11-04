@@ -60,8 +60,11 @@ export class ConvertPanel {
     this.cutHint.textContent = "Load a 3D model (.obj or .stl) to turn it into a pattern.";
     panel.append(this.cutBtn, this.cutHint);
 
-    const derived = el("div", "derived");
-    derived.append(heading("h3", "Derived"));
+    // Collapsed: the table is for someone checking a file; the file name is already in the status line above.
+    const derived = el("details", "derived");
+    const derivedSummary = el("summary", "derived-summary");
+    derivedSummary.textContent = "File details";
+    derived.append(derivedSummary);
     this.derivedList = el("dl", "derived-list") as HTMLDListElement;
     this.derivedEmpty = el("p", "fkld-meta-empty");
     this.derivedEmpty.textContent = "load a model to see its facts.";
