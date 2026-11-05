@@ -82,6 +82,8 @@ export function pickTab(
   clear: boolean;
   onComponent: boolean;
   overComponent: boolean;
+  /** Clear of the copper and the parts, but lying on a tab already placed: the two fuse and are snipped as one. */
+  onTab: boolean;
 } | null {
   /** Whether a ring point is too close to a pad or terminal to tab onto. */
   const onComponent = (p: Vec2): boolean =>
@@ -188,24 +190,24 @@ export function pickTab(
       }
       return {
         index: c.index, side: c.side, path,
-        clear: true, onComponent: forcedOntoComponent, overComponent: false,
+        clear: true, onComponent: forcedOntoComponent, overComponent: false, onTab: false,
       };
     }
   }
   if (crowded) {
     return {
       index: crowded.index, side: crowded.side, path: crowded.path,
-      clear: true, onComponent: forcedOntoComponent, overComponent: false,
+      clear: true, onComponent: forcedOntoComponent, overComponent: false, onTab: true,
     };
   }
   if (gripping) {
-    return { index: gripping.index, side: gripping.side, path: gripping.path, clear: true, onComponent: true, overComponent: false };
+    return { index: gripping.index, side: gripping.side, path: gripping.path, clear: true, onComponent: true, overComponent: false, onTab: false };
   }
   fallback ??= overFallback;
   return fallback
     ? {
         index: fallback.index, side: fallback.side, path: fallback.path,
-        clear: false, onComponent: forcedOntoComponent, overComponent: fallback.over,
+        clear: false, onComponent: forcedOntoComponent, overComponent: fallback.over, onTab: false,
       }
     : null;
 }

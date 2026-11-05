@@ -1258,7 +1258,7 @@ export function buildCopperCarrierExport(
     for (let t = 0; t < want; t++) {
       const choice = pickTab(ring, others, win, tape, taken, chosen, partEnds, mates);
       if (!choice) break;
-      const poor = !choice.clear || choice.onComponent || choice.overComponent;
+      const poor = !choice.clear || choice.onComponent || choice.overComponent || choice.onTab;
       if (t === 0 && poor && spare && rings.some((_, j) => fused(ri, j))) return false;
       // The first grip is taken as it comes — a run has to be held even where the only spot is a poor one.
       // An extra is a convenience, so it is only worth having if it is clean: taking a compromised one would

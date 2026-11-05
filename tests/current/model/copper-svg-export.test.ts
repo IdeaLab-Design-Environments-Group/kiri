@@ -1215,6 +1215,35 @@ describe("model/copper-svg-export", () => {
     }
   });
 
+  it("never lays one tab on another at twelve LEDs", { timeout: 60_000 }, () => {
+    // Two tabs closer than a tape width are one strip of copper: stuck down together, and snipping one cuts
+    // the other. A tab that could only be had on top of another used to be taken anyway, ahead of one over
+    // a part; puffin had 4 such pairs and akde-decagon-pyramid 17, some crossing outright. Measured
+    // segment to segment, since two tabs can cross with neither one's corners near the other.
+    const cr = (o: Vec2, s: Vec2, t: Vec2): number => (s.x - o.x) * (t.y - o.y) - (s.y - o.y) * (t.x - o.x);
+    const segSeg = (a: Vec2, b: Vec2, c: Vec2, d: Vec2): number =>
+      cr(a, b, c) * cr(a, b, d) < 0 && cr(c, d, a) * cr(c, d, b) < 0
+        ? 0
+        : Math.min(ptSeg(a, c, d), ptSeg(b, c, d), ptSeg(c, a, b), ptSeg(d, a, b));
+    const apart = (p: Vec2[], q: Vec2[]): number => {
+      let m = Infinity;
+      for (let i = 1; i < p.length; i++) {
+        for (let j = 1; j < q.length; j++) m = Math.min(m, segSeg(p[i - 1]!, p[i]!, q[j - 1]!, q[j]!));
+      }
+      return m;
+    };
+    for (const name of ["house", "church", "puffin", "akde-hex", "akde-square-pyramid", "akde-decagon-pyramid"]) {
+      const { fold, traces, tapeW, keepOff, pads } = planned(`${name}.fkld`, 12);
+      const out = buildCopperCarrierExport(fold, traces, tapeW, "k", keepOff, undefined, undefined, pads);
+      const tape = tapeW * sheetFrame(fold).scale;
+      const fused: string[] = [];
+      out.tabPaths.forEach((p, i) => out.tabPaths.slice(i + 1).forEach((q, k) => {
+        if (apart(p, q) < tape) fused.push(`${i}/${i + 1 + k}`);
+      }));
+      expect(fused, `${name}: tabs touching`).toEqual([]);
+    }
+  });
+
   it("spreads its tabs over the walls instead of stacking them on one", () => {
     // Sorted on distance alone every tab dives for whichever wall is nearest, and they pile up: 45 of 99
     // tabs across the bundled circuits ran within a tape width of another, and puffin sent all six to the
