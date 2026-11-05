@@ -211,7 +211,9 @@ export const TUTORIAL_SECTIONS: TutorialSection[] = [
       {
         slug: "export-for-3d-fab",
         title: "export for 3D printing",
-        blurb: "The tiled build as geometry to print, at the gap and detail the simulator folded.",
+        blurb:
+          "Set the longest side and the tile thickness, then save the tiled build as an STL, at the gap "
+          + "and detail the simulator folded.",
       },
       {
         slug: "export-electronics",
