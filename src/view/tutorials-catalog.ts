@@ -42,8 +42,8 @@ export const TUTORIAL_SECTIONS: TutorialSection[] = [
         slug: "using-top-bar-on-main-page",
         title: "use the top bar",
         blurb:
-          "What each header button is for: Simulate, Export, Pattern editor, Electronics, "
-          + "Load sample and Cut & fold.",
+          "Where each header button goes: Simulate, Electronics and Export, in the order you come to "
+          + "them, then Examples and Tutorials.",
       },
       {
         slug: "adjust-zoom-main-page",
