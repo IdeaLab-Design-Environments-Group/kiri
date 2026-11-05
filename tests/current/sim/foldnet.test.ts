@@ -23,6 +23,21 @@ describe("sim/foldnet", () => {
     expect(net.meta.R).toBeLessThanOrEqual(1);
   });
 
+  it("winds every face counterclockwise in the flat net, as FoldNet.faces promises", () => {
+    // Mixed winding made a crease between a lateral face and its molecule read ±π on the flat sheet,
+    // so a fold measured from flat (the declared-form sim path) started half a turn off.
+    for (const edgeCount of [4, 6, 10]) {
+      const net = buildFoldNet(
+        computeState({ edgeCount, edgeLength: 100, totalCurvature: 100, materialThickness: 1 }),
+      );
+      const v = net.vertices;
+      for (const [a, b, c] of net.faces) {
+        const area2 = (v[b].x - v[a].x) * (v[c].y - v[a].y) - (v[b].y - v[a].y) * (v[c].x - v[a].x);
+        expect(area2).toBeGreaterThan(0);
+      }
+    }
+  });
+
   it("derives mesh edges from arbitrary triangle meshes", () => {
     const net = foldNetFromMesh(
       [vec3(0, 0, 0), vec3(1, 0, 0), vec3(1, 1, 0), vec3(0, 1, 0)],

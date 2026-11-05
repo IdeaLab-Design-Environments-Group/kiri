@@ -151,8 +151,11 @@ export function buildFoldNet(state: KirigamiState): FoldNet {
   const basePairs: [number, number][] = []; // outer corners that merge into a cone base vertex
   const valleyOuter: number[] = []; // foldPt (valley convergence) per molecule
   const ekey = (a: number, b: number): string => (a < b ? `${a}_${b}` : `${b}_${a}`);
+  // Every face CCW in the flat net, as `FoldNet.faces` promises: a crease between faces of opposite
+  // winding reads ±π while the sheet is still flat, which breaks any fold measured from flat.
   const addTri = (a: P2, b: P2, c: P2): void => {
-    faces.push([vid(a), vid(b), vid(c)]);
+    const ccw = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x) > 0;
+    faces.push(ccw ? [vid(a), vid(b), vid(c)] : [vid(a), vid(c), vid(b)]);
   };
 
   for (let k = 0; k < N; k++) {
