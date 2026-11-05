@@ -18,6 +18,79 @@ describe("sim/build", () => {
     expect(solver.theta.length).toBe(model.creases.count);
   });
 
+  // Issue #14: the goal must be an isometry of the flat net for every N, not only the square pyramid.
+  // N=6 and N=10 are the hex and decagon presets; before the fix their goals stretched the worst bar
+  // by 34% and 118% (minor-cut slits pulled to a fixed tuck point, apex tips pulled past the slant).
+  for (const [N, L, H, T] of [
+    [4, 50, 30, 0.31],
+    [6, 100, 100, 1],
+    [10, 100, 100, 1],
+  ]) {
+    it(`goal pose keeps every bar's length for N=${N} and lands the pyramid`, () => {
+      const state = computeState({ edgeCount: N, edgeLength: L, totalCurvature: H, materialThickness: T });
+      const { net, model } = buildFoldScene(state);
+      let worst = 0;
+      for (let i = 0; i < model.beams.count; i++) {
+        const a = model.beams.n0[i];
+        const b = model.beams.n1[i];
+        const g = model.goal;
+        const l = Math.hypot(g[3 * a] - g[3 * b], g[3 * a + 1] - g[3 * b + 1], g[3 * a + 2] - g[3 * b + 2]);
+        worst = Math.max(worst, Math.abs(l / model.beams.rest[i] - 1));
+      }
+      expect(worst).toBeLessThan(1e-4); // model arrays are Float32: exact up to single precision
+
+      // base corners pair up on the base ring at radius R, z = 0
+      for (const [a, b] of net.basePairs) {
+        const ga = [model.goal[3 * a], model.goal[3 * a + 1], model.goal[3 * a + 2]];
+        const gb = [model.goal[3 * b], model.goal[3 * b + 1], model.goal[3 * b + 2]];
+        expect(Math.hypot(ga[0] - gb[0], ga[1] - gb[1], ga[2] - gb[2])).toBeLessThan(1e-9);
+        expect(Math.hypot(ga[0], ga[1])).toBeCloseTo(net.meta.R, 5);
+        expect(ga[2]).toBeCloseTo(0, 5);
+      }
+      // apex tips sit on the lateral faces below the apex, inside the base ring
+      for (const t of net.tips) {
+        const z = model.goal[3 * t + 2];
+        expect(z).toBeGreaterThan(0.75 * net.meta.H);
+        expect(z).toBeLessThan(net.meta.H);
+      }
+      // the rim facets near the apex keep their flat relation: the small rim triangle overlaps its
+      // neighbour in the flat net, and a fold measured from flat expects it to stay that way
+      const rimR = 1.4 * net.meta.rApex;
+      const normal = (P: (i: number) => number[], f: number): number[] => {
+        const [a, b, c] = net.faces[f].map(P);
+        const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        const w = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+        const nn = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
+        const l = Math.hypot(nn[0], nn[1], nn[2]);
+        return nn.map((x) => x / l);
+      };
+      const flatP = (i: number) => [net.vertices[i].x, net.vertices[i].y, net.vertices[i].z];
+      const goalP = (i: number) => [model.goal[3 * i], model.goal[3 * i + 1], model.goal[3 * i + 2]];
+      const rho = (i: number) => Math.hypot(net.vertices[i].x, net.vertices[i].y);
+      const rimFacets = net.edges.filter((e) => e.assignment === "F" && rho(e.a) <= rimR && rho(e.b) <= rimR);
+      expect(rimFacets.length).toBe(2 * N);
+      for (const e of rimFacets) {
+        const [f1, f2] = e.faces;
+        const dotOf = (P: (i: number) => number[]) => {
+          const n1 = normal(P, f1);
+          const n2 = normal(P, f2);
+          return n1[0] * n2[0] + n1[1] * n2[1] + n1[2] * n2[2];
+        };
+        expect(dotOf(goalP)).toBeCloseTo(dotOf(flatP), 4);
+      }
+
+      // the molecules tuck inside: both ends of every valley sit in the plane of a lateral edge, on
+      // the axis side of it (below the apex→base-corner line at their radius)
+      const { R, H: Hn } = net.meta;
+      const valleyNodes = net.edges.filter((e) => e.assignment === "V").flatMap((e) => [e.a, e.b]);
+      expect(valleyNodes.length).toBe(2 * N);
+      for (const i of valleyNodes) {
+        const r = Math.hypot(model.goal[3 * i], model.goal[3 * i + 1]);
+        expect(model.goal[3 * i + 2]).toBeLessThan(Hn * (1 - r / R));
+      }
+    });
+  }
+
   it("builds a single-hinge model with the requested target", () => {
     const model = singleHingeModel(0.75, 1.5);
     expect(model.creases.count).toBe(1);
