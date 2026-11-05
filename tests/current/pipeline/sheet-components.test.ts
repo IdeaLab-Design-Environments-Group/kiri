@@ -1,9 +1,11 @@
 /**
- * Sheet connectivity: face labeling over shared edges.
+ * Sheet connectivity: face labeling over shared edges, and the bare-cut
+ * one-piece test the relief SWAP descent uses to skip severing swaps.
  */
 
 import { describe, expect, it } from "vitest";
-import { labelComponents } from "../../../src/pipeline/sheet-components.js";
+import { buildTopology } from "../../../src/pipeline/mesh.js";
+import { cutKeepsOnePiece, labelComponents } from "../../../src/pipeline/sheet-components.js";
 import type { TriMesh } from "../../../src/pipeline/types.js";
 import { makeGrid } from "./fixtures/targets.js";
 
@@ -36,5 +38,28 @@ describe("labelComponents", () => {
     const { count, label } = labelComponents(grid);
     expect(count).toBe(1);
     expect(label.every((l) => l === 0)).toBe(true);
+  });
+});
+
+describe("cutKeepsOnePiece", () => {
+  const grid = makeGrid(2, 2); // 3x3 vertices, centre vertex 4
+  const topo = buildTopology(grid);
+  const edge = (a: number, b: number): number => topo.edgeIndex.get(a < b ? `${a}_${b}` : `${b}_${a}`)!;
+
+  it("no cut, or a slit from the boundary to the centre, keeps one piece", () => {
+    expect(cutKeepsOnePiece(grid, topo, [])).toBe(true);
+    expect(cutKeepsOnePiece(grid, topo, [edge(1, 4)])).toBe(true);
+  });
+
+  it("a slit across the sheet, boundary to boundary, severs it", () => {
+    expect(cutKeepsOnePiece(grid, topo, [edge(1, 4), edge(4, 7)])).toBe(false);
+  });
+
+  it("boundary edges in the cut set are ignored", () => {
+    expect(cutKeepsOnePiece(grid, topo, [edge(0, 1), edge(1, 2)])).toBe(true);
+  });
+
+  it("one interior edge between two boundary vertices cuts off a corner", () => {
+    expect(cutKeepsOnePiece(grid, topo, [edge(1, 5)])).toBe(false);
   });
 });

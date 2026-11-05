@@ -1,11 +1,12 @@
 /**
  * Connected pieces of a cut sheet: face-connectivity over shared edges.
  *
- * Pattern: functional core. The relief search labels a trial sheet thousands
- * of times per pass, so this is one union-find pass with no string edge keys.
+ * Pattern: functional core. The relief search asks "does this cut set keep the
+ * sheet in one piece?" thousands of times per pass, so both entry points are
+ * union-find passes with no string edge keys.
  */
 
-import type { TriMesh } from "./types.js";
+import type { MeshTopology, TriMesh } from "./types.js";
 
 /**
  * Face-connectivity labeling over shared edges of a TriMesh. Labels are
@@ -49,4 +50,34 @@ export function labelComponents(mesh: TriMesh): { count: number; label: number[]
     label.push(r === f ? count++ : label[r]);
   }
   return { count, label };
+}
+
+/**
+ * True iff cutting `mesh` along `cutEdges` leaves its faces in one piece (bare
+ * cut, no vents). Vents only remove material, so a cut set failing this can
+ * never yield a one-piece vented sheet either.
+ */
+export function cutKeepsOnePiece(mesh: TriMesh, topo: MeshTopology, cutEdges: Iterable<number>): boolean {
+  const cut = new Set(cutEdges);
+  const parent: number[] = [];
+  for (let f = 0; f < mesh.faces.length; f++) parent.push(f);
+  const find = (x: number): number => {
+    while (parent[x] !== x) {
+      parent[x] = parent[parent[x]];
+      x = parent[x];
+    }
+    return x;
+  };
+  let pieces = mesh.faces.length;
+  for (let e = 0; e < topo.edges.length; e++) {
+    const ef = topo.edges[e].faces;
+    if (ef.length !== 2 || cut.has(e)) continue;
+    const a = find(ef[0]);
+    const b = find(ef[1]);
+    if (a !== b) {
+      parent[a] = b;
+      pieces--;
+    }
+  }
+  return pieces <= 1;
 }

@@ -14,10 +14,10 @@ import { angleDefects } from "../../../src/pipeline/curvature.js";
 import { kirigamize } from "../../../src/pipeline/kirigamize.js";
 import { buildTopology, edgeKey } from "../../../src/pipeline/mesh.js";
 import { planCuts } from "../../../src/pipeline/plan-cuts.js";
-import { cutAlongEdges, findSelfOverlap, unfoldPatch } from "../../../src/pipeline/unfold.js";
+import { cutAlongEdges, findSelfOverlap, ReliefBudgetError, unfoldPatch } from "../../../src/pipeline/unfold.js";
 import { pointTriangleDistance } from "../../../src/pipeline/verify.js";
 import { PipelineError, type TriMesh, type UnfoldResult, type Vec2 } from "../../../src/pipeline/types.js";
-import { makeDoubleSaddleFan, makeEnneper, makeSaddleFan, makeSaddleRoof } from "./fixtures/targets.js";
+import { makeDoubleSaddleFan, makeEnneper, makeSaddleFan, makeSaddleRoof, makeTorus } from "./fixtures/targets.js";
 
 const TAU = 2 * Math.PI;
 
@@ -302,6 +302,35 @@ describe("carveCone termination — saddle roof + Enneper", () => {
     }
     expect(Date.now() - t0).toBeLessThan(5_000);
   }, 15_000);
+});
+
+// Where two slits merge the relief loop falls through to the SWAP descent,
+// which used to try every (add, remove) pair with a full vented cut each and
+// ran into the 20 s budget (#15). Either a valid sheet or a fast, plain error.
+describe("relief SWAP descent — enneper8 + torus finish well inside the budget", () => {
+  const cases: [string, () => TriMesh][] = [
+    ["enneper8", () => makeEnneper(8)],
+    ["torus", () => makeTorus(40, 15, 12, 8)],
+  ];
+  for (const [name, fixture] of cases) {
+    it(`${name}: a valid vented sheet or a fast PipelineError, never the budget error`, () => {
+      const t0 = Date.now();
+      let result: ReturnType<typeof kirigamize> | null = null;
+      try {
+        result = kirigamize(fixture(), { verify: false });
+      } catch (err) {
+        expect(err).toBeInstanceOf(PipelineError);
+        expect(err).not.toBeInstanceOf(ReliefBudgetError);
+      }
+      expect(Date.now() - t0).toBeLessThan(10_000); // half the 20 s budget, with room for a loaded CI box
+      if (result !== null) {
+        expect(result.unfold.patchCount).toBe(1);
+        expectTwoPiInvariant(result.unfold);
+        expect(findSelfOverlap(result.unfold.flat, result.unfold.faces)).toBeNull();
+        expectVentEdgesOnSheet(result.unfold);
+      }
+    }, 30_000);
+  }
 });
 
 describe("saddle roof — vent cones carve through whole faces", () => {

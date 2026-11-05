@@ -25,7 +25,7 @@ import { distance } from "../core/vec3.js";
 import { edgeKey, edgeLength, faceAngles, vertexWedges } from "./mesh.js";
 import { countFlatOverlaps, cross2, findSelfOverlap, unfoldPatch } from "./flat-layout.js";
 import { shortestPaths } from "./plan-cuts.js";
-import { labelComponents } from "./sheet-components.js";
+import { cutKeepsOnePiece, labelComponents } from "./sheet-components.js";
 import { boundaryNeighbours, clearLength, extendLip, followLip, insideRing, slitDepths } from "./slit-lips.js";
 import {
   PipelineError,
@@ -79,6 +79,16 @@ const PRUNE_MAX_PASSES = 4;
  * default in DEFAULT_KIRIGAMIZE for exactly this reason).
  */
 const PRUNE_MAX_TRIALS = 256;
+
+/**
+ * Work cap on one SWAP descent step, in vented-cut units: each trial cut costs
+ * one unit plus one per vent it re-places (a vented cut re-walks every vent, so
+ * that is where the time goes). When it runs out the step takes the best move
+ * found so far, or fails fast if none improved. Every bundled example and test
+ * surface settles well inside it; the torus, the heaviest, finds its best move
+ * at ~17k units of a ~87k full scan (#15).
+ */
+export const SWAP_WORK_BUDGET = 30000;
 
 /** Vent-walk angle snap (rad): residues below this never force a sliver split. */
 const SNAP_ANG = 1e-7;
@@ -1114,8 +1124,15 @@ function addReliefCut(
   // the structure acyclic — the sheet stays one piece — while re-routing the
   // slits toward radial form. Pick the move that STRICTLY reduces the flat
   // self-overlap pair count; the strict integer descent terminates.
+  let work = 0;
   const overlapsFor = (edges: number[], cap: number): number => {
     checkReliefBudget();
+    // Most swaps close a cut cycle and sever the sheet, or strip a vent vertex of
+    // its slit (cutAlongEdges throws on that); skip the vented cut for those.
+    if (!cutKeepsOnePiece(mesh, topo, edges)) return Number.POSITIVE_INFINITY;
+    const slit = new Set(edges.filter((e) => topo.edges[e].faces.length === 2));
+    for (const v of ventAngles.keys()) if (!topo.vertexEdges[v].some((e) => slit.has(e))) return Number.POSITIVE_INFINITY;
+    work += 1 + ventAngles.size;
     try {
       const trial = cutAlongEdges(mesh, topo, edges, ventAngles);
       if (labelComponents(trial.mesh).count !== 1) return Number.POSITIVE_INFINITY;
@@ -1132,7 +1149,8 @@ function addReliefCut(
   let best = current;
   let bestAdd = -1;
   let bestRemove = -1;
-  for (let add = 0; add < topo.edges.length; add++) {
+  // Nothing beats an overlap-free move (ties keep the earlier one), so stop at the first.
+  for (let add = 0; add < topo.edges.length && best > 0 && work < SWAP_WORK_BUDGET; add++) {
     if (cutSet.has(add) || topo.edges[add].faces.length !== 2) continue;
     const withAdd = [...cutSet, add];
     const nAdd = overlapsFor(withAdd, best - 1);
@@ -1142,6 +1160,7 @@ function addReliefCut(
       bestRemove = -1;
     }
     for (const rm of cutSet) {
+      if (best === 0 || work >= SWAP_WORK_BUDGET) break;
       const nSwap = overlapsFor(withAdd.filter((e) => e !== rm), best - 1);
       if (nSwap < best) {
         best = nSwap;
@@ -1156,5 +1175,12 @@ function addReliefCut(
     return [bestAdd];
   }
 
+  if (work >= SWAP_WORK_BUDGET) {
+    throw new PipelineError(
+      "unfold",
+      `relief cut: no cut swap reduced the ${current} overlapping face pairs within the search budget — try a simpler mesh or fewer vents`,
+      { overlap },
+    );
+  }
   throw new PipelineError("unfold", "relief cut: no connectivity-safe edge near overlap", { overlap });
 }
