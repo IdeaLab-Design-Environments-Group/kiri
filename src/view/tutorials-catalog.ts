@@ -46,11 +46,11 @@ export const TUTORIAL_SECTIONS: TutorialSection[] = [
           + "Load sample and Cut & fold.",
       },
       {
-        slug: "adjust-zoom-and-viewing-axis-main-page",
-        title: "zoom and viewing axis",
+        slug: "adjust-zoom-main-page",
+        title: "zoom the viewer",
         blurb:
-          "Zoom the viewer and change the axis you look down, so a flat pattern or a folded form sits "
-          + "square on screen.",
+          "The viewer's Zoom buttons: + and − step in and out, Fit frames the whole pattern again. "
+          + "Scrolling over the pattern zooms too.",
       },
       {
         slug: "alternate-between-folded-and-unfolded-version-in-main-page",
