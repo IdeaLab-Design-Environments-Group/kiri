@@ -101,12 +101,15 @@ describe("model/crease-price", () => {
     // Re-recorded on 2026-11-03 (from 17/11 crossings and 13.9/15.86 units), when the strict corridor
     // pass began refusing copper that touches the other net. The trade narrowed: two crossings fewer for
     // 9.3% more copper, where it was six for 14.1%.
+    //
+    // Re-pinned on 2026-11-04 (13.62/14.88 -> 13.56/14.78 units) for the LED legs laid through the run that
+    // passes the pad: the crossings did not move (15 and 13), only the stubs' copper went. 9.0% more copper.
     const priced = crossings("church.fkld", 12);
     const lengthOnly = crossings("church.fkld", 12, 0);
     expect(lengthOnly.tension).toBe(15);
     expect(priced.tension).toBe(13);
-    expect(lengthOnly.len).toBeCloseTo(13.62, 2);
-    expect(priced.len).toBeCloseTo(14.88, 2);
+    expect(lengthOnly.len).toBeCloseTo(13.56, 2);
+    expect(priced.len).toBeCloseTo(14.78, 2);
     // The trade itself, independent of the four figures above: fewer creases crossed, more copper spent.
     expect(priced.tension).toBeLessThan(lengthOnly.tension);
     expect(priced.len).toBeGreaterThan(lengthOnly.len);
@@ -163,13 +166,14 @@ describe("model/crease-price", () => {
       const banded = crossings("akde-hex.fkld", 12, 0, STRAIN_BAND_CAP);
       expect(flat.tension).toBe(23);
       expect(banded.tension).toBe(19);
-      expect(flat.len).toBeCloseTo(1496.25, 2);
-      expect(banded.len).toBeCloseTo(1512.53, 2);
+      // Copper 1496.25 / 1512.53 until 2026-11-04, when LED legs stopped being separate stubs; crossings unmoved.
+      expect(flat.len).toBeCloseTo(1492.04, 2);
+      expect(banded.len).toBeCloseTo(1501.53, 2);
       // The same trade the price makes, bought a different way: fewer crossings, more copper.
       expect(banded.tension).toBeLessThan(flat.tension);
       expect(banded.len).toBeGreaterThan(flat.len);
 
-      // 15 crossings and 13.62 units both ways: the same unpriced route as in "buys tension crossings".
+      // 15 crossings and 13.56 units both ways: the same unpriced route as in "buys tension crossings".
       const church = crossings("church.fkld", 12, 0, 0);
       expect(church.tension).toBe(15);
       expect(crossings("church.fkld", 12, 0, STRAIN_BAND_CAP)).toEqual(church);
@@ -190,9 +194,9 @@ describe("model/crease-price", () => {
     it("leaves every route untouched when it is switched off", { timeout: 60000 }, () => {
       // The escape hatch has to be real: at `bandCap` 0 this is the router as it was before bands existed.
       const before = crossings("church.fkld", 12, undefined, 0);
-      // 13 and 14.88 since 2026-11-03 (was 11 and 15.86): the priced plan in "buys tension crossings".
+      // 13 and 14.78 since 2026-11-04 (14.88 on 2026-11-03, 15.86 before that, at 11): the priced plan in "buys tension crossings".
       expect(before.tension).toBe(13);
-      expect(before.len).toBeCloseTo(14.88, 2);
+      expect(before.len).toBeCloseTo(14.78, 2);
     });
   });
 });

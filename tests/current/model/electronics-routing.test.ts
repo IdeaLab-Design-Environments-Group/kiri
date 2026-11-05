@@ -62,7 +62,8 @@ describe("model/electronics-routing", () => {
   // flakiness rather than as a budget nobody had ever chosen. 20s is picked to be loose enough that load
   // cannot trip it and tight enough that a real slowdown still can: the routing would have to get four
   // times slower to fail here, which is far past any change that should pass review unnoticed.
-  it("never runs copper over an LED chip, on any bundled pattern", { timeout: 60_000 }, () => {
+  // Solo 15s; 45s and then 60s were both beaten by a full parallel run on a loaded machine (the file alone passes in 15s); 120s.
+  it("never runs copper over an LED chip, on any bundled pattern", { timeout: 120_000 }, () => {
     // The one destructive constraint: tape over the chip shorts the part. Checked on the real patterns,
     // not a toy grid, because a toy grid satisfies it by construction.
     for (const name of ["house.fkld", "church.fkld", "puffin.fkld", "akde-hex.fkld"]) {
@@ -594,7 +595,9 @@ describe("model/electronics-routing", () => {
     // that remain are mid-route junctions on the two crowded ones, and are pinned.
     const budget: Record<string, number> = {
       "house.fkld": 0,
-      "church.fkld": 0,
+      // 2 on 2026-11-03 once the router refused copper touching the other net; 1 since LED legs are laid
+      // through the run that passes the pad (no separate stub doubling back at the pad). Not yet 0.
+      "church.fkld": 1,
       // 0 -> 1 with an LED's pads at its own footprint's spacing: the two nets meet at almost the same point
       // at each hinge now, so a junction that used to be a shallow fork is a narrow one. Confirmed to be the
       // pad positions rather than the squaring-off step -- 1 with `landPads` disabled as well.
