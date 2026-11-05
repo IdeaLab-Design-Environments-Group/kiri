@@ -145,6 +145,7 @@ export function shellMarkup(): string {
                   <button type="button" class="el-export-carrier" data-side="inside" aria-label="download the inside carrier frame (SVG)" title="download the inside's carrier frame: align it, stick the traces down, snip the tabs">SVG</button>
                   <button type="button" class="el-export-carrier" data-side="outside" aria-label="download the outside carrier frame (SVG)" title="download the outside's carrier frame: align it, stick the traces down, snip the tabs">SVG</button>
                 </div>
+                <p class="el-export-note" role="status" hidden></p>
                 <span class="el-sub-label">mirror the cut</span>
                 <span class="el-seg">
                   <button type="button" class="el-mirror" data-axis="x" title="mirror the cut left-right — for cutting through the backing or laying the tape adhesive side up" aria-pressed="false">⇄ left-right</button>

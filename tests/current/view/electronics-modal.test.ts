@@ -1050,9 +1050,17 @@ describe("view/electronics-modal", () => {
     modal.overlay.querySelector(".el-export").dispatch("click", {});
     expect(anchors).toHaveLength(0);
     expect(modal.statusEl.textContent).toContain("Nothing to export");
+    // ...and says it under the export buttons too, where the person who pressed one is looking, not only in the
+    // line at the foot of the page.
+    const note = modal.overlay.querySelector(".el-export-note");
+    expect(note.hidden).toBe(false);
+    expect(note.textContent).toContain("Nothing to export on the inside");
 
     modal.selectTool("battery");
     tapFlat(modal, { x: 0.5, y: 0.5 });
+    // Placing something is an edit, and the refusal no longer describes the sheet: it goes.
+    expect(note.hidden, "a stale refusal outlived the edit").toBe(true);
+    expect(note.textContent).toBe("");
     modal.selectTool("led");
     tapFlat(modal, modal.gaps[0].point);
 
@@ -1062,6 +1070,7 @@ describe("view/electronics-modal", () => {
     expect(anchors).toHaveLength(1);
     expect(anchors[0].download).toBe("kiri-inside-copper.svg");
     expect(modal.statusEl.textContent).toContain("strip");
+    expect(note.hidden, "a saved file left a refusal showing").toBe(true);
 
     (globalThis as any).document.createElement = origCreate;
     delete (globalThis as any).URL;

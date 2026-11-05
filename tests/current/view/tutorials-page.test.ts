@@ -93,6 +93,14 @@ describe("view/tutorials-page", () => {
     expect(unlisted, "recordings on disk that no card links to").toEqual([]);
   });
 
+  it("writes every section and tutorial title in sentence case, not all lower case", () => {
+    // They were "getting around", "import a model" next to Title Case everywhere else. The brand, "kiri", is the one
+    // word kept in lower case wherever it appears.
+    const starts = /^([A-Z0-9]|kiri\b)/;
+    for (const item of allTutorials()) expect(item.title, `tutorial "${item.title}"`).toMatch(starts);
+    for (const section of TUTORIAL_SECTIONS) expect(section.title, `section "${section.title}"`).toMatch(starts);
+  });
+
   it("gives every tutorial a title and a sentence of its own", () => {
     const titles = allTutorials().map((t) => t.title);
     expect(new Set(titles).size).toBe(titles.length);

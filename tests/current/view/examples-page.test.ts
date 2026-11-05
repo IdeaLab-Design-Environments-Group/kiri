@@ -92,6 +92,14 @@ describe("view/examples-page", () => {
     expect(new Set(slugs).size, "the same part is listed twice").toBe(slugs.length);
   });
 
+  it("writes every model and part title in sentence case, not all lower case", () => {
+    // They were "bat", "ear, left", "desk lamp" next to Title Case everywhere else. The brand, "kiri", is the one
+    // word kept in lower case wherever it appears.
+    const starts = /^([A-Z0-9]|kiri\b)/;
+    for (const part of allExamples()) expect(part.title, `part "${part.title}"`).toMatch(starts);
+    for (const model of EXAMPLE_MODELS) expect(model.title, `model "${model.title}"`).toMatch(starts);
+  });
+
   it("gives every part a title and a sentence of its own", () => {
     for (const part of allExamples()) {
       expect(part.blurb.length, `"${part.title}" has no blurb`).toBeGreaterThan(20);

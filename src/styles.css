@@ -1342,6 +1342,14 @@ body.is-electronics .app-legend {
 .el-export-col { text-align: center; }
 .el-export-row { padding-right: 0.2rem; }
 .el-sub-label { margin-top: 0.25rem; }
+/* Why an export gave no file: under the buttons you pressed, not only in the line at the foot of the page. */
+.el-export-note {
+  margin: 0.2rem 0 0;
+  font-size: 0.76rem;
+  line-height: 1.35;
+  color: #a4404a;
+}
+.el-export-note[hidden] { display: none; }
 .el-side-sect { display: flex; flex-direction: column; gap: 0.3rem; }
 .el-side-head {
   display: flex;
