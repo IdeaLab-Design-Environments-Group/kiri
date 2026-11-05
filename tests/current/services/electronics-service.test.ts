@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
-import { resolveElectronicsTarget, resolveFoldedCopperOverlay } from "../../../src/services/electronics-service.js";
+import { memoizeFoldedOverlay, resolveElectronicsTarget, resolveFoldedCopperOverlay } from "../../../src/services/electronics-service.js";
 import type { FoldFile, LoadedModel } from "../../../src/model/fold-file.js";
 import { flatFaces, type Circuit } from "../../../src/model/electronics.js";
 import { TILE_INSET_FRAC } from "../../../src/model/tile-subdiv.js";
@@ -71,6 +71,37 @@ describe("services/electronics-service", () => {
     expect(out).toEqual([]);
     expect(onWarning).toHaveBeenCalledTimes(1);
     expect(onWarning.mock.calls[0]![0]).toContain("Copper could not be placed");
+    errSpy.mockRestore();
+  });
+
+  it("re-plans the overlay only when an input is replaced", () => {
+    const plan = vi.fn((_input: unknown) => []);
+    const overlay = memoizeFoldedOverlay(plan);
+    const fold = twoTri();
+    const circuit: Circuit = { leds: [], battery: { face: 0 } };
+    const input = { fold, circuit, tileGap: 0.16, sheetMm: 100 };
+    const first = overlay(input);
+    expect(overlay({ ...input })).toBe(first); // a fresh input object holding the same things
+    expect(plan).toHaveBeenCalledTimes(1);
+
+    overlay({ ...input, circuit: { ...circuit } }); // an edit replaces the circuit
+    overlay({ ...input, circuit: { ...circuit }, tileGap: 0.2 });
+    overlay({ ...input, fold: twoTri() });
+    overlay({ ...input, sheetMm: 200 });
+    expect(plan).toHaveBeenCalledTimes(5);
+  });
+
+  it("repeats a remembered failure's warning on every reuse", () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const plan = vi.fn(resolveFoldedCopperOverlay);
+    const overlay = memoizeFoldedOverlay(plan);
+    const input = { fold: twoTri(), circuit: { leds: [{ face: 0 }], battery: { face: 0 }, wires: 5 } as never, tileGap: 0.16, sheetMm: 100 };
+    const first = vi.fn();
+    const again = vi.fn();
+    expect(overlay({ ...input, onWarning: first })).toEqual([]);
+    expect(overlay({ ...input, onWarning: again })).toEqual([]);
+    expect(plan).toHaveBeenCalledTimes(1);
+    expect(again).toHaveBeenCalledWith(first.mock.calls[0]![0]);
     errSpy.mockRestore();
   });
 });

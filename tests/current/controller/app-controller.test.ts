@@ -8,6 +8,20 @@ import { readFileSync } from "node:fs";
 import { flatFaces, gapGraph, ledOf } from "../../../src/model/electronics.js";
 import { TILE_INSET_FRAC } from "../../../src/model/tile-subdiv.js";
 
+// Counts the router's runs, so a test can tell a re-plan from a reused plan. Not a `vi.fn`: the
+// `restoreAllMocks` below would strip its implementation and the real router with it.
+const routing = vi.hoisted(() => ({ plans: 0 }));
+vi.mock("../../../src/model/electronics-routing.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../../../src/model/electronics-routing.js")>();
+  return {
+    ...real,
+    planRoutes: (...args: Parameters<typeof real.planRoutes>) => {
+      routing.plans++;
+      return real.planRoutes(...args);
+    },
+  };
+});
+
 class ConvertPanelMock {
   factsCalls: [string, string][][] = [];
   statusCalls: Array<{ msg: string; kind: string }> = [];
@@ -564,6 +578,55 @@ describe("controller/app-controller", () => {
       expect(m.tris.length % 3).toBe(0); // triangles, in threes
       expect(m.tris.length).toBeGreaterThan(0);
     }
+  });
+
+  it("does not re-plan the folded copper on a store update that leaves the circuit alone", () => {
+    // Every store update renders, and a big board takes seconds to route: a status message or a setting
+    // the copper does not depend on must reuse the plan in hand.
+    const { controller, store, sim } = setup();
+    const fold = JSON.parse(
+      readFileSync(new URL("../../../public/examples/house.fkld", import.meta.url).pathname, "utf8"),
+    );
+    store.update({ model: { kind: "fold", name: "house.fkld", object: fold } });
+    const gaps = gapGraph(fold, flatFaces(fold)).gaps;
+    controller.updateCircuit({ leds: [ledOf(gaps[0]!.faceA, gaps[0]!.faceB)], battery: { face: 0 } });
+    const plans = routing.plans;
+    const traces = sim.traces;
+
+    store.setStatus("Something unrelated.", "ok");
+    store.update({ simDetail: 3 });
+    expect(routing.plans).toBe(plans);
+    expect(sim.traces).toBe(traces);
+
+    controller.updateCircuit({ leds: [ledOf(gaps[1]!.faceA, gaps[1]!.faceB)], battery: { face: 0 } });
+    expect(routing.plans).toBe(plans + 1); // a real edit still re-plans
+  });
+
+  it("keeps reporting a copper failure once, through unrelated updates, and clears it on success", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { controller, store } = setup();
+    const fold = JSON.parse(
+      readFileSync(new URL("../../../public/examples/house.fkld", import.meta.url).pathname, "utf8"),
+    );
+    store.update({ model: { kind: "fold", name: "house.fkld", object: fold } });
+    const broken = () => ({ leds: [{ face: 0 }], battery: { face: 0 }, wires: 5 }) as never;
+    const copperWarning = () => store.getState().status.msg.startsWith("Copper could not be placed");
+    controller.updateCircuit(broken());
+    expect(copperWarning()).toBe(true);
+    expect(store.getState().status.kind).toBe("bad");
+    const plans = routing.plans;
+
+    // Once shown, the warning is not pushed back over a later message by renders that reuse the plan.
+    store.setStatus("Something else.", "ok");
+    store.update({ simDetail: 3 });
+    expect(routing.plans).toBe(plans);
+    expect(store.getState().status.msg).toBe("Something else.");
+
+    // A working circuit forgets the warning, so the same failure later is reported afresh.
+    const gaps = gapGraph(fold, flatFaces(fold)).gaps;
+    controller.updateCircuit({ leds: [ledOf(gaps[0]!.faceA, gaps[0]!.faceB)], battery: { face: 0 } });
+    controller.updateCircuit(broken());
+    expect(copperWarning()).toBe(true);
   });
 
   it("drops the stored circuit when the viewer shows a different pattern", () => {

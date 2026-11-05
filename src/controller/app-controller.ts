@@ -22,7 +22,7 @@ import { resolveSvgExport } from "../services/svg-export-service.js";
 import { resolveStlExport } from "../services/stl-export-service.js";
 import { DEFAULT_PRINT_SIZE } from "../model/stl-export.js";
 import { type Circuit } from "../model/electronics.js";
-import { resolveElectronicsTarget, type ElectronicsPlanningAdapter, defaultElectronicsPlanning } from "../services/electronics-service.js";
+import { resolveElectronicsTarget, type ElectronicsPlanningAdapter, createElectronicsPlanning } from "../services/electronics-service.js";
 import type { AnchoredMesh } from "../model/trace-anchor.js";
 import type { ConvertPanel, CutAndFoldState } from "../view/convert-panel.js";
 import type { ViewerFrame } from "../view/viewer-frame.js";
@@ -46,7 +46,7 @@ export class AppController {
     private readonly exporter: ExportModal,
     private readonly patternEditor: PatternEditorModal,
     private readonly electronics: ElectronicsModal,
-    private readonly electronicsPlanning: ElectronicsPlanningAdapter = defaultElectronicsPlanning,
+    private readonly electronicsPlanning: ElectronicsPlanningAdapter = createElectronicsPlanning(),
   ) {
     // 3D Sim folds exactly what the VIEWER is showing (fall back to the loaded model). This keeps
     // "what you see is what gets simulated" true even when the viewer and the convert panel differ.

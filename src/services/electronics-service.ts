@@ -46,9 +46,41 @@ export interface FoldedOverlayInput {
   onWarning?: (message: string) => void;
 }
 
-export const defaultElectronicsPlanning: ElectronicsPlanningAdapter = {
-  foldedOverlay: resolveFoldedCopperOverlay,
-};
+/** The app's planning: the folded overlay, remembered between renders. One per controller, so each keeps
+ *  its own last plan. */
+export function createElectronicsPlanning(): ElectronicsPlanningAdapter {
+  return { foldedOverlay: memoizeFoldedOverlay(resolveFoldedCopperOverlay) };
+}
+
+/**
+ * `plan`, re-run only when one of its inputs is replaced.
+ *
+ * The controller asks on every store update, and most updates (a status line, the sim's detail) leave the
+ * copper's inputs alone; a big board takes seconds to route. Inputs are compared by identity, which is
+ * exact here because the store replaces a circuit or pattern on every change rather than mutating it. A
+ * plan that failed is remembered with its warning, and the warning is repeated on every reuse, so a caller
+ * sees the same thing whether or not the plan was re-run.
+ */
+export function memoizeFoldedOverlay(
+  plan: (input: FoldedOverlayInput) => AnchoredMesh[],
+): (input: FoldedOverlayInput) => AnchoredMesh[] {
+  let last: { input: FoldedOverlayInput; traces: AnchoredMesh[]; warning: string | null } | null = null;
+  return (input) => {
+    const same = last
+      && last.input.fold === input.fold
+      && last.input.circuit === input.circuit
+      && last.input.tileGap === input.tileGap
+      && last.input.sheetMm === input.sheetMm
+      && last.input.sheet === input.sheet;
+    if (!same) {
+      let warning: string | null = null;
+      const traces = plan({ ...input, onWarning: (message) => (warning = message) });
+      last = { input, traces, warning };
+    }
+    if (last!.warning !== null) input.onWarning?.(last!.warning);
+    return last!.traces;
+  };
+}
 
 /**
  * Planned and hand-drawn copper, pinned to the mesh for the folded preview.
