@@ -44,7 +44,22 @@ export interface FoldedOverlayInput {
   sheet?: SheetSpec;
   /** Called with a short message when the copper could not be planned (the overlay is then empty). */
   onWarning?: (message: string) => void;
+  /** Plan even a board of {@link DEFERRED_OVERLAY_LEDS} or more LEDs: the author asked for it. */
+  force?: boolean;
+  /** Called with a short message when a big board's plan is left until it is asked for (overlay empty). */
+  onDeferred?: (message: string) => void;
 }
+
+/**
+ * LED count from which the folded overlay is planned only on request, not on every render.
+ *
+ * Measured in issue #21 (one `planRoutes` call, one LED per hinge): at 4 LEDs no example pattern takes a
+ * second, at 8 the hex already takes about 4.5 s, and by 12 puffin takes 28 s. Render runs on every store
+ * update, so from 8 a status line or a slider move could freeze the page. The same count is where the
+ * Electronics editor's Route button starts painting "routing…" first (`BUSY_FEEDBACK_LEDS`), so "slow"
+ * means one thing in the app. House and church have fewer hinges than this and are never deferred.
+ */
+export const DEFERRED_OVERLAY_LEDS = 8;
 
 /** The app's planning: the folded overlay, remembered between renders. One per controller, so each keeps
  *  its own last plan. */
@@ -60,6 +75,10 @@ export function createElectronicsPlanning(): ElectronicsPlanningAdapter {
  * exact here because the store replaces a circuit or pattern on every change rather than mutating it. A
  * plan that failed is remembered with its warning, and the warning is repeated on every reuse, so a caller
  * sees the same thing whether or not the plan was re-run.
+ *
+ * A board of {@link DEFERRED_OVERLAY_LEDS} or more LEDs is not planned unless `force` is set; it reports
+ * through `onDeferred` and returns nothing. That is not remembered, so the forced plan that follows is,
+ * and later unforced calls with the same inputs reuse it.
  */
 export function memoizeFoldedOverlay(
   plan: (input: FoldedOverlayInput) => AnchoredMesh[],
@@ -73,6 +92,11 @@ export function memoizeFoldedOverlay(
       && last.input.sheetMm === input.sheetMm
       && last.input.sheet === input.sheet;
     if (!same) {
+      const leds = input.circuit?.leds.length ?? 0;
+      if (!input.force && leds >= DEFERRED_OVERLAY_LEDS) {
+        input.onDeferred?.(`${leds} LEDs: routing them takes a while, so the folded copper is planned on request. Press Folded form in Electronics to see it.`);
+        return [];
+      }
       let warning: string | null = null;
       const traces = plan({ ...input, onWarning: (message) => (warning = message) });
       last = { input, traces, warning };

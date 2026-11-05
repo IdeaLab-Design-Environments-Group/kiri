@@ -629,6 +629,47 @@ describe("controller/app-controller", () => {
     expect(copperWarning()).toBe(true);
   });
 
+  it("leaves a big board's folded copper until Folded form asks for it", () => {
+    // From 8 LEDs a plan can take seconds, and render runs on every store update: such a board is not
+    // routed for the 3D view until the author asks, and the status line says how to ask.
+    const { controller, store, sim, electronics } = setup();
+    const fold = JSON.parse(
+      readFileSync(new URL("../../../public/examples/akde-square-pyramid.fkld", import.meta.url).pathname, "utf8"),
+    );
+    store.update({ model: { kind: "fold", name: "akde-square-pyramid.fkld", object: fold } });
+    const gaps = gapGraph(fold, flatFaces(fold)).gaps;
+    const leds = gaps.slice(0, 8).map((g) => ledOf(g.faceA, g.faceB));
+    const plans = routing.plans;
+    controller.updateCircuit({ leds, battery: { face: 0 } });
+
+    expect(routing.plans).toBe(plans);
+    expect(sim.traces).toEqual([]);
+    expect(store.getState().status.msg).toMatch(/^8 LEDs: .*Folded form/);
+    expect(store.getState().status.kind).toBe("");
+
+    electronics.formListener!();
+    expect(routing.plans).toBe(plans + 1);
+    expect(sim.traces).not.toEqual([]);
+    expect(sim.openCalls).toBe(1);
+    // The copper it asked for is there now, so the line saying it is not has to go.
+    expect(store.getState().status.msg).not.toMatch(/planned on request/);
+
+    store.update({ simDetail: 3 }); // the requested plan stays on the model through later renders
+    expect(routing.plans).toBe(plans + 1);
+    expect(sim.traces).not.toEqual([]);
+  });
+
+  it("routes a board under 8 LEDs for the folded view without being asked", () => {
+    const { controller, store, sim } = setup();
+    const fold = JSON.parse(
+      readFileSync(new URL("../../../public/examples/akde-square-pyramid.fkld", import.meta.url).pathname, "utf8"),
+    );
+    store.update({ model: { kind: "fold", name: "akde-square-pyramid.fkld", object: fold } });
+    const gaps = gapGraph(fold, flatFaces(fold)).gaps;
+    controller.updateCircuit({ leds: gaps.slice(0, 7).map((g) => ledOf(g.faceA, g.faceB)), battery: { face: 0 } });
+    expect(sim.traces).not.toEqual([]);
+  });
+
   it("drops the stored circuit when the viewer shows a different pattern", () => {
     // The Electronics tool starts a fresh circuit for every new pattern, so the stored one has to go too:
     // kept, the sim routed the old pattern's faces and gaps onto the new one until the next edit.

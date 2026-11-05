@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
-import { memoizeFoldedOverlay, resolveElectronicsTarget, resolveFoldedCopperOverlay } from "../../../src/services/electronics-service.js";
+import { DEFERRED_OVERLAY_LEDS, memoizeFoldedOverlay, resolveElectronicsTarget, resolveFoldedCopperOverlay } from "../../../src/services/electronics-service.js";
 import type { FoldFile, LoadedModel } from "../../../src/model/fold-file.js";
 import { flatFaces, type Circuit } from "../../../src/model/electronics.js";
 import { TILE_INSET_FRAC } from "../../../src/model/tile-subdiv.js";
@@ -103,5 +103,32 @@ describe("services/electronics-service", () => {
     expect(plan).toHaveBeenCalledTimes(1);
     expect(again).toHaveBeenCalledWith(first.mock.calls[0]![0]);
     errSpy.mockRestore();
+  });
+
+  it("leaves a board of many LEDs unplanned until forced, then keeps the forced plan", () => {
+    const plan = vi.fn((_input: unknown) => [{ kind: "pwr" }] as never[]);
+    const overlay = memoizeFoldedOverlay(plan);
+    const circuit = { leds: Array.from({ length: DEFERRED_OVERLAY_LEDS }, () => ({ face: 0 })), battery: null } as never;
+    const onDeferred = vi.fn();
+    const input = { fold: twoTri(), circuit, tileGap: 0.16, sheetMm: 100, onDeferred };
+
+    expect(overlay(input)).toEqual([]);
+    expect(overlay(input)).toEqual([]); // still deferred: nothing was remembered
+    expect(plan).not.toHaveBeenCalled();
+    expect(onDeferred).toHaveBeenCalledTimes(2);
+    expect(onDeferred.mock.calls[0]![0]).toMatch(new RegExp(`^${DEFERRED_OVERLAY_LEDS} LEDs: `));
+
+    const forced = overlay({ ...input, force: true });
+    expect(forced).not.toEqual([]);
+    expect(overlay(input)).toBe(forced); // same inputs, unforced: the requested plan is reused
+    expect(plan).toHaveBeenCalledTimes(1);
+    expect(onDeferred).toHaveBeenCalledTimes(2);
+  });
+
+  it("plans a board just under the deferral count without being asked", () => {
+    const plan = vi.fn((_input: unknown) => []);
+    const circuit = { leds: Array.from({ length: DEFERRED_OVERLAY_LEDS - 1 }, () => ({ face: 0 })), battery: null } as never;
+    memoizeFoldedOverlay(plan)({ fold: twoTri(), circuit, tileGap: 0.16, sheetMm: 100 });
+    expect(plan).toHaveBeenCalledTimes(1);
   });
 });

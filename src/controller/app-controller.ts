@@ -6,7 +6,7 @@
  * the store never reference each other directly; the use-case logic itself
  * lives in `src/services/` so new features land there, not here.
  */
-import { type AppState, AppStore, type CircuitSide } from "../model/app-store.js";
+import { type AppState, AppStore, type CircuitSide, type StatusKind } from "../model/app-store.js";
 import { deriveFacts } from "../model/derive-facts.js";
 import { type FoldFile, type LoadedModel } from "../model/fold-file.js";
 import { canSimulate } from "../sim/index.js";
@@ -113,9 +113,12 @@ export class AppController {
     // crease strain is measured across. Routing for one and folding the other would be routing for neither.
     this.electronics.onMaterialChange((material) => this.store.update({ simMaterial: material }));
     // "Folded form": the same 3D sim the model page opens, on the material the editor is laid out for, with
-    // the planned copper already on it (`setTraces` below runs on every render).
+    // the planned copper already on it (`setTraces` below runs on every render). It is also the request a
+    // big board's copper waits for (see `DEFERRED_OVERLAY_LEDS`), so it plans whatever the LED count.
     this.electronics.onOpenForm(() => {
       this.electronics.close();
+      const { model, viewerShown } = this.store.getState();
+      this.sim.setTraces(this.tracesForSim(resolveElectronicsTarget(model, viewerShown)?.object ?? null, true));
       void this.sim.open();
     });
 
@@ -158,22 +161,27 @@ export class AppController {
    *
    *  Routed here rather than read back from the Electronics modal: the modal may never have been opened, and
    *  the copper belongs on the model either way. */
-  private tracesForSim(fold: FoldFile | null): AnchoredMesh[] {
+  private tracesForSim(fold: FoldFile | null, force = false): AnchoredMesh[] {
     const { circuits, circuitSide, simTileGap } = this.store.getState();
-    const seen: { msg: string | null } = { msg: null };
+    const seen: { msg: string | null; kind: StatusKind } = { msg: null, kind: "" };
     const traces = this.electronicsPlanning.foldedOverlay({
       fold,
       circuit: circuits[circuitSide],
       tileGap: simTileGap,
       sheetMm: this.exporter.printSizeMm(),
-      onWarning: (message) => (seen.msg = message),
+      force,
+      onWarning: (message) => { seen.msg = message; seen.kind = "bad"; },
+      onDeferred: (message) => { seen.msg = message; seen.kind = ""; },
     });
     const warning = seen.msg;
     // Render runs on every store update, and showing the warning is itself an update: report each distinct
-    // warning once, and forget it as soon as planning succeeds again.
+    // warning (or deferral) once, and forget it as soon as planning succeeds again.
     if (warning !== this.lastCopperWarning) {
+      // A line still saying the copper is missing is wrong once it is there; anything said since stays.
+      const stale = this.lastCopperWarning;
       this.lastCopperWarning = warning;
-      if (warning) this.store.setStatus(warning, "bad");
+      if (warning) this.store.setStatus(warning, seen.kind);
+      else if (stale !== null && this.store.getState().status.msg === stale) this.store.setStatus("");
     }
     return traces;
   }
