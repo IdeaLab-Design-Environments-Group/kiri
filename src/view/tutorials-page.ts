@@ -67,7 +67,7 @@ export class TutorialsPage {
     this.trigger.type = "button";
     this.trigger.className = "sim-trigger tut-nav";
     this.trigger.textContent = "Tutorials";
-    this.trigger.title = "short screen recordings of every part of kiri";
+    this.trigger.title = "Short screen recordings of every part of kiri";
     this.trigger.addEventListener("click", () => this.open());
 
     this.overlay = el("div", "tut-page");
@@ -87,7 +87,7 @@ export class TutorialsPage {
     this.search = document.createElement("input");
     this.search.type = "search";
     this.search.className = "tut-search";
-    this.search.placeholder = "filter tutorials";
+    this.search.placeholder = "Filter tutorials";
     this.search.setAttribute("aria-label", "Filter tutorials");
     this.search.addEventListener("input", () => this.applyFilter());
     this.tally = el("span", "tut-tally");

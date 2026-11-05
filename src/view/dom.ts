@@ -11,6 +11,21 @@ export function heading(level: "h2" | "h3", text: string): HTMLElement {
   return node;
 }
 
+/**
+ * Save `blob` as `filename` through a temporary link: how every export in the app reaches the downloads folder.
+ * It was written out twice, character for character, in the export dialog and in the Electronics editor.
+ */
+export function downloadBlob(filename: string, blob: Blob): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 /** Render an ordered list of term/value pairs into a <dl>, replacing its contents. */
 export function renderDefinitionList(dl: HTMLDListElement, rows: Iterable<[string, string]>): void {
   dl.innerHTML = "";

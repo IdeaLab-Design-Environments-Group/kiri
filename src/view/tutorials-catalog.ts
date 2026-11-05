@@ -28,40 +28,40 @@ export interface TutorialSection {
 
 export const TUTORIAL_SECTIONS: TutorialSection[] = [
   {
-    title: "getting around",
+    title: "Getting around",
     intro: "The model page: loading something to work on, and looking at it.",
     items: [
       {
         slug: "import-a-model",
-        title: "import a model",
+        title: "Import a model",
         blurb:
           "Drop an STL, OBJ, FOLD or FKLD file onto the Model panel — or click it to choose one. A "
           + "pattern file opens in the viewer beside it; a mesh waits for Cut & fold.",
       },
       {
         slug: "using-top-bar-on-main-page",
-        title: "use the top bar",
+        title: "Use the top bar",
         blurb:
           "Where each header button goes: Simulate, Electronics and Export, in the order you come to "
           + "them, then Examples and Tutorials.",
       },
       {
         slug: "adjust-zoom-main-page",
-        title: "zoom the viewer",
+        title: "Zoom the viewer",
         blurb:
           "The viewer's Zoom buttons: + and − step in and out, Fit frames the whole pattern again. "
           + "Scrolling over the pattern zooms too.",
       },
       {
         slug: "alternate-between-folded-and-unfolded-version-in-main-page",
-        title: "folded and unfolded",
+        title: "Folded and unfolded",
         blurb:
           "The viewer's Shape toggle swaps the flat crease pattern for the folded form of the same "
           + "model, without touching the file.",
       },
       {
         slug: "viewing-fkld-stored-properties-of-model",
-        title: "read what the FKLD file stores",
+        title: "Read what the FKLD file stores",
         blurb:
           "Vertices, edges, faces and their assignments are all in the file. The viewer's layers and "
           + "panels are how you read them back.",
@@ -69,17 +69,17 @@ export const TUTORIAL_SECTIONS: TutorialSection[] = [
     ],
   },
   {
-    title: "making a pattern",
+    title: "Making a pattern",
     intro: "From a mesh — or from nothing — to a crease pattern you can fold.",
     items: [
       {
         slug: "kirigamize-a-model",
-        title: "cut & fold a model",
+        title: "Cut & fold a model",
         blurb: "Cut & fold turns the loaded mesh into a cut-and-fold kirigami pattern.",
       },
       {
         slug: "adjust-relief-width-and-face-detail-in-3d",
-        title: "relief width and face detail",
+        title: "Relief width and face detail",
         blurb:
           "Gap sets how wide the bare hinge between printed tiles is; Detail sets how deep the sharpest "
           + "folds are subdivided. Finer tiles leave narrower gaps, so the model folds further.",
@@ -87,89 +87,89 @@ export const TUTORIAL_SECTIONS: TutorialSection[] = [
     ],
   },
   {
-    title: "folding it in 3D",
+    title: "Folding it in 3D",
     intro: "The same design, folded as either of the two builds kiri makes.",
     items: [
       {
         slug: "folding-3d-modality",
-        title: "fold the 3D-printed build",
+        title: "Fold the 3D-printed build",
         blurb:
           "Simulate folds the tiled build — rigid tiles with a bare hinge gap, which is what "
           + "stops it closing flat.",
       },
       {
         slug: "simulate-vinyl-version-of-model",
-        title: "fold the vinyl build",
+        title: "Fold the vinyl build",
         blurb: "The same design folded as one continuous sheet, scored at the creases rather than cut.",
       },
     ],
   },
   {
-    title: "electronics: getting in",
+    title: "Electronics: getting in",
     intro:
       "Where the copper is laid: which build it is for, and which face of the design it goes on.",
     items: [
       {
         slug: "navigate-to-electronics-interface",
-        title: "open the electronics editor",
+        title: "Open the electronics editor",
         blurb: "Electronics is a page of its own, at its own URL — the Back control returns to the model.",
       },
       {
         slug: "switch-between-vinyl-and-3d-in-elec",
-        title: "route on vinyl or on tiles",
+        title: "Route on vinyl or on tiles",
         blurb:
           "The Build segment draws and routes whichever build the simulator folds — one scored sheet, or "
           + "rigid tiles with gaps between them.",
       },
       {
         slug: "alternate-between-the-inside-and-outside-faces-of-a-design",
-        title: "inside and outside copper",
+        title: "Inside and outside copper",
         blurb: "Each face carries its own circuit. Side switches which one you are editing.",
       },
     ],
   },
   {
-    title: "electronics: placing parts",
+    title: "Electronics: placing parts",
     intro:
       "Finding a component, seating it on the sheet, and turning it once it is there.",
     items: [
       {
         slug: "navigate-and-open-components-menu",
-        title: "find a part in the library",
+        title: "Find a part in the library",
         blurb: "Search the component library by name or by package, then place what you picked.",
       },
       {
         slug: "add-parts-across-a-fold-or-on-a-tile",
-        title: "seat a part across a fold, or on a tile",
+        title: "Seat a part across a fold, or on a tile",
         blurb:
           "Across a fold bridges the hinge with a pad on each side; On a tile stands the part where you "
           + "put it and wires its pads by net or by hand.",
       },
       {
         slug: "rotatebypressingr",
-        title: "rotate a part with R",
+        title: "Rotate a part with R",
         blurb: "With a part selected, R turns it on the sheet.",
       },
     ],
   },
   {
-    title: "electronics: nets and copper",
+    title: "Electronics: nets and copper",
     intro:
       "What is joined to what, and the copper the router lays to do it.",
     items: [
       {
         slug: "creating-nets",
-        title: "declare a net",
+        title: "Declare a net",
         blurb: "Names are yours — PWR, GND, SDA. A net exists as soon as you name it.",
       },
       {
         slug: "assigning-nets",
-        title: "put a pad on a net",
+        title: "Put a pad on a net",
         blurb: "Wiring is assignment: a pad joins a net, and the router works out the copper.",
       },
       {
         slug: "autoroute",
-        title: "route the copper",
+        title: "Route the copper",
         blurb:
           "Route re-plans the copper now; Auto re-plans on every edit that moves it. Manual leaves the "
           + "last plan on the canvas while you work.",
@@ -177,20 +177,20 @@ export const TUTORIAL_SECTIONS: TutorialSection[] = [
     ],
   },
   {
-    title: "electronics: the whole sheet",
+    title: "Electronics: the whole sheet",
     intro:
       "The two controls that act on the design entire, rather than on one part of it.",
     items: [
       {
         slug: "switch-between-strips-and-carriers",
-        title: "strips and carriers",
+        title: "Strips and carriers",
         blurb:
           "The Copper group draws the same circuit two ways — as bare tape strips, or as the parts on a "
           + "carrier frame — and each is exported on its own.",
       },
       {
         slug: "mirror-designs-according-to-needs",
-        title: "mirror the design",
+        title: "Mirror the design",
         blurb:
           "Mirror flips the whole sheet left–right or top–bottom, for when the copper has to go on from "
           + "the other side.",
@@ -198,26 +198,26 @@ export const TUTORIAL_SECTIONS: TutorialSection[] = [
     ],
   },
   {
-    title: "getting it made",
+    title: "Getting it made",
     intro: "The files a cutter, a printer or a pick-and-place actually needs.",
     items: [
       {
         slug: "export-for-vinyl-fab",
-        title: "export for vinyl cutting",
+        title: "Export for vinyl cutting",
         blurb:
           "Cut files saves one zip: the cut, score and combined SVGs, registered in mm and sized by "
           + "the same longest side as the tiles, ready for the vinyl cutter.",
       },
       {
         slug: "export-for-3d-fab",
-        title: "export for 3D printing",
+        title: "Export for 3D printing",
         blurb:
           "Set the longest side and the tile thickness, then save the tiled build as an STL, at the gap "
           + "and detail the simulator folded.",
       },
       {
         slug: "export-electronics",
-        title: "export the electronics",
+        title: "Export the electronics",
         blurb:
           "Export saves the copper as an SVG to cut: the bare strips or the carrier frame, for the "
           + "inside or the outside face.",
@@ -233,7 +233,7 @@ export const TUTORIAL_SECTIONS: TutorialSection[] = [
 export const WALKTHROUGHS: Tutorial[] = [
   {
     slug: "kiri-zero-to-hero",
-    title: "kiri zero to hero",
+    title: "kiri zero to hero", // the brand is written in lower case everywhere, even first
     blurb:
       "One project from start to finish: load a model, cut and fold it, place and route the "
       + "electronics, and export everything for fabrication.",

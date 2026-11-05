@@ -1,6 +1,7 @@
 import type { SvgExportPayload } from "../model/fkld-svg-export.js";
 import { DEFAULT_PRINT_SIZE, type StlExport } from "../model/stl-export.js";
 import { enterFocusScope } from "./dialog-focus.js";
+import { downloadBlob } from "./dom.js";
 
 /** Returns the export payload for the current pattern when the modal opens, or null if none. */
 export type ExportProvider = () => SvgExportPayload | null;
@@ -31,6 +32,16 @@ export class ExportModal {
   private readonly stlHeightUnit: HTMLElement;
   private provider: ExportProvider | null = null;
   private stlProvider: StlProvider | null = null;
+  /** The tile thickness the builder picked at open, to put back when the box holds something unusable. */
+  private defaultHeight: number | null = null;
+  /**
+   * What was said about a value that was replaced (see {@link downloadStl}). It is kept apart from the status line
+   * because the size box refreshes the previews, and that rewrites the status line a moment later: a sentence put
+   * straight there vanished before it could be read. It stays until the box is edited or the dialog is reopened.
+   */
+  private notice = "";
+  /** The status line without any notice, so the notice can be put in front of it or taken away again. */
+  private baseStatus = "";
   private payload: SvgExportPayload | null = null;
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -70,11 +81,11 @@ export class ExportModal {
               <input type="number" class="export-stl-height" min="0" step="0.1" />
               <span class="export-stl-unit">units</span>
             </label>
-            <button type="button" class="export-stl-btn">tiles (STL)</button>
+            <button type="button" class="export-stl-btn export-trigger">Download 3D tiles (.stl)</button>
           </div>
           <div class="export-group export-group-cut" role="group" aria-label="Cut files">
             <span class="export-group-title">Cut files</span>
-            <button type="button" class="export-zip-btn">cut + score + combined (zip)</button>
+            <button type="button" class="export-zip-btn export-trigger">Download cut files (.zip)</button>
           </div>
         </footer>
       </div>
@@ -92,6 +103,7 @@ export class ExportModal {
     // Announce edits as they happen: the copper is planned and cut at this size, so it must not go stale.
     this.stlSizeInput.addEventListener("change", () => this.printSizeHandler(this.printSizeMm()));
     this.stlHeightInput = this.overlay.querySelector(".export-stl-height")!;
+    for (const box of [this.stlSizeInput, this.stlHeightInput]) box.addEventListener("input", () => this.setNotice(""));
     this.stlHeightUnit = this.overlay.querySelector(".export-stl-unit")!;
 
     this.zipBtn.addEventListener("click", () => this.downloadZip());
@@ -139,6 +151,7 @@ export class ExportModal {
   }
 
   open(): void {
+    this.notice = "";
     this.payload = this.provider?.() ?? null;
     // Probe the STL at the model's defaults to prefill the menu inputs and enable the button.
     if (!this.stlSizeInput.value) this.stlSizeInput.value = String(DEFAULT_PRINT_SIZE);
@@ -146,7 +159,8 @@ export class ExportModal {
     const stlDefault = this.stlProvider?.(null, null, probeSize) ?? null;
     this.stlBtn.disabled = !stlDefault; // the tiles export independently of the cut pattern
     if (stlDefault) {
-      this.stlHeightInput.value = String(Math.round(stlDefault.height * 100) / 100);
+      this.defaultHeight = Math.round(stlDefault.height * 100) / 100;
+      this.stlHeightInput.value = String(this.defaultHeight);
       this.stlHeightUnit.textContent = stlDefault.unit;
     }
     this.overlay.hidden = false;
@@ -172,9 +186,9 @@ export class ExportModal {
   private writePreviews(): void {
     if (!this.payload) {
       this.previews.cut.innerHTML = this.previews.score.innerHTML = this.previews.both.innerHTML = "";
-      this.statusEl.textContent = this.stlBtn.disabled
+      this.setStatus(this.stlBtn.disabled
         ? "No pattern to export — load a model and press Cut & fold first."
-        : "No cut pattern, but the 3D-printed tiles are exportable as STL.";
+        : "No cut pattern, but the 3D-printed tiles are exportable as STL.");
       this.zipBtn.disabled = true;
       return;
     }
@@ -182,8 +196,23 @@ export class ExportModal {
     this.previews.score.innerHTML = this.payload.previews.score;
     this.previews.both.innerHTML = this.payload.previews.both;
     this.zipBtn.disabled = false;
-    this.statusEl.textContent =
-      "black = Cut, blue = Score. The zip holds cut, score and combined SVGs (registered, in mm); import the cut and score ones and set the layer ops.";
+    this.setStatus(
+      "Black is cut, blue is score. The zip holds three SVG files at true size (mm) that line up with each other: " +
+      "cut, score, and both together. In your cutter's software, load the cut and score files as separate layers " +
+      "and set one to cut and the other to score.",
+    );
+  }
+
+  /** The status line: `text`, with any notice about a replaced value in front of it. */
+  private setStatus(text: string): void {
+    this.baseStatus = text;
+    this.statusEl.textContent = this.notice ? `${this.notice} ${text}` : text;
+  }
+
+  /** Say something about a replaced value, and keep saying it until the boxes are edited or the dialog reopens. */
+  private setNotice(text: string): void {
+    this.notice = text;
+    this.setStatus(this.baseStatus);
   }
 
   close(): void {
@@ -194,27 +223,35 @@ export class ExportModal {
 
   private downloadZip(): void {
     if (!this.payload) return;
-    download(this.payload.archive.filename, new Blob([this.payload.archive.bytes], { type: "application/zip" }));
+    downloadBlob(this.payload.archive.filename, new Blob([this.payload.archive.bytes], { type: "application/zip" }));
   }
 
   private downloadStl(): void {
-    const rawH = parseFloat(this.stlHeightInput.value);
-    const height = Number.isFinite(rawH) && rawH > 0 ? rawH : null; // null → builder's default
-    const rawS = parseFloat(this.stlSizeInput.value);
-    const size = Number.isFinite(rawS) && rawS > 0 ? rawS : null; // null → builder's print-size default
+    // A thickness or size that is empty, zero or not a number used to fall back to the builder's default without a
+    // word, so 0 gave a normal file and no sign that 0 had been ignored. The default is put in the box and said.
+    const notes: string[] = [];
+    const height = this.positiveOrDefault(this.stlHeightInput, this.defaultHeight, "Tile thickness", this.stlHeightUnit.textContent || "mm", notes);
+    const size = this.positiveOrDefault(this.stlSizeInput, DEFAULT_PRINT_SIZE, "Longest side", "mm", notes);
+    if (notes.length) this.setNotice(notes.join(" "));
     const stl = this.stlProvider?.(height, null, size) ?? null;
     if (!stl) return;
-    download(stl.filename, new Blob([stl.text], { type: "model/stl" }));
+    downloadBlob(stl.filename, new Blob([stl.text], { type: "model/stl" }));
+  }
+
+  /**
+   * The number in `input` if it is above zero. Otherwise null (the builder then uses its own default), with
+   * `fallback` put back in the box and a sentence added to `notes` saying what happened.
+   */
+  private positiveOrDefault(
+    input: HTMLInputElement, fallback: number | null, label: string, unit: string, notes: string[],
+  ): number | null {
+    const raw = parseFloat(input.value);
+    if (Number.isFinite(raw) && raw > 0) return raw;
+    if (fallback !== null) {
+      input.value = String(fallback);
+      notes.push(`${label} must be more than 0, so ${fallback} ${unit} was used.`);
+    }
+    return null;
   }
 }
 
-function download(filename: string, blob: Blob): void {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}

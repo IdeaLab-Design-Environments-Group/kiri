@@ -136,7 +136,7 @@ import {
   netTally,
   netlistTrouble,
   partsTally, railsReady,
-  statusLine, syncRouteHint, syncWireDelete, syncWireWidth,
+  statusLine, syncExportNote, syncRouteHint, syncWireDelete, syncWireWidth,
 } from "./electronics-presenters.js";
 // Re-exported so the presenters can be reached through the modal that renders them, the same way the
 // palette's own catalog is — a caller that has the modal should not need to know which file the rows
@@ -179,6 +179,7 @@ import { fillPadRows, netChildren } from "./electronics-pad-rows.js";
 import type { FoldFile } from "../model/fold-file.js";
 import { HOME, currentRoute, goToRoute, onRouteChange } from "./route.js";
 import { enterFocusScope } from "./dialog-focus.js";
+import { downloadBlob } from "./dom.js";
 
 /**
  * Whether a key event landed in something the author is typing into.
@@ -2183,6 +2184,7 @@ export class ElectronicsModal {
    *  The redraw must happen here: the controller does not push anything back, so an edit that only
    *  emitted would update `this.circuit` and never appear on screen. */
   private emit(replan: Replan = "auto"): void {
+    syncExportNote(this.overlay, ""); // an edit may have put something there to export: the old refusal is stale
     // The canvas first, because `render()` re-plans and the nets panel reads the plan: the battery's and
     // each hinge-LED's rows are derived from `this.routed` (see {@link derivedRows}). Painted first, the
     // panel showed the plan from BEFORE this edit — one behind, so a freshly placed LED contributed
@@ -2867,19 +2869,10 @@ export class ElectronicsModal {
   /** Save the file if one was built, and say the line either way — a refused export that printed nothing
    *  would look like a button that does not work. */
   private saveExport(out: ExportResult): void {
-    if (out.filename && out.svg !== undefined) this.download(out.filename, out.svg);
+    const saved = !!out.filename && out.svg !== undefined;
+    if (saved) downloadBlob(out.filename!, new Blob([out.svg!], { type: "image/svg+xml" }));
     this.statusEl.textContent = out.message;
-  }
-
-  private download(filename: string, svg: string): void {
-    const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    syncExportNote(this.overlay, saved ? "" : out.message); // a refusal is also written under the buttons
   }
 
 

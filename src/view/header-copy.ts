@@ -18,7 +18,6 @@ const PATTERN = "Needs a pattern: load a pattern file, or Cut & fold a 3D model 
 export const HEADER_COPY: readonly HeaderCopy[] = [
   { label: "Simulate", title: "Fold the pattern in 3D.", needs: PATTERN },
   { label: "Export", title: "Save the cut-and-score SVG or STL tiles.", needs: PATTERN },
-  { label: "Pattern editor", title: "Draw a pattern grid by hand." },
   { label: "Electronics", title: "Place LEDs and route copper tape on the pattern.", needs: PATTERN },
   { label: "Examples", title: "Open one of the bundled models, already cut and ready to fold." },
   { label: "Tutorials", title: "Short screen recordings of every part of kiri." },
