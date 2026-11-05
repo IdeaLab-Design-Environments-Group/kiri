@@ -14,8 +14,8 @@
  *
  * The Route group's Auto/Manual segment is the way back to live routing for an author who wants it:
  * under Auto, an edit that moves copper re-plans it on the spot. **Wiring a net is not one of those
- * edits in either mode** — assigning a pad, deleting a net, and placing the two parts that join the
- * bus's own rails (an LED, the battery: PWR and GND are nets like any other here) always wait for Route.
+ * edits in either mode** — assigning a pad or deleting a net always waits for Route. An LED or the
+ * battery joins the PWR and GND rails, and waits too until the circuit has both; then Auto plans it.
  *
  * Polarity is the router's to decide, not the author's: it reports which pad it landed PWR on, and the
  * preview draws that, so the pad colours say which way round to fit each component.
@@ -131,7 +131,7 @@ import {
   netPanelRows,
   netTally,
   netlistTrouble,
-  partsTally,
+  partsTally, railsReady,
   statusLine, syncRouteHint, syncWireDelete, syncWireWidth,
 } from "./electronics-presenters.js";
 // Re-exported so the presenters can be reached through the modal that renders them, the same way the
@@ -1390,11 +1390,10 @@ export class ElectronicsModal {
       this.select({ kind: "led", index: this.circuit.leds.length - 1 });
     }
     // Everything reaching here — the battery, and an LED whichever way it was placed — is a part whose
-    // whole effect on the copper is that it joins the PWR and GND rails: the router bridges a hinge LED
-    // onto them and a free one lands with its two pads defaulted to them. That is a net assignment made
-    // by placing rather than by typing, so it defers exactly as one made in the pads panel does — the two
-    // rails are nets like any other, and the Route button says when. See {@link Replan}.
-    this.emit("later");
+    // whole effect on the copper is that it joins the PWR and GND rails. Until there is both an LED and a
+    // battery that is half a circuit, so it defers like a net assignment and the status line says what it
+    // waits for. From there on it is a placement like any other, and Auto plans it (issue #37).
+    this.emit(railsReady(this.circuit) ? "auto" : "later");
   }
 
   /** Where the router put each placed library part. Defensive against an older plan object that predates

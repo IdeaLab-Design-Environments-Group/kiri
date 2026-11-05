@@ -377,6 +377,20 @@ export function buildPadRows(
 }
 
 /**
+ * Whether the PWR and GND rails have something to draw: a battery and at least one LED, hinge or free.
+ *
+ * Under Auto, placing an LED or the battery plans on the spot from this point on and waits for Route
+ * before it. Short of it, any plan is copper for half a circuit (issue #37).
+ */
+export function railsReady(circuit: Circuit): boolean {
+  return !!circuit.battery && hasLed(circuit);
+}
+
+function hasLed(circuit: Circuit): boolean {
+  return circuit.leds.length > 0 || (circuit.parts ?? []).some((p) => /^LED/.test(p.component));
+}
+
+/**
  * What is wrong with the netlist itself, as one sentence.
  *
  * Six kinds of fault are resolved and reported by `resolveNetlist`, carried out through `planRoutes` as
@@ -497,10 +511,15 @@ export function statusLine(input: StatusInput): string {
           ? " · tap to lay a point, tap the last one or press Enter to finish"
           : " · tap the pattern to start a wire";
   }
-  msg += netlistTrouble(circuit, routed);
+  // Auto holding off until there is a circuit to draw is not a fault, and the last plan's netlist faults
+  // are about a circuit the author has since moved on from, so they are not repeated over it. Only with
+  // half the rails down: a circuit with neither is on nets of its own, and Auto plans those as usual.
+  const waiting = input.autoRoute && input.stale && !!circuit.battery !== hasLed(circuit);
+  if (!waiting) msg += netlistTrouble(circuit, routed);
   // Ahead of the selection hint, because it is about the whole drawing rather than about one part: what
   // is on the canvas is copper for an earlier circuit, and every count above it was read off that plan.
-  if (input.stale) msg += " · copper is out of date — press Route";
+  if (waiting) msg += " · copper is planned once there is an LED and a battery — or press Route";
+  else if (input.stale) msg += " · copper is out of date — press Route";
   else if (!input.autoRoute) msg += " · routing on request";
   const sel = input.selected;
   const picked = input.picked;

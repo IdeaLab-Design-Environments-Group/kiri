@@ -560,6 +560,25 @@ describe("view/electronics-presenters > statusLine", () => {
     expect(status({ circuit, stale: true, autoRoute: false })).not.toContain("routing on request");
   });
 
+  it("says Auto is waiting for an LED and a battery instead of repeating the last plan's faults", () => {
+    const fault = { ...EMPTY_ROUTE, netFaults: [{ kind: "too-few", net: PWR_NET_ID, why: "net PWR has no terminals" }] } as never;
+    const waiting = "copper is planned once there is an LED and a battery — or press Route";
+    for (const circuit of [
+      bare({ leds: [{ a: 0, b: 1 }] }),
+      bare({ battery: { face: 0, x: 0, y: 0 } as never }),
+    ]) {
+      const msg = status({ circuit, routed: fault, stale: true });
+      expect(msg).toContain(waiting);
+      expect(msg).not.toContain("netlist fault");
+      expect(msg).not.toContain("out of date");
+    }
+    // Both present, or Manual: the rule is the old one.
+    const both = bare({ parts: [{ component: "LED_1206", x: 0, y: 0, free: true }], battery: { face: 0, x: 0, y: 0 } as never });
+    expect(status({ circuit: both, stale: true })).toContain("out of date");
+    expect(status({ circuit: bare({ leds: [{ a: 0, b: 1 }] }), routed: fault, stale: true, autoRoute: false }))
+      .toContain("copper is out of date — press Route");
+  });
+
   it("names what is selected, and whether its orientation is the author's or the router's", () => {
     const circuit = bare({ leds: [{ a: 0, b: 1 }], battery: { face: 0, x: 0, y: 0 } as never });
     expect(status({ circuit, selected: { kind: "led", index: 0 }, picked: { a: 0, b: 1 } as never }))

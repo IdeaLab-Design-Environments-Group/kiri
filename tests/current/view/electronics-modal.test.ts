@@ -565,8 +565,7 @@ describe("view/electronics-modal", () => {
 
     it("re-plans a part seated in a run on the spot once Auto is turned on", () => {
       // Placing a part in a run is an edit that still asks the segment, so under Auto it plans there and
-      // then. What it is NOT asserted on any more is an LED or the battery: those two are the PWR and GND
-      // rails themselves, and joining a net waits for Route whatever the segment says — see below.
+      // then. An LED or the battery does too once the circuit has both — see below.
       const { modal } = withCopper();
       auto(modal);
       const before = modal.routed.traces.length;
@@ -630,23 +629,61 @@ describe("view/electronics-modal", () => {
       expect(modal.stale).toBe(false);
     });
 
-    it("waits for Route when an LED or the battery joins the rails, whatever the segment says", () => {
-      // PWR and GND are nets like any other now: a part landing on them is a net assignment, and one made
-      // by placing defers exactly as one made in the pads panel does. Under Auto, where a placement DOES
-      // normally plan on the spot — that is what makes this the segment-independent half of the rule.
+    it("plans under Auto when an LED or the battery joins rails that already have both", () => {
+      // Issue #37. An LED and a battery are the first point there is anything to draw, so from there on a
+      // placement under Auto plans on the spot like every other placement. Deferring it left the status
+      // line showing the previous plan's netlist fault, which read as an error.
       const { modal } = withCopper();
       auto(modal);
       const kept = modal.routed;
       modal.selectTool("led");
       tapFlat(modal, { x: 0.5, y: 1 }); // a second hinge
       expect(modal.circuit.leds, "the edit did not land").toHaveLength(2);
-      expect(modal.routed, "placing an LED re-planned the rails").toBe(kept);
-      expect(modal.stale).toBe(true);
-      expect(modal.statusEl.textContent).toContain("out of date");
-
-      press(modal, "el-route");
+      expect(modal.routed, "placing an LED did not re-plan the rails").not.toBe(kept);
       expect(modal.stale).toBe(false);
-      expect(modal.routed).not.toBe(kept);
+      expect(modal.statusEl.textContent).not.toContain("out of date");
+    });
+
+    it("plans under Auto the moment the battery joins an LED", () => {
+      const { modal } = openOn(grid2x2());
+      auto(modal);
+      modal.selectTool("led");
+      tapFlat(modal, { x: 1, y: 0.5 });
+      modal.selectTool("battery");
+      tapFlat(modal, { x: 0.5, y: 0.5 });
+      expect(modal.circuit.battery, "the edit did not land").toBeTruthy();
+      expect(modal.stale).toBe(false);
+      expect(modal.routed.traces.length).toBeGreaterThan(0);
+      expect(modal.statusEl.textContent).not.toContain("out of date");
+    });
+
+    it("waits under Auto while there is only an LED, and says what it is waiting for", () => {
+      // Nothing to draw yet: no plan, and no netlist fault left over from the previous one either.
+      const { modal } = openOn(grid2x2());
+      auto(modal);
+      const kept = modal.routed;
+      modal.selectTool("led");
+      tapFlat(modal, { x: 1, y: 0.5 });
+      expect(modal.circuit.leds, "the edit did not land").toHaveLength(1);
+      expect(modal.routed, "an LED with no battery was planned").toBe(kept);
+      expect(modal.stale).toBe(true);
+      const msg = modal.statusEl.textContent;
+      expect(msg).toContain("copper is planned once there is an LED and a battery — or press Route");
+      expect(msg).not.toContain("netlist fault");
+      expect(msg).not.toContain("out of date");
+    });
+
+    it("still waits for Route under Manual when the battery joins an LED", () => {
+      const { modal } = openOn(grid2x2());
+      const kept = modal.routed;
+      modal.selectTool("led");
+      tapFlat(modal, { x: 1, y: 0.5 });
+      modal.selectTool("battery");
+      tapFlat(modal, { x: 0.5, y: 0.5 });
+      expect(modal.circuit.battery, "the edit did not land").toBeTruthy();
+      expect(modal.routed, "Manual planned on its own").toBe(kept);
+      expect(modal.stale).toBe(true);
+      expect(modal.statusEl.textContent).toContain("copper is out of date — press Route");
     });
 
     it("leaves the copper alone under Manual, and says the drawing is out of date", () => {
