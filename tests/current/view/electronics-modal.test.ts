@@ -179,6 +179,14 @@ describe("view/electronics-modal", () => {
     expect(asked).toBe(1);
   });
 
+  it("tells the app when Route is pressed, so the folded copper is planned too", () => {
+    const { modal } = openOn(grid2x2());
+    let asked = 0;
+    modal.onRoute(() => asked++);
+    modal.overlay.querySelector(".el-route").dispatch("click", {});
+    expect(asked).toBe(1);
+  });
+
   it("ignores a gap change that is not a change", () => {
     const { modal, edits } = openOn(grid2x2());
     const before = modal.svg.innerHTML;

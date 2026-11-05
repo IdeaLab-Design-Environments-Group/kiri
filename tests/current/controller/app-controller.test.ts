@@ -233,6 +233,10 @@ class ElectronicsModalMock {
   onOpenForm(cb: () => void): void {
     this.formListener = cb;
   }
+  routeListener: (() => void) | null = null;
+  onRoute(cb: () => void): void {
+    this.routeListener = cb;
+  }
   setMaterial(m: unknown): void {
     this.materialCalls.push(m);
   }
@@ -758,6 +762,27 @@ describe("controller/app-controller", () => {
     await land(0, planned);
     expect(sim.traces).toBe(planned);
     expect(store.getState().status.msg).toBe("");
+  });
+
+  it("plans a big board's folded copper when the editor's Route button asks", async () => {
+    const { planning, jobs, land } = backgroundPlanning();
+    const { controller, store, sim, electronics } = setup(planning);
+    const fold = JSON.parse(
+      readFileSync(new URL("../../../public/examples/akde-square-pyramid.fkld", import.meta.url).pathname, "utf8"),
+    );
+    store.update({ model: { kind: "fold", name: "akde-square-pyramid.fkld", object: fold } });
+    const gaps = gapGraph(fold, flatFaces(fold)).gaps;
+    controller.updateCircuit({ leds: gaps.slice(0, 8).map((g) => ledOf(g.faceA, g.faceB)), battery: { face: 0 } });
+    expect(jobs).toHaveLength(0);
+
+    electronics.routeListener!();
+    expect(jobs).toHaveLength(1);
+    expect(sim.openCalls).toBe(0); // Route plans; it does not leave the editor
+    expect(store.getState().status.msg).toBe(PLANNING_ROUTES);
+
+    const planned = meshes("pwr");
+    await land(0, planned);
+    expect(sim.traces).toBe(planned);
   });
 
   it("drops the stored circuit when the viewer shows a different pattern", () => {

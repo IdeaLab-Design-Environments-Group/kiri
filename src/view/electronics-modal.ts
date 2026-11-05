@@ -448,6 +448,8 @@ export class ElectronicsModal {
   private materialHandler: (m: SimMaterial) => void = () => {};
   /** Asked for the folded form of the current build (the 3D sim, in this material, copper on). */
   private formHandler: () => void = () => {};
+  /** Told when Route is pressed: the request the folded copper of a big board waits for, as Folded form is. */
+  private routeHandler: () => void = () => {};
   /** What the cursor's last tap picked up — an LED or a part on a rail — or null. */
   private selected: Selection | null = null;
   /** Whether that selection was PICKED — the author tapped something already on the sheet — rather than
@@ -638,7 +640,8 @@ export class ElectronicsModal {
       this.autoButtons.set(on, btn);
     }
     this.routeBtn = this.overlay.querySelector<HTMLButtonElement>(".el-route")!;
-    this.routeBtn.addEventListener("click", () => this.routeNowWithFeedback());
+    // The app first, so a background plan of the folded copper is under way before this one blocks.
+    this.routeBtn.addEventListener("click", () => { this.routeHandler(); this.routeNowWithFeedback(); });
     this.overlay.querySelector(".el-route-clear")!.addEventListener("click", () => this.clearRoutes());
     for (const btn of this.overlay.querySelectorAll<HTMLButtonElement>(".el-place")) {
       const mode = btn.dataset.place === "free" ? "free" : "gap";
@@ -886,6 +889,11 @@ export class ElectronicsModal {
   /** Notified when Folded form is pressed — the controller opens the 3D sim on this build. */
   onOpenForm(handler: () => void): void {
     this.formHandler = handler;
+  }
+
+  /** Notified when Route is pressed — the controller plans the folded copper for this circuit too. */
+  onRoute(handler: () => void): void {
+    this.routeHandler = handler;
   }
 
   /** Set the size the pattern is printed and cut at. Re-plans: the tape is the same 3.25mm of copper

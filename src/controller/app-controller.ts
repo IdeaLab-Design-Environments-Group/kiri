@@ -122,6 +122,11 @@ export class AppController {
       this.sim.setTraces(this.tracesForSim(resolveElectronicsTarget(model, viewerShown)?.object ?? null, true));
       void this.sim.open();
     });
+    // The editor's Route button is the same request for the folded copper, without leaving the editor.
+    this.electronics.onRoute(() => {
+      const { model, viewerShown } = this.store.getState();
+      this.sim.setTraces(this.tracesForSim(resolveElectronicsTarget(model, viewerShown)?.object ?? null, true));
+    });
 
     // Model changes → re-render every view (fires once immediately with state).
     this.store.subscribe((state) => this.render(state));
