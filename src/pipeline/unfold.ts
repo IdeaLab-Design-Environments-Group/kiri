@@ -25,6 +25,7 @@ import { distance } from "../core/vec3.js";
 import { edgeKey, edgeLength, faceAngles, vertexWedges } from "./mesh.js";
 import { countFlatOverlaps, cross2, findSelfOverlap, unfoldPatch } from "./flat-layout.js";
 import { shortestPaths } from "./plan-cuts.js";
+import { labelComponents } from "./sheet-components.js";
 import { boundaryNeighbours, clearLength, extendLip, followLip, insideRing, slitDepths } from "./slit-lips.js";
 import {
   PipelineError,
@@ -942,41 +943,6 @@ function seamedUnfoldWithinBudget(
   }
   /* istanbul ignore next */
   throw new PipelineError("unfold", "unreachable");
-}
-
-/** Face-connectivity labeling over shared edges of a TriMesh. */
-function labelComponents(mesh: TriMesh): { count: number; label: number[] } {
-  const edgeFaces = new Map<string, number[]>();
-  for (let f = 0; f < mesh.faces.length; f++) {
-    const [i, j, k] = mesh.faces[f];
-    for (const [a, b] of [[i, j], [j, k], [k, i]] as [number, number][]) {
-      const key = edgeKey(a, b);
-      const list = edgeFaces.get(key) ?? [];
-      list.push(f);
-      edgeFaces.set(key, list);
-    }
-  }
-  const label = new Array<number>(mesh.faces.length).fill(-1);
-  let count = 0;
-  for (let seed = 0; seed < mesh.faces.length; seed++) {
-    if (label[seed] !== -1) continue;
-    const queue = [seed];
-    label[seed] = count;
-    while (queue.length > 0) {
-      const f = queue.pop()!;
-      const [i, j, k] = mesh.faces[f];
-      for (const [a, b] of [[i, j], [j, k], [k, i]] as [number, number][]) {
-        for (const g of edgeFaces.get(edgeKey(a, b)) ?? []) {
-          if (label[g] === -1) {
-            label[g] = count;
-            queue.push(g);
-          }
-        }
-      }
-    }
-    count++;
-  }
-  return { count, label };
 }
 
 /**
