@@ -1200,6 +1200,13 @@ body.is-electronics .app-legend {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* What the part needs to be mounted (issue #36), on its own line under the name. */
+.el-part-mount {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--muted, #596275);
+  font-weight: 400;
+}
 .el-part-row:hover { background: var(--accent-soft, #eef3ff); color: var(--accent-strong, #1741c4); }
 .el-part-row.is-armed {
   background: var(--accent-soft, #eef3ff);

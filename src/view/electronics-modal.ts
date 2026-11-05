@@ -99,6 +99,7 @@ import {
   type ElectronicsDesignAdapter,
 } from "../model/electronics-design.js";
 import { footprintById } from "../model/library.js";
+import { mountingHint, mountingOf } from "../model/part-mounting.js";
 import {
   BLOCKED,
   BLOCKED_SHOWN,
@@ -1077,6 +1078,10 @@ export class ElectronicsModal {
         row.className = "el-part-row";
         row.dataset.id = c.id;
         row.textContent = partLabel(c);
+        // Issue #36: which header or socket the part needs, or that it needs none.
+        const mount = row.appendChild(document.createElement("span"));
+        mount.className = "el-part-mount";
+        mount.textContent = mountingHint(mountingOf(c.id));
         row.setAttribute("role", "option");
         const isArmed = c === armed;
         row.setAttribute("aria-selected", isArmed ? "true" : "false");

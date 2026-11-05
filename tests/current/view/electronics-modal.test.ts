@@ -1849,6 +1849,22 @@ describe("view/electronics-modal", () => {
       expect(modal.overlay.querySelector(".el-part-trigger").textContent).toContain("C_1206");
     });
 
+    it("says beside a searched part which socket it needs, or that it needs none", async () => {
+      // Issue #36: a part found by search has to say whether it goes in a header or socket, and which.
+      const { modal } = openOn(grid2x2());
+      await modal.libraryReady;
+      const hint = (id: string): string | undefined => {
+        const row = modal.overlay.querySelectorAll(".el-part-row").find((r: any) => r.dataset.id === id);
+        expect(row, `no row for ${id}`).toBeTruthy();
+        return row.children.find((c: any) => c.className.includes("el-part-mount"))?.textContent;
+      };
+      search(modal, "xiao");
+      expect(hint("SeeedStudio_XIAO_RP2040")).toBe("goes in socket Module_XIAO_Generic_SocketSMD");
+      expect(hint("Module_XIAO_Generic_SocketSMD")).toBe("socket for Seeed XIAO boards");
+      search(modal, "R_1206");
+      expect(hint("R_1206")).toBe("no header needed");
+    });
+
     it("opens the shelves a search matches, rather than making them be hunted for", async () => {
       const { modal } = openOn(grid2x2());
       await modal.libraryReady;
