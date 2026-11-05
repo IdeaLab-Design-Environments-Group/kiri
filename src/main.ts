@@ -26,6 +26,8 @@ import { ElectronicsModal } from "./view/electronics-modal.js";
 import { ExamplesPage } from "./view/examples-page.js";
 import { TutorialsPage } from "./view/tutorials-page.js";
 import { AppController } from "./controller/app-controller.js";
+import { createElectronicsPlanning } from "./services/electronics-service.js";
+import { backgroundOverlayPlanner } from "./services/folded-overlay-worker.js";
 
 const app = document.getElementById("app");
 if (!app) throw new Error("Missing #app root");
@@ -71,7 +73,9 @@ window.addEventListener("error", (e) => reportFailure("Uncaught error", e.error 
 window.addEventListener("unhandledrejection", (e) => reportFailure("Unhandled rejection", e.reason));
 
 // ---- Controller -----------------------------------------------------------
-const controller = new AppController(store, convert, viewer, simModal, exportModal, patternEditor, electronics);
+// The folded copper is routed in a Web Worker where there is one: a big board takes seconds (issue #21).
+const planning = createElectronicsPlanning(backgroundOverlayPlanner() ?? undefined);
+const controller = new AppController(store, convert, viewer, simModal, exportModal, patternEditor, electronics, planning);
 
 // The Examples page's one intent: a model was chosen, so load it the way the bundled sample loads.
 examples.onPick((slug) => void controller.loadExample(slug));

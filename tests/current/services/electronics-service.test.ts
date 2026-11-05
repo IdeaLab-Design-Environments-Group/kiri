@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
-import { DEFERRED_OVERLAY_LEDS, memoizeFoldedOverlay, resolveElectronicsTarget, resolveFoldedCopperOverlay } from "../../../src/services/electronics-service.js";
+import { DEFERRED_OVERLAY_LEDS, PLANNING_ROUTES, createElectronicsPlanning, memoizeFoldedOverlay, resolveElectronicsTarget, resolveFoldedCopperOverlay } from "../../../src/services/electronics-service.js";
 import type { FoldFile, LoadedModel } from "../../../src/model/fold-file.js";
 import { flatFaces, type Circuit } from "../../../src/model/electronics.js";
 import { TILE_INSET_FRAC } from "../../../src/model/tile-subdiv.js";
@@ -130,5 +130,102 @@ describe("services/electronics-service", () => {
     const circuit = { leds: Array.from({ length: DEFERRED_OVERLAY_LEDS - 1 }, () => ({ face: 0 })), battery: null } as never;
     memoizeFoldedOverlay(plan)({ fold: twoTri(), circuit, tileGap: 0.16, sheetMm: 100 });
     expect(plan).toHaveBeenCalledTimes(1);
+  });
+});
+
+/** A promise and the hands that settle it, so a test decides when a background plan lands. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (err: unknown) => void;
+  const promise = new Promise<T>((res, rej) => ((resolve = res), (reject = rej)));
+  return { promise, resolve, reject };
+}
+
+/** Let settled promises run their handlers. */
+const settle = () => new Promise((r) => setTimeout(r, 0));
+
+describe("services/electronics-service: plans that finish later", () => {
+  const circuit = (face: number): Circuit => ({ leds: [], battery: { face } });
+
+  it("says it is busy while a plan runs, and hands the plan over once it lands", async () => {
+    const job = deferred<never[]>();
+    const plan = vi.fn((_input: unknown) => job.promise);
+    const overlay = memoizeFoldedOverlay(plan);
+    const onBusy = vi.fn();
+    const onPlanned = vi.fn();
+    const input = { fold: twoTri(), circuit: circuit(0), tileGap: 0.16, sheetMm: 100, onBusy, onPlanned };
+
+    expect(overlay(input)).toEqual([]);
+    expect(overlay({ ...input })).toEqual([]); // asked again before it lands: still the one plan
+    expect(plan).toHaveBeenCalledTimes(1);
+    expect(onBusy).toHaveBeenCalledTimes(2);
+    expect(onBusy.mock.calls[0]![0]).toBe(PLANNING_ROUTES);
+    expect(onPlanned).not.toHaveBeenCalled();
+
+    const traces = [{ kind: "pwr", tris: [] }] as never[];
+    job.resolve(traces);
+    await settle();
+    expect(onPlanned).toHaveBeenCalledTimes(1);
+    expect(overlay({ ...input })).toBe(traces);
+    expect(plan).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a plan whose circuit was replaced while it ran", async () => {
+    const jobs = [deferred<never[]>(), deferred<never[]>()];
+    let n = 0;
+    const overlay = memoizeFoldedOverlay(() => jobs[n++]!.promise);
+    const fold = twoTri();
+    const onPlannedOld = vi.fn();
+    const onPlannedNew = vi.fn();
+    const old = { fold, circuit: circuit(0), tileGap: 0.16, sheetMm: 100, onPlanned: onPlannedOld };
+    const current = { fold, circuit: circuit(1), tileGap: 0.16, sheetMm: 100, onPlanned: onPlannedNew };
+
+    overlay(old);
+    overlay(current);
+    jobs[0]!.resolve([{ kind: "old", tris: [] }] as never[]);
+    await settle();
+    expect(onPlannedOld).not.toHaveBeenCalled();
+    expect(overlay(current)).toEqual([]); // the old circuit's copper is not this one's
+
+    const fresh = [{ kind: "new", tris: [] }] as never[];
+    jobs[1]!.resolve(fresh);
+    await settle();
+    expect(onPlannedNew).toHaveBeenCalledTimes(1);
+    expect(overlay(current)).toBe(fresh);
+  });
+
+  it("drops a running plan when the board it was for is now left until asked", async () => {
+    const job = deferred<never[]>();
+    const overlay = memoizeFoldedOverlay(() => job.promise);
+    const onPlanned = vi.fn();
+    const fold = twoTri();
+    overlay({ fold, circuit: circuit(0), tileGap: 0.16, sheetMm: 100, onPlanned });
+    const big = { leds: Array.from({ length: DEFERRED_OVERLAY_LEDS }, () => ({ face: 0 })), battery: null } as never;
+    const onDeferred = vi.fn();
+    expect(overlay({ fold, circuit: big, tileGap: 0.16, sheetMm: 100, onDeferred })).toEqual([]);
+    expect(onDeferred).toHaveBeenCalledTimes(1);
+    job.resolve([{ kind: "pwr", tris: [] }] as never[]);
+    await settle();
+    expect(onPlanned).not.toHaveBeenCalled();
+  });
+
+  it("turns a plan that failed elsewhere into the copper warning", async () => {
+    const job = deferred<never[]>();
+    const overlay = memoizeFoldedOverlay(() => job.promise);
+    const input = { fold: twoTri(), circuit: circuit(0), tileGap: 0.16, sheetMm: 100 };
+    overlay(input);
+    job.reject(new Error("worker died"));
+    await settle();
+    const onWarning = vi.fn();
+    expect(overlay({ ...input, onWarning })).toEqual([]);
+    expect(onWarning).toHaveBeenCalledWith("Copper could not be placed on the folded model: worker died");
+  });
+
+  it("plans on the page when no background planner is given", () => {
+    const fold = JSON.parse(
+      readFileSync(new URL("../../../public/examples/house.fkld", import.meta.url).pathname, "utf8"),
+    ) as FoldFile;
+    const traces = createElectronicsPlanning().foldedOverlay({ fold, circuit: { leds: [], battery: { face: 0 } }, tileGap: TILE_INSET_FRAC, sheetMm: 200 });
+    expect(traces.length).toBeGreaterThan(0);
   });
 });

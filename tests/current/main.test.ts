@@ -161,7 +161,8 @@ describe("main.ts", () => {
     expect(state.appChildren.map((x) => x.id)).toEqual(["convert", "viewer"]);
     expect(state.headerChildren.map((x) => x.id)).toEqual(["header-actions"]);
     expect(state.controllerArgs).toHaveLength(1);
-    expect(state.controllerArgs[0]).toHaveLength(7);
+    expect(state.controllerArgs[0]).toHaveLength(8);
+    expect(state.controllerArgs[0][7].foldedOverlay).toBeTypeOf("function"); // the folded copper's planner
     expect(state.loadSampleCalls).toEqual([false]);
     // Workflow order: Simulate, Electronics, Export; then the library: Examples, Tutorials.
     expect(state.viewCalls).toEqual([

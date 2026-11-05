@@ -114,7 +114,8 @@ export class AppController {
     this.electronics.onMaterialChange((material) => this.store.update({ simMaterial: material }));
     // "Folded form": the same 3D sim the model page opens, on the material the editor is laid out for, with
     // the planned copper already on it (`setTraces` below runs on every render). It is also the request a
-    // big board's copper waits for (see `DEFERRED_OVERLAY_LEDS`), so it plans whatever the LED count.
+    // big board's copper waits for (see `DEFERRED_OVERLAY_LEDS`), so it plans whatever the LED count. With a
+    // background planner the sim opens at once and the copper is pushed to it when the plan lands.
     this.electronics.onOpenForm(() => {
       this.electronics.close();
       const { model, viewerShown } = this.store.getState();
@@ -172,6 +173,9 @@ export class AppController {
       force,
       onWarning: (message) => { seen.msg = message; seen.kind = "bad"; },
       onDeferred: (message) => { seen.msg = message; seen.kind = ""; },
+      onBusy: (message) => { seen.msg = message; seen.kind = ""; },
+      // A plan from the background planner landed for the inputs still in the store: render picks it up.
+      onPlanned: () => this.render(this.store.getState()),
     });
     const warning = seen.msg;
     // Render runs on every store update, and showing the warning is itself an update: report each distinct

@@ -7,6 +7,30 @@ import { PatternGrid, presetWaterbomb } from "../../../src/model/pattern-grid.js
 import { readFileSync } from "node:fs";
 import { flatFaces, gapGraph, ledOf } from "../../../src/model/electronics.js";
 import { TILE_INSET_FRAC } from "../../../src/model/tile-subdiv.js";
+import {
+  PLANNING_ROUTES,
+  createElectronicsPlanning,
+  type ElectronicsPlanningAdapter,
+} from "../../../src/services/electronics-service.js";
+import type { AnchoredMesh } from "../../../src/model/trace-anchor.js";
+
+/**
+ * A planner that runs "elsewhere": each plan is a promise the test settles by hand, in any order, the way a
+ * Web Worker's replies arrive. `land(i, traces)` settles the i-th plan asked for.
+ */
+function backgroundPlanning() {
+  const jobs: Array<(traces: AnchoredMesh[]) => void> = [];
+  const planning = createElectronicsPlanning(
+    () => new Promise<AnchoredMesh[]>((resolve) => jobs.push(resolve)),
+  );
+  const land = async (i: number, traces: AnchoredMesh[]) => {
+    jobs[i]!(traces);
+    await new Promise((r) => setTimeout(r, 0));
+  };
+  return { planning, jobs, land };
+}
+
+const meshes = (kind: string): AnchoredMesh[] => [{ kind, tris: [] }];
 
 // Counts the router's runs, so a test can tell a re-plan from a reused plan. Not a `vi.fn`: the
 // `restoreAllMocks` below would strip its implementation and the real router with it.
@@ -234,7 +258,7 @@ function makeFold(overrides: Partial<FoldFile> = {}): FoldFile {
   };
 }
 
-function setup() {
+function setup(planning?: ElectronicsPlanningAdapter) {
   const store = new AppStore();
   const convert = new ConvertPanelMock();
   const viewer = new ViewerFrameMock();
@@ -250,6 +274,7 @@ function setup() {
     exporter as never,
     patternEditor as never,
     electronics as never,
+    planning,
   );
   return { controller, store, convert, viewer, sim, exporter, patternEditor, electronics };
 }
@@ -668,6 +693,71 @@ describe("controller/app-controller", () => {
     const gaps = gapGraph(fold, flatFaces(fold)).gaps;
     controller.updateCircuit({ leds: gaps.slice(0, 7).map((g) => ledOf(g.faceA, g.faceB)), battery: { face: 0 } });
     expect(sim.traces).not.toEqual([]);
+  });
+
+  it("says routes are being planned while the folded copper plans off the page, then shows it", async () => {
+    const { planning, jobs, land } = backgroundPlanning();
+    const { controller, store, sim } = setup(planning);
+    const fold = JSON.parse(
+      readFileSync(new URL("../../../public/examples/house.fkld", import.meta.url).pathname, "utf8"),
+    );
+    store.update({ model: { kind: "fold", name: "house.fkld", object: fold } });
+    const gaps = gapGraph(fold, flatFaces(fold)).gaps;
+    controller.updateCircuit({ leds: [ledOf(gaps[0]!.faceA, gaps[0]!.faceB)], battery: { face: 0 } });
+
+    expect(jobs).toHaveLength(1);
+    expect(sim.traces).toEqual([]);
+    expect(store.getState().status).toEqual({ msg: PLANNING_ROUTES, kind: "" });
+
+    const planned = meshes("pwr");
+    await land(0, planned);
+    expect(sim.traces).toBe(planned);
+    expect(store.getState().status.msg).toBe(""); // the copper is there, so the busy line goes
+    expect(jobs).toHaveLength(1);
+  });
+
+  it("discards a background plan for a circuit that has changed since it was asked for", async () => {
+    const { planning, jobs, land } = backgroundPlanning();
+    const { controller, store, sim } = setup(planning);
+    const fold = JSON.parse(
+      readFileSync(new URL("../../../public/examples/house.fkld", import.meta.url).pathname, "utf8"),
+    );
+    store.update({ model: { kind: "fold", name: "house.fkld", object: fold } });
+    const gaps = gapGraph(fold, flatFaces(fold)).gaps;
+    controller.updateCircuit({ leds: [ledOf(gaps[0]!.faceA, gaps[0]!.faceB)], battery: { face: 0 } });
+    controller.updateCircuit({ leds: [ledOf(gaps[1]!.faceA, gaps[1]!.faceB)], battery: { face: 0 } });
+    expect(jobs).toHaveLength(2);
+
+    await land(0, meshes("stale"));
+    expect(sim.traces).toEqual([]);
+    expect(store.getState().status.msg).toBe(PLANNING_ROUTES);
+
+    const current = meshes("current");
+    await land(1, current);
+    expect(sim.traces).toBe(current);
+  });
+
+  it("plans a big board off the page when Folded form asks, and shows it once it lands", async () => {
+    const { planning, jobs, land } = backgroundPlanning();
+    const { controller, store, sim, electronics } = setup(planning);
+    const fold = JSON.parse(
+      readFileSync(new URL("../../../public/examples/akde-square-pyramid.fkld", import.meta.url).pathname, "utf8"),
+    );
+    store.update({ model: { kind: "fold", name: "akde-square-pyramid.fkld", object: fold } });
+    const gaps = gapGraph(fold, flatFaces(fold)).gaps;
+    controller.updateCircuit({ leds: gaps.slice(0, 8).map((g) => ledOf(g.faceA, g.faceB)), battery: { face: 0 } });
+    expect(jobs).toHaveLength(0); // still left until asked
+    expect(store.getState().status.msg).toMatch(/^8 LEDs: .*Folded form/);
+
+    electronics.formListener!();
+    expect(sim.openCalls).toBe(1); // the sim opens straight away; the copper follows
+    expect(jobs).toHaveLength(1);
+    expect(store.getState().status.msg).toBe(PLANNING_ROUTES);
+
+    const planned = meshes("pwr");
+    await land(0, planned);
+    expect(sim.traces).toBe(planned);
+    expect(store.getState().status.msg).toBe("");
   });
 
   it("drops the stored circuit when the viewer shows a different pattern", () => {
