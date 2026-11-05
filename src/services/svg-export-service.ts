@@ -8,6 +8,7 @@ import { buildFkldSvgExport, type SvgExportPayload } from "../model/fkld-svg-exp
 import type { Circuit } from "../model/electronics.js";
 import type { LoadedModel } from "../model/fold-file.js";
 import type { ShownModel } from "./sim-scene-service.js";
+import { exportBaseName } from "./export-base-name.js";
 
 export function resolveSvgExport(
   model: LoadedModel | null,
@@ -17,9 +18,5 @@ export function resolveSvgExport(
 ): SvgExportPayload | null {
   const src = shown ?? (model?.kind === "fold" ? { object: model.object, name: model.name } : null);
   if (!src) return null;
-  return buildFkldSvgExport(src.object, baseName(src.name), sheetMm);
-}
-
-function baseName(name: string): string {
-  return name.replace(/\.(fkld|fold|json)$/i, "") || "kirigami";
+  return buildFkldSvgExport(src.object, exportBaseName(src.name), sheetMm);
 }

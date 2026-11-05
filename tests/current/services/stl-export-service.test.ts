@@ -29,6 +29,17 @@ describe("services/stl-export-service", () => {
     expect(out).toEqual({ object: model.object, name: "house", height: undefined, detail: undefined });
   });
 
+  it("names the export after the file, not the folders in the path the viewer reports", async () => {
+    const { resolveStlExport } = await import("../../../src/services/stl-export-service.js");
+    buildStlExport.mockClear();
+    const shown = { object: { file_spec: 1 }, name: "../examples/house.fkld" } as any;
+
+    resolveStlExport(null, shown);
+
+    // The browser used to save this as `_examples_house.stl`.
+    expect(buildStlExport).toHaveBeenCalledWith(shown.object, "house", undefined, undefined, undefined, undefined);
+  });
+
   it("returns null when there is nothing exportable", async () => {
     const { resolveStlExport } = await import("../../../src/services/stl-export-service.js");
     buildStlExport.mockClear();

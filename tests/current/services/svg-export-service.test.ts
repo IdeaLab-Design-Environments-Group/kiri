@@ -29,6 +29,17 @@ describe("services/svg-export-service", () => {
     expect(out).toEqual({ object: model.object, name: "loaded" });
   });
 
+  it("names the export after the file, not the folders in the path the viewer reports", async () => {
+    const { resolveSvgExport } = await import("../../../src/services/svg-export-service.js");
+    buildFkldSvgExport.mockClear();
+    const shown = { object: { file_spec: 1 }, name: "../examples/house.fkld" } as any;
+
+    resolveSvgExport(null, shown);
+
+    // `../examples/house` here once became zip entries like `../examples/house/../examples/house-cut.svg`.
+    expect(buildFkldSvgExport).toHaveBeenCalledWith(shown.object, "house", undefined);
+  });
+
   it("returns null when there is nothing exportable", async () => {
     const { resolveSvgExport } = await import("../../../src/services/svg-export-service.js");
     buildFkldSvgExport.mockClear();

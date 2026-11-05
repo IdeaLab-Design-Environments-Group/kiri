@@ -6,6 +6,7 @@
 import { buildStlExport, type StlExport } from "../model/stl-export.js";
 import type { LoadedModel } from "../model/fold-file.js";
 import type { ShownModel } from "./sim-scene-service.js";
+import { exportBaseName } from "./export-base-name.js";
 
 export function resolveStlExport(
   model: LoadedModel | null,
@@ -17,9 +18,5 @@ export function resolveStlExport(
 ): StlExport | null {
   const src = shown ?? (model?.kind === "fold" ? { object: model.object, name: model.name } : null);
   if (!src) return null;
-  return buildStlExport(src.object, baseName(src.name), heightUnits, maxSubdiv, inset, printSize);
-}
-
-function baseName(name: string): string {
-  return name.replace(/\.(fkld|fold|json|stl|obj)$/i, "") || "kirigami";
+  return buildStlExport(src.object, exportBaseName(src.name), heightUnits, maxSubdiv, inset, printSize);
 }

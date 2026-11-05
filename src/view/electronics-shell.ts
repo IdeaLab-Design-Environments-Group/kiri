@@ -138,12 +138,12 @@ export function shellMarkup(): string {
                 <div class="el-side-head"><span class="el-side-title">Export</span></div>
                 <div class="el-export-grid">
                   <span></span><span class="el-export-col">inside</span><span class="el-export-col">outside</span>
-                  <span class="el-export-row">strips</span>
-                  <button type="button" class="el-export" data-side="inside" title="download the inside's copper as separate strips to cut">SVG</button>
-                  <button type="button" class="el-export" data-side="outside" title="download the outside's copper as separate strips to cut">SVG</button>
-                  <span class="el-export-row">carrier</span>
-                  <button type="button" class="el-export-carrier" data-side="inside" title="download the inside's carrier frame: align it, stick the traces down, snip the tabs">SVG</button>
-                  <button type="button" class="el-export-carrier" data-side="outside" title="download the outside's carrier frame: align it, stick the traces down, snip the tabs">SVG</button>
+                  <span class="el-export-row" title="every copper run as its own piece to cut">strips</span>
+                  <button type="button" class="el-export" data-side="inside" aria-label="download the inside copper as separate strips (SVG)" title="download the inside's copper as separate strips to cut">SVG</button>
+                  <button type="button" class="el-export" data-side="outside" aria-label="download the outside copper as separate strips (SVG)" title="download the outside's copper as separate strips to cut">SVG</button>
+                  <span class="el-export-row" title="one frame that holds every copper run in place on thin tabs">carrier frame</span>
+                  <button type="button" class="el-export-carrier" data-side="inside" aria-label="download the inside carrier frame (SVG)" title="download the inside's carrier frame: align it, stick the traces down, snip the tabs">SVG</button>
+                  <button type="button" class="el-export-carrier" data-side="outside" aria-label="download the outside carrier frame (SVG)" title="download the outside's carrier frame: align it, stick the traces down, snip the tabs">SVG</button>
                 </div>
                 <span class="el-sub-label">mirror the cut</span>
                 <span class="el-seg">
