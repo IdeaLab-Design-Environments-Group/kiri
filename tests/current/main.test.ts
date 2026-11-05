@@ -52,7 +52,7 @@ vi.mock("../../src/view/layout.js", () => ({
 
 vi.mock("../../src/view/sim-modal.js", () => ({
   SimModal: class SimModal {
-    mountTrigger = vi.fn(() => state.viewCalls.push("sim.mountTrigger"));
+    mountTrigger = vi.fn((container: { id: string }) => state.viewCalls.push("sim -> " + container.id));
     setProvider = vi.fn();
     setEnabled = vi.fn();
   },
@@ -60,7 +60,7 @@ vi.mock("../../src/view/sim-modal.js", () => ({
 
 vi.mock("../../src/view/export-modal.js", () => ({
   ExportModal: class ExportModal {
-    mountTrigger = vi.fn(() => state.viewCalls.push("export.mountTrigger"));
+    mountTrigger = vi.fn((container: { id: string }) => state.viewCalls.push("export -> " + container.id));
     setProvider = vi.fn();
     setEnabled = vi.fn();
   },
@@ -76,7 +76,7 @@ vi.mock("../../src/view/pattern-editor-modal.js", () => ({
 
 vi.mock("../../src/view/electronics-modal.js", () => ({
   ElectronicsModal: class ElectronicsModal {
-    mountTrigger = vi.fn(() => state.viewCalls.push("electronics.mountTrigger"));
+    mountTrigger = vi.fn((container: { id: string }) => state.viewCalls.push("electronics -> " + container.id));
     onEdit = vi.fn();
     setEnabled = vi.fn();
     setPattern = vi.fn();
@@ -86,24 +86,22 @@ vi.mock("../../src/view/electronics-modal.js", () => ({
 
 vi.mock("../../src/view/examples-page.js", () => ({
   ExamplesPage: class ExamplesPage {
-    mountTrigger = vi.fn(() => state.viewCalls.push("examples.mountTrigger"));
+    mountTrigger = vi.fn((container: { id: string }) => state.viewCalls.push("examples -> " + container.id));
     onPick = vi.fn();
   },
 }));
 
 vi.mock("../../src/view/tutorials-page.js", () => ({
   TutorialsPage: class TutorialsPage {
-    mountTrigger = vi.fn(() => state.viewCalls.push("tutorials.mountTrigger"));
+    mountTrigger = vi.fn((container: { id: string }) => state.viewCalls.push("tutorials -> " + container.id));
   },
 }));
 
 vi.mock("../../src/view/header-actions.js", () => ({
   HeaderActions: class HeaderActions {
     element = { id: "header-actions" };
-    appendActionButtons = vi.fn(() => state.viewCalls.push("header.appendActionButtons"));
-    onLoadSample = vi.fn();
-    onKirigamize = vi.fn();
-    setKirigamizeEnabled = vi.fn();
+    workflow = { id: "header-workflow" };
+    library = { id: "header-library" };
   },
 }));
 
@@ -163,15 +161,15 @@ describe("main.ts", () => {
     expect(state.appChildren.map((x) => x.id)).toEqual(["convert", "viewer"]);
     expect(state.headerChildren.map((x) => x.id)).toEqual(["header-actions"]);
     expect(state.controllerArgs).toHaveLength(1);
-    expect(state.controllerArgs[0]).toHaveLength(8);
+    expect(state.controllerArgs[0]).toHaveLength(7);
     expect(state.loadSampleCalls).toEqual([false]);
+    // Workflow order: Simulate, Electronics, Export; then the library: Examples, Tutorials.
     expect(state.viewCalls).toEqual([
-      "sim.mountTrigger",
-      "export.mountTrigger",
-      "electronics.mountTrigger",
-      "examples.mountTrigger",
-      "tutorials.mountTrigger",
-      "header.appendActionButtons",
+      "sim -> header-workflow",
+      "electronics -> header-workflow",
+      "export -> header-workflow",
+      "examples -> header-library",
+      "tutorials -> header-library",
     ]);
   });
 

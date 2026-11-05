@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { HeaderActions } from "../../../src/view/header-actions.js";
 import { installDom } from "./mock-dom.js";
 
@@ -8,43 +8,30 @@ describe("view/header-actions", () => {
     delete (globalThis as any).window;
   });
 
-  it("appends the action buttons in order", () => {
+  it("is two groups of navigation, workflow first and the library after it", () => {
     installDom();
     const header = new HeaderActions();
-    header.appendActionButtons();
 
-    const children = Array.from(header.element.children) as any[];
-    // [Cut & fold] -- "Load sample" moved into the viewer's own toolbar, where the one-entry Example
-    // dropdown that loaded the same file used to be, and "Create pyramid" was removed.
-    expect(children.map((c) => c.tagName)).toEqual(["button"]);
-    expect(children.map((c) => c.textContent)).toEqual(["Cut & fold"]);
+    const groups = Array.from(header.element.children) as any[];
+    expect(groups).toEqual([header.workflow, header.library]);
+    expect(groups.map((g) => g.tagName)).toEqual(["nav", "nav"]);
+    // Named, so a screen reader can tell the two navigation regions apart.
+    expect(header.workflow.getAttribute("aria-label")).toBe("Workflow");
+    expect(header.library.getAttribute("aria-label")).toBe("Examples and help");
   });
 
-  it("fires registered handlers and toggles disabled state", () => {
+  it("starts empty: the triggers are mounted by the pages and dialogs that own them", () => {
     installDom();
     const header = new HeaderActions();
-    header.appendActionButtons();
-    const onKirigamize = vi.fn();
-    header.onKirigamize(onKirigamize);
-
-    const children = Array.from(header.element.children) as HTMLButtonElement[];
-    header.setKirigamizeEnabled(true);
-    children[0]?.click(); // Cut & fold
-
-    expect(onKirigamize).toHaveBeenCalledTimes(1);
-    expect(children[0]?.disabled).toBe(false);
+    expect(header.workflow.children).toHaveLength(0);
+    expect(header.library.children).toHaveLength(0);
   });
 
-  it("refreshes the Cut & fold tooltip with its enabled and busy state", () => {
+  it("holds no model action: Cut & fold lives in the Model column, beside the file", () => {
     installDom();
-    const header = new HeaderActions();
-    header.appendActionButtons();
-    const btn = Array.from(header.element.children)[0] as HTMLButtonElement;
-    header.setKirigamizeEnabled(true);
-    expect(btn.title).toBe("Turn the loaded mesh into a cut-and-fold pattern.");
-    header.setKirigamizeEnabled(false, true);
-    expect(btn.title).toContain("Working");
-    header.setKirigamizeEnabled(false);
-    expect(btn.title).toContain("Needs a mesh");
+    const header = new HeaderActions() as unknown as Record<string, unknown>;
+    expect(header.onKirigamize).toBeUndefined();
+    expect(header.setKirigamizeEnabled).toBeUndefined();
+    expect(header.appendActionButtons).toBeUndefined();
   });
 });

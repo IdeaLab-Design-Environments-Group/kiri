@@ -160,6 +160,9 @@ describe("services/model-loader", () => {
   it("loadedStatus reproduces the pre-extraction status strings", () => {
     const fold = parseLoaded(FOLD, "ok.fold");
     expect(loadedStatus(fold).msg).toContain('Loaded FOLD model "ok.fold"');
+    // A FOLD file is already a pattern; it must not claim to be ready for Cut & fold, which is off for it.
+    expect(loadedStatus(fold).msg).toContain("already a pattern");
+    expect(loadedStatus(fold).msg).not.toMatch(/cut & fold/i);
     expect(loadedStatus(fold).kind).toBe("ok");
     const mesh = parseLoaded("v 0 0 0", "shape.stl");
     expect(loadedStatus(mesh)).toEqual({

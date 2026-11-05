@@ -3,7 +3,7 @@
  * a `title` tooltip saying what it does and, only while the button is disabled, what it needs.
  *
  * Applied once after the buttons are mounted, matching each button by its label (case-insensitive,
- * trailing arrows ignored). This is what lets the Electronics button, whose module is not edited for
+ * trailing arrows ignored). The buttons may sit directly in `header` or one level down, in its groups. This is what lets the Electronics button, whose module is not edited for
  * copy, share the same vocabulary as the rest.
  */
 export interface HeaderCopy {
@@ -13,7 +13,7 @@ export interface HeaderCopy {
   needs?: string;
 }
 
-const PATTERN = "Needs a pattern: press Cut & fold first.";
+const PATTERN = "Needs a pattern: load a pattern file, or Cut & fold a 3D model first.";
 
 export const HEADER_COPY: readonly HeaderCopy[] = [
   { label: "Simulate", title: "Fold the pattern in 3D.", needs: PATTERN },
@@ -22,7 +22,6 @@ export const HEADER_COPY: readonly HeaderCopy[] = [
   { label: "Electronics", title: "Place LEDs and route copper tape on the pattern.", needs: PATTERN },
   { label: "Examples", title: "Open one of the bundled models, already cut and ready to fold." },
   { label: "Tutorials", title: "Short screen recordings of every part of kiri." },
-  { label: "Cut & fold", title: "Turn the loaded mesh into a cut-and-fold pattern.", needs: "Needs a mesh: drop a model first." },
 ];
 
 function key(text: string): string {
@@ -34,8 +33,11 @@ function key(text: string): string {
  * Safe to call again after each state change. Unknown buttons are left alone.
  */
 export function applyHeaderCopy(header: HTMLElement): void {
-  const children = Array.from((header?.children ?? []) as unknown as ArrayLike<HTMLElement>);
-  for (const button of children) {
+  const top = Array.from((header?.children ?? []) as unknown as ArrayLike<HTMLElement>);
+  const buttons = top.flatMap((child) =>
+    child.tagName?.toLowerCase() === "button" ? [child] : Array.from((child.children ?? []) as unknown as ArrayLike<HTMLElement>),
+  );
+  for (const button of buttons) {
     const copy = HEADER_COPY.find((c) => key(c.label) === key(button.textContent ?? ""));
     if (!copy) continue;
     button.textContent = copy.label;

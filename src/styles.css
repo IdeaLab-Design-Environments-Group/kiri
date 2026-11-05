@@ -100,12 +100,37 @@ body {
   }
 }
 
-/* One line while it fits: the title does not break, the subtitle gives way first, and the two pattern
-   actions sit a little apart from the page triggers before them. */
+/* One line while it fits: the title does not break and the subtitle gives way first. */
 .app-header h1 { white-space: nowrap; }
-.header-actions > :nth-last-child(2) { margin-left: 0.75rem; }
 @media (max-width: 1180px) { .app-subtitle { display: none; } }
 @media (min-width: 900px) { .header-actions { flex-wrap: nowrap; } }
+
+/* Two groups of navigation. The workflow group (Simulate, Electronics, Export) is what you do with a pattern,
+   in the order you come to it. The library group (Examples, Tutorials) is where to find a model and how to use
+   the app: not steps of the work, so it sits behind a divider and its buttons are drawn without a frame. */
+.header-actions { gap: 1.1rem; }
+.header-group { display: flex; align-items: center; gap: 0.4rem; }
+.header-library {
+  padding-left: 1.1rem;
+  border-left: 1px solid var(--border);
+}
+.header-library .sim-trigger { border-color: transparent; background: transparent; }
+.header-library .sim-trigger:hover:not(:disabled) { background: var(--surface-soft); }
+.header-library .sim-trigger.is-active { background: var(--accent-soft, #eef3ff); border-color: var(--accent, #1f6feb); }
+@media (max-width: 900px) {
+  .header-actions { flex: 1 1 100%; justify-content: flex-start; gap: 0.5rem 1rem; }
+  .header-group { flex-wrap: wrap; }
+  .header-library { padding-left: 0; border-left: 0; }
+}
+
+/* "Cut & fold" sits under the file it acts on, full width, with one line saying what it does or why it is off. */
+.convert-cut { width: 100%; margin-top: 0.7rem; }
+.cut-hint {
+  margin: 0.45rem 0 0;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  color: var(--muted);
+}
 
 /* ---- Grid (resizable cards: Convert · gutter · Viewer) ---- */
 .app-grid {
@@ -620,10 +645,15 @@ body {
 
 /* ---- Responsive ---- */
 @media (max-width: 980px) {
+  /* One column, each card as tall as its content, and the page scrolls. The rows used to be minmax(0, auto), so
+     when the two cards did not fit the screen they shrank and the viewer drew over the bottom of the Model card,
+     including the Cut & fold button. */
   .app-grid,
   .app-grid.left-collapsed {
     grid-template-columns: 1fr;
-    grid-auto-rows: minmax(0, auto);
+    grid-auto-rows: auto;
+    align-content: start;
+    overflow-y: auto;
   }
 
   .col-resizer {
@@ -635,8 +665,18 @@ body {
     pointer-events: auto;
   }
 
+  /* The Model card grows to fit its content and the page scrolls, instead of the card scrolling inside itself. */
+  .convert-column {
+    min-height: auto; /* `.column` sets 0, which let the grid squeeze this row below its content */
+  }
+
+  .convert-column .panel {
+    overflow: visible;
+  }
+
   .viewer-column {
     height: 60vh;
+    min-height: 22rem;
   }
 }
 

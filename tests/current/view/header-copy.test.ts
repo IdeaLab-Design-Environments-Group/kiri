@@ -29,7 +29,7 @@ describe("view/header-copy", () => {
   it("says what is needed only while the button is disabled", () => {
     installDom();
     const header = document.createElement("div");
-    for (const raw of ["Simulate", "Cut & fold"]) {
+    for (const raw of ["Simulate", "Export"]) {
       const b = document.createElement("button");
       b.textContent = raw;
       b.disabled = true;
@@ -37,17 +37,38 @@ describe("view/header-copy", () => {
     }
     const kids = Array.from(header.children) as HTMLButtonElement[];
     applyHeaderCopy(header);
-    expect(kids[0]!.title).toContain("Needs a pattern: press Cut & fold first");
-    expect(kids[1]!.title).toContain("Needs a mesh: drop a model first");
+    expect(kids[0]!.title).toContain("Needs a pattern: load a pattern file, or Cut & fold a 3D model first");
+    expect(kids[1]!.title).toContain("Needs a pattern");
     for (const k of kids) k.disabled = false;
     applyHeaderCopy(header);
     expect(kids[0]!.title).toBe("Fold the pattern in 3D.");
     expect(kids[1]!.title).not.toContain("Needs");
   });
 
+  it("finds the buttons one level down, in the header's groups", () => {
+    installDom();
+    const header = document.createElement("div");
+    const flow = document.createElement("nav");
+    const library = document.createElement("nav");
+    const named = (raw: string) => {
+      const b = document.createElement("button");
+      b.textContent = raw;
+      return b;
+    };
+    const sim = named("simulate");
+    const tut = named("Tutorials");
+    flow.append(sim);
+    library.append(tut);
+    header.append(flow, library);
+    applyHeaderCopy(header);
+    expect(sim.textContent).toBe("Simulate");
+    expect(sim.title).toBe("Fold the pattern in 3D.");
+    expect(tut.title).toContain("screen recordings");
+  });
+
   it("covers every label the header mounts", () => {
     const labels = HEADER_COPY.map((c) => c.label);
-    for (const l of ["Simulate", "Export", "Electronics", "Examples", "Tutorials", "Cut & fold"]) {
+    for (const l of ["Simulate", "Export", "Electronics", "Examples", "Tutorials"]) {
       expect(labels).toContain(l);
     }
     for (const c of HEADER_COPY) expect(c.title.length).toBeGreaterThan(10);

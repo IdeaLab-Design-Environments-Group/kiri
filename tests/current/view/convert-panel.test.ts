@@ -59,4 +59,44 @@ describe("view/convert-panel", () => {
     expect(handler).toHaveBeenNthCalledWith(2, file);
     expect(dropzone.classList.contains("dragover")).toBe(false);
   });
+
+  it("is headed Model, and offers Cut & fold under the status, off until told otherwise", () => {
+    installDom();
+    const panel = new ConvertPanel();
+    const root = panel.element as unknown as MockElement;
+    const btn = childByClass(root, "convert-cut")!;
+    const hint = childByClass(root, "cut-hint")!;
+
+    expect(btn.textContent).toBe("Cut & fold");
+    expect(btn.disabled).toBe(true);
+    expect(hint.textContent).toContain("Load a 3D model");
+    expect(JSON.stringify(root.children.map((c: any) => c.children?.map((k: any) => k.textContent)))).toContain("Model");
+  });
+
+  it("enables Cut & fold, says what it does or why it is off, and reports a press", () => {
+    installDom();
+    const panel = new ConvertPanel();
+    const root = panel.element as unknown as MockElement;
+    const btn = childByClass(root, "convert-cut")!;
+    const hint = childByClass(root, "cut-hint")!;
+    const onCut = vi.fn();
+    panel.onCutAndFold(onCut);
+
+    panel.setCutAndFold({ enabled: true, hint: "Cuts the mesh into a flat pattern." });
+    expect(btn.disabled).toBe(false);
+    expect(hint.textContent).toBe("Cuts the mesh into a flat pattern.");
+    expect(btn.title).toBe("Cuts the mesh into a flat pattern.");
+    expect(btn.getAttribute("aria-busy")).toBe("false");
+    btn.dispatch("click");
+    expect(onCut).toHaveBeenCalledTimes(1);
+
+    panel.setCutAndFold({ enabled: false, busy: true, hint: "Working…" });
+    expect(btn.disabled).toBe(true);
+    expect(btn.getAttribute("aria-busy")).toBe("true");
+
+    panel.setCutAndFold({ enabled: false, hint: "This is already a pattern." });
+    expect(btn.disabled).toBe(true);
+    expect(hint.textContent).toBe("This is already a pattern.");
+    expect(btn.getAttribute("aria-busy")).toBe("false");
+  });
 });
