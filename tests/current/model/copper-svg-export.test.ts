@@ -314,8 +314,12 @@ describe("model/copper-svg-export", () => {
       // akde-hex 0 -> 6 on 2026-11-03, a recorded regression: the router began refusing copper that touches
       // the other net, and its PWR rail now rings GND's spurs, so every line out from them crossed it.
       // Back to 0 on 2026-11-03: a spur fused to a held run of its own net needs no tab of its own.
-      // house and church were budgeted at 2 and 1, and read 0 on 2026-11-03; pinned there.
-      const budget: Record<string, number> = { "akde-hex.fkld": 0, "house.fkld": 0, "church.fkld": 0 };
+      // house and church were budgeted at 2 and 1, and read 0 on 2026-11-03; pinned there. puffin and the
+      // two pyramids read 0 on 2026-11-05 and are pinned with them.
+      const budget: Record<string, number> = {
+        "akde-hex.fkld": 0, "house.fkld": 0, "church.fkld": 0,
+        "puffin.fkld": 0, "akde-square-pyramid.fkld": 0, "akde-decagon-pyramid.fkld": 0,
+      };
       for (const [name, want] of Object.entries(budget)) {
         const { fold, traces, tapeW } = planned(name, 12);
         const out = buildCopperCarrierExport(fold, traces, tapeW);
@@ -337,14 +341,14 @@ describe("model/copper-svg-export", () => {
       // A tab on a pad sits exactly where the LED goes, and snipping it would cut at the pad. The pads are the
       // outermost points of every run, so they are the first thing a nearest-wall search reaches -- which is
       // what it used to pick.
-      // Zero on every pattern but puffin, which has one run so short that every point on it is under a
-      // component, leaving the tab nowhere else to grip. Counted, not hidden.
+      // puffin was budgeted at 2 for a run so short that every point on it is under a component; it is held
+      // through its own net, and every pattern reads 0 since 2026-11-05.
       const budget: Record<string, number> = {
         "house.fkld": 0,
         "church.fkld": 0,
         "akde-hex.fkld": 0,
         "akde-square-pyramid.fkld": 0,
-        "puffin.fkld": 2,
+        "puffin.fkld": 0,
       };
       for (const [name, want] of Object.entries(budget)) {
         const { fold, traces, tapeW, keepOff } = planned(name, 12);
@@ -384,16 +388,15 @@ describe("model/copper-svg-export", () => {
 
     it("does not run a tab over a pad or a terminal", { timeout: 30000 }, () => {
       // Keeping the *anchor* off a component was not enough: the tab still crossed parts on its way to the
-      // wall, where it is stuck down on top of one and cuts into it when snipped. Zero everywhere but puffin,
-      // whose window is crowded enough that some runs have no clear line out at all -- those fall back to the
-      // shortest tab and are reported, not hidden.
+      // wall, where it is stuck down on top of one and cuts into it when snipped. puffin was budgeted at 2 for
+      // runs with no clear line out; it reads 0 since 2026-11-05, like the rest.
       const budget: Record<string, number> = {
         "house.fkld": 0,
         "church.fkld": 0,
         "akde-hex.fkld": 0,
         "akde-decagon-pyramid.fkld": 0,
         "akde-square-pyramid.fkld": 0,
-        "puffin.fkld": 2,
+        "puffin.fkld": 0,
       };
       for (const [name, want] of Object.entries(budget)) {
         const { fold, traces, tapeW, keepOff } = planned(name, 12);
@@ -1241,6 +1244,27 @@ describe("model/copper-svg-export", () => {
         if (apart(p, q) < tape) fused.push(`${i}/${i + 1 + k}`);
       }));
       expect(fused, `${name}: tabs touching`).toEqual([]);
+    }
+  });
+
+  it("keeps every tab within its measured length at twelve LEDs", { timeout: 60_000 }, () => {
+    // A tab is a strip of copper over the waste, stuck down nowhere until it reaches the frame. Turning a
+    // corner or skipping a crowded wall makes it longer, and nothing else bounds how long; these are the
+    // longest measured on 2026-11-05, in millimetres, rounded up. Shrink only.
+    const budget: Record<string, number> = {
+      "house.fkld": 60,
+      "church.fkld": 62,
+      "puffin.fkld": 88,
+      "akde-hex.fkld": 182,
+      "akde-square-pyramid.fkld": 82,
+      "akde-decagon-pyramid.fkld": 267,
+    };
+    for (const [name, want] of Object.entries(budget)) {
+      const { fold, traces, tapeW, keepOff, pads } = planned(name, 12);
+      const out = buildCopperCarrierExport(fold, traces, tapeW, "k", keepOff, undefined, undefined, pads);
+      const length = (p: Vec2[]): number =>
+        p.slice(1).reduce((s, q, i) => s + Math.hypot(q.x - p[i]!.x, q.y - p[i]!.y), 0);
+      expect(Math.max(...out.tabPaths.map(length)), `${name}: longest tab in mm`).toBeLessThanOrEqual(want);
     }
   });
 
