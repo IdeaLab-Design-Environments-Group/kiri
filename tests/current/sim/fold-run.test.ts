@@ -221,3 +221,77 @@ describe("the fold is drawn, not skipped", () => {
     expect(worst).toBeLessThan(0.08);
   });
 });
+
+/**
+ * How fast the fold follows the slider. The cap on node motion per frame (`FAST_MOTION`) bound on nearly every
+ * frame of a ramp, so it set the pace: on house the fold trailed a steady drag by 60% of the whole fold, which
+ * is the "latency" of the slider. A kinematic guide may travel faster; a chord guide may not, because for the
+ * AKDE examples the same change landed on a different settled pose, 4% to 44% of a span off.
+ */
+describe("following the slider", () => {
+  const example = async (name: string) => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const { buildScene } = await import("../../../src/sim/scene.js");
+    const fold = JSON.parse(
+      readFileSync(fileURLToPath(new URL(`../../../public/examples/${name}.fkld`, import.meta.url)), "utf8"),
+    );
+    const { model, solver } = buildScene(fold)!.scene;
+    return { model, runner: new FoldRunner(model, solver) };
+  };
+
+  it("lets a kinematic guide travel at a wider cap than a chord guide", async () => {
+    const kinematic = await example("house");
+    const chord = await example("akde-hex");
+    expect(kinematic.model.foldDrive).toBe("kinematic");
+    expect(chord.model.foldDrive).toBe("chord");
+    expect(kinematic.runner.rampMotion).toBeGreaterThan(chord.runner.rampMotion);
+    expect(chord.runner.rampMotion).toBe(0.01); // the old cap, untouched
+  });
+
+  it("keeps the old cap for a free fold and a pinned one", () => {
+    const pinned = hinge();
+    pinned.fixed[0] = 1;
+    expect(runnerFor(hinge()).rampMotion).toBe(0.01);
+    expect(runnerFor(pinned).rampMotion).toBe(0.01);
+  });
+
+  it("trails a steady drag by well under what it did, on a kinematic guide", { timeout: 60000 }, async () => {
+    const { runner } = await example("house");
+    const DRAG = 90; // a drag from flat to folded over 90 frames
+    for (let k = 1; k <= DRAG; k++) {
+      runner.setTarget(k / DRAG);
+      runner.frame();
+    }
+    // 0.597 behind with the old cap, 0.219 now. What is left is the ease, which is not touched: raising it moved
+    // settled poses by up to 5%.
+    expect(runner.getTarget() - runner.foldPercent).toBeLessThan(0.3);
+  });
+
+  it("settles house on the same pose as before", { timeout: 60000 }, async () => {
+    // Pinned from the run before the cap was raised (extent of each axis over the span, and the mean height).
+    // The cap changes how many solver steps run before a frame is drawn, not the steps, so the settled pose does
+    // not move: measured 0.0000% of a span on house, and at most 0.025% over all 29 bundled examples.
+    const { model, runner } = await example("house");
+    runner.setTarget(1);
+    for (let f = 0; f < 4000 && !runner.settled(); f++) runner.frame();
+    expect(runner.settled()).toBe(true);
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < 3 * model.numNodes; i++) {
+      lo = Math.min(lo, model.rest[i]);
+      hi = Math.max(hi, model.rest[i]);
+    }
+    const span = hi - lo;
+    const extent = (axis: number) => {
+      let a = Infinity, b = -Infinity;
+      for (let i = 0; i < model.numNodes; i++) {
+        a = Math.min(a, model.position[3 * i + axis]!);
+        b = Math.max(b, model.position[3 * i + axis]!);
+      }
+      return (b - a) / span;
+    };
+    expect(extent(0)).toBeCloseTo(0.287148, 3);
+    expect(extent(1)).toBeCloseTo(0.265421, 3);
+    expect(extent(2)).toBeCloseTo(0.313679, 3);
+  });
+});

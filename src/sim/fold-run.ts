@@ -55,6 +55,26 @@ const FOLD_EASE = 0.05;
  * as what it is.
  */
 const FAST_MOTION = 0.01;
+/**
+ * The same cap while the fold is still travelling to the target, for a model whose guide is kinematic.
+ *
+ * `FAST_MOTION` binds on almost every frame of a ramp, so it, not the ease, set how fast the fold followed the
+ * slider: on house the fold trailed a steady drag by 60% of the whole fold. Raising it does not change a single
+ * solver step, only how many run before a frame is drawn, and a kinematic guide carries the sheet along a path,
+ * so how quickly the path is walked does not change which pose it arrives at. Measured on every bundled example
+ * that has one: settled pose within 0.04% of a span of the old cadence, and the fold trails a steady drag by
+ * about half as much (house 60% of the fold behind, now 22%; clock-case 72%, now 42%).
+ *
+ * Not higher, because the price is paid per frame: more of the 80 steps run before each draw. At 4% the lag
+ * falls to its floor (21%, set by the ease) but a frame on puffin or teapot-body averages 10-13 ms against
+ * 3-4 ms, which is most of a 60fps frame. At 2% the same frames average 6-7 ms.
+ *
+ * Not for a `chord` guide (akde-decagon-pyramid, akde-hex, bistable-star-tiling): the same change moved the
+ * AKDE ones to a different settled pose, 4% to 44% of a span, which is the wrong-branch failure the header
+ * describes. They keep {@link FAST_MOTION} throughout. Raising the EASE instead, which is what "close big gaps
+ * faster" amounts to, moved even kinematic poses (bat-wing-left, 5%), so the ease is left alone too.
+ */
+const RAMP_MOTION = 0.02;
 /** Steps between checks of how far the frame has got. Small enough to stop close to the budget. */
 const CHUNK = 1;
 /** Guided cadence: solver steps per frame, all at that frame's foldPercent. */
@@ -92,6 +112,8 @@ export class FoldRunner {
   readonly unpinned: boolean;
   /** There is a soft guide, so there is something to let go of at the end. */
   readonly guideHeld: boolean;
+  /** The per-frame node-motion cap while travelling to the target, as a fraction of the span. */
+  readonly rampMotion: number;
 
   constructor(
     private readonly model: BarHingeModel,
@@ -119,6 +141,7 @@ export class FoldRunner {
     // a span through the fold with this on, against 0.9% with it off.
     this.unpinned = !pinned && model.foldDrive !== "kinematic";
     if (this.guideHeld) model.guideWeight = 1;
+    this.rampMotion = model.foldDrive === "kinematic" ? RAMP_MOTION : FAST_MOTION;
   }
 
   /** Aim at a new fold fraction (the slider). Restarts the guide, since the shape is moving again. */
@@ -163,7 +186,8 @@ export class FoldRunner {
       // changes how much of the fold is DRAWN and never how fast the fold happens.
       const before = (this.before ??= new Float32Array(m.position.length));
       before.set(m.position);
-      const budget = FAST_MOTION * this.span;
+      const rampBudget = this.rampMotion * this.span;
+      const holdBudget = FAST_MOTION * this.span;
       let ran = 0;
       while (ran < GUIDED_STEPS_PER_FRAME) {
         const chunk = Math.min(CHUNK, GUIDED_STEPS_PER_FRAME - ran);
@@ -178,7 +202,8 @@ export class FoldRunner {
           if (at) this.prevKE = kineticDamp(m, this.prevKE);
         }
         ran += chunk;
-        if (this.maxNodeMove(before) > budget) break; // enough has happened to be worth drawing
+        // The tight cap once the fold has arrived: that is what spreads a release snap-through over many frames.
+        if (this.maxNodeMove(before) > (this.atTarget() ? holdBudget : rampBudget)) break; // enough has happened to be worth drawing
       }
       this.releaseShare = ran / GUIDED_STEPS_PER_FRAME;
     } else {
