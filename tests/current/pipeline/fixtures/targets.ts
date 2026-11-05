@@ -291,6 +291,24 @@ export function makeDoubleSaddleFan(sep = 25, ringR = 60, zAmp = 20): TriMesh {
   return { vertices, faces };
 }
 
+/** Closed torus — genus 1 (χ=0, no boundary): `nu` × `nv` quads, each split along a→c. */
+export function makeTorus(R = 50, r = 20, nu = 16, nv = 8): TriMesh {
+  const vertices: Vec3[] = [];
+  for (let i = 0; i < nu; i++)
+    for (let j = 0; j < nv; j++) {
+      const u = (2 * Math.PI * i) / nu, v = (2 * Math.PI * j) / nv;
+      vertices.push({ x: (R + r * Math.cos(v)) * Math.cos(u), y: (R + r * Math.cos(v)) * Math.sin(u), z: r * Math.sin(v) });
+    }
+  const idx = (i: number, j: number) => (i % nu) * nv + (j % nv);
+  const faces: [number, number, number][] = [];
+  for (let i = 0; i < nu; i++)
+    for (let j = 0; j < nv; j++) {
+      const a = idx(i, j), b = idx(i + 1, j), c = idx(i + 1, j + 1), d = idx(i, j + 1);
+      faces.push([a, b, c], [a, c, d]);
+    }
+  return { vertices, faces };
+}
+
 /** Serialize a TriMesh as minimal OBJ text (round-trip test helper). */
 export function toObj(mesh: TriMesh): string {
   const lines: string[] = [];
