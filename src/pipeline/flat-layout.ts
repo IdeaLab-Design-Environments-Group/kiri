@@ -217,13 +217,22 @@ export function countFlatOverlaps(flat: Vec2[], faces: [number, number, number][
     minY: Math.min(t[0].y, t[1].y, t[2].y),
     maxY: Math.max(t[0].y, t[1].y, t[2].y),
   }));
+  // Sweep along x: with faces sorted by minX, face j can only meet face i while
+  // minX_j ≤ maxX_i. Same pairs as the all-pairs scan (the predicate is symmetric),
+  // so the count is identical; a NaN box would break the sort, so it opts out.
+  const sweep = boxes.every((b) => Number.isFinite(b.minX) && Number.isFinite(b.maxX));
+  const order = faces.map((_, i) => i);
+  if (sweep) order.sort((p, q) => boxes[p].minX - boxes[q].minX);
   let count = 0;
-  for (let i = 0; i < faces.length; i++) {
-    for (let j = i + 1; j < faces.length; j++) {
-      if (faces[i].some((v) => faces[j].includes(v))) continue;
-      const a = boxes[i];
+  for (let oi = 0; oi < order.length; oi++) {
+    const i = order[oi];
+    const a = boxes[i];
+    for (let oj = oi + 1; oj < order.length; oj++) {
+      const j = order[oj];
       const b = boxes[j];
+      if (sweep && b.minX > a.maxX) break;
       if (a.maxX < b.minX || b.maxX < a.minX || a.maxY < b.minY || b.maxY < a.minY) continue;
+      if (faces[i].some((v) => faces[j].includes(v))) continue;
       if (trianglesOverlap(tris[i], tris[j])) {
         count++;
         if (count > cap) return count;
