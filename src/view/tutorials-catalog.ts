@@ -73,13 +73,6 @@ export const TUTORIAL_SECTIONS: TutorialSection[] = [
     intro: "From a mesh — or from nothing — to a crease pattern you can fold.",
     items: [
       {
-        slug: "creating-pyramid-model-base-for-simulation",
-        title: "create a pyramid",
-        blurb:
-          "Create pyramid builds the AKDE pyramid from the creation pipeline: the small, well-behaved "
-          + "model to try the simulator and the router on first.",
-      },
-      {
         slug: "kirigamize-a-model",
         title: "cut & fold a model",
         blurb: "Cut & fold turns the loaded mesh into a cut-and-fold kirigami pattern.",
