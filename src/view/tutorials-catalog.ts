@@ -35,8 +35,8 @@ export const TUTORIAL_SECTIONS: TutorialSection[] = [
         slug: "import-a-model",
         title: "import a model",
         blurb:
-          "Drop an STL, OBJ, FOLD or FKLD file onto the Convert panel — or pick one with the file "
-          + "chooser — and it loads into the FKLD viewer beside it.",
+          "Drop an STL, OBJ, FOLD or FKLD file onto the Model panel — or click it to choose one. A "
+          + "pattern file opens in the viewer beside it; a mesh waits for Cut & fold.",
       },
       {
         slug: "using-top-bar-on-main-page",
