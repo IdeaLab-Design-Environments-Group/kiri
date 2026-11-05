@@ -204,7 +204,9 @@ export const TUTORIAL_SECTIONS: TutorialSection[] = [
       {
         slug: "export-for-vinyl-fab",
         title: "export for vinyl cutting",
-        blurb: "Cut, score and copper layers at one print size, ready for the vinyl cutter.",
+        blurb:
+          "Cut files saves one zip: the cut, score and combined SVGs, registered in mm and sized by "
+          + "the same longest side as the tiles, ready for the vinyl cutter.",
       },
       {
         slug: "export-for-3d-fab",
