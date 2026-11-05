@@ -25,6 +25,7 @@ import { distance } from "../core/vec3.js";
 import { edgeKey, edgeLength, faceAngles, vertexWedges } from "./mesh.js";
 import { countFlatOverlaps, cross2, findSelfOverlap, unfoldPatch } from "./flat-layout.js";
 import { shortestPaths } from "./plan-cuts.js";
+import { boundaryNeighbours, clearLength, extendLip, followLip, insideRing, slitDepths } from "./slit-lips.js";
 import {
   PipelineError,
   type CutPlan,
@@ -247,7 +248,11 @@ export function cutAlongEdges(
     return labelComponents({ vertices, faces: live }).count;
   };
 
-  const ventVerts = [...ventAngles.keys()].sort((a, b) => a - b);
+  // Deepest slit first: a vent carves along its slit toward the boundary and
+  // absorbs the saddles it passes, so those must not hold a vent yet.
+  const slitDepth = slitDepths(topo, isCut);
+  const depthOf = (v: number): number => slitDepth.get(v) ?? 0;
+  const ventVerts = [...ventAngles.keys()].sort((a, b) => depthOf(b) - depthOf(a) || a - b);
   const initialLiveFaces = faces.length;
 
   // Vents may not make connectivity WORSE than the bare cut already is. A
@@ -293,6 +298,67 @@ export function cutAlongEdges(
     return id;
   };
 
+  // Slit lips of the bare cut sheet; far points must clear the whole development.
+  const lipNbrs = boundaryNeighbours(faces);
+  const cutDegree = (v: number): number => topo.vertexEdges[v].filter(isCut).length;
+  const farLen = flatLive === null ? 0 : clearLength(flatLive);
+  /**
+   * Both lips of a LEAF slit at copy vc as flat polylines (apex first), followed
+   * through cut-degree-2 vertices to the sheet boundary or a branch. A straight
+   * cone misses the double cover where the slit bends or crosses another saddle
+   * (whose own excess turns lip B further). Null when both lips are straight
+   * (the plain cone is exact), vc is not a clean leaf, or earlier vents moved lip B off the walk's ray.
+   */
+  const slitLips = (vc: number, wA: number, coneEnd: number): [Vec2[], Vec2[]] | null => {
+    const flat = flatLive!;
+    const nb = lipNbrs.get(vc) ?? [];
+    const wB = nb.find((x) => x !== wA);
+    if (nb.length !== 2 || !nb.includes(wA) || wB === undefined || cutDegree(origVertex[vc]) !== 1) return null;
+    if (origVertex[wA] !== origVertex[wB]) return null;
+    const ap = flat[vc];
+    const [ux, uy, bx, by] = [flat[coneEnd].x - ap.x, flat[coneEnd].y - ap.y, flat[wB].x - ap.x, flat[wB].y - ap.y];
+    if (Math.abs(cross2(ux, uy, bx, by)) > 1e-6 * Math.hypot(ux, uy) * Math.hypot(bx, by) || ux * bx + uy * by <= 0) return null;
+    const passes = (c: number): boolean => origVertex[c] >= 0 && !topo.boundaryVertices.has(origVertex[c]) && cutDegree(origVertex[c]) === 2;
+    const [lipA, lipB] = [followLip(flat, lipNbrs, vc, wA, passes), followLip(flat, lipNbrs, vc, wB, passes)];
+    return lipA.length === 2 && lipB.length === 2 ? null : [lipA, lipB];
+  };
+  /** Make flat point q a vertex of every live face it falls in (lip B's bends lie inside side-A faces). */
+  const insertAt = (q: Vec2): void => {
+    const flat = flatLive!;
+    for (let gi = 0; gi < faces.length; gi++) {
+      const tri = faces[gi];
+      if (tri === null || tri.some((i) => Math.hypot(flat[i].x - q.x, flat[i].y - q.y) < SNAP_LEN)) continue;
+      const [a, b, c] = tri.map((i) => flat[i]);
+      const area = cross2(b.x - a.x, b.y - a.y, c.x - a.x, c.y - a.y);
+      if (Math.abs(area) < 1e-12) continue;
+      const l0 = cross2(b.x - q.x, b.y - q.y, c.x - q.x, c.y - q.y) / area;
+      const l1 = cross2(c.x - q.x, c.y - q.y, a.x - q.x, a.y - q.y) / area;
+      const ls = [l0, l1, 1 - l0 - l1];
+      if (ls.some((l) => l < -1e-9)) continue;
+      const zero = ls.findIndex((l) => l < 1e-9);
+      if (zero !== -1) {
+        const [opp, u, w] = [tri[zero], tri[(zero + 1) % 3], tri[(zero + 2) % 3]];
+        const m = lerpVertex(u, w, ls[(zero + 2) % 3]);
+        faces[gi] = [opp, u, m];
+        faces.push([opp, m, w]);
+        splitFarAt(u, w, m, gi);
+        continue;
+      }
+      const m = vertices.length;
+      const mix = (P: { x: number; y: number; z: number }[]) => ({
+        x: ls[0] * P[tri[0]].x + ls[1] * P[tri[1]].x + ls[2] * P[tri[2]].x,
+        y: ls[0] * P[tri[0]].y + ls[1] * P[tri[1]].y + ls[2] * P[tri[2]].y,
+        z: ls[0] * P[tri[0]].z + ls[1] * P[tri[1]].z + ls[2] * P[tri[2]].z,
+      });
+      vertices.push(mix(vertices));
+      goalPos.push(mix(goalPos));
+      origVertex.push(-1);
+      flat.push({ x: q.x, y: q.y });
+      faces[gi] = [tri[0], tri[1], m];
+      faces.push([tri[1], tri[2], m], [tri[2], tri[0], m]);
+    }
+  };
+
   /** Conformity: split the live face across (u1, u2), other than `exclude`, at mid. */
   const splitFarAt = (u1: number, u2: number, mid: number, exclude: number): void => {
     const far = faces.findIndex((g, gi) => gi !== exclude && g !== null && g.includes(u1) && g.includes(u2));
@@ -314,45 +380,60 @@ export function cutAlongEdges(
    * Carve the rest of the vent cone radially outward (K1 depth): the one-ring
    * walk only excises the sector's first ring, but the wrap it compensates
    * displaces material at ALL radii, so the double-cover extends outward
-   * between the same two rays. Working in the live development (exact, since
+   * between the two lips. Working in the live development (exact, since
    * every split is an affine sub-division of a flat face), remove every face
-   * piece strictly between ray d1 and ray d2 from `apex`, splitting crossed
-   * faces conformingly. Stops at the sheet boundary. Connectivity damage is
+   * piece between lip polylines `lipA` and `lipB` (both start at the apex; a
+   * two-point lip is a ray), splitting crossed faces conformingly. Stops at
+   * the sheet boundary. Connectivity damage is
    * caught by the caller's component check. Returns false when the walk
    * exhausts its guard with edges still queued (the carve did not finish).
    */
   const carveCone = (
-    apex: Vec2,
-    d1: Vec2,
-    d2: Vec2,
+    lipA: Vec2[],
+    lipB: Vec2[],
     frontier: [number, number][],
     ventEdges: [number, number][],
   ): boolean => {
     if (flatLive === null) return true;
     const flat = flatLive;
+    const apex = lipA[0];
+    const d1 = { x: lipA[1].x - apex.x, y: lipA[1].y - apex.y };
+    const d2 = { x: lipB[1].x - apex.x, y: lipB[1].y - apex.y };
     const orient = Math.sign(cross2(d1.x, d1.y, d2.x, d2.y)) || 1;
     const sideOf = (ray: Vec2, p: Vec2): number => {
       const c = cross2(ray.x, ray.y, p.x - apex.x, p.y - apex.y) * orient;
       const eps = 1e-9 * (Math.hypot(ray.x, ray.y) * Math.hypot(p.x - apex.x, p.y - apex.y) + 1e-12);
       return c > eps ? 1 : c < -eps ? -1 : 0;
     };
-    /** Crossing of `ray` with live segment (u, t): param r on u→t, or null. */
-    const crossingOn = (ray: Vec2, u: number, t: number): number | null => {
+    // Region boundary: each lip polyline from the apex; its last segment runs on as a ray.
+    const segs: { o: Vec2; d: Vec2; ray: boolean }[] = [];
+    for (const lip of [lipA, lipB]) {
+      for (let i = 0; i + 1 < lip.length; i++) {
+        segs.push({ o: lip[i], d: { x: lip[i + 1].x - lip[i].x, y: lip[i + 1].y - lip[i].y }, ray: i + 2 === lip.length });
+      }
+    }
+    const isCone = segs.length === 2;
+    const ring = isCone ? [] : [...lipA, extendLip(lipA, farLen), extendLip(lipB, farLen), ...[...lipB].reverse().slice(0, -1)];
+    /** Inside the vent region, boundary included (two-ray cone: the original side test). */
+    const inside = (p: Vec2): boolean => (isCone ? sideOf(d1, p) >= 0 && sideOf(d2, p) <= 0 : insideRing(ring, p));
+    /** Crossing of boundary segment `sg` with live segment (u, t): param r on u→t, or null. */
+    const crossingOn = (sg: { o: Vec2; d: Vec2; ray: boolean }, u: number, t: number): number | null => {
+      const ray = sg.d;
       const pu = flat[u];
       const pt = flat[t];
       const ex = pt.x - pu.x;
       const ey = pt.y - pu.y;
       const det = cross2(ex, ey, -ray.x, -ray.y); // [e  -d] r,s solve
       if (Math.abs(det) < 1e-15) return null;
-      const wx = apex.x - pu.x;
-      const wy = apex.y - pu.y;
+      const wx = sg.o.x - pu.x;
+      const wy = sg.o.y - pu.y;
       const r = cross2(wx, wy, -ray.x, -ray.y) / det;
       const s = cross2(ex, ey, wx, wy) / det;
       // Length-aware window: crossings within SNAP_LEN of u reuse u via the
       // single-crossing branches; near t the leftover ≤SNAP_LEN in-cone sliver
       // stays (below the shrink-SAT registration — see "degenerate slivers").
       const tEps = Math.min(0.5, SNAP_LEN / Math.hypot(ex, ey));
-      if (r < tEps || r > 1 - tEps || s <= 0) return null;
+      if (r < tEps || r > 1 - tEps || s <= 0 || (!sg.ray && s > 1)) return null;
       return r;
     };
 
@@ -401,9 +482,7 @@ export function cutAlongEdges(
         const tri = faces[gi];
         if (tri === null || !tri.includes(x) || !tri.includes(y)) continue;
         const t = tri.find((vv) => vv !== x && vv !== y)!;
-        const s1 = sideOf(d1, flat[t]);
-        const s2 = sideOf(d2, flat[t]);
-        if (s1 >= 0 && s2 <= 0) {
+        if (inside(flat[t])) {
           // Third corner on/inside the cone: excise every live piece on (x, y).
           faces[gi] = null;
           pushEdge(x, t);
@@ -420,9 +499,20 @@ export function cutAlongEdges(
         const fy = flat[t].y - flat[x].y;
         if (Math.abs(cross2(ex, ey, fx, fy)) <= 1e-9 * Math.hypot(ex, ey) * Math.hypot(fx, fy)) continue;
         // Exactly one ray separates t from the cone; chord it off.
-        const ray = s1 < 0 ? d1 : d2;
-        const rx = crossingOn(ray, x, t);
-        const ry = crossingOn(ray, y, t);
+        let rx: number | null = null;
+        let ry: number | null = null;
+        if (isCone) {
+          const sg = segs[sideOf(d1, flat[t]) < 0 ? 0 : 1];
+          rx = crossingOn(sg, x, t);
+          ry = crossingOn(sg, y, t);
+        } else {
+          for (const sg of segs) {
+            const [cx, cy] = [crossingOn(sg, x, t), crossingOn(sg, y, t)];
+            if (cx === null && cy === null) continue;
+            if ((rx === null && ry === null) || (cx !== null && cy !== null)) [rx, ry] = [cx, cy];
+            if (cx !== null && cy !== null) break;
+          }
+        }
         if (rx !== null && ry !== null) {
           // Chord crosses both far edges: keep the t-corner piece only.
           const wa = lerpOnEdge(x, t, rx);
@@ -592,10 +682,14 @@ export function cutAlongEdges(
       // the next vent with ~8× the faces.
       let carveDone = true;
       if (deep && ok && remaining <= 1e-6 && flatLive !== null && firstLead !== -1 && coneEnd !== -1) {
-        const apex = flatLive[vc];
-        const d1 = { x: flatLive[firstLead].x - apex.x, y: flatLive[firstLead].y - apex.y };
-        const d2 = { x: flatLive[coneEnd].x - apex.x, y: flatLive[coneEnd].y - apex.y };
-        carveDone = carveCone(apex, d1, d2, frontier, ventEdges);
+        let lipA = [flatLive[vc], flatLive[firstLead]];
+        let lipB = [flatLive[vc], flatLive[coneEnd]];
+        const bent = slitLips(vc, firstLead, coneEnd);
+        if (bent !== null) {
+          [lipA, lipB] = bent;
+          for (const q of lipB.slice(1, -1)) insertAt(q);
+        }
+        carveDone = carveCone(lipA, lipB, frontier, ventEdges);
       }
 
       // A carve that cuts through an earlier vent's vertex would leave it short of 2π.

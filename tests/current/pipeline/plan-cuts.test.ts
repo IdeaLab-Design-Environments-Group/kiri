@@ -4,7 +4,17 @@ import { buildTopology } from "../../../src/pipeline/mesh.js";
 import { planCuts, shortestPaths } from "../../../src/pipeline/plan-cuts.js";
 import { seamedUnfold } from "../../../src/pipeline/unfold.js";
 import type { MeshTopology, TriMesh } from "../../../src/pipeline/types.js";
-import { makeCube, makeGrid, makeOctahedron, makePyramid, makeSaddleFan } from "./fixtures/targets.js";
+import { condition } from "../../../src/pipeline/conditioning.js";
+import {
+  makeCube,
+  makeDoubleSaddleFan,
+  makeEnneper,
+  makeGrid,
+  makeOctahedron,
+  makePyramid,
+  makeSaddleFan,
+  makeSaddleRoof,
+} from "./fixtures/targets.js";
 
 function isForest(topo: MeshTopology, cutEdges: number[]): boolean {
   // union-find over the cut edges; a cycle-closing edge makes it not-a-forest
@@ -143,6 +153,60 @@ describe("planCuts — several boundary loops", () => {
     const unfold = seamedUnfold(cyl, topo, plan, defects);
     expect(unfold.patchCount).toBe(1);
     expect(unfold.faces.length).toBe(cyl.faces.length);
+  });
+});
+
+/** No tree of the cut forest reaches the boundary twice: forest test with every boundary vertex merged into one node. */
+function boundaryContractedForest(topo: MeshTopology, cutEdges: number[]): boolean {
+  const node = (v: number): number => (topo.boundaryVertices.has(v) ? -1 : v);
+  const parent = new Map<number, number>();
+  const find = (x: number): number => {
+    while (parent.has(x) && parent.get(x) !== x) x = parent.get(x)!;
+    return x;
+  };
+  for (const e of cutEdges) {
+    const [a, b] = [node(topo.edges[e].a), node(topo.edges[e].b)];
+    for (const x of [a, b]) if (!parent.has(x)) parent.set(x, x);
+    const [ra, rb] = [find(a), find(b)];
+    if (ra === rb) return false;
+    parent.set(ra, rb);
+  }
+  return true;
+}
+
+describe("planCuts — δ<0 slits on open surfaces", () => {
+  const planned = (fixture: TriMesh) => {
+    const { mesh } = condition(fixture);
+    const topo = buildTopology(mesh);
+    const defects = angleDefects(mesh, topo);
+    return { topo, defects, plan: planCuts(mesh, topo, defects, { lambda: 0, strategy: "dart" }) };
+  };
+
+  it("saddle roof: every saddle next to the boundary gets its own one-edge slit to it", () => {
+    // The tree plan joined them instead (6-7-8 along a row, reaching the boundary once).
+    const { topo, plan } = planned(makeSaddleRoof());
+    const nearBoundary = plan.perVertexAction
+      .map((a, v) => ({ a, v }))
+      .filter(({ a, v }) => a === "slit" && topo.vertexEdges[v].some((e) => topo.boundaryVertices.has(topo.edges[e].a) || topo.boundaryVertices.has(topo.edges[e].b)));
+    expect(nearBoundary.length).toBe(8);
+    for (const { v } of nearBoundary) {
+      const toBoundary = topo.vertexEdges[v].filter(
+        (e) => plan.cutEdges.includes(e) && topo.boundaryVertices.has(topo.edges[e].a === v ? topo.edges[e].b : topo.edges[e].a),
+      );
+      expect(toBoundary.length).toBe(1);
+    }
+    // The centre saddle cannot reach the boundary in one edge; its slit continues through exactly one of them.
+    expect(nearBoundary.filter(({ v }) => cutDegree(topo, plan.cutEdges, v) === 2).length).toBe(1);
+  });
+
+  it("every slit vertex is cut, and no cut tree reaches the boundary twice", () => {
+    for (const fixture of [makeSaddleRoof(3), makeSaddleRoof(), makeSaddleRoof(6), makeEnneper(), makeEnneper(5), makeDoubleSaddleFan(), makeSaddleFan()]) {
+      const { topo, plan } = planned(fixture);
+      expect(boundaryContractedForest(topo, plan.cutEdges)).toBe(true);
+      plan.perVertexAction.forEach((a, v) => {
+        if (a === "slit") expect(cutDegree(topo, plan.cutEdges, v)).toBeGreaterThanOrEqual(1);
+      });
+    }
   });
 });
 

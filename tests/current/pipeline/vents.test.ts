@@ -14,7 +14,7 @@ import { angleDefects } from "../../../src/pipeline/curvature.js";
 import { kirigamize } from "../../../src/pipeline/kirigamize.js";
 import { buildTopology, edgeKey } from "../../../src/pipeline/mesh.js";
 import { planCuts } from "../../../src/pipeline/plan-cuts.js";
-import { cutAlongEdges, findSelfOverlap } from "../../../src/pipeline/unfold.js";
+import { cutAlongEdges, findSelfOverlap, unfoldPatch } from "../../../src/pipeline/unfold.js";
 import { pointTriangleDistance } from "../../../src/pipeline/verify.js";
 import { PipelineError, type TriMesh, type UnfoldResult, type Vec2 } from "../../../src/pipeline/types.js";
 import { makeDoubleSaddleFan, makeEnneper, makeSaddleFan, makeSaddleRoof } from "./fixtures/targets.js";
@@ -244,9 +244,6 @@ describe("double saddle fan — multi-vent dynamic excess", () => {
   });
 });
 
-// awaiting unfold connectivity fix — these currently throw inside seamedUnfold;
-// the assertions below are their final form and must go green once the
-// parallel connectivity fix lands. Do not skip.
 describe("saddle roof + Enneper — many-vent invariants", () => {
   it("saddle roof: one sheet, ≥7 vents, 2π everywhere, no overlap, ventEdges on sheet", () => {
     const result = kirigamize(makeSaddleRoof(), { verify: false });
@@ -314,8 +311,9 @@ describe("saddle roof — vent cones carve through whole faces", () => {
     // (32 → 312 here) and stall every later overlap count.
     // 3x → 5x on 2026-11-04: the carve that split along the rays cut through
     // earlier vents' vertices, so the merge with main kept main's carve and its
-    // intact-vent check. It reads 153 faces and places 6 of the 7 vents raw;
-    // kirigamize still places all 7 (see the carveCone termination tests).
+    // intact-vent check. Since each saddle got its own slit and the carve
+    // follows the lips, it reads 38 faces with 8 vents (the centre saddle's
+    // vent absorbs the saddle its slit passes).
     const { mesh, topo, defects } = conditioned(makeSaddleRoof());
     const plan = planCuts(mesh, topo, defects, { lambda: 0, strategy: "dart" });
     const ventAngles = new Map<number, number>();
@@ -327,6 +325,29 @@ describe("saddle roof — vent cones carve through whole faces", () => {
     expect(cut.vents.length).toBeGreaterThanOrEqual(6);
     expect(cut.mesh.faces.length).toBeLessThanOrEqual(5 * mesh.faces.length);
   });
+});
+
+// The centre saddle's slit runs through a second saddle and on to the
+// boundary. Its double cover lies between the two lip polylines (the second
+// saddle's excess turns lip B further), not inside a straight cone.
+describe("saddle roof — a vent whose slit passes another saddle", () => {
+  for (const n of [4, 5, 6]) {
+    it(`n=${n}: the raw cut already develops without overlap, 2π at every vent`, () => {
+      const { mesh, topo, defects } = conditioned(makeSaddleRoof(n));
+      const plan = planCuts(mesh, topo, defects, { lambda: 0, strategy: "dart" });
+      const ventAngles = new Map<number, number>();
+      plan.perVertexAction.forEach((a, v) => {
+        if (a === "slit" && defects.defects[v] < 0) ventAngles.set(v, -defects.defects[v]);
+      });
+      const cut = cutAlongEdges(mesh, topo, plan.cutEdges, ventAngles);
+      const flat = unfoldPatch(cut, cut.mesh.faces.map((_, f) => f));
+      expect(findSelfOverlap(flat, cut.mesh.faces)).toBeNull();
+      const unfold = { flat, faces: cut.mesh.faces, origVertex: cut.origVertex, vents: cut.vents } as unknown as UnfoldResult;
+      expect(cut.vents.length).toBeGreaterThanOrEqual(ventAngles.size / 2);
+      expectTwoPiInvariant(unfold);
+      expectVentEdgesOnSheet(unfold);
+    });
+  }
 });
 
 describe("error path — vent vertex with no incident slit", () => {

@@ -26,11 +26,13 @@
  *   routing:     min_C Σ_{e∈C} (len(e) + λ·vis(e))
  *   sign rule:   δ>0 → dart; δ<0 → slit (vent supplies 2π closure, no wedge rule)
  *
- * Connectivity: the cut set is a FOREST (cycles pruned) touching each
- * boundary loop at most ONCE (every loop is a pseudo-terminal joining the MST
- * exactly once, and paths are forbidden from passing THROUGH boundary
- * vertices) — such a tree never disconnects. With several loops the tree also
- * joins them, which is what lets an open cylinder flatten (one rim-to-rim seam).
+ * Connectivity: the cut set is a FOREST (cycles pruned, each boundary loop
+ * counted as one node) in which every tree touches each boundary loop at most
+ * ONCE (loops are pseudo-terminals of the MST, and paths are forbidden from
+ * passing THROUGH boundary vertices) — such a forest never disconnects. With
+ * several loops the tree also joins them, which is what lets an open cylinder
+ * flatten (one rim-to-rim seam). On an open surface each δ<0 slit is its own
+ * shortest path to the boundary, outside the MST.
  */
 
 import { edgeLength } from "./mesh.js";
@@ -201,8 +203,12 @@ function boundaryLoops(topo: MeshTopology): number[][] {
   return [...loops.values()];
 }
 
-/** Spanning forest of an edge subset (drops cycle-closing edges). */
-function spanningForest(topo: MeshTopology, edgeSet: Set<number>): Set<number> {
+/**
+ * Spanning forest of an edge subset (drops cycle-closing edges). Each boundary
+ * loop counts as one node, so no kept tree reaches the same loop twice (that
+ * path would sever the sheet).
+ */
+function spanningForest(topo: MeshTopology, edgeSet: Set<number>, loops: number[][]): Set<number> {
   const parent = new Map<number, number>();
   const find = (x: number): number => {
     let r = x;
@@ -210,6 +216,7 @@ function spanningForest(topo: MeshTopology, edgeSet: Set<number>): Set<number> {
     parent.set(x, r);
     return r;
   };
+  for (const loop of loops) for (const v of loop) parent.set(v, loop[0]);
   const kept = new Set<number>();
   for (const e of edgeSet) {
     const { a, b } = topo.edges[e];
@@ -315,8 +322,13 @@ export function planCuts(
     const loopEnd = (i: number, j: number): number =>
       loops[j].reduce((best, v) => (loopSols[i].dist[v] < loopSols[i].dist[best] ? v : best));
 
+    // Slit terminals on an open surface each take their OWN shortest path to
+    // the boundary instead of joining the tree: a vent carves the double cover
+    // along its slit, so a slit routed through other saddles swallows them.
+    const ownSlit = (v: number): boolean => hasBoundary && perVertexAction[v] === "slit";
+    for (const v of cutTerminals.filter(ownSlit)) for (const e of extractPath(boundarySol!, v)) cutSet.add(e);
     type Node = number | { loop: number };
-    const nodes: Node[] = [...cutTerminals, ...loops.map((_, loop) => ({ loop }))];
+    const nodes: Node[] = [...cutTerminals.filter((v) => !ownSlit(v)), ...loops.map((_, loop) => ({ loop }))];
     const distOf = (u: Node, v: Node): number => {
       if (typeof u !== "number" && typeof v !== "number") return loopSols[u.loop].dist[loopEnd(u.loop, v.loop)];
       if (typeof u !== "number") return loopSols[u.loop].dist[v as number];
@@ -355,7 +367,7 @@ export function planCuts(
       for (const e of path) cutSet.add(e);
     }
     // Path unions can close cycles — prune to a forest.
-    const forest = spanningForest(topo, cutSet);
+    const forest = spanningForest(topo, cutSet, loops);
     cutSet.clear();
     for (const e of forest) cutSet.add(e);
 
