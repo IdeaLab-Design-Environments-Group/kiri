@@ -61,3 +61,15 @@ export function maxTensileStrain(m: BarHingeModel): number {
   }
   return worst;
 }
+
+/**
+ * Bundled examples whose declared folded form is not an isometry of their own flat net, so no fold can
+ * reach it: the sim stretches bars toward it and the base flares (issues #14 and #24). The goal pose
+ * alone asks a worst-bar stretch of 34% (hex) and 118% (decagon). The fault is in the target the AKDE
+ * generator wrote for N=6 and N=10, not in the sim.
+ *
+ * The one list: `fold-realism.test.ts` and `kzr-sim.test.ts` measure it, and the load status line marks
+ * these files as reference only. When a regenerated file folds within the pyramid's bounds the pin in
+ * `kzr-sim.test.ts` fails; remove the name here and the note goes with it.
+ */
+export const REFERENCE_ONLY_EXAMPLES: readonly string[] = ["akde-hex.fkld", "akde-decagon-pyramid.fkld"];

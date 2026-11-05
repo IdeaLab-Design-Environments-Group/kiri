@@ -29,7 +29,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { buildScene } from "../../../src/sim/scene.js";
-import { meanTensileStrain, maxTensileStrain } from "../../../src/sim/strain.js";
+import { meanTensileStrain, maxTensileStrain, REFERENCE_ONLY_EXAMPLES } from "../../../src/sim/strain.js";
 import { FoldRunner } from "../../../src/sim/fold-run.js";
 import { kabsch, applyRigid } from "../../../src/pipeline/verify.js";
 import type { BarHingeModel } from "../../../src/sim/model.js";
@@ -60,7 +60,7 @@ const REACHABLE = [
  * further than their own goal already asks — the failure is in the file, and the point of the test
  * is that the simulator reports it rather than imposing the shape anyway.
  */
-const UNREACHABLE = ["akde-hex.fkld", "akde-decagon-pyramid.fkld"];
+const UNREACHABLE = REFERENCE_ONLY_EXAMPLES; // the same list marks them reference only on load
 
 const GUIDED = [...REACHABLE, ...UNREACHABLE];
 

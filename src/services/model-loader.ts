@@ -13,7 +13,7 @@
 import { AppError } from "../core/errors.js";
 import type { FoldFile, LoadedModel } from "../model/fold-file.js";
 import { isFkld } from "../model/fold-file.js";
-import { canSimulate } from "../sim/index.js";
+import { canSimulate, REFERENCE_ONLY_EXAMPLES } from "../sim/index.js";
 import type { Status } from "../model/app-store.js";
 
 /** Largest file we will read into memory. */
@@ -109,7 +109,10 @@ export function loadedStatus(model: LoadedModel): Status {
     // A FOLD or FKLD file is already a pattern: there is nothing to cut and fold, so this must not say so (the
     // Cut & fold button is off for it, and its hint says why). What it can do next is fold in Simulate.
     const next = canSimulate(model.object) ? ": open Simulate to see it fold" : "";
-    return { msg: `Loaded ${kind} model "${model.name}". It is already a pattern${next}.`, kind: "ok" };
+    const note = REFERENCE_ONLY_EXAMPLES.includes(model.name)
+      ? " Reference only: its folded form cannot be reached without stretching the sheet, so the sim stretches bars and the base flares."
+      : "";
+    return { msg: `Loaded ${kind} model "${model.name}". It is already a pattern${next}.${note}`, kind: "ok" };
   }
   return {
     msg: `Loaded ${model.ext.toUpperCase()} mesh "${model.name}". Press Cut & fold to convert.`,

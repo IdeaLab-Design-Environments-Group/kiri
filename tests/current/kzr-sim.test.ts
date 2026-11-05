@@ -12,7 +12,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { buildScene } from "../../src/sim/scene.js";
-import { maxTensileStrain, meanTensileStrain } from "../../src/sim/strain.js";
+import { maxTensileStrain, meanTensileStrain, REFERENCE_ONLY_EXAMPLES } from "../../src/sim/strain.js";
 import type { FoldFile } from "../../src/model/fold-file.js";
 
 function loadExample(name: string): FoldFile {
@@ -60,9 +60,10 @@ describe("kirigamizer app sim path (src/sim via scene.buildScene)", () => {
   // kirigamize pipeline (src/pipeline/emit.ts), not something src/sim generates, so the fix belongs
   // in the AKDE generator for N=6 and N=10. Until then this pins the known gap: when a regenerated
   // file passes mean < 0.05 and max < 0.12 these assertions fail, and the preset should move to
-  // REACHABLE in fold-realism.test.ts and get the same checks as the pyramid.
+  // REACHABLE in fold-realism.test.ts and get the same checks as the pyramid. Dropping it from
+  // REFERENCE_ONLY_EXAMPLES (src/sim/strain.ts) also removes the reference-only note from the load status.
   it("hex and decagon goal poses are not isometric (reference-only, known gap)", () => {
-    for (const name of ["akde-hex.fkld", "akde-decagon-pyramid.fkld"]) {
+    for (const name of REFERENCE_ONLY_EXAMPLES) {
       const { model } = buildScene(loadExample(name))!.scene;
       model.position.set(model.goal);
       expect(maxTensileStrain(model)).toBeGreaterThan(0.12);

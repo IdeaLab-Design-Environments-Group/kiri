@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchSample, parseLoaded, loadedStatus, readModelFile } from "../../../src/services/model-loader.js";
 import { AppError } from "../../../src/core/errors.js";
+import { REFERENCE_ONLY_EXAMPLES } from "../../../src/sim/strain.js";
 
 const FOLD = JSON.stringify({
   vertices_coords: [[0, 0], [1, 0], [1, 1]],
@@ -169,5 +170,19 @@ describe("services/model-loader", () => {
       msg: 'Loaded STL mesh "shape.stl". Press Cut & fold to convert.',
       kind: "",
     });
+  });
+
+  it("loadedStatus marks the reference-only examples and says why (issues #14, #24)", () => {
+    expect(REFERENCE_ONLY_EXAMPLES).toEqual(["akde-hex.fkld", "akde-decagon-pyramid.fkld"]);
+    for (const name of REFERENCE_ONLY_EXAMPLES) {
+      const msg = loadedStatus(parseLoaded(FOLD, name)).msg;
+      expect(msg, name).toContain(`Loaded FOLD model "${name}"`);
+      expect(msg, name).toMatch(/reference only/i);
+      expect(msg, name).toMatch(/stretch/i);
+    }
+    // Only those files: a reachable preset, and a file that merely shares a prefix, load without the note.
+    for (const name of ["house.fkld", "akde-square-pyramid.fkld", "my-akde-hex.fkld"]) {
+      expect(loadedStatus(parseLoaded(FOLD, name)).msg, name).not.toMatch(/reference only/i);
+    }
   });
 });
