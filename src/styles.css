@@ -1910,6 +1910,7 @@ body.is-tutorials .app-legend {
 }
 .tut-page-header {
   display: flex;
+  flex-wrap: wrap; /* on a phone the tabs and the filter take a row each rather than overlapping */
   align-items: center;
   gap: 0.75rem;
   padding: 0.6rem 1rem;
@@ -1944,11 +1945,17 @@ body.is-tutorials .app-legend {
   color: #fff;
 }
 .tut-body[hidden] { display: none; }
-/* One walkthrough runs the width of the page: it is the one thing on the tab, and a long recording
-   of a dense editor needs the room. */
-.tut-grid.tut-walk-grid { grid-template-columns: minmax(0, 1fr); max-width: 1100px; }
-/* Recorded at 1600 x 1100, not the clips' 16:9. Capped in height so the controls stay on screen. */
-.tut-walk-card .tut-video { aspect-ratio: 1600 / 1100; max-height: calc(100vh - 220px); }
+/* One walkthrough, centred and as large as fits: it is the one thing on the tab, and a long recording
+   of a dense editor needs the room. Its width is set from the height left on screen (the 300px is the
+   header, the tab bar, the card's title and its blurb), so the recording, at its own 1600 x 1100, fills
+   the card exactly: no bars beside it and nothing pushed below the fold. */
+.tut-grid.tut-walk-grid {
+  grid-template-columns: minmax(0, 1fr);
+  width: min(100%, 1400px, calc((100vh - 300px) * 16 / 11));
+  min-width: min(100%, 480px);
+  margin: 0 auto;
+}
+.tut-walk-card .tut-video { aspect-ratio: 1600 / 1100; height: auto; object-fit: contain; }
 .tut-tally {
   font-size: 0.78rem;
   color: #667085;
