@@ -73,6 +73,8 @@ export function pickTab(
    * church, it sent two to four times as many tabs across a trace to spare a part's lead.
    */
   noGrip: Vec2[] = [],
+  /** The other runs of this run's own net, which an anchor is kept out of where it can be. */
+  mates: Vec2[][] = [],
 ): {
   index: number;
   side: Side;
@@ -88,8 +90,9 @@ export function pickTab(
   // Nine offsets is as good as twenty-four: measured identical, so the extra reach buys nothing.
   const SIDE_STEPS = [0, 1.5, -1.5, 3, -3, 5, -5, 8, -8];
   const candidates: { index: number; side: Side; step: number; reach: number }[] = [];
-  ring.forEach((p, i) => {
-    if (onComponent(p)) return; // a pad or a terminal: grip the trace elsewhere
+  /** Every anchor, wall and sideways step, leaving out the anchors `skip` rules out. */
+  const gather = (skip: (p: Vec2) => boolean): void => ring.forEach((p, i) => {
+    if (skip(p)) return;
     const dist: [Side, number][] = [
       ["left", p.x - win.x0], ["right", win.x1 - p.x],
       ["top", p.y - win.y0], ["bottom", win.y1 - p.y],
@@ -101,23 +104,18 @@ export function pickTab(
       }
     }
   });
+  /** Where this run meets copper of its own net. An opening there is half buried in the other run, and the
+   *  tab's sides come out clipped short of it, leaving the boundary open there. */
+  const inJunction = (p: Vec2): boolean =>
+    mates.some((m) => pointInRing(p, m) || m.some((q, k) => ptSegDist(p, q, m[(k + 1) % m.length]!) < tapeW));
+  gather((p) => onComponent(p) || inJunction(p)); // a pad or a terminal: grip the trace elsewhere
+  if (!candidates.length) gather(onComponent); // nowhere else to grip: a junction it is
   let forcedOntoComponent = false;
   if (!candidates.length) {
     // Every point sits on a component (a very short run between two pads). Better held by a tab on a pad than
     // left loose in the window, so try again without the exclusion — and say so.
     forcedOntoComponent = true;
-    ring.forEach((p, i) => {
-      const dist: [Side, number][] = [
-        ["left", p.x - win.x0], ["right", win.x1 - p.x],
-        ["top", p.y - win.y0], ["bottom", win.y1 - p.y],
-      ];
-      for (const [side, d] of dist) {
-        if (d < 0) continue;
-        for (const step of SIDE_STEPS) {
-          candidates.push({ index: i, side, step, reach: d + Math.abs(step) * tapeW });
-        }
-      }
-    });
+    gather(() => false);
   }
   // A wall already carrying tabs costs more to reach, so later tabs spread onto the others rather than
   // stacking. Priced in tape widths: dear enough to move a tab to another wall, not so dear that it drives
@@ -249,6 +247,15 @@ function segSegDist(a: Vec2, b: Vec2, c: Vec2, d: Vec2): number {
   // Two segments that cross are at zero, though neither one's ends need come near the other.
   if (segsIntersect(a, b, c, d)) return 0;
   return Math.min(ptSegDist(a, c, d), ptSegDist(b, c, d), ptSegDist(c, a, b), ptSegDist(d, a, b));
+}
+
+function pointInRing(p: Vec2, ring: Vec2[]): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const a = ring[i]!, b = ring[j]!;
+    if ((a.y > p.y) !== (b.y > p.y) && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+  }
+  return inside;
 }
 
 function ptSegDist(p: Vec2, a: Vec2, b: Vec2): number {

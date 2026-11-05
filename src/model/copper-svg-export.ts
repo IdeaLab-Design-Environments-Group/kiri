@@ -1240,6 +1240,7 @@ export function buildCopperCarrierExport(
     // overlap freely -- one net, one potential -- so treating them as obstacles left every candidate blocked,
     // which is why neither more anchors nor bent tabs changed anything.
     const others = rings.filter((r, i) => i !== ri && r.net !== net).map((r) => r.ring);
+    const mates = rings.filter((r, i) => i !== ri && r.net === net).map((r) => r.ring);
     // How many supports this run earns. A long run held at one point still swings about it and can lift a
     // corner off the mat; a second grip costs a tab's width of extra cut and stops that. Kept modest --
     // every tab is a place the copper stays joined to the waste and has to be snipped by hand.
@@ -1255,7 +1256,7 @@ export function buildCopperCarrierExport(
     const picks: { index: number; side: Side; path: Vec2[] }[] = [];
     const taken = [...avoid];
     for (let t = 0; t < want; t++) {
-      const choice = pickTab(ring, others, win, tape, taken, chosen, partEnds);
+      const choice = pickTab(ring, others, win, tape, taken, chosen, partEnds, mates);
       if (!choice) break;
       const poor = !choice.clear || choice.onComponent || choice.overComponent;
       if (t === 0 && poor && spare && rings.some((_, j) => fused(ri, j))) return false;

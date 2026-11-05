@@ -1194,6 +1194,27 @@ describe("model/copper-svg-export", () => {
     expect(out.unclosedCuts).toBe(0);
   });
 
+  it("leaves no more cuts unclosed at twelve LEDs than it did when measured", { timeout: 60_000 }, () => {
+    // A tab anchored where its run overlaps another run of its net has half its opening buried in that
+    // copper; its sides are clipped short of the opening and the boundary is left open there. Keeping
+    // anchors out of those junctions took akde-decagon-pyramid from 3 to 2. puffin's head packs eight LEDs
+    // into a few tape widths, and its remaining open ends come from strips meeting there, not from tabs.
+    // Measured 2026-11-05. Shrink only.
+    const budget: Record<string, number> = {
+      "house.fkld": 0,
+      "church.fkld": 0,
+      "puffin.fkld": 8,
+      "akde-hex.fkld": 2,
+      "akde-square-pyramid.fkld": 0,
+      "akde-decagon-pyramid.fkld": 2,
+    };
+    for (const [name, want] of Object.entries(budget)) {
+      const { fold, traces, tapeW, keepOff, pads } = planned(name, 12);
+      const out = buildCopperCarrierExport(fold, traces, tapeW, "k", keepOff, undefined, undefined, pads);
+      expect(out.unclosedCuts, `${name}: fragments that would not close`).toBeLessThanOrEqual(want);
+    }
+  });
+
   it("spreads its tabs over the walls instead of stacking them on one", () => {
     // Sorted on distance alone every tab dives for whichever wall is nearest, and they pile up: 45 of 99
     // tabs across the bundled circuits ran within a tape width of another, and puffin sent all six to the
