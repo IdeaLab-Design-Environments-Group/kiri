@@ -8,6 +8,7 @@ import { COMPONENTS, R_1206, SW_SPDT } from "../../../src/model/footprints.gener
 import { PCB_COLOURS } from "../../../src/model/part-render.js";
 import { padNamed, padSize, terminals } from "../../../src/model/footprint.js";
 import { netPlacement } from "../../../src/model/parts.js";
+import { padPosition } from "../../../src/model/netlist.js";
 import { LIBRARY, componentById } from "../../../src/model/library.js";
 import { sheetFrame } from "../../../src/model/copper-svg-export.js";
 import { ERRORS } from "../../../src/model/wire-rules.js";
@@ -1863,6 +1864,83 @@ describe("view/electronics-modal", () => {
       expect(hint("Module_XIAO_Generic_SocketSMD")).toBe("socket for Seeed XIAO boards");
       search(modal, "R_1206");
       expect(hint("R_1206")).toBe("no header needed");
+    });
+
+    /** The "+ socket" action offered beside a searched part, or undefined when there is none. */
+    function withSocketAction(modal: any, id: string): any {
+      return modal.overlay.querySelectorAll(".el-part-with-socket").find((b: any) => b.dataset.id === id);
+    }
+
+    it("offers to place a part that needs a socket together with that socket", async () => {
+      // Issue #36: a board that plugs into a socket can be put down with its socket in one go.
+      const { modal } = openOn(grid2x2());
+      await modal.libraryReady;
+      search(modal, "xiao");
+      expect(withSocketAction(modal, "SeeedStudio_XIAO_RP2040"), "no + socket beside the board").toBeTruthy();
+      // The socket itself, and parts that stand on their own, have nothing to pair with.
+      expect(withSocketAction(modal, "Module_XIAO_Generic_SocketSMD")).toBeUndefined();
+      search(modal, "R_1206");
+      expect(withSocketAction(modal, "R_1206")).toBeUndefined();
+      search(modal, "pico");
+      expect(withSocketAction(modal, "RaspberryPi_PicoW_Combined")).toBeTruthy();
+    });
+
+    it("places the socket and the board on it, pin over pin, as one edit", async () => {
+      const { modal, edits } = openOn(grid2x2());
+      await modal.libraryReady;
+      modal.selectPlaceMode("free");
+      search(modal, "xiao");
+      withSocketAction(modal, "SeeedStudio_XIAO_RP2040").dispatch("click", {});
+      expect(modal.tool).toBe("SeeedStudio_XIAO_RP2040");
+      expect(modal.menuOpen, "choosing put the menu away").toBe(false);
+      const base = edits.length;
+      tapFlat(modal, { x: 1.2, y: 1.2 });
+
+      expect(edits.length, "the pair was more than one edit").toBe(base + 1);
+      const parts = (edits[edits.length - 1] as any).parts;
+      expect(parts.map((p: any) => p.component))
+        .toEqual(["Module_XIAO_Generic_SocketSMD", "SeeedStudio_XIAO_RP2040"]);
+      const [socket, board] = parts;
+      expect(socket.free && board.free).toBe(true);
+      expect(board.rot ?? 0).toBe(socket.rot ?? 0);
+      // The socket sits where the author tapped; the board is on it with every pin over the socket's
+      // contact of the same number -- the nearest socket contact to board pin n is socket pin n.
+      expect(socket.x).toBeCloseTo(1.2, 9);
+      expect(socket.y).toBeCloseTo(1.2, 9);
+      const w = modal.tapeW(), mm = modal.tapeMm();
+      const sFp = componentById(socket.component)!.footprint, bFp = componentById(board.component)!.footprint;
+      for (let n = 1; n <= 14; n++) {
+        const at = padPosition(board, bFp, String(n), w, mm)!;
+        let nearest = "", best = Infinity;
+        for (let m = 1; m <= 14; m++) {
+          const s = padPosition(socket, sFp, String(m), w, mm)!;
+          const d = Math.hypot(s.x - at.x, s.y - at.y);
+          if (d < best) [best, nearest] = [d, String(m)];
+        }
+        expect(nearest, `board pin ${n} is over socket pin ${nearest}`).toBe(String(n));
+      }
+      // The board is what is selected, so R and Delete reach the part the author asked for.
+      expect(modal.selected).toEqual({ kind: "part", index: 1 });
+    });
+
+    it("places just the part on a plain pick, and drops the pairing when another part is armed", async () => {
+      const { modal } = openOn(grid2x2());
+      await modal.libraryReady;
+      modal.selectPlaceMode("free");
+      search(modal, "xiao");
+      modal.overlay.querySelectorAll(".el-part-row")
+        .find((r: any) => r.dataset.id === "SeeedStudio_XIAO_RP2040").dispatch("click", {});
+      tapFlat(modal, { x: 1.2, y: 1.2 });
+      expect(modal.circuit.parts.map((p: any) => p.component)).toEqual(["SeeedStudio_XIAO_RP2040"]);
+
+      search(modal, "xiao");
+      withSocketAction(modal, "SeeedStudio_XIAO_RP2040").dispatch("click", {});
+      search(modal, "xiao");
+      modal.overlay.querySelectorAll(".el-part-row")
+        .find((r: any) => r.dataset.id === "SeeedStudio_XIAO_ESP32C3").dispatch("click", {});
+      tapFlat(modal, { x: 0.6, y: 1.6 });
+      expect(modal.circuit.parts.map((p: any) => p.component))
+        .toEqual(["SeeedStudio_XIAO_RP2040", "SeeedStudio_XIAO_ESP32C3"]);
     });
 
     it("opens the shelves a search matches, rather than making them be hunted for", async () => {

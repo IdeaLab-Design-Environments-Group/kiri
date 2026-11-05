@@ -53,6 +53,11 @@ export function appendPlacedPart(part: PlacedPart): CircuitCommand {
   return { apply: (c) => ({ ...c, parts: [...(c.parts ?? []), part] }) };
 }
 
+/** Several parts put down by one gesture — a board and its socket — as one edit. */
+export function appendPlacedParts(parts: PlacedPart[]): CircuitCommand {
+  return { apply: (c) => ({ ...c, parts: [...(c.parts ?? []), ...parts] }) };
+}
+
 export function appendLegacyPart(kind: Exclude<PartListKind, "part">, point: Resistor | Switch): CircuitCommand {
   const field = fieldFor(kind);
   return { apply: (c) => ({ ...c, [field]: [...legacyItems(c, kind), point] }) };

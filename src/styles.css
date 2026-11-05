@@ -1220,6 +1220,20 @@ body.is-electronics .app-legend {
   cursor: default;
 }
 .el-part-row.is-dead:hover { background: none; color: var(--muted, #98a2b3); }
+/* Place a plug-in board together with its socket (issue #36): a small action under the board's row. */
+.el-part-with-socket {
+  align-self: flex-start;
+  margin: 0 0 0.25rem 1.5rem;
+  padding: 0.1rem 0.45rem;
+  font: inherit;
+  font-size: 0.72rem;
+  border: 1px solid var(--border, #d0d5dd);
+  border-radius: 999px;
+  background: var(--surface, #fff);
+  color: var(--accent-strong, #1741c4);
+  cursor: pointer;
+}
+.el-part-with-socket:hover { background: var(--accent-soft, #eef3ff); }
 /* The library is over a hundred footprints and most of their names are datasheet part numbers, so the picker is a
    search box and a grouped list rather than one long scroll. The count beside it is what keeps the list
    honest: it says how much of the library is on offer and that the rest is a search away. */

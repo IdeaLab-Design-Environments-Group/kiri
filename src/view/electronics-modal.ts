@@ -50,6 +50,7 @@ import {
   appendLed,
   appendLegacyPart,
   appendPlacedPart,
+  appendPlacedParts,
   assignPad as assignPadCommand,
   clearPlacedCircuit,
   cloneCircuit,
@@ -100,6 +101,8 @@ import {
 } from "../model/electronics-design.js";
 import { footprintById } from "../model/library.js";
 import { mountingHint, mountingOf } from "../model/part-mounting.js";
+import { withSocket } from "../model/socket-seat.js";
+import { socketAction } from "./socket-action.js";
 import {
   BLOCKED,
   BLOCKED_SHOWN,
@@ -404,6 +407,8 @@ export class ElectronicsModal {
    * kirigami sheet a fold is where copper most wants to cross. It is a default now, not a law.
    */
   private placeMode: PlaceMode = "gap";
+  /** The armed part goes down with its socket (issue #36). Cleared by arming anything. */
+  private withSocketArmed = false;
   private viewMode: ViewMode = "strips";
   /** Which way the cut is flipped — off by default, so the file matches the design unless asked otherwise. */
   private mirror: Mirror = { x: false, y: false };
@@ -964,6 +969,7 @@ export class ElectronicsModal {
     // Arming anything is the end of browsing the library, whichever control did it.
     if (this.menuOpen) this.setMenuOpen(false);
     this.tool = tool;
+    this.withSocketArmed = false;
     // Arming is also an intent to PLACE, so the part picked up on the sheet stops swallowing the next tap.
     // It stays selected — R and Delete still reach it — but reaching for the palette and then tapping the
     // sheet can only mean one thing, and making that tap do nothing would read as a dead palette.
@@ -1063,7 +1069,7 @@ export class ElectronicsModal {
     armed: Component | undefined,
   ): void {
     this.partMenu.innerHTML = "";
-    this.partTrigger.textContent = armed ? partLabel(armed) : "Pick a part…";
+    this.partTrigger.textContent = armed ? partLabel(armed) + (this.withSocketArmed ? " + socket" : "") : "Pick a part…";
     this.partTrigger.classList.toggle("is-empty", !armed);
 
     for (const { label } of PART_GROUPS) {
@@ -1088,6 +1094,9 @@ export class ElectronicsModal {
         row.classList.toggle("is-armed", isArmed);
         row.addEventListener("click", () => this.chooseFromMenu(c.id));
         body.appendChild(row);
+        // Arming clears the pairing, so "+ socket" sets it after arming the part.
+        const pair = socketAction(c.id, (id) => { this.chooseFromMenu(id); this.withSocketArmed = true; this.fillPalette(); });
+        if (pair) body.appendChild(pair);
       }
     }
     if (shown.length === 0) this.addShelf("No part matches", 0, false, true);
@@ -1154,6 +1163,14 @@ export class ElectronicsModal {
     this.armPicked();
     this.setMenuOpen(false);
     this.fillPalette();
+  }
+
+  /** Put down a library part, with its socket if that is what was armed, and select it. One edit. */
+  private dropPart(part: PlacedPart): void {
+    const parts = this.withSocketArmed ? withSocket(part, this.tapeW(), this.tapeMm()) : [part];
+    const at = (this.circuit.parts ?? []).length;
+    this.runCommand(appendPlacedParts(parts));
+    this.select({ kind: "part", index: at + parts.length - 1 });
   }
 
   private toggleMenu(): void {
@@ -1293,7 +1310,6 @@ export class ElectronicsModal {
       // the library unplaceable in practice: a rail passes through at most three terminals, so a USB socket
       // or a module could only ever stand free. A free part has no copper cut for it and is wired through
       // declared nets or by hand-drawn runs.
-      const placed = this.circuit.parts ?? [];
       // Across a fold, if that is what was asked for: the part is stood on the hinge itself and turned to
       // cross it, so a pad lands on each tile. Stored `free` — no rail is cut for it — with the angle the
       // hinge gives it, which is the one thing about a fold-crossing part the author should not have to
@@ -1306,8 +1322,7 @@ export class ElectronicsModal {
         // pads on the same tile and bridge nothing.
         const rot = ((Math.atan2(q.x - p.x, -(q.y - p.y)) * 180) / Math.PI + 360) % 360;
         const mid = { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 };
-        this.runCommand(appendPlacedPart({ component: part.id, x: mid.x, y: mid.y, free: true, rot }));
-        this.select({ kind: "part", index: placed.length });
+        this.dropPart({ component: part.id, x: mid.x, y: mid.y, free: true, rot });
         this.emit();
         return;
       }
@@ -1331,8 +1346,7 @@ export class ElectronicsModal {
       const seat: PlacedPart = onRail
         ? { component: part.id, x: near!.point.x, y: near!.point.y, rot: near!.rot }
         : { component: part.id, x: flat.x, y: flat.y, free: true };
-      this.runCommand(appendPlacedPart(seat));
-      this.select({ kind: "part", index: placed.length });
+      this.dropPart(seat);
       this.emit();
       return;
     }
