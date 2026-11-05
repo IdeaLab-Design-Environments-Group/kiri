@@ -124,8 +124,9 @@ export function cutAlongEdges(
 
   const vertices: TriMesh["vertices"] = [];
   const origVertex: number[] = [];
-  /** cornerCopy.get(`${f}_${v}`) → cut-mesh vertex id for face f's corner at v. */
-  const cornerCopy = new Map<string, number>();
+  /** cornerCopy[3f + i] → cut-mesh vertex id for corner i of source face f. */
+  const cornerCopy = new Int32Array(3 * mesh.faces.length);
+  const copyAt = (f: number, v: number): number => cornerCopy[3 * f + mesh.faces[f].indexOf(v)];
   /** Fan-ordered wedges per source vertex (kept for vent application). */
   const wedgesOf = new Map<number, { copy: number; faces: number[]; angle: number }[]>();
 
@@ -136,7 +137,7 @@ export function cutAlongEdges(
       const id = vertices.length;
       vertices.push({ ...mesh.vertices[v] });
       origVertex.push(v);
-      for (const f of wedge.faces) cornerCopy.set(`${f}_${v}`, id);
+      for (const f of wedge.faces) cornerCopy[3 * f + mesh.faces[f].indexOf(v)] = id;
       recorded.push({ copy: id, faces: wedge.faces, angle: wedge.angle });
     }
     if (ventAngles.has(v)) wedgesOf.set(v, recorded);
@@ -146,7 +147,7 @@ export function cutAlongEdges(
 
   // Faces by SOURCE face id; vent application may null (remove) or split them.
   const faces: ([number, number, number] | null)[] = mesh.faces.map(
-    (fv, f) => fv.map((v) => cornerCopy.get(`${f}_${v}`)!) as [number, number, number],
+    (_, f) => [cornerCopy[3 * f], cornerCopy[3 * f + 1], cornerCopy[3 * f + 2]],
   );
   const lips: LipPair[] = [];
   for (const e of cutSet) {
@@ -154,8 +155,8 @@ export function cutAlongEdges(
     const [f1, f2] = ef;
     lips.push({
       sourceEdge: e,
-      lipA: [cornerCopy.get(`${f1}_${a}`)!, cornerCopy.get(`${f1}_${b}`)!],
-      lipB: [cornerCopy.get(`${f2}_${a}`)!, cornerCopy.get(`${f2}_${b}`)!],
+      lipA: [copyAt(f1, a), copyAt(f1, b)],
+      lipB: [copyAt(f2, a), copyAt(f2, b)],
     });
   }
 
@@ -166,31 +167,32 @@ export function cutAlongEdges(
   // vertex right now. Candidates (each wedge copy × walk direction) are
   // tried with rollback until one fits AND keeps the sheet connected.
   const vents: VentRecord[] = [];
+  /** Corner angle of live triangle `tri` at its vertex vc. */
+  const cornerAt = (tri: [number, number, number], vc: number): number => {
+    const [i, j, k] = tri;
+    const others = (i === vc ? [j, k] : j === vc ? [k, i] : [i, j]) as [number, number];
+    const [p, a, b] = [vertices[vc], vertices[others[0]], vertices[others[1]]];
+    const u = { x: a.x - p.x, y: a.y - p.y, z: a.z - p.z };
+    const w = { x: b.x - p.x, y: b.y - p.y, z: b.z - p.z };
+    const cr = { x: u.y * w.z - u.z * w.y, y: u.z * w.x - u.x * w.z, z: u.x * w.y - u.y * w.x };
+    return Math.atan2(Math.hypot(cr.x, cr.y, cr.z), u.x * w.x + u.y * w.y + u.z * w.z);
+  };
   const liveAngleAt = (vc: number): number => {
     let sum = 0;
-    for (const tri of faces) {
-      if (tri === null || !tri.includes(vc)) continue;
-      const [i, j, k] = tri;
-      const at = vc;
-      const others = (i === vc ? [j, k] : j === vc ? [k, i] : [i, j]) as [number, number];
-      const u = {
-        x: vertices[others[0]].x - vertices[at].x,
-        y: vertices[others[0]].y - vertices[at].y,
-        z: vertices[others[0]].z - vertices[at].z,
-      };
-      const w = {
-        x: vertices[others[1]].x - vertices[at].x,
-        y: vertices[others[1]].y - vertices[at].y,
-        z: vertices[others[1]].z - vertices[at].z,
-      };
-      const cr = {
-        x: u.y * w.z - u.z * w.y,
-        y: u.z * w.x - u.x * w.z,
-        z: u.x * w.y - u.y * w.x,
-      };
-      sum += Math.atan2(Math.hypot(cr.x, cr.y, cr.z), u.x * w.x + u.y * w.y + u.z * w.z);
-    }
+    for (const tri of faces) if (tri !== null && tri.includes(vc)) sum += cornerAt(tri, vc);
     return sum;
+  };
+  /** liveAngleAt for many copies in one pass over the faces (same terms, same order). */
+  const liveAnglesAt = (copies: number[]): Map<number, number> => {
+    const sums = new Map(copies.map((c) => [c, 0]));
+    for (const tri of faces) {
+      if (tri === null) continue;
+      for (let s = 0; s < 3; s++) {
+        const sum = sums.get(tri[s]);
+        if (sum !== undefined && tri.indexOf(tri[s]) === s) sums.set(tri[s], sum + cornerAt(tri, tri[s]));
+      }
+    }
+    return sums;
   };
   /** Ordered live fan chain of work-face indices around copy vc (open chain). */
   const liveChain = (vc: number): number[] => {
@@ -572,13 +574,13 @@ export function cutAlongEdges(
       candidates.push({ vc, chain: [...chain].reverse(), flip: true });
     }
 
-    /** Walk one candidate, mutating live state; returns fit + vent edges. */
+    /** Walk one candidate, mutating live state; `walked` = it absorbed the excess and finished its carve. */
     const walkCandidate = (
       vc: number,
       chain: number[],
       flip: boolean,
       deep = true,
-    ): { fits: boolean; ventEdges: [number, number][] } => {
+    ): { walked: boolean; ventEdges: [number, number][] } => {
       const ventEdges: [number, number][] = [];
       let remaining = excess;
       let ok = true;
@@ -693,10 +695,14 @@ export function cutAlongEdges(
         carveDone = carveCone(lipA, lipB, frontier, ventEdges);
       }
 
-      // A carve that cuts through an earlier vent's vertex would leave it short of 2π.
-      const intact = vents.every((vt) => (wedgesOf.get(vt.sourceVertex) ?? []).reduce((a, w) => a + liveAngleAt(w.copy), 0) > TAU - 1e-6);
-      const fits = ok && carveDone && remaining <= 1e-6 && intact && liveComponents() === baseComponents;
-      return { fits, ventEdges };
+      return { walked: ok && carveDone && remaining <= 1e-6, ventEdges };
+    };
+    /** After a walk: every earlier vent keeps its 2π (a carve through one would not) and the sheet its pieces. */
+    const keepsSheet = (): boolean => {
+      const ventWedges = vents.map((vt) => wedgesOf.get(vt.sourceVertex) ?? []);
+      const angles = liveAnglesAt(ventWedges.flatMap((ws) => ws.map((w) => w.copy)));
+      const intact = ventWedges.every((ws) => ws.reduce((a, w) => a + angles.get(w.copy)!, 0) > TAU - 1e-6);
+      return intact && liveComponents() === baseComponents;
     };
 
     const snapshot = () => ({
@@ -726,16 +732,17 @@ export function cutAlongEdges(
       for (let ci = 0; ci < candidates.length && !applied; ci++) {
         const { vc, chain, flip } = candidates[ci];
         const snap = snapshot();
-        const { fits, ventEdges } = walkCandidate(vc, chain, flip, deep);
-        if (fits && flatLive === null) {
+        const { walked, ventEdges } = walkCandidate(vc, chain, flip, deep);
+        if (walked && flatLive === null && keepsSheet()) {
           vents.push({ sourceVertex: v, angle: excess, ventEdges });
           applied = true;
           break; // first fit — keep mutations
         }
-        if (fits && flatLive !== null) {
+        if (walked && flatLive !== null) {
+          // Score before the sheet checks: a candidate that cannot beat the best needs neither.
           const live = faces.filter((f): f is [number, number, number] => f !== null);
           const score = countFlatOverlaps(flatLive, live, bestScore);
-          if (score < bestScore) {
+          if (score < bestScore && keepsSheet()) {
             bestScore = score;
             bestIdx = ci;
             bestVentEdges = ventEdges;
@@ -745,9 +752,9 @@ export function cutAlongEdges(
       }
       if (!applied && bestIdx !== -1) {
         const { vc, chain, flip } = candidates[bestIdx];
-        const { fits } = walkCandidate(vc, chain, flip, deep); // deterministic re-walk
+        const { walked } = walkCandidate(vc, chain, flip, deep); // deterministic re-walk
         /* istanbul ignore if */
-        if (!fits) throw new PipelineError("unfold", `vent re-walk diverged at vertex ${v}`, { vertex: v });
+        if (!walked || !keepsSheet()) throw new PipelineError("unfold", `vent re-walk diverged at vertex ${v}`, { vertex: v });
         vents.push({ sourceVertex: v, angle: excess, ventEdges: bestVentEdges });
         applied = true;
       }
