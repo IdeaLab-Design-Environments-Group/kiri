@@ -258,7 +258,7 @@ export function cutAlongEdges(
   // Vents may not make connectivity WORSE than the bare cut already is. A
   // disconnecting cut set is the CALLER's problem (seamedUnfold hard-gates
   // it; relief trials reject it) — blaming the vent here used to surface as
-  // a bogus "mesh too coarse" failure on connectivity-unsafe relief trials.
+  // a bogus vent-placement failure on connectivity-unsafe relief trials.
   const baseComponents = liveComponents();
 
   // Development of the live sheet, used to RANK vent candidates: removing a
@@ -756,7 +756,7 @@ export function cutAlongEdges(
     if (!applied) {
       throw new PipelineError(
         "unfold",
-        `no vent placement at vertex ${v} absorbs ${excess.toFixed(4)} rad while keeping the sheet connected — mesh too coarse for this defect`,
+        `no vent placement at vertex ${v} absorbs ${excess.toFixed(4)} rad: every candidate disconnects the sheet, leaves an earlier vent short of 2π, runs out of material, or cannot finish its carve`,
         { vertex: v },
       );
     }
