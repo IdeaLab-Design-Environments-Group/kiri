@@ -218,7 +218,9 @@ export const TUTORIAL_SECTIONS: TutorialSection[] = [
       {
         slug: "export-electronics",
         title: "export the electronics",
-        blurb: "The copper, the parts and the netlist, out of the editor and into fabrication.",
+        blurb:
+          "Export saves the copper as an SVG to cut: the bare strips or the carrier frame, for the "
+          + "inside or the outside face.",
       },
     ],
   },
