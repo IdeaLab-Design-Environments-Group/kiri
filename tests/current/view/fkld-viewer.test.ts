@@ -290,6 +290,74 @@ describe("view/fkld-viewer", () => {
     expect(html).not.toContain("data-view");
     expect(html).not.toContain('id="view-group"');
   });
+  describe("what the viewer shows first", () => {
+    const html = readFileSync(VIEWER, "utf8");
+    const el = (viewer: ViewerApi, id: string) => (viewer.win.__el as (i: string) => StubEl)(id);
+
+    it("is headed for the person, not the file format", () => {
+      const heading = /<h1>([\s\S]*?)<\/h1>/.exec(html)![1]!;
+      expect(heading).toContain("Pattern");
+      expect(heading).toContain("Drag to turn it, scroll to zoom");
+      // The visible heading no longer names the program's file format or its renderer.
+      expect(heading).not.toContain("FKLD");
+      expect(heading).not.toContain("SVG renderer");
+    });
+
+    it("keeps the everyday layers up front and the file-reading ones behind More layers", () => {
+      const viewer = loadViewer();
+      const group = el(viewer, "toggle-group");
+      const advanced = group.children.filter((l) => / adv\b/.test(" " + l.className)).map((l) => l.textContent);
+      const everyday = group.children.filter((l) => !/ adv\b/.test(" " + l.className)).map((l) => l.textContent);
+      expect(advanced).toEqual(["Vertices", "Face Text", "Molecules", "Curvature"]);
+      expect(everyday).toEqual(["Full body", "Faces", "Edges", "Cuts"]);
+      // Nothing was taken away: all eight are still there to switch on.
+      expect(group.children).toHaveLength(8);
+    });
+
+    it("puts the raw property box behind More layers too", () => {
+      expect(html).toMatch(/<div class="group adv" id="prop-group">\s*<span class="lbl">Property:/);
+      expect(html).toContain(".toolbar:not(.show-adv) .adv { display: none; }");
+    });
+
+    it("opens and closes the extra layers from one button that says which it is", () => {
+      const viewer = loadViewer();
+      const btn = el(viewer, "more-layers");
+      expect(html).toMatch(/id="more-layers"[^>]*aria-expanded="false"/);
+      btn.fire("click");
+      expect(btn.getAttribute("aria-expanded")).toBe("true");
+      expect(btn.textContent).toBe("Fewer layers");
+      btn.fire("click");
+      expect(btn.getAttribute("aria-expanded")).toBe("false");
+      expect(btn.textContent).toBe("More layers");
+    });
+
+    it("starts with the side panel closed, behind a button called Pattern details", () => {
+      const viewer = loadViewer();
+      const chevron = el(viewer, "sidebar-collapse");
+      expect(chevron.textContent).toBe("‹"); // collapsed: the arrow offers to open it
+      expect(chevron.attrs.title ?? (chevron as unknown as { title?: string }).title).toBeDefined();
+      // Not "File details": that is the name of the collapsed table in the Model column, a different thing.
+      expect(html).toMatch(/id="toggle-sidebar"[^>]*>Pattern details</);
+      expect(html).not.toContain(">Toggle sidebar<");
+    });
+
+    it("spells out the edge codes and the file fields in the side panel, keeping the codes", () => {
+      const viewer = loadViewer();
+      viewer.loadObject(example("house.fkld"), "house.fkld");
+      const panel = viewer.sidebar.innerHTML;
+      expect(panel).toContain("made by");
+      expect(panel).toContain("format version");
+      expect(panel).toContain("Folds and cuts");
+      expect(panel).toContain("mountain fold");
+      expect(panel).toContain("cut");
+      // The one-letter code stays, after the words.
+      expect(panel).toMatch(/mountain fold <span class="code">\(M\)<\/span>/);
+      expect(panel).not.toContain("frame_title");
+      expect(panel).not.toContain("FKLD spec");
+      expect(panel).not.toContain("Edge assignments");
+    });
+  });
+
   it("has no viewer Import file input", () => {
     expect(readFileSync(VIEWER, "utf8")).not.toContain('id="file-input"');
   });

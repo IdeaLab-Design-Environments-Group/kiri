@@ -233,6 +233,11 @@ export class SimModal {
     this.trigger.disabled = !enabled;
   }
 
+  /** Whether Simulate is on for what is open: the welcome card offers it only then. */
+  isEnabled(): boolean {
+    return !this.trigger.disabled;
+  }
+
   async open(): Promise<void> {
     this.overlay.hidden = false;
     if (!this.canvas) {
