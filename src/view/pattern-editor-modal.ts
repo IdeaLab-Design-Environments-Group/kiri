@@ -18,6 +18,7 @@ import {
   type CandidateEdge,
   type CreaseAssignment,
 } from "../model/pattern-grid.js";
+import { enterFocusScope } from "./dialog-focus.js";
 
 /** The active brush: a crease assignment, or the eraser. */
 type Tool = CreaseAssignment | "E";
@@ -53,6 +54,8 @@ export type PatternSerializer = (grid: PatternGrid) => { filename: string; text:
 export class PatternEditorModal {
   private readonly overlay: HTMLElement;
   private readonly trigger: HTMLButtonElement;
+  /** Undoes {@link enterFocusScope}: set while open, so closing gives focus back to what opened it. */
+  private leaveFocus: (() => void) | null = null;
   private readonly svg: SVGSVGElement;
   private readonly statusEl: HTMLElement;
   private readonly colsInput: HTMLInputElement;
@@ -211,10 +214,13 @@ export class PatternEditorModal {
     this.rebuild();
     this.setStatus("Pick a brush, then click or drag edges. Try a preset to start.");
     this.overlay.hidden = false;
+    this.leaveFocus ??= enterFocusScope(this.overlay, this.trigger, { trap: true });
   }
 
   close(): void {
     this.overlay.hidden = true;
+    this.leaveFocus?.();
+    this.leaveFocus = null;
   }
 
   // ---- editing -------------------------------------------------------------

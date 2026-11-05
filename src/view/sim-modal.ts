@@ -2,6 +2,7 @@ import type { FoldScene, SimMaterial } from "../sim/index.js";
 import { DEFAULT_MAX_SUBDIV, TILE_INSET_FRAC } from "../model/tile-subdiv.js";
 import type { AnchoredMesh } from "../model/trace-anchor.js";
 import type { SimView } from "./sim-view.js";
+import { enterFocusScope } from "./dialog-focus.js";
 
 /** Returns a ready fold scene when the sim opens, or null when no model is loaded. */
 export type SimSceneProvider = (material?: SimMaterial) => { scene: FoldScene; title: string } | null;
@@ -16,6 +17,8 @@ export type SimSceneProvider = (material?: SimMaterial) => { scene: FoldScene; t
 export class SimModal {
   private readonly overlay: HTMLElement;
   private readonly trigger: HTMLButtonElement;
+  /** Undoes {@link enterFocusScope}: set while open, so closing gives focus back to what opened it. */
+  private leaveFocus: (() => void) | null = null;
   private readonly mount: HTMLElement;
   private readonly statusEl: HTMLElement;
   /** Live mean tensile bar strain — see `SimView.setStatusListener`. */
@@ -240,6 +243,8 @@ export class SimModal {
 
   async open(): Promise<void> {
     this.overlay.hidden = false;
+    // The fold slider first: it is the one thing this dialog is for, and the arrow keys then fold the model.
+    this.leaveFocus ??= enterFocusScope(this.overlay, this.trigger, { trap: true, initial: this.foldSlider });
     if (!this.canvas) {
       this.statusEl.textContent = "loading 3D viewer…";
       const Canvas = await loadSimCanvas(this.reloads++);
@@ -265,6 +270,8 @@ export class SimModal {
 
   close(): void {
     this.overlay.hidden = true;
+    this.leaveFocus?.();
+    this.leaveFocus = null;
     this.materialLoad++;
     this.cancelIdleWarm();
     this.canvas?.stop();

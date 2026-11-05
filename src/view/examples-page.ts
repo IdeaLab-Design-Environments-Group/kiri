@@ -20,6 +20,7 @@
 import { el } from "./dom.js";
 import { EXAMPLE_MODELS, type Example, type ExampleModel } from "./examples-catalog.js";
 import { HOME, currentRoute, goToRoute, onRouteChange } from "./route.js";
+import { enterFocusScope } from "./dialog-focus.js";
 
 /** The route this page answers to. `#/examples`. */
 const ROUTE = "examples";
@@ -29,6 +30,8 @@ const MEDIA = "examples/";
 
 export class ExamplesPage {
   private readonly trigger: HTMLButtonElement;
+  /** Undoes {@link enterFocusScope}: set while open, so closing gives focus back to what opened it. */
+  private leaveFocus: (() => void) | null = null;
   private readonly overlay: HTMLElement;
   private readonly search: HTMLInputElement;
   private readonly tally: HTMLElement;
@@ -202,6 +205,7 @@ export class ExamplesPage {
     this.overlay.hidden = false;
     document.body?.classList.add("is-examples");
     this.trigger.classList.add("is-active");
+    this.leaveFocus ??= enterFocusScope(this.overlay, this.trigger);
   }
 
   private hide(): void {
@@ -209,6 +213,8 @@ export class ExamplesPage {
     this.overlay.hidden = true;
     document.body?.classList.remove("is-examples");
     this.trigger.classList.remove("is-active");
+    this.leaveFocus?.();
+    this.leaveFocus = null;
   }
 
   private goBack(): void {

@@ -30,6 +30,7 @@
 import { el } from "./dom.js";
 import { HOME, currentRoute, goToRoute, onRouteChange } from "./route.js";
 import { TUTORIAL_SECTIONS, WALKTHROUGHS, type Tutorial } from "./tutorials-catalog.js";
+import { enterFocusScope } from "./dialog-focus.js";
 
 /** The route this page answers to. `#/tutorials`. */
 const ROUTE = "tutorials";
@@ -44,6 +45,8 @@ type Tab = "usage" | "walkthroughs";
 
 export class TutorialsPage {
   private readonly trigger: HTMLButtonElement;
+  /** Undoes {@link enterFocusScope}: set while open, so closing gives focus back to what opened it. */
+  private leaveFocus: (() => void) | null = null;
   private readonly overlay: HTMLElement;
   private readonly search: HTMLInputElement;
   /** Card element ↔ the words it can be searched by, built once. */
@@ -290,6 +293,7 @@ export class TutorialsPage {
     this.overlay.hidden = false;
     document.body?.classList.add("is-tutorials");
     this.trigger.classList.add("is-active");
+    this.leaveFocus ??= enterFocusScope(this.overlay, this.trigger);
     // With an observer, the clips that are on screen start on their own as it reports them. Without one,
     // there is nothing to report anything, so every clip runs while the page is up.
     if (!this.observer && this.tab === "usage") for (const video of this.videos) TutorialsPage.play(video);
@@ -301,6 +305,8 @@ export class TutorialsPage {
     this.overlay.hidden = true;
     document.body?.classList.remove("is-tutorials");
     this.trigger.classList.remove("is-active");
+    this.leaveFocus?.();
+    this.leaveFocus = null;
     this.pauseAll();
   }
 
