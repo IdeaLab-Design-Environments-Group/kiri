@@ -208,15 +208,15 @@ export function buildFoldNet(state: KirigamiState): FoldNet {
     cutKeys.add(ekey(vid(outerR1), vid(foldPt)));
     cutKeys.add(ekey(vid(outerL2), vid(foldPt)));
 
-    // Left half (5-gon innerL, innerMid, foldPt, outerR1, tip[k]) fanned from innerMid. The
-    // shared edge outerR1→tip[k] IS polygon k's right slant mountain crease.
-    addTri(innerMid, foldPt, outerR1);
-    addTri(innerMid, outerR1, tip[k]);
-    addTri(innerMid, tip[k], innerL);
-    // Right half (5-gon innerR, innerMid, foldPt, outerL2, tip[k+1]).
-    addTri(innerMid, innerR, tip[kp]);
-    addTri(innerMid, tip[kp], outerL2);
-    addTri(innerMid, outerL2, foldPt);
+    // Left half (5-gon tip[k], outerR1, foldPt, innerMid, innerL) fanned from innerL, its one
+    // reflex corner. The shared edge outerR1→tip[k] IS polygon k's right slant mountain crease.
+    addTri(innerL, tip[k], outerR1);
+    addTri(innerL, outerR1, foldPt);
+    addTri(innerL, foldPt, innerMid);
+    // Right half (5-gon tip[k+1], outerL2, foldPt, innerMid, innerR), fanned from innerR.
+    addTri(innerR, innerMid, foldPt);
+    addTri(innerR, foldPt, outerL2);
+    addTri(innerR, outerL2, tip[kp]);
   }
 
   // --- Derive unique edges + classify by face adjacency --------------------------------

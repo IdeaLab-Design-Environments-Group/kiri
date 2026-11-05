@@ -38,6 +38,26 @@ describe("sim/foldnet", () => {
     }
   });
 
+  it("tiles the flat net without overlapping triangles", () => {
+    // Issue #14: fanning each molecule half from its valley node put the rim triangle
+    // (innerMid, tip, innerRim) inside its neighbour (innerMid, outerCorner, tip), so the flat sheet
+    // covered that sliver twice.
+    for (const edgeCount of [4, 6, 10]) {
+      const net = buildFoldNet(
+        computeState({ edgeCount, edgeLength: 100, totalCurvature: 100, materialThickness: 1 }),
+      );
+      const v = net.vertices;
+      const cross = (o: number, a: number, b: number): number =>
+        (v[a].x - v[o].x) * (v[b].y - v[o].y) - (v[a].y - v[o].y) * (v[b].x - v[o].x);
+      // Two faces sharing an edge overlap iff their third vertices lie on the same side of it.
+      for (const e of net.edges) {
+        if (e.faces.length !== 2) continue;
+        const [w1, w2] = e.faces.map((f) => net.faces[f].find((i) => i !== e.a && i !== e.b)!);
+        expect(Math.sign(cross(e.a, e.b, w1))).toBe(-Math.sign(cross(e.a, e.b, w2)));
+      }
+    }
+  });
+
   it("derives mesh edges from arbitrary triangle meshes", () => {
     const net = foldNetFromMesh(
       [vec3(0, 0, 0), vec3(1, 0, 0), vec3(1, 1, 0), vec3(0, 1, 0)],

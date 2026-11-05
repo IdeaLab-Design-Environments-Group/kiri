@@ -53,30 +53,23 @@ describe("sim/build", () => {
         expect(z).toBeGreaterThan(0.75 * net.meta.H);
         expect(z).toBeLessThan(net.meta.H);
       }
-      // the rim facets near the apex keep their flat relation: the small rim triangle overlaps its
-      // neighbour in the flat net, and a fold measured from flat expects it to stay that way
-      const rimR = 1.4 * net.meta.rApex;
-      const normal = (P: (i: number) => number[], f: number): number[] => {
-        const [a, b, c] = net.faces[f].map(P);
+      // No crease is folded flat. A crease at ±π is one the sim cannot reach: the importer clamps
+      // design folds to MAX_FOLD = 2.7 (origami-import.ts), and the clamped fold no longer closes
+      // the panel kinematics. Merging a molecule's two outer corners used to fold its valley to
+      // exactly π, the triangles either side of it sharing all three corners.
+      const normal = (f: number): number[] => {
+        const [a, b, c] = net.faces[f].map((i) => [model.goal[3 * i], model.goal[3 * i + 1], model.goal[3 * i + 2]]);
         const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
         const w = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
         const nn = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
         const l = Math.hypot(nn[0], nn[1], nn[2]);
         return nn.map((x) => x / l);
       };
-      const flatP = (i: number) => [net.vertices[i].x, net.vertices[i].y, net.vertices[i].z];
-      const goalP = (i: number) => [model.goal[3 * i], model.goal[3 * i + 1], model.goal[3 * i + 2]];
-      const rho = (i: number) => Math.hypot(net.vertices[i].x, net.vertices[i].y);
-      const rimFacets = net.edges.filter((e) => e.assignment === "F" && rho(e.a) <= rimR && rho(e.b) <= rimR);
-      expect(rimFacets.length).toBe(2 * N);
-      for (const e of rimFacets) {
-        const [f1, f2] = e.faces;
-        const dotOf = (P: (i: number) => number[]) => {
-          const n1 = normal(P, f1);
-          const n2 = normal(P, f2);
-          return n1[0] * n2[0] + n1[1] * n2[1] + n1[2] * n2[2];
-        };
-        expect(dotOf(goalP)).toBeCloseTo(dotOf(flatP), 4);
+      for (const e of net.edges) {
+        if (e.faces.length !== 2) continue;
+        const [n1, n2] = e.faces.map(normal);
+        const fold = Math.acos(Math.max(-1, Math.min(1, n1[0] * n2[0] + n1[1] * n2[1] + n1[2] * n2[2])));
+        expect(fold).toBeLessThan(2.7);
       }
 
       // the molecules tuck inside: both ends of every valley sit in the plane of a lateral edge, on
