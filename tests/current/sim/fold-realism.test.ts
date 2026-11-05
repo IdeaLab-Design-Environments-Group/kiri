@@ -51,12 +51,13 @@ const REACHABLE = [
   "puffin.fkld",
   "bistable-star-tiling.fkld",
   "kirigami-flap.fkld",
+  "akde-decagon-pyramid.fkld",
 ];
 
 /**
  * Presets whose declared folded form is NOT an isometry of their flat net: reaching it would mean
- * stretching the sheet, in akde-decagon's case by 118% on its worst bar and beyond 5% on 130 of its
- * 140 bars. No fold can get there, so these are held only to staying finite and to not stretching
+ * stretching the sheet, in akde-hex's case by 34% on its worst bar (akde-decagon asked 118% until it
+ * was regenerated, issue #14). No fold can get there, so these are held only to staying finite and to not stretching
  * further than their own goal already asks — the failure is in the file, and the point of the test
  * is that the simulator reports it rather than imposing the shape anyway.
  */
@@ -258,7 +259,7 @@ describe("the fold path is physical, not a blend between keyframes", () => {
     it(`${name}: sheet neither stretches nor crushes along the way`, { timeout: 120_000 }, () => {
       const r = settled(name).ramp;
 
-      // Stretch. These five sit at 0.00–0.44%: their folded forms are exact isometries of their
+      // Stretch. These six sit at 0.00–0.44%: their folded forms are exact isometries of their
       // flat nets, so a fold that keeps the material's length can reach them, and does.
       expect(r.pathStretch).toBeLessThan(0.04);
 
@@ -271,7 +272,7 @@ describe("the fold path is physical, not a blend between keyframes", () => {
 
     it(`${name}: still lands its declared form after the guide lets go`, { timeout: 120_000 }, () => {
       const r = settled(name).ramp;
-      // Measured 0.0–6.5% of a model span across the five. The guide is zero by now, so
+      // Measured 0.0–6.5% of a model span across the six. The guide is zero by now, so
       // this is the pattern's own creases and seams holding the shape — a fold that sprang open, or
       // one ramped too fast to stay on its branch, lands far outside this (the free fold's ramp put
       // house at 14% and church at 27%).
@@ -284,14 +285,14 @@ describe("a folded form the sheet could not reach is reported, not hidden", () =
   // Not a defect in the fold — a fact about these files, which the pinned path made invisible by
   // writing the positions in regardless. Whether a declared form is reachable is decided here, once,
   // and it is what splits REACHABLE from UNREACHABLE above.
-  it("the five reachable presets declare exact isometries", () => {
+  it("the six reachable presets declare exact isometries", () => {
     for (const name of REACHABLE) {
       expect(goalTensileDemand(buildScene(load(name))!.scene.model)).toBeLessThan(0.01);
     }
   });
 
-  it("both AKDE presets declare a form their own flat net cannot make", () => {
-    // akde-hex asks 34% of its worst bar, akde-decagon 118%. Shrinking the timestep eightfold does
+  it("akde-hex declares a form its own flat net cannot make", () => {
+    // akde-hex asks 34% of its worst bar. Shrinking the timestep eightfold does
     // not help, which is how we know it is the target and not the integrator.
     for (const name of UNREACHABLE) {
       expect(goalTensileDemand(buildScene(load(name))!.scene.model)).toBeGreaterThan(0.2);
@@ -369,7 +370,7 @@ describe("folded layers do not end up on the wrong side of each other", () => {
 
   for (const name of REACHABLE) {
     it(`${name}: layers rest against each other, not through`, { timeout: 120_000 }, () => {
-      // Four of the five are exactly zero. puffin is the exception, and its flips are local to the
+      // Five of the six are exactly zero. puffin is the exception, and its flips are local to the
       // same region where it also leaves creases off target — it is the densest model here, and the
       // contact is proximity-only: vertex-vs-triangle, no edge-edge, no continuous detection, so a
       // face that sweeps past another between two steps is not caught.

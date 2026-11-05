@@ -53,16 +53,31 @@ describe("kirigamizer app sim path (src/sim via scene.buildScene)", () => {
     expect(maxTensileStrain(model)).toBeLessThan(0.12);
   });
 
-  // akde-hex and akde-decagon-pyramid are REFERENCE-ONLY (issue #14). Unlike the pyramid, their
-  // declared foldedForm goal is not an isometry of their own flat net, so no fold can reach it and
-  // the tensile bound above cannot hold for them: measured goal strain is mean 0.054 / max 0.336 for
-  // hex and mean 0.195 / max 1.183 for decagon. The goal is the conditioned target emitted by the
-  // kirigamize pipeline (src/pipeline/emit.ts), not something src/sim generates, so the fix belongs
-  // in the AKDE generator for N=6 and N=10. Until then this pins the known gap: when a regenerated
-  // file passes mean < 0.05 and max < 0.12 these assertions fail, and the preset should move to
+  // akde-decagon-pyramid was reference-only until it was regenerated (issue #14): its old goal
+  // stretched its worst bar by 118%. Its goal is now an isometry of its flat net with every valley
+  // folded to 2 rad, short of the importer's MAX_FOLD clamp, and it settles within the pyramid's bounds.
+  it("folds the AKDE decagon guided, within the pyramid's strain bounds", { timeout: 30000 }, () => {
+    const built = buildScene(loadExample("akde-decagon-pyramid.fkld"))!;
+    expect(built.mode).toBe("guided");
+    const { model, solver } = built.scene;
+    const flat = model.position.slice();
+    model.position.set(model.goal);
+    expect(maxTensileStrain(model)).toBeLessThan(1e-4);
+    model.position.set(flat);
+    solver.solve(16000, 1);
+    expect(meanTensileStrain(model)).toBeLessThan(0.05);
+    expect(maxTensileStrain(model)).toBeLessThan(0.12);
+  });
+
+  // akde-hex stays REFERENCE-ONLY (issue #14): its declared foldedForm goal is not an isometry of its
+  // own flat net, so no fold can reach it and the tensile bound above cannot hold for it: measured
+  // goal strain is mean 0.054 / max 0.336. A goal regenerated from `pyramidGoal` is isometric, but the
+  // hex does not settle to it reliably, so the file is kept. This pins the known gap: when a
+  // regenerated file passes mean < 0.05 and max < 0.12 this fails, and the preset should move to
   // REACHABLE in fold-realism.test.ts and get the same checks as the pyramid. Dropping it from
   // REFERENCE_ONLY_EXAMPLES (src/sim/strain.ts) also removes the reference-only note from the load status.
-  it("hex and decagon goal poses are not isometric (reference-only, known gap)", () => {
+  it("hex goal pose is not isometric (reference-only, known gap)", () => {
+    expect(REFERENCE_ONLY_EXAMPLES).toEqual(["akde-hex.fkld"]);
     for (const name of REFERENCE_ONLY_EXAMPLES) {
       const { model } = buildScene(loadExample(name))!.scene;
       model.position.set(model.goal);

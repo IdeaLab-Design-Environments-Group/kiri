@@ -173,7 +173,7 @@ describe("services/model-loader", () => {
   });
 
   it("loadedStatus marks the reference-only examples and says why (issues #14, #24)", () => {
-    expect(REFERENCE_ONLY_EXAMPLES).toEqual(["akde-hex.fkld", "akde-decagon-pyramid.fkld"]);
+    expect(REFERENCE_ONLY_EXAMPLES).toEqual(["akde-hex.fkld"]);
     for (const name of REFERENCE_ONLY_EXAMPLES) {
       const msg = loadedStatus(parseLoaded(FOLD, name)).msg;
       expect(msg, name).toContain(`Loaded FOLD model "${name}"`);
@@ -181,7 +181,7 @@ describe("services/model-loader", () => {
       expect(msg, name).toMatch(/stretch/i);
     }
     // Only those files: a reachable preset, and a file that merely shares a prefix, load without the note.
-    for (const name of ["house.fkld", "akde-square-pyramid.fkld", "my-akde-hex.fkld"]) {
+    for (const name of ["house.fkld", "akde-square-pyramid.fkld", "akde-decagon-pyramid.fkld", "my-akde-hex.fkld"]) {
       expect(loadedStatus(parseLoaded(FOLD, name)).msg, name).not.toMatch(/reference only/i);
     }
   });

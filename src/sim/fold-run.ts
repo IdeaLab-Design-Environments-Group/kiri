@@ -69,10 +69,11 @@ const FAST_MOTION = 0.01;
  * falls to its floor (21%, set by the ease) but a frame on puffin or teapot-body averages 10-13 ms against
  * 3-4 ms, which is most of a 60fps frame. At 2% the same frames average 6-7 ms.
  *
- * Not for a `chord` guide (akde-decagon-pyramid, akde-hex, bistable-star-tiling): the same change moved the
- * AKDE ones to a different settled pose, 4% to 44% of a span, which is the wrong-branch failure the header
- * describes. They keep {@link FAST_MOTION} throughout. Raising the EASE instead, which is what "close big gaps
- * faster" amounts to, moved even kinematic poses (bat-wing-left, 5%), so the ease is left alone too.
+ * Not for a `chord` guide (akde-hex, bistable-star-tiling, and akde-decagon-pyramid when this was measured):
+ * the same change moved the AKDE ones to a different settled pose, 4% to 44% of a span, which is the
+ * wrong-branch failure the header describes. They keep {@link FAST_MOTION} throughout. Raising the EASE
+ * instead, which is what "close big gaps faster" amounts to, moved even kinematic poses (bat-wing-left, 5%),
+ * so the ease is left alone too.
  */
 const RAMP_MOTION = 0.02;
 /** Steps between checks of how far the frame has got. Small enough to stop close to the budget. */

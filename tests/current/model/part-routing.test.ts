@@ -375,7 +375,10 @@ describe("model/part-routing", () => {
       // Re-recorded on 2026-11-04, for LED legs laid through the run that passes the pad instead of as a
       // separate stub: akde-hex at three 6 -> 5 runs and 371.86 -> 369.04, house 6 -> 5 and 4.39 -> 4.36,
       // akde-decagon 913.04 -> 912.33 (5 runs still). Nothing moved at one LED, nor on church or puffin.
-      ["akde-decagon-pyramid", 3, 5, 912.332282491698],
+      // Re-recorded on 2026-11-05, when akde-decagon was re-exported with its molecules remeshed (issue
+      // #14): same outline, cuts and score lines, different facet triangles, so the first gaps seat the
+      // three LEDs elsewhere. 5 runs / 912.33 -> 3 / 221.97. Nothing moved at one LED.
+      ["akde-decagon-pyramid", 3, 3, 221.974738993651],
       ["akde-hex", 1, 2, 105.15717799886949],
       ["akde-hex", 3, 5, 369.04272592190995],
       ["akde-square-pyramid", 1, 0, 0],

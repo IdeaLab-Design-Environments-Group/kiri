@@ -68,13 +68,20 @@ describe("the panel tree", () => {
     expect(flap.foldDrive).toBe("kinematic");
   });
 
-  it("refuses the AKDE cones, whose declared form no fold reaches", () => {
-    for (const name of ["akde-hex.fkld", "akde-decagon-pyramid.fkld"]) {
-      const { model } = buildScene(load(name))!.scene;
-      expect(buildCreaseTree(model).loops.length).toBe(1);
-      expect(model.foldDrive).toBe("chord"); // and so nothing is pinned, and the guide is as before
-      expect(Array.from(model.fixed).some((f) => f === 1)).toBe(false);
-    }
+  it("refuses akde-hex, whose declared form no fold reaches", () => {
+    const { model } = buildScene(load("akde-hex.fkld"))!.scene;
+    expect(buildCreaseTree(model).loops.length).toBe(1);
+    expect(model.foldDrive).toBe("chord"); // and so nothing is pinned, and the guide is as before
+    expect(Array.from(model.fixed).some((f) => f === 1)).toBe(false);
+  });
+
+  it("takes akde-decagon, whose cone loop closes once its goal is isometric", () => {
+    // The ring of wedges round the cone is one loop. Its goal used to stretch bars by 118%, so the
+    // tree fold missed it; with every bar kept and no valley clamped flat it closes exactly (#14).
+    const { model } = buildScene(load("akde-decagon-pyramid.fkld"))!.scene;
+    expect(buildCreaseTree(model).loops.length).toBe(1);
+    expect(model.foldDrive).toBe("kinematic");
+    expect(model.foldClosure).toBeLessThan(1e-4);
   });
 });
 
