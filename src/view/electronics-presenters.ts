@@ -387,7 +387,13 @@ export function railsReady(circuit: Circuit): boolean {
 }
 
 function hasLed(circuit: Circuit): boolean {
-  return circuit.leds.length > 0 || (circuit.parts ?? []).some((p) => /^LED/.test(p.component));
+  return ledCount(circuit) > 0;
+}
+
+/** Every LED on the sheet: the hinge LEDs, and LEDs placed as library parts. Counting only the first
+ *  read "0 LEDs" over a page of LEDs on tiles (#57). */
+export function ledCount(circuit: Circuit): number {
+  return circuit.leds.length + (circuit.parts ?? []).filter((p) => /^LED/.test(p.component)).length;
 }
 
 /**
@@ -460,9 +466,12 @@ export interface StatusInput {
  */
 export function statusLine(input: StatusInput): string {
   const { circuit, routed } = input;
-  const n = circuit.leds.length;
+  const n = ledCount(circuit);
   const batt = circuit.battery ? "battery set" : "no battery";
-  let msg = `${n} LED${n === 1 ? "" : "s"} · ${batt}`;
+  // A count of nothing is a start, not a fault, so it is not written as "0 LEDs · no battery".
+  let msg = n > 0
+    ? `${n} LED${n === 1 ? "" : "s"} · ${batt}`
+    : circuit.battery ? "no LEDs yet · battery set" : "no LEDs or battery yet";
   if (!circuit.battery && n > 0) msg += " · add a battery";
   // Its pads shrink to fit a small tile, but only so far; past that they hang off it.
   if (circuit.battery && routed.batteryOverhang) {

@@ -135,7 +135,7 @@ import {
   netPanelRows,
   netTally,
   netlistTrouble,
-  partsTally, railsReady,
+  ledCount, partsTally, railsReady,
   statusLine, syncExportNote, syncRouteHint, syncWireDelete, syncWireWidth,
 } from "./electronics-presenters.js";
 // Re-exported so the presenters can be reached through the modal that renders them, the same way the
@@ -2912,7 +2912,7 @@ export class ElectronicsModal {
   private renderStatus(): void {
     const selPart = this.partSelection();
     const sel = this.selected;
-    syncRouteHint(this.routeBtn, this.circuit.leds.length, this.stale);
+    syncRouteHint(this.routeBtn, ledCount(this.circuit), this.stale);
     syncWireDelete(this.overlay.querySelector(".el-wire-sect"), this.wire.selected());
     syncWireWidth(this.overlay.querySelector(".el-wire-sect"), this.wire.selectedWidthMm(), this.tapeMm());
     this.statusEl.textContent = statusLine({

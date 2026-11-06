@@ -474,8 +474,20 @@ describe("view/electronics-presenters > statusLine", () => {
   }
 
   it("opens with the counts, and says so when there is nothing at all", () => {
-    expect(status()).toBe("0 LEDs · no battery");
+    // Not "0 LEDs · no battery": on an empty page that read as a fault rather than as a start (#57).
+    expect(status()).toBe("no LEDs or battery yet");
+    expect(status({ circuit: bare({ battery: { face: 0, x: 0, y: 0 } as never }) }))
+      .toMatch(/^no LEDs yet · battery set/);
   });
+
+  it("counts LEDs placed as library parts alongside the hinge LEDs", () => {
+    // The walkthrough in #57 read "0 LEDs" with three wired LEDs listed: they were library LEDs, and only
+    // the hinge list was counted.
+    const led = (x: number) => ({ component: "LED_1206", x, y: 0, free: true });
+    const circuit = bare({ leds: [{ a: 0, b: 1 }], parts: [led(0), led(1), { component: "R_1206", x: 2, y: 0 }] });
+    expect(status({ circuit, routedPartCount: 3 })).toMatch(/^3 LEDs · no battery/);
+  });
+
 
   it("asks for a battery only once there is an LED to power", () => {
     expect(status({ circuit: bare({ leds: [{ a: 0, b: 1 }] }) })).toBe(
@@ -620,7 +632,7 @@ describe("view/electronics-presenters > statusLine", () => {
       nets: [{ id: "n1", name: "A", traces: [], stranded: [0], railTap: "none" }] as never,
     });
     expect(status({ routed, stale: true })).toBe(
-      "0 LEDs · no battery · 1 terminal could not be reached without crossing another net" +
+      "no LEDs or battery yet · 1 terminal could not be reached without crossing another net" +
         " · copper is out of date — press Route",
     );
   });

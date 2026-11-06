@@ -375,6 +375,17 @@ describe("view/electronics-modal", () => {
       expect(terminals(componentById("LED_1206")!.footprint).length).toBe(2);
     });
 
+    it("is counted, in the status line and for the Route strip", () => {
+      // The status line counted only hinge LEDs, so a page of LEDs on tiles read "0 LEDs" (#57).
+      const { modal } = openOn(grid2x2());
+      armFreeLed(modal);
+      tapFlat(modal, { x: 0.5, y: 0.5 });
+      expect(modal.circuit.parts).toHaveLength(1);
+      expect(modal.overlay.querySelector(".el-status").textContent).toMatch(/^1 LED · /);
+      // Manual routing leaves it unplanned, and the strip on the canvas says so as it does for a hinge LED.
+      expect(modal.overlay.querySelector(".el-route-hint").hidden).toBe(false);
+    });
+
     it("stores nothing for an LED on a hinge, whose polarity is the router's to decide", () => {
       // A hinge-LED's membership of PWR and GND is true by construction and is NOT stored: which leg is
       // positive is a routing OUTPUT — `planRoutes` searches over `flip[]` — so a stored assignment would
