@@ -20,6 +20,7 @@ export class SimModal {
   /** Undoes {@link enterFocusScope}: set while open, so closing gives focus back to what opened it. */
   private leaveFocus: (() => void) | null = null;
   private readonly mount: HTMLElement;
+  private readonly titleEl: HTMLElement;
   private readonly statusEl: HTMLElement;
   /** Live mean tensile bar strain — see `SimView.setStatusListener`. */
   private readonly strainEl: HTMLElement;
@@ -73,7 +74,7 @@ export class SimModal {
     this.overlay.innerHTML = `
       <div class="sim-modal" role="dialog" aria-modal="true" aria-label="3D fold simulation">
         <header class="sim-modal-header">
-          <span class="sim-modal-title">3D fold simulation — the copper on the folded model</span>
+          <span class="sim-modal-title">3D fold simulation</span>
           <button type="button" class="sim-modal-close" aria-label="close">×</button>
         </header>
         <div class="sim-modal-body">
@@ -114,6 +115,7 @@ export class SimModal {
       this.showElectronics = this.elecToggle.checked;
       this.canvas?.setOverlayVisible(this.showElectronics);
     });
+    this.titleEl = this.overlay.querySelector(".sim-modal-title")!;
     this.statusEl = this.overlay.querySelector(".sim-status")!;
     this.strainEl = this.overlay.querySelector(".sim-strain")!;
     this.foldSlider = this.overlay.querySelector(".sim-fold-slider")!;
@@ -157,9 +159,12 @@ export class SimModal {
     this.syncElecToggle();
   }
 
-  /** Hide the toggle when there is nothing placed — a switch for an empty layer is a puzzle, not a control. */
+  /** Hide the toggle when there is nothing placed — a switch for an empty layer is a puzzle, not a control.
+   *  The title promises the copper only when there is some: an LED body or a +/- mark alone is not copper. */
   private syncElecToggle(): void {
     this.elecControl.hidden = this.traces.length === 0;
+    const copper = this.traces.some((t) => t.kind !== "led-body" && t.kind !== "mark");
+    this.titleEl.textContent = copper ? "3D fold simulation — the copper on the folded model" : "3D fold simulation";
   }
 
   setProvider(provider: SimSceneProvider): void {

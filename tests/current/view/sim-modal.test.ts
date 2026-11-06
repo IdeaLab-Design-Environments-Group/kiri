@@ -75,7 +75,25 @@ describe("view/sim-modal", () => {
     const { SimModal } = await import("../../../src/view/sim-modal.js");
     new SimModal();
     const overlay = document.body.children[0]!;
-    expect(overlay.querySelector(".sim-modal-title")!.textContent).toBe("3D fold simulation — the copper on the folded model");
+    expect(overlay.querySelector(".sim-modal-title")!.textContent).toBe("3D fold simulation");
+  });
+
+  it("mentions the copper in the title only while a circuit has copper on the model", async () => {
+    const { document } = installDom();
+    const { SimModal } = await import("../../../src/view/sim-modal.js");
+    const modal = new SimModal();
+    const title = document.body.children[0]!.querySelector(".sim-modal-title")!;
+    expect(title.textContent).not.toContain("copper");
+
+    modal.setTraces([{ kind: "pwr", tris: [] }]);
+    expect(title.textContent).toBe("3D fold simulation — the copper on the folded model");
+
+    // An LED body and the +/- marks are drawn, but they are not copper.
+    modal.setTraces([{ kind: "led-body", tris: [] }, { kind: "mark", tris: [] }]);
+    expect(title.textContent).not.toContain("copper");
+
+    modal.setTraces([]);
+    expect(title.textContent).toBe("3D fold simulation");
   });
 
   it("opens lazily, loads a scene, updates fold percent, and can be reset/closed", async () => {
