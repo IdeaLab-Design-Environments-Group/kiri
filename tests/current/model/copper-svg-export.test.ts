@@ -1269,6 +1269,56 @@ describe("model/copper-svg-export", () => {
     }
   });
 
+  it("keeps every tab off the other net's copper, measured in millimetres", { timeout: 60_000 }, () => {
+    // `crossingTabs` is the exporter's own verdict; this measures the file. Each tab's centreline against
+    // the other net's strip outlines, in the sheet frame (printScale applied, so house and church are
+    // judged in millimetres, not pattern units). A tab of width w crosses a strip when its centreline
+    // comes within w/2 of it; `pickTab` asks for a whole w, so every tab here also clears by half a tape.
+    // Measured 2026-11-06 with keepOff and pads, as the editor exports: 0 crossings, every clearance at
+    // least 1.01 tape widths, on all six patterns at 6 and 12 LEDs.
+    const cr = (o: Vec2, s: Vec2, t: Vec2): number => (s.x - o.x) * (t.y - o.y) - (s.y - o.y) * (t.x - o.x);
+    const segSeg = (a: Vec2, b: Vec2, c: Vec2, d: Vec2): number =>
+      cr(a, b, c) * cr(a, b, d) < 0 && cr(c, d, a) * cr(c, d, b) < 0
+        ? 0
+        : Math.min(ptSeg(a, c, d), ptSeg(b, c, d), ptSeg(c, a, b), ptSeg(d, a, b));
+    const inside = (p: Vec2, r: Vec2[]): boolean => {
+      let n = false;
+      for (let i = 0, j = r.length - 1; i < r.length; j = i++) {
+        const a = r[i]!, b = r[j]!;
+        if ((a.y > p.y) !== (b.y > p.y) && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) n = !n;
+      }
+      return n;
+    };
+    const toRing = (path: Vec2[], r: Vec2[]): number => {
+      if (path.some((p) => inside(p, r))) return 0;
+      let m = Infinity;
+      for (let k = 1; k < path.length; k++) {
+        for (let i = 0; i < r.length; i++) m = Math.min(m, segSeg(path[k - 1]!, path[k]!, r[i]!, r[(i + 1) % r.length]!));
+      }
+      return m;
+    };
+    for (const name of ["house", "church", "puffin", "akde-hex", "akde-square-pyramid", "akde-decagon-pyramid"]) {
+      for (const n of [6, 12]) {
+        const { fold, traces, tapeW, keepOff, pads } = planned(`${name}.fkld`, n);
+        const out = buildCopperCarrierExport(fold, traces, tapeW, "k", keepOff, undefined, undefined, pads);
+        const { T, scale } = sheetFrame(fold);
+        const tape = tapeW * scale;
+        const rings = traces.filter((t) => t.pts.length >= 2)
+          .map((t) => ({ net: t.net, ring: stripOutline(t, tapeW, pads, tape).map(T) }));
+        const crossing: string[] = [];
+        out.tabPaths.forEach((path, i) => {
+          // The tab's own run is the one its anchor sits on.
+          const onRun = (r: Vec2[]): number =>
+            Math.min(...r.map((q, k) => ptSeg(path[0]!, q, r[(k + 1) % r.length]!)));
+          const own = rings.reduce((a, b) => (onRun(b.ring) < onRun(a.ring) ? b : a));
+          const d = Math.min(...rings.filter((r) => r.net !== own.net).map((r) => toRing(path, r.ring)));
+          if (d < tape / 2) crossing.push(`tab ${i} at ${(d / tape).toFixed(2)} tape`);
+        });
+        expect(crossing, `${name} at ${n} LEDs: tabs over the other net`).toEqual([]);
+      }
+    }
+  });
+
   it("keeps every tab within its measured length at twelve LEDs", { timeout: 60_000 }, () => {
     // A tab is a strip of copper over the waste, stuck down nowhere until it reaches the frame. Turning a
     // corner or skipping a crowded wall makes it longer, and nothing else bounds how long; these are the
