@@ -32,6 +32,8 @@ import { flatFaces, gapGraph, ledOf, type Circuit, type Led, type Vec2 } from ".
 import type { FoldFile } from "../../../src/model/fold-file.js";
 
 const EXAMPLES = new URL("../../../public/examples/", import.meta.url).pathname;
+/** akde-hex as it shipped before issue #67. The cases below that name it were measured on that geometry. */
+const LEGACY_HEX = new URL("../sim/fixtures/akde-hex-legacy.fkld", import.meta.url).pathname;
 
 /** Every library component the rail steps across, with its id. */
 function acrossParts(): { id: string; fp: ReturnType<typeof componentById> extends null ? never : any }[] {
@@ -117,7 +119,7 @@ describe("model/pad-axis — the run's axes, end to end", () => {
     // (2) and (3). Only the parts a rail can actually pass through reach `switchLand` — `placement()`
     // refuses anything past three terminals — so this is 8 of the 87, and the 3 transposed ones among them
     // are the entire wrong-copper-on-a-sheet radius of the bug this file pins.
-    const fold = JSON.parse(readFileSync(`${EXAMPLES}akde-hex.fkld`, "utf8")) as FoldFile;
+    const fold = JSON.parse(readFileSync(LEGACY_HEX, "utf8")) as FoldFile; // the 8-of-87 count is on this geometry
     const faces = flatFaces(fold);
     const gaps = gapGraph(fold, faces).gaps;
     const seen = new Set<string>();

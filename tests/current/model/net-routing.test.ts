@@ -14,9 +14,13 @@ import { TAPE_MM, planRoutes, tapeWidthFor, type Trace2D } from "../../../src/mo
 import type { ResolvedNet } from "../../../src/model/netlist.js";
 
 const EXAMPLES = new URL("../../../public/examples/", import.meta.url).pathname;
+/** akde-hex as it shipped before issue #67. The cases below that name it were measured on that geometry. */
+const LEGACY_HEX = new URL("../sim/fixtures/akde-hex-legacy.fkld", import.meta.url).pathname;
+/** A bundled example by file name, or the legacy hex fixture by `akde-hex-legacy.fkld`. */
+const examplePath = (name: string): string => (name === "akde-hex-legacy.fkld" ? LEGACY_HEX : `${EXAMPLES}${name}`);
 
 function load(name: string) {
-  const fold = JSON.parse(readFileSync(`${EXAMPLES}${name}`, "utf8"));
+  const fold = JSON.parse(readFileSync(examplePath(name), "utf8"));
   const faces = flatFaces(fold);
   return { fold, faces, gaps: gapGraph(fold, faces).gaps, tapeW: tapeWidthFor(faces) };
 }
@@ -357,8 +361,8 @@ describe("model/net-routing", () => {
     // Two C_1206 on akde-hex's two biggest tiles, PWR on pad 1 and GND on pad 2. Turned a quarter, each
     // part's pads line up with the corridor's first node 55mm off, so leaving one pad heads across the
     // other. A bend half way along a hop that long turns it about ten degrees, which is not enough: both
-    // nets came back stranded, each blaming the other.
-    const { faces, gaps } = load("akde-hex.fkld");
+    // nets came back stranded, each blaming the other. Measured on akde-hex before its re-export (#67).
+    const { faces, gaps } = load("akde-hex-legacy.fkld");
     const at = (f: number) => ({ x: faces[f]!.centroid.x, y: faces[f]!.centroid.y });
     for (const rot of [0, 90, 180, 270]) {
       const r = planRoutes(faces, gaps, {
@@ -803,8 +807,9 @@ describe("model/net-routing", () => {
       // without noticing, because its distance function could not see a crossing (see `nearestOn`). With
       // those refused, nothing on `house` comes nearer than 3.45 tape widths and the film's 2.8 floor has
       // nothing to bite on. Measured across the bundled patterns, `akde-hex` holds at 2.10 and `puffin` at
-      // 1.95; `akde-hex` is the steadier of the two across net counts.
-      const { faces, gaps, tapeW } = load("akde-hex.fkld");
+      // 1.95; `akde-hex` is the steadier of the two across net counts. That was akde-hex before its
+      // re-export (issue #67), so the legacy geometry is loaded.
+      const { faces, gaps, tapeW } = load("akde-hex-legacy.fkld");
       const nets = [0, 1, 2, 3].map((n) => ({
         id: `n${n}`,
         name: `N${n}`,

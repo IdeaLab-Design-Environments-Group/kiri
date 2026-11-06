@@ -20,13 +20,17 @@ import { FOLD_PENALTY_FRAC, patternDiag, planRoutes, totalLength } from "../../.
 import { STRAIN_BAND_CAP } from "../../../src/model/fold-strain.js";
 
 const EXAMPLES = new URL("../../../public/examples/", import.meta.url).pathname;
+/** akde-hex as it shipped before issue #67. The cases below that name it were measured on that geometry. */
+const LEGACY_HEX = new URL("../sim/fixtures/akde-hex-legacy.fkld", import.meta.url).pathname;
+/** A bundled example by file name, or the legacy hex fixture by `akde-hex-legacy.fkld`. */
+const examplePath = (name: string): string => (name === "akde-hex-legacy.fkld" ? LEGACY_HEX : `${EXAMPLES}${name}`);
 
 /**
  * `gapFrac` is the build: the shipped inter-tile gap of the 3D-printed sheet by default, or 0 for the
  * vinyl one, which is scored rather than cut and so has no gap between its faces at all.
  */
 function load(name: string, gapFrac?: number) {
-  const fold = JSON.parse(readFileSync(`${EXAMPLES}${name}`, "utf8"));
+  const fold = JSON.parse(readFileSync(examplePath(name), "utf8"));
   const faces = flatFaces(fold);
   return { faces, gaps: gapGraph(fold, faces, gapFrac).gaps };
 }
@@ -162,8 +166,9 @@ describe("model/crease-price", () => {
       // put GND on PWR's tape at 6 places. Once the strict corridor pass refused contact, every route the
       // bands preferred there fell to the fallback pass, the descent dropped the plans that crossed, and
       // banded and flat now plan identically -- a recorded negative result, pinned below.
-      const flat = crossings("akde-hex.fkld", 12, 0, 0);
-      const banded = crossings("akde-hex.fkld", 12, 0, STRAIN_BAND_CAP);
+      // Measured on akde-hex before it was re-exported (issue #67), so it loads that geometry.
+      const flat = crossings("akde-hex-legacy.fkld", 12, 0, 0);
+      const banded = crossings("akde-hex-legacy.fkld", 12, 0, STRAIN_BAND_CAP);
       expect(flat.tension).toBe(23);
       expect(banded.tension).toBe(19);
       // Copper 1496.25 / 1512.53 until 2026-11-04, when LED legs stopped being separate stubs; crossings unmoved.

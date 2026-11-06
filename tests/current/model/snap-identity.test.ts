@@ -61,13 +61,18 @@ import { resolveVertex, type WireContext } from "../../../src/model/manual-wire.
 import { WireTool, type WireHost } from "../../../src/view/wire-tool.js";
 
 const EXAMPLES = new URL("../../../public/examples/", import.meta.url).pathname;
+/** akde-hex as it shipped before issue #67. The cases below that name it were measured on that geometry. */
+const LEGACY_HEX = new URL("../sim/fixtures/akde-hex-legacy.fkld", import.meta.url).pathname;
+/** A bundled example by file name, or the legacy hex fixture by `akde-hex-legacy.fkld`. */
+const examplePath = (name: string): string => (name === "akde-hex-legacy.fkld" ? LEGACY_HEX : `${EXAMPLES}${name}`);
 
 /** Three real patterns, at three very different scales — house and church route in hundredths of a unit,
- *  akde-hex in whole ones, so a coincidence that survived only one of them would be caught here. */
-const PATTERNS = ["house.fkld", "church.fkld", "akde-hex.fkld"];
+ *  akde-hex in whole ones, so a coincidence that survived only one of them would be caught here. The hex
+ *  is the geometry it had before its re-export (issue #67), on which the costs quoted below were measured. */
+const PATTERNS = ["house.fkld", "church.fkld", "akde-hex-legacy.fkld"];
 
 function load(name: string): { faces: FlatFace[]; gaps: GapEdge[] } {
-  const fold = JSON.parse(readFileSync(`${EXAMPLES}${name}`, "utf8"));
+  const fold = JSON.parse(readFileSync(examplePath(name), "utf8"));
   const faces = flatFaces(fold);
   return { faces, gaps: gapGraph(fold, faces).gaps };
 }

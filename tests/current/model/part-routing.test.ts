@@ -41,6 +41,10 @@ import {
 } from "../../../src/model/footprints.generated.js";
 
 const EXAMPLES = new URL("../../../public/examples/", import.meta.url).pathname;
+/** akde-hex as it shipped before issue #67. The cases below that name it were measured on that geometry. */
+const LEGACY_HEX = new URL("../sim/fixtures/akde-hex-legacy.fkld", import.meta.url).pathname;
+/** A bundled example by file name, or the legacy hex fixture by `akde-hex-legacy.fkld`. */
+const examplePath = (name: string): string => (name === "akde-hex-legacy.fkld" ? LEGACY_HEX : `${EXAMPLES}${name}`);
 
 /** house, and the midpoint of its PWR run — the fixture `resistor.test.ts` uses, for the same reasons. */
 function fixture(leds = 1) {
@@ -379,8 +383,9 @@ describe("model/part-routing", () => {
       // #14): same outline, cuts and score lines, different facet triangles, so the first gaps seat the
       // three LEDs elsewhere. 5 runs / 912.33 -> 3 / 221.97. Nothing moved at one LED.
       ["akde-decagon-pyramid", 3, 3, 221.974738993651],
-      ["akde-hex", 1, 2, 105.15717799886949],
-      ["akde-hex", 3, 5, 369.04272592190995],
+      // akde-hex rows are on the geometry it had before its re-export (issue #67): the legacy fixture.
+      ["akde-hex-legacy", 1, 2, 105.15717799886949],
+      ["akde-hex-legacy", 3, 5, 369.04272592190995],
       ["akde-square-pyramid", 1, 0, 0],
       ["akde-square-pyramid", 3, 2, 49.15677510965487],
       ["bistable-star-tiling", 1, 0, 0],
@@ -395,7 +400,7 @@ describe("model/part-routing", () => {
       ["puffin", 3, 5, 86.23574359038487],
     ];
     for (const [name, leds, runs, copper] of before) {
-      const fold = JSON.parse(readFileSync(`${EXAMPLES}${name}.fkld`, "utf8"));
+      const fold = JSON.parse(readFileSync(examplePath(`${name}.fkld`), "utf8"));
       const faces = flatFaces(fold);
       const gaps = gapGraph(fold, faces).gaps;
       const seen = new Set<string>();
@@ -564,10 +569,11 @@ describe("model/part-routing", () => {
   });
 
   it("leaves no zero-length segment where a break ends on a corner", () => {
-    // A break that ends a hair's breadth from a vertex — here 1e-15 off one on akde-hex — left a segment
-    // that short behind: `dedupe` compared a distance against a squared tolerance, so only exact repeats
-    // went. Anything that takes a direction from such a segment reads noise.
-    const fold = JSON.parse(readFileSync(`${EXAMPLES}akde-hex.fkld`, "utf8"));
+    // A break that ends a hair's breadth from a vertex — here 1e-15 off one on akde-hex as it was before
+    // its re-export (issue #67) — left a segment that short behind: `dedupe` compared a distance against a
+    // squared tolerance, so only exact repeats went. Anything that takes a direction from such a segment
+    // reads noise.
+    const fold = JSON.parse(readFileSync(LEGACY_HEX, "utf8"));
     const faces = flatFaces(fold);
     const gaps = gapGraph(fold, faces).gaps;
     const seen = new Set<string>();
