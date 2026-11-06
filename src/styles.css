@@ -518,6 +518,7 @@ body {
 
 .export-group {
   display: inline-flex;
+  flex-wrap: wrap; /* on a phone the boxes and the button go onto further lines instead of off the edge */
   align-items: center;
   gap: 0.4rem 0.6rem;
   padding: 0.3rem 0.6rem;
