@@ -276,6 +276,16 @@ describe("#64 nothing reachable by Tab or a screen reader is nameless or 2 px wi
   });
 });
 
+describe("#64 a dialog taller than the window starts at the top, not above it", () => {
+  it("lets the overlay scroll and centres the dialog with auto margins, which never go negative", () => {
+    // Centred by the flex container alone, a dialog taller than the window spills over both edges: at
+    // 200% zoom the Simulate dialog started 26 px above the screen. Auto margins centre it while it fits
+    // and pin it to the top when it does not, and the overlay scrolls to reach the rest.
+    expect(rule(".sim-overlay")).toMatch(/overflow-y:\s*auto/);
+    expect(rule(".sim-modal")).toMatch(/margin:\s*auto/);
+  });
+});
+
 /** The element in the page carrying this id (the mock DOM lays the markup out flat). */
 function byId(modal: any, id: string | undefined): any {
   return id ? modal.overlay.children.find((c: any) => c.attributes.id === id) : undefined;

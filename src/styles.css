@@ -382,6 +382,9 @@ body {
 }
 
 /* ---- 3D sim modal ---- */
+/* A dialog taller than the window (Simulate at 200% zoom) used to spill over both edges, 26 px of it above
+   the screen, because the flex centring has no floor. Auto margins centre it while it fits and pin it to
+   the top when it does not, and the overlay scrolls to reach the rest (#64). */
 .sim-overlay {
   position: fixed;
   inset: 0;
@@ -389,6 +392,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow-y: auto;
+  padding: 0.5rem 0;
   background: rgba(0, 0, 0, 0.4);
 }
 
@@ -397,6 +402,7 @@ body {
 }
 
 .sim-modal {
+  margin: auto;
   width: min(880px, 94vw);
   background: #fff;
   border-radius: 6px;
