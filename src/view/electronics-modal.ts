@@ -121,7 +121,7 @@ import {
   netTally,
   netlistTrouble,
   ledCount, partsTally, railsReady,
-  statusLine, syncExportNote, syncRouteHint, syncWireDelete, syncWireWidth,
+  statusLine, syncExportNote, syncRouteHint, syncWireSection, syncWireWidth,
 } from "./electronics-presenters.js";
 // Re-exported so the presenters can be reached through the modal that renders them, the same way the
 // palette's own catalog is — a caller that has the modal should not need to know which file the rows
@@ -932,6 +932,7 @@ export class ElectronicsModal {
     // part-drawn wire rather than committing copper the author walked away from.
     this.wire.setActive(tool === "wire");
     this.syncButtons();
+    this.renderStatus(); // the Wire group comes and goes with the wire tool (#64)
   }
 
 
@@ -2665,7 +2666,9 @@ export class ElectronicsModal {
     const sel = this.selected;
     syncRouteHint(this.routeBtn, ledCount(this.circuit), this.stale);
     syncFirstStep(this.overlay.querySelector<HTMLElement>(".el-empty-hint"), this.circuit, this.placeMode);
-    syncWireDelete(this.overlay.querySelector(".el-wire-sect"), this.wire.selected());
+    const q = (sel: string): HTMLInputElement | null => this.overlay.querySelector(sel);
+    syncWireSection({ group: q(".el-wire-sect"), width: q(".el-wire-width"), del: q(".el-wire-delete"),
+      note: q(".el-wire-note") }, this.tool === "wire", this.wire.selected());
     syncWireWidth(this.overlay.querySelector(".el-wire-sect"), this.wire.selectedWidthMm(), this.tapeMm());
     this.say(statusLine({
       circuit: this.circuit,

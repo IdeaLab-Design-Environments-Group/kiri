@@ -2376,6 +2376,12 @@ body.is-examples .app-legend {
 }
 .el-wire-width:focus { border-color: var(--accent, #1f6feb); }
 .el-wire-sect[hidden] { display: none; }
+/* Armed with no wire selected, the group is shown greyed with a note saying what makes it live (#64). */
+.el-wire-note { margin: 0 0 0.4rem; font-size: 0.74rem; color: var(--muted, #667085); }
+.el-wire-note[hidden] { display: none; }
+.el-wire-delete:disabled,
+.el-wire-width:disabled { opacity: 0.55; cursor: not-allowed; }
+.el-wire-delete:disabled:hover { background: #fff; }
 /* Stale copper: the planned tape no longer matches the parts on it, so it is drawn dimmed and dashed rather
    than as current. Hand-drawn wires are the author's, not the plan's, and stay as they are. */
 .el-body.is-route-stale .el-tape:not(.el-wire-copper) {

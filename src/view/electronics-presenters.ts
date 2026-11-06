@@ -623,7 +623,25 @@ export function syncExportNote(root: Element | null | undefined, text: string): 
   note.hidden = text === "";
 }
 
-/** Show the "delete wire" control only while a hand-drawn wire is selected. */
-export function syncWireDelete(group: Element | null | undefined, selectedWire: string | null): void {
-  if (group) (group as HTMLElement).hidden = selectedWire === null;
+/** The Wire group's elements, each of which may be missing. */
+export interface WireSection {
+  group: { hidden: boolean } | null;
+  width: { disabled: boolean } | null;
+  del: { disabled: boolean } | null;
+  note: { hidden: boolean } | null;
+}
+
+/**
+ * Show the Wire group whenever the wire tool is armed, not only once a wire is selected (#64).
+ *
+ * It used to appear only with a wire selected, so the width box was a control nobody knew existed until
+ * they had drawn a wire and tapped it. Armed with nothing selected it is there to be found, greyed out,
+ * with a note saying what makes it live.
+ */
+export function syncWireSection(els: WireSection, armed: boolean, selectedWire: string | null): void {
+  const none = selectedWire === null;
+  if (els.group) els.group.hidden = !armed && none;
+  if (els.width) els.width.disabled = none;
+  if (els.del) els.del.disabled = none;
+  if (els.note) els.note.hidden = !none;
 }

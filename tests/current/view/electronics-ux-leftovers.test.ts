@@ -196,6 +196,33 @@ describe("#64 deleting a part takes its stale copper with it", () => {
   });
 });
 
+describe("#64 the wire width box is there as soon as the wire tool is", () => {
+  it("shows it greyed with a note while no wire is selected, live once one is, and gone with the tool", () => {
+    const modal = openOn(grid(1));
+    const sect = q(modal, ".el-wire-sect");
+    expect(sect.hidden, "the Wire group is up before the wire tool is armed").toBe(true);
+
+    click(modal, ".el-tool", (b) => b.dataset.tool === "wire");
+    expect(sect.hidden, "arming the wire tool did not show the width box").toBe(false);
+    expect(q(modal, ".el-wire-width").disabled).toBe(true);
+    expect(q(modal, ".el-wire-delete").disabled).toBe(true);
+    expect(q(modal, ".el-wire-note").hidden).toBe(false);
+    expect(q(modal, ".el-wire-note").textContent).toMatch(/select|tap a wire/i);
+
+    // Drawing one leaves it selected.
+    tapFlat(modal, { x: 0.3, y: 0.3 });
+    tapFlat(modal, { x: 1.7, y: 0.3 });
+    (globalThis as any).document.dispatch("keydown", { key: "Enter" });
+    expect(modal.wire.selected()).not.toBeNull();
+    expect(q(modal, ".el-wire-width").disabled).toBe(false);
+    expect(q(modal, ".el-wire-delete").disabled).toBe(false);
+    expect(q(modal, ".el-wire-note").hidden).toBe(true);
+
+    click(modal, ".el-tool", (b) => b.dataset.tool === "led");
+    expect(sect.hidden).toBe(true);
+  });
+});
+
 /** The element in the page carrying this id (the mock DOM lays the markup out flat). */
 function byId(modal: any, id: string | undefined): any {
   return id ? modal.overlay.children.find((c: any) => c.attributes.id === id) : undefined;

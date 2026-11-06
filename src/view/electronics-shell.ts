@@ -91,12 +91,13 @@ export function shellMarkup(): string {
               </div>
               <div class="el-side-sect el-wire-sect" hidden>
                 <div class="el-side-head"><span class="el-side-title">Wire</span></div>
+                <p class="el-wire-note" id="el-wire-note">Tap a wire to select it, then set its width or delete it here.</p>
                 <label class="el-wire-width-row" title="the selected wire's tape width. Empty means the plan's own width">
                   <span>width</span>
-                  <input type="number" class="el-wire-width" min="0.5" max="10" step="0.1" placeholder="auto" aria-label="selected wire width in millimetres" autocomplete="off">
+                  <input type="number" class="el-wire-width" min="0.5" max="10" step="0.1" placeholder="auto" aria-label="selected wire width in millimetres" aria-describedby="el-wire-note" autocomplete="off" disabled>
                   <span>mm</span>
                 </label>
-                <button type="button" class="el-wire-delete" title="delete the selected hand-drawn wire (Backspace or Delete)">delete wire</button>
+                <button type="button" class="el-wire-delete" disabled title="delete the selected hand-drawn wire (Backspace or Delete)">delete wire</button>
               </div>
               <div class="el-side-sect el-placed" hidden>
                 <div class="el-side-head">

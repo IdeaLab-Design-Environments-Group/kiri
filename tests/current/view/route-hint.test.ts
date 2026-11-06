@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { routeHintShown, syncRouteHint, syncWireDelete, syncWireWidth } from "../../../src/view/electronics-presenters.js";
+import { routeHintShown, syncRouteHint, syncWireSection, syncWireWidth } from "../../../src/view/electronics-presenters.js";
 
 describe("route hint", () => {
   it("shows only with LEDs and a stale plan", () => {
@@ -45,7 +45,7 @@ describe("route hint", () => {
     syncWireWidth(group as unknown as Element, 2.25, 1.5);
     expect(box.value).toBe("2.25");
     expect(box.placeholder).toBe("auto (1.5)");
-    syncWireDelete({ hidden: true } as unknown as Element, "w1");
+
     syncWireWidth(group as unknown as Element, null, 1.5);
     expect(box.value).toBe("");
     expect(() => syncWireWidth(null, 1, 1.5)).not.toThrow();
@@ -61,12 +61,24 @@ describe("route hint", () => {
     expect(box.placeholder).toBe("auto (1.5)"); // the hint still follows the plan
   });
 
-  it("shows the delete-wire group only while a wire is selected", () => {
-    const group = { hidden: true };
-    syncWireDelete(group as unknown as Element, "w1");
-    expect(group.hidden).toBe(false);
-    syncWireDelete(group as unknown as Element, null);
-    expect(group.hidden).toBe(true);
-    expect(() => syncWireDelete(null, "w1")).not.toThrow();
+  it("shows the Wire group while the wire tool is armed, its controls live only with a wire selected", () => {
+    const els = () => ({
+      group: { hidden: true }, width: { disabled: false }, del: { disabled: false }, note: { hidden: true },
+    });
+    // #64: armed with nothing selected, the width box is there to be found, greyed, with a note saying why.
+    const armed = els();
+    syncWireSection(armed as never, true, null);
+    expect(armed.group.hidden).toBe(false);
+    expect(armed.width.disabled).toBe(true);
+    expect(armed.del.disabled).toBe(true);
+    expect(armed.note.hidden).toBe(false);
+    const picked = els();
+    syncWireSection(picked as never, true, "w1");
+    expect([picked.group.hidden, picked.width.disabled, picked.del.disabled, picked.note.hidden])
+      .toEqual([false, false, false, true]);
+    const away = els();
+    syncWireSection(away as never, false, null);
+    expect(away.group.hidden).toBe(true);
+    expect(() => syncWireSection({ group: null, width: null, del: null, note: null }, true, "w1")).not.toThrow();
   });
 });
