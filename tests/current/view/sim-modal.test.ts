@@ -19,6 +19,8 @@ class MockCanvas implements SimView {
   readonly setOverlayVisible = vi.fn();
   readonly setStatusListener = vi.fn();
   readonly warmToTarget = vi.fn();
+  readonly hurryToTarget = vi.fn();
+  readonly setProgressListener = vi.fn();
 
   constructor(mount: MockElement) {
     if (failNextConstruct) {
@@ -105,7 +107,9 @@ describe("view/sim-modal", () => {
         vertices: [{}, {}],
         faces: [[0, 1, 0]],
         edges: [{ faces: [0, 1] }, { faces: [0] }],
+        meta: { N: 0 },
       },
+      model: { creases: { count: 1 } },
     } as unknown as FoldScene;
     modal.setProvider(() => ({ scene, title: "sample (guided)" }));
 
@@ -114,8 +118,8 @@ describe("view/sim-modal", () => {
     expect(canvasInstances).toHaveLength(1);
     expect(canvasInstances[0]?.setScene).toHaveBeenCalledWith(scene);
     expect(canvasInstances[0]?.start).toHaveBeenCalledTimes(1);
-    // The modal opens flat (full sheet, all cuts visible); the user folds via the slider.
-    expect(canvasInstances[0]?.setFoldPercent).toHaveBeenCalledWith(0);
+    // Opening folds the model once, so the first thing seen is a fold, not a flat sheet that never moves.
+    expect(canvasInstances[0]?.setFoldPercent).toHaveBeenLastCalledWith(1);
 
     const overlay = document.body.children[0]!;
     const slider = overlay.querySelector(".sim-fold-slider")!;
@@ -243,6 +247,138 @@ describe("view/sim-modal", () => {
 
     const status = document.body.children[0]!.querySelector(".sim-status")!;
     expect(status.textContent).toBe("Fold stopped: Map maximum size exceeded");
+  });
+
+  /** A scene the modal can load: enough of a net and model for the status line. */
+  const foldScene = (foldDrive: "kinematic" | "chord" = "kinematic"): FoldScene =>
+    ({
+      net: { vertices: [{}, {}], faces: [[0, 1, 0]], edges: [], meta: { N: 0 } },
+      model: { creases: { count: 0 }, foldDrive },
+    }) as unknown as FoldScene;
+
+  /** The progress callback the modal handed the canvas on its latest scene load. */
+  const progressOf = (canvas: MockCanvas): ((applied: number) => void) =>
+    canvas.setProgressListener.mock.calls.at(-1)![0];
+
+  it("folds once on open, with the slider following the fold as it goes", async () => {
+    const { document } = installDom();
+    const { SimModal } = await import("../../../src/view/sim-modal.js");
+    const modal = new SimModal({ prefersReducedMotion: () => false });
+    modal.setProvider(() => ({ scene: foldScene(), title: "house" }));
+
+    await modal.open();
+    const canvas = canvasInstances[0]!;
+    expect(canvas.setFoldPercent).toHaveBeenLastCalledWith(1);
+    expect(canvas.hurryToTarget).not.toHaveBeenCalled(); // a kinematic fold is watched at its own pace
+
+    const overlay = document.body.children[0]!;
+    const slider = overlay.querySelector(".sim-fold-slider")!;
+    const value = overlay.querySelector(".sim-fold-value")!;
+    expect(slider.value).toBe("0"); // it starts from the flat sheet
+    progressOf(canvas)(0.42);
+    expect(slider.value).toBe("42");
+    expect(value.textContent).toBe("42%");
+    progressOf(canvas)(1);
+    expect(slider.value).toBe("100");
+    // Following the fold is display only: it must not re-aim the fold at the value it is showing.
+    expect(canvas.setFoldPercent).toHaveBeenLastCalledWith(1);
+  });
+
+  it("folds again from flat when reopened, wherever the slider was left", async () => {
+    const { document } = installDom();
+    const { SimModal } = await import("../../../src/view/sim-modal.js");
+    const modal = new SimModal({ prefersReducedMotion: () => false });
+    modal.setProvider(() => ({ scene: foldScene(), title: "house" }));
+    await modal.open();
+    const slider = document.body.children[0]!.querySelector(".sim-fold-slider")!;
+    slider.value = "30";
+    slider.dispatch("input");
+    modal.close();
+
+    await modal.open();
+    expect(canvasInstances[0]!.setFoldPercent).toHaveBeenLastCalledWith(1);
+    expect(slider.value).toBe("0");
+  });
+
+  it("dragging the slider stops the fold on open and hands it to the user", async () => {
+    const { document } = installDom();
+    const { SimModal } = await import("../../../src/view/sim-modal.js");
+    const modal = new SimModal({ prefersReducedMotion: () => false });
+    modal.setProvider(() => ({ scene: foldScene(), title: "house" }));
+    await modal.open();
+    const canvas = canvasInstances[0]!;
+    const slider = document.body.children[0]!.querySelector(".sim-fold-slider")!;
+    progressOf(canvas)(0.3);
+
+    slider.value = "20";
+    slider.dispatch("input");
+    expect(canvas.setFoldPercent).toHaveBeenLastCalledWith(0.2);
+
+    // The fold still easing toward the user's 20% must not drag the slider about.
+    progressOf(canvas)(0.25);
+    expect(slider.value).toBe("20");
+  });
+
+  it("opens already folded under prefers-reduced-motion, without drawing the way there", async () => {
+    const { document } = installDom();
+    const { SimModal } = await import("../../../src/view/sim-modal.js");
+    const modal = new SimModal({ prefersReducedMotion: () => true });
+    modal.setProvider(() => ({ scene: foldScene(), title: "house" }));
+
+    await modal.open();
+    const canvas = canvasInstances[0]!;
+    expect(canvas.setFoldPercent).toHaveBeenLastCalledWith(1);
+    expect(canvas.hurryToTarget).toHaveBeenCalledWith({ draw: false });
+    const slider = document.body.children[0]!.querySelector(".sim-fold-slider")!;
+    expect(slider.value).toBe("100");
+  });
+
+  it("keeps reduced motion when a material switch rebuilds the folded model", async () => {
+    installDom();
+    const { SimModal } = await import("../../../src/view/sim-modal.js");
+    const modal = new SimModal({ prefersReducedMotion: () => true }) as any;
+    modal.setProvider(() => ({ scene: foldScene(), title: "house" }));
+    await modal.open();
+    modal.selectMaterial("printed"); // no requestAnimationFrame here, so it rebuilds at once
+    const canvas = canvasInstances[0]!;
+    expect(canvas.setScene).toHaveBeenCalledTimes(2);
+    expect(canvas.setFoldPercent).toHaveBeenLastCalledWith(1);
+    expect(canvas.hurryToTarget).toHaveBeenCalledTimes(2);
+    expect(canvas.hurryToTarget).toHaveBeenLastCalledWith({ draw: false });
+    expect(canvas.warmToTarget).not.toHaveBeenCalled();
+  });
+
+  it("asks for reduced motion when opening, not once at construction", async () => {
+    installDom();
+    const { SimModal } = await import("../../../src/view/sim-modal.js");
+    let reduce = false;
+    const modal = new SimModal({ prefersReducedMotion: () => reduce });
+    modal.setProvider(() => ({ scene: foldScene(), title: "house" }));
+    reduce = true; // the user changed the OS setting after the page loaded
+    await modal.open();
+    expect(canvasInstances[0]!.hurryToTarget).toHaveBeenCalledWith({ draw: false });
+  });
+
+  it("fast-forwards the slow chord-guided fold on open, still drawing it", async () => {
+    installDom();
+    const { SimModal } = await import("../../../src/view/sim-modal.js");
+    const modal = new SimModal({ prefersReducedMotion: () => false });
+    modal.setProvider(() => ({ scene: foldScene("chord"), title: "akde-hex" }));
+    await modal.open();
+    expect(canvasInstances[0]!.setFoldPercent).toHaveBeenLastCalledWith(1);
+    expect(canvasInstances[0]!.hurryToTarget).toHaveBeenCalledWith({ draw: true });
+  });
+
+  it("reads prefers-reduced-motion from matchMedia when nothing is injected", async () => {
+    const { window } = installDom();
+    const query = vi.fn(() => ({ matches: true }));
+    (window as any).matchMedia = query;
+    const { SimModal } = await import("../../../src/view/sim-modal.js");
+    const modal = new SimModal();
+    modal.setProvider(() => ({ scene: foldScene(), title: "house" }));
+    await modal.open();
+    expect(query).toHaveBeenCalledWith("(prefers-reduced-motion: reduce)");
+    expect(canvasInstances[0]!.hurryToTarget).toHaveBeenCalledWith({ draw: false });
   });
 
   it("offers an electronics toggle only when there is something to show", async () => {

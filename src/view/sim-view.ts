@@ -32,7 +32,16 @@ export interface SimView {
    * threw and the fold has stopped.
    */
   setStatusListener(fn: (s: { stretch: number; held: boolean; drive: FoldDrive; error?: string }) => void): void;
+  /** The fold actually applied (0..1) whenever a drawn frame changes it; it lags the target while it eases. */
+  setProgressListener(fn: (applied: number) => void): void;
   warmToTarget(): void;
+  /**
+   * Take a fold that is driven to a goal to its current target faster than it animates: each animation
+   * frame runs as many fold frames as fit a time box. They are the same frames in the same order, so the
+   * pose arrived at is the same; only fewer of them are drawn. `draw: false` draws none until the fold
+   * has settled (reduced motion). A new target ends it; a free fold, which has to be watched, ignores it.
+   */
+  hurryToTarget(opts: { draw: boolean }): void;
   start(): void;
   stop(): void;
 }

@@ -15,6 +15,7 @@ class MockOrbitControls {
 
 class MockObject3D {
   children: any[] = [];
+  visible = true;
   position = { set: vi.fn() };
   add = vi.fn((...items: any[]) => {
     this.children.push(...items);
@@ -361,13 +362,76 @@ describe("view/sim-canvas", () => {
     expect(seen.at(-1)).toBe(false); // and it says so when it lets go
   });
 
-  /** A softly guided scene, so it is taken to a goal. */
+  /** A softly guided scene, so it is taken to a goal and can be fast-forwarded. */
   function guidedScene() {
     const scene = makeScene({ pinned: false });
     scene.model.softDriven = true;
     scene.model.guideWeight = 1;
     return scene;
   }
+
+  it("fast-forwards to the target without drawing the way there, then shows the folded pose", async () => {
+    const { SimCanvas } = await import("../../../src/view/sim-canvas.js");
+    const canvas = new SimCanvas(makeContainer()) as any;
+    canvas.setScene(guidedScene());
+    const progress: number[] = [];
+    canvas.setProgressListener((p: number) => progress.push(p));
+    canvas.setFoldPercent(1);
+    canvas.hurryToTarget({ draw: false });
+    expect(canvas.group.visible).toBe(false); // nothing of the flat sheet or the fold in between
+    canvas.start();
+    const loop = raf.mock.calls[0]?.[0] as () => void;
+    for (let i = 0; i < 50 && progress.at(-1) !== 1; i++) loop();
+
+    expect(progress.at(-1)).toBe(1);
+    expect(progress.filter((p) => p < 1)).toEqual([]); // no partial pose was reported, so none was drawn
+    expect(canvas.group.visible).toBe(true);
+  });
+
+  it("fast-forwards a drawn fold in far fewer animation frames than the normal pace", async () => {
+    const { SimCanvas } = await import("../../../src/view/sim-canvas.js");
+    const rafsToFold = (hurry: boolean): number => {
+      raf.mockReset();
+      const canvas = new SimCanvas(makeContainer()) as any;
+      canvas.setScene(guidedScene());
+      let applied = 0;
+      canvas.setProgressListener((p: number) => (applied = p));
+      canvas.setFoldPercent(1);
+      if (hurry) canvas.hurryToTarget({ draw: true });
+      expect(canvas.group.visible).toBe(true);
+      canvas.start();
+      const loop = raf.mock.calls[0]?.[0] as () => void;
+      let n = 0;
+      while (applied !== 1 && n < 1000) {
+        loop();
+        n++;
+      }
+      return n;
+    };
+    const normal = rafsToFold(false);
+    const hurried = rafsToFold(true);
+    expect(normal).toBeGreaterThan(50);
+    expect(hurried).toBeLessThan(normal / 5);
+  });
+
+  it("a new fold target ends the fast-forward and shows the model again", async () => {
+    const { SimCanvas } = await import("../../../src/view/sim-canvas.js");
+    const canvas = new SimCanvas(makeContainer()) as any;
+    canvas.setScene(guidedScene());
+    canvas.setFoldPercent(1);
+    canvas.hurryToTarget({ draw: false });
+    canvas.setFoldPercent(0.4); // the user took the slider
+    expect(canvas.group.visible).toBe(true);
+  });
+
+  it("does not fast-forward a free fold, which has to be watched", async () => {
+    const { SimCanvas } = await import("../../../src/view/sim-canvas.js");
+    const canvas = new SimCanvas(makeContainer()) as any;
+    canvas.setScene(makeScene({ pinned: false }));
+    canvas.setFoldPercent(1);
+    canvas.hurryToTarget({ draw: false });
+    expect(canvas.group.visible).toBe(true);
+  });
 
   it("aims the camera at the folded goal of a guided fold", async () => {
     const { SimCanvas } = await import("../../../src/view/sim-canvas.js");

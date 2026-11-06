@@ -3,7 +3,7 @@ import { SimCameraFollow } from "./sim-camera-follow";
 import { foldFrame } from "./sim-camera-fit.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { BarHingeModel, FoldDrive, FoldNet, FoldScene, FoldSolver, SimMaterial } from "../sim/index.js";
-import { applyPrintedClosure, FoldRunner, FOLD_REACHED_EPS, meanTensileStrain } from "../sim/index.js";
+import { applyPrintedClosure, FoldRunner, FOLD_REACHED_EPS, meanTensileStrain, WARM_BUDGET_MS } from "../sim/index.js";
 import { DEFAULT_MAX_SUBDIV, MAX_TILE_GAP, MIN_TILE_GAP, planSubTiles, TILE_INSET_FRAC, TILE_THICK_FRAC } from "../model/tile-subdiv.js";
 import type { AnchoredMesh } from "../model/trace-anchor.js";
 import { GND_COLOUR, PWR_COLOUR } from "../model/net-palette.js";
@@ -60,6 +60,12 @@ const SETTLE_FRAMES = 10;
 const SETTLE_REL = 4e-4;
 /** Hard cap: freeze this many frames after reaching the target even if it never fully settles (~4s). */
 const MAX_SETTLE_FRAMES = 240;
+/**
+ * How long one animation frame of a drawn `hurryToTarget` may spend on fold frames, in ms. About two
+ * display frames, so the fast-forward still reads as motion (~25 fps) while akde-hex's ~1700 fold
+ * frames, half a minute at the normal pace, go by in about a second.
+ */
+const HURRY_FRAME_MS = 30;
 
 /**
  * A run whose kind is none of the fixed names below — a declared net's id.
@@ -165,9 +171,13 @@ export class SimCanvas implements SimView {
   // "C" cut → its midpoint pinches inward to open the gap; the export bridges the fold gaps with thin
   // living hinges. Tile CORNERS always stay full = the pinpoint pivots.
   private tileEdgePinch: boolean[][] | null = null;
-  // Open at the flat full sheet (0): the kirigamized body is first shown as the complete
-  // paper with every cut line visible, then the user drives the fold slider up to the target.
+  // A new scene starts as the flat full sheet (0), with every cut line visible; the modal then aims
+  // it at the fold it opens on.
   private targetFold = 0;
+  /** Set while {@link hurryToTarget} runs: whether the frames on the way are drawn. */
+  private hurry: { draw: boolean } | null = null;
+  private onProgress: ((applied: number) => void) | null = null;
+  private lastProgress = -1;
   private running = false;
   /** Drives the solver over time — owns foldPercent and the cadence. See `sim/fold-run.ts`. */
   private runner: FoldRunner | null = null;
@@ -227,6 +237,8 @@ export class SimCanvas implements SimView {
     this.material = scene.material ?? "vinyl";
 
     this.runner = new FoldRunner(model, scene.solver);
+    this.endHurry();
+    this.lastProgress = -1;
     this.lastReported = -1;
     this.lastHeld = null;
     this.frozen = false;
@@ -360,9 +372,9 @@ export class SimCanvas implements SimView {
   }
 
   /**
-   * Fast-forward a guided fold to the current slider target. The modal now opens flat (target 0),
-   * so this is a no-op on open (the early return below) and only does work once the user scrubs the
-   * fold slider to a non-zero target — without the burst the mesh would ease in over many frames.
+   * Fast-forward a guided fold to the current slider target in one time-boxed burst. The modal uses
+   * it when a scene is rebuilt at a fold already under way (a material switch, reset fold); opening
+   * runs the fold through {@link hurryToTarget} or the normal animation instead.
    */
   warmToTarget(): void {
     if (!this.fold || !this.runner) return;
@@ -372,7 +384,30 @@ export class SimCanvas implements SimView {
     this.prevPos = this.fold.model.position.slice();
   }
 
+  setProgressListener(fn: (applied: number) => void): void {
+    this.onProgress = fn;
+    this.lastProgress = -1;
+  }
+
+  /**
+   * See `SimView.hurryToTarget`. Each animation frame calls `FoldRunner.warmToTarget`, which runs the
+   * runner's own `frame()`, so how the fold is driven per step is untouched (#38: changing the cadence
+   * of the chord-guided AKDE models moved their settled pose by 4-44% of a span). Only how many of
+   * those frames go by between two draws changes.
+   */
+  hurryToTarget({ draw }: { draw: boolean }): void {
+    if (!this.runner?.toGoal || this.targetFold < FOLD_REACHED_EPS || this.runner.settled()) return;
+    this.hurry = { draw };
+    if (!draw) this.group.visible = false; // nothing of the way there, not even the flat sheet
+  }
+
+  private endHurry(): void {
+    this.hurry = null;
+    this.group.visible = true;
+  }
+
   setFoldPercent(p: number): void {
+    this.endHurry(); // the user has the slider: from here the fold goes at its own pace
     this.targetFold = Math.min(1, Math.max(0, p));
     this.runner?.setTarget(this.targetFold);
     this.frozen = false; // scrubbing wakes a frozen fold
@@ -430,11 +465,22 @@ export class SimCanvas implements SimView {
 
   private advance(): void {
     if (!this.fold || this.frozen || !this.runner) return; // frozen: hold the pose, orbit only
+    let arrivedUnseen = false;
     try {
-      this.runner.frame();
+      if (this.hurry) {
+        const { draw } = this.hurry;
+        this.runner.warmToTarget(undefined, draw ? HURRY_FRAME_MS : WARM_BUDGET_MS);
+        if (this.runner.settled()) {
+          this.endHurry();
+          arrivedUnseen = !draw;
+        } else if (!draw) return; // still on the way, and none of it is drawn
+      } else {
+        this.runner.frame();
+      }
     } catch (err) {
       // A solver that throws mid-fold would otherwise take the render loop down with it. Hold the
       // last pose and say why it stopped; scrubbing the fold tries again.
+      this.endHurry();
       this.frozen = true;
       this.onStatus?.({
         stretch: meanTensileStrain(this.fold.model),
@@ -446,8 +492,18 @@ export class SimCanvas implements SimView {
     }
     this.flushGeometry();
     this.reportStatus();
+    this.reportProgress();
     this.maybeFreeze();
-    this.followPose(this.frozen); // one O(N) pass while folding; on the freeze frame settle fully
+    // One O(N) pass while folding; on the freeze frame settle fully. A fold that arrived unseen
+    // (reduced motion) snaps too, so the camera does not glide in after it.
+    this.followPose(this.frozen || arrivedUnseen);
+  }
+
+  private reportProgress(): void {
+    const applied = this.foldPercent;
+    if (!this.onProgress || applied === this.lastProgress) return;
+    this.lastProgress = applied;
+    this.onProgress(applied);
   }
 
   private reportStatus(): void {

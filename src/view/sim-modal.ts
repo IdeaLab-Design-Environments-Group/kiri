@@ -1,4 +1,4 @@
-import type { FoldScene, SimMaterial } from "../sim/index.js";
+import type { FoldDrive, FoldScene, SimMaterial } from "../sim/index.js";
 import { DEFAULT_MAX_SUBDIV, TILE_INSET_FRAC } from "../model/tile-subdiv.js";
 import type { AnchoredMesh } from "../model/trace-anchor.js";
 import type { SimView } from "./sim-view.js";
@@ -10,7 +10,7 @@ export type SimSceneProvider = (material?: SimMaterial) => { scene: FoldScene; t
 /**
  * "Simulate" trigger + modal hosting the Three.js fold simulation, with the planned copper drawn
  * on the folded model. The copper is *placed* in the Electronics modal; this is where it is seen in 3D. Opening
- * builds the scene from the current model and starts the CPU solver; the
+ * builds the scene from the current model, starts the CPU solver and folds the model once; the
  * fold slider scrubs `foldPercent` 0→1; "Reset fold" rebuilds from the
  * current model. The canvas (and Three.js) load lazily on first open.
  */
@@ -49,8 +49,18 @@ export class SimModal {
   private idleWarm: number | null = null;
   /** Invalidates a queued tab rebuild when the user clicks back before the next paint. */
   private materialLoad = 0;
+  /**
+   * True from opening until the opening fold arrives or the user takes the slider. While it is, the slider
+   * shows how far the fold has got, and a rebuild (material tab) folds again from flat.
+   */
+  private autoFold = false;
+  private readonly prefersReducedMotion: () => boolean;
+  /** The reduced-motion setting as read on the latest open. */
+  private reduceMotion = false;
 
-  constructor() {
+  /** `prefersReducedMotion` is asked on every open; by default it reads the OS setting through matchMedia. */
+  constructor({ prefersReducedMotion = osPrefersReducedMotion }: { prefersReducedMotion?: () => boolean } = {}) {
+    this.prefersReducedMotion = prefersReducedMotion;
     this.trigger = document.createElement("button");
     this.trigger.type = "button";
     this.trigger.className = "sim-trigger";
@@ -131,7 +141,10 @@ export class SimModal {
       tab.addEventListener("click", () => this.selectMaterial(tab.dataset.material as SimMaterial));
     }
 
-    this.foldSlider.addEventListener("input", () => this.applyFold());
+    this.foldSlider.addEventListener("input", () => {
+      this.autoFold = false; // the user has it now: stop the opening fold and go where they drag
+      this.applyFold();
+    });
     this.detailSlider.addEventListener("input", () => this.applyDetail());
     this.gapSlider.addEventListener("input", () => this.applyGap());
     this.syncDetailVisibility();
@@ -267,6 +280,8 @@ export class SimModal {
       }
       if (this.overlay.hidden) return;
     }
+    this.reduceMotion = this.prefersReducedMotion();
+    this.autoFold = true;
     this.loadWorld();
   }
 
@@ -324,8 +339,14 @@ export class SimModal {
           : `${how} · stretch ${pct.toFixed(1)}%`;
       });
       this.syncDetailVisibility();
-      this.applyFold();
-      this.canvas.warmToTarget();
+      this.canvas.setProgressListener((applied) => this.followFold(applied));
+      if (this.autoFold) {
+        this.startOpeningFold(built.scene.model.foldDrive);
+      } else {
+        this.applyFold();
+        if (this.reduceMotion) this.canvas.hurryToTarget({ draw: false });
+        else this.canvas.warmToTarget();
+      }
       this.canvas.start();
       const { net } = built.scene;
       const shell = net.meta.N > 0 && net.faces.length === 7 * net.meta.N;
@@ -369,6 +390,44 @@ export class SimModal {
     this.foldValue.textContent = `${pct}%`;
     this.canvas?.setFoldPercent(pct / 100);
   }
+
+  /**
+   * Fold the model once on open, so the first thing seen is a fold and not a flat sheet that never moves
+   * (#56). It goes through the fold runner's own animation, slider in tow. Under reduced motion it opens
+   * already folded, the frames on the way not drawn. A chord-guided model (the AKDE ones) needs some 1700
+   * frames, half a minute at the normal pace, so its frames are run faster than they are drawn.
+   */
+  private startOpeningFold(drive: FoldDrive | undefined): void {
+    if (!this.canvas) return;
+    this.canvas.setFoldPercent(1);
+    if (this.reduceMotion) {
+      this.autoFold = false;
+      this.showFold(1);
+      this.canvas.hurryToTarget({ draw: false });
+      return;
+    }
+    this.showFold(0);
+    if (drive === "chord") this.canvas.hurryToTarget({ draw: true });
+  }
+
+  /** While the opening fold runs, the slider shows how far it has got (display only: the target stays 1). */
+  private followFold(applied: number): void {
+    if (!this.autoFold) return;
+    this.showFold(applied);
+    if (applied >= 1) this.autoFold = false;
+  }
+
+  private showFold(applied: number): void {
+    const pct = Math.round(applied * 100);
+    this.foldSlider.value = String(pct);
+    this.foldValue.textContent = `${pct}%`;
+  }
+}
+
+/** The OS "reduce motion" setting; false where there is no matchMedia (tests, old browsers). */
+function osPrefersReducedMotion(): boolean {
+  const mm = typeof window === "undefined" ? undefined : window.matchMedia;
+  return typeof mm === "function" && mm.call(window, "(prefers-reduced-motion: reduce)").matches;
 }
 
 /**
