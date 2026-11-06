@@ -223,6 +223,40 @@ describe("#64 the wire width box is there as soon as the wire tool is", () => {
   });
 });
 
+describe("#64 every small control is a 24 px target (WCAG 2.5.8)", () => {
+  const welcome = readFileSync("src/styles-welcome.css", "utf8");
+  /** The px a declaration sets in a rule body, or 0. */
+  function px(body: string, prop: string): number {
+    const m = body.match(new RegExp(`(?:^|[;\\s])${prop}:\\s*(\\d+(?:\\.\\d+)?)px`));
+    return m ? Number(m[1]) : 0;
+  }
+  function ruleIn(sheet: string, selector: string): string {
+    const esc = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const all = [...sheet.matchAll(new RegExp(`(?:^|\\})\\s*${esc}\\s*\\{([^}]*)\\}`, "gm"))];
+    if (!all.length) throw new Error(`no rule for ${selector}`);
+    return all.map((m) => m[1]).join(";");
+  }
+  it.each([
+    ["src/styles.css", ".col-collapse"],
+    ["src/styles-welcome.css", ".welcome-close"],
+    ["src/styles.css", ".el-net-add"],
+    ["src/styles.css", ".el-net-twist"],
+    ["src/styles.css", ".el-net-colour"],
+    ["src/styles.css", ".el-net-del"],
+    ["src/styles.css", ".el-net-kid-off"],
+    ["src/styles.css", ".el-pad-off"],
+    ["src/styles.css", ".el-net-name"],
+    ["src/styles.css", ".el-pad-net"],
+  ])("%s %s is at least 24 x 24 px", (file, selector) => {
+    const body = ruleIn(file.endsWith("welcome.css") ? welcome : css, selector);
+    const w = Math.max(px(body, "width"), px(body, "min-width"));
+    const h = Math.max(px(body, "height"), px(body, "min-height"));
+    // Text inputs are as wide as the column; it is their height that was short.
+    if (!/name|pad-net/.test(selector)) expect(w, `${selector} width`).toBeGreaterThanOrEqual(24);
+    expect(h, `${selector} height`).toBeGreaterThanOrEqual(24);
+  });
+});
+
 /** The element in the page carrying this id (the mock DOM lays the markup out flat). */
 function byId(modal: any, id: string | undefined): any {
   return id ? modal.overlay.children.find((c: any) => c.attributes.id === id) : undefined;

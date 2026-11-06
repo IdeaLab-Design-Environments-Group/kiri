@@ -184,8 +184,8 @@ body {
   top: 18px;
   left: 50%;
   transform: translateX(-50%);
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2354,6 +2354,20 @@ body.is-examples .app-legend {
 }
 .el-pad-off:hover, .el-pad-off:focus-visible { color: #a4404a; }
 .el-pad-off[hidden] { display: none; }
+/* Every small control is at least a 24 px target (WCAG 2.5.8, #64). Measured before: the net delete x at
+   15x14, the colour swatch at 14x14, the twisty at 18x16. The glyphs keep their size; the hit area grows
+   around them. Later in the sheet than the rules they amend, so they win on order alone. */
+.el-net-add { min-width: 24px; min-height: 24px; }
+.el-net-twist { min-width: 24px; min-height: 24px; }
+.el-net-del { min-width: 24px; min-height: 24px; }
+.el-net-kid-off { min-width: 24px; min-height: 24px; }
+.el-pad-off { min-width: 24px; min-height: 24px; }
+.el-net-name { min-height: 24px; }
+.el-pad-net { min-height: 24px; }
+/* The swatch stays a small square; the input around it is the 24 px target. */
+.el-net-colour { width: 24px; height: 24px; padding: 5px; border: 0; }
+.el-net-colour::-webkit-color-swatch { border: 1px solid rgba(0, 0, 0, 0.22); }
+.el-net-colour::-moz-color-swatch { border: 1px solid rgba(0, 0, 0, 0.22); }
 /* A selected hand-drawn wire has a delete button in the sidebar. */
 .el-wire-delete {
   font: inherit;
