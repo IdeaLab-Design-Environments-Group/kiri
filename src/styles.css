@@ -1983,6 +1983,14 @@ body.is-electronics .app-legend {
 @media (max-width: 760px) {
   .el-footer-row { flex-wrap: wrap; }
   .el-footer-row .el-status { flex-basis: 100%; text-align: left; }
+  /* Three columns do not fit a phone: the two rails squeezed the canvas to zero width. Stack them, with
+     the canvas first, and let the page scroll. */
+  .el-page-inner { height: auto; }
+  .el-workspace { flex-direction: column; }
+  .el-workspace .el-canvas-wrap { order: -1; }
+  .el-side,
+  .el-tools { flex: 0 0 auto; max-width: none; overflow-y: visible; }
+  .el-svg { height: 55vh; }
 }
 .el-key-led { color: #d24545; }
 .el-key-pwr { color: #ff0000; }

@@ -75,6 +75,13 @@ describe("#64 the status line never changes the canvas height", () => {
     expect(rule(".el-footer-row")).toMatch(/flex-wrap:\s*nowrap/);
   });
 
+  it("stacks the canvas above the two rails on a phone, so it is not squeezed to nothing", () => {
+    const phone = css.match(/@media \(max-width: 760px\) \{((?:[^{}]*\{[^}]*\})*)\s*\}/g) ?? [];
+    const block = phone.find((b) => b.includes(".el-workspace")) ?? "";
+    expect(block).toMatch(/\.el-workspace \{ flex-direction: column; \}/);
+    expect(block).toMatch(/\.el-canvas-wrap \{ order: -1; \}/);
+  });
+
   it("carries the whole sentence in its title, for every way the line is written", () => {
     const modal = openOn(grid(100));
     const status = q(modal, ".el-status");
