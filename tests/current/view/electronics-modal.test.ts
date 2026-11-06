@@ -3501,8 +3501,11 @@ describe("view/electronics-modal", () => {
       const faults = modal.wire.faults();
       expect(faults.length, "the fixture drew a wire the rules are happy with").toBeGreaterThan(0);
       expect(faults.some((f: any) => ERRORS.has(f.kind)), "no error among the faults").toBe(true);
-      expect(modal.statusEl.textContent).toContain("cannot be cut");
+      expect(modal.statusEl.textContent).toContain("not cuttable as drawn");
       expect(modal.statusEl.textContent).not.toContain("still cuttable");
+      // #64: finishing lays it anyway, which is what the line says it will do.
+      (globalThis as any).document.dispatch("keydown", { key: "Enter" });
+      expect(modal.circuit.wires).toHaveLength(1);
     });
 
     it("gives the wire tool the keys it needs, and leaves the others alone", () => {

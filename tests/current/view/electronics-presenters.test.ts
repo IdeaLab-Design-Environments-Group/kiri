@@ -578,7 +578,15 @@ describe("view/electronics-presenters > statusLine", () => {
       wiring: true,
       wireFaults: [{ kind: "off-body", why: "leaves the sheet" }],
     });
-    expect(bad).toContain("· this wire cannot be cut: leaves the sheet");
+    expect(bad).toContain("· laid if you finish, but not cuttable as drawn: leaves the sheet");
+    // #64: the tool lays a wire over another net's copper when it is finished, and the router keeps it and
+    // reports the short, so the line must not read as though the wire were refused.
+    const over = status({
+      wiring: true,
+      wireFaults: [{ kind: "too-close", why: "the wire lies on top of another net's copper" }],
+    });
+    expect(over).not.toContain("this wire cannot be cut");
+    expect(over).toContain("laid if you finish, but not cuttable as drawn: the wire lies on top of another net's copper");
     const warn = status({
       wiring: true,
       wireFaults: [{ kind: "fold-fatigue", why: "crosses a fold" }],

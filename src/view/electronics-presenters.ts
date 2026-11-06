@@ -515,13 +515,15 @@ export function statusLine(input: StatusInput): string {
   if (wires > 0) msg += ` · ${wires} hand wire${wires === 1 ? "" : "s"}`;
   if (input.wiring) {
     // An error and a warning are different things and must not read alike: an ERROR means the wire
-    // cannot be cut, a WARNING means it can and will cost something — a weaker sheet, a harder weed, a
+    // cannot be cut as drawn, a WARNING means it can and will cost something — a weaker sheet, a harder weed, a
     // shorter fold life. The rule is `wire-rules.ts`'s, read rather than restated, so the line the
     // author sees agrees with `isBuildable` by construction.
     const faults = input.wireFaults;
     const bad = faults.filter((f) => ERRORS.has(f.kind as never));
     msg += bad.length
-      ? ` · this wire cannot be cut: ${bad[0]!.why}`
+      // Not "cannot be cut" and nothing more: finishing lays the wire anyway, and the router keeps it and
+      // reports the short, so a line that read as a refusal was wrong about what the next tap does (#64).
+      ? ` · laid if you finish, but not cuttable as drawn: ${bad[0]!.why}`
       : faults.length
         ? ` · ${faults.length} warning${faults.length === 1 ? "" : "s"}, still cuttable: ${faults[0]!.why}`
         : input.wireDrawing
