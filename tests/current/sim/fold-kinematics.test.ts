@@ -29,6 +29,10 @@ import { applyRigid, kabsch } from "../../../src/pipeline/verify.js";
 const load = (name: string): FoldFile =>
   JSON.parse(readFileSync(fileURLToPath(new URL(`../../../public/examples/${name}`, import.meta.url)), "utf8")) as FoldFile;
 
+/** akde-hex as it shipped before issue #67: its declared form stretches its own bars by 34%. */
+const unreachable = (): FoldFile =>
+  JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/akde-hex-legacy.fkld", import.meta.url)), "utf8")) as FoldFile;
+
 /** Nets whose panel graph is a tree, so a coordinated fold exists. */
 const COORDINATED = ["house.fkld", "church.fkld", "puffin.fkld"] as const;
 
@@ -68,8 +72,8 @@ describe("the panel tree", () => {
     expect(flap.foldDrive).toBe("kinematic");
   });
 
-  it("refuses akde-hex, whose declared form no fold reaches", () => {
-    const { model } = buildScene(load("akde-hex.fkld"))!.scene;
+  it("refuses the old akde-hex, whose declared form no fold reaches", () => {
+    const { model } = buildScene(unreachable())!.scene;
     expect(buildCreaseTree(model).loops.length).toBe(1);
     expect(model.foldDrive).toBe("chord"); // and so nothing is pinned, and the guide is as before
     expect(Array.from(model.fixed).some((f) => f === 1)).toBe(false);
@@ -244,8 +248,8 @@ describe("the closure gate", () => {
   }
 
   it("sees an error at something like its real size, on a fine mesh as well as a coarse one", () => {
-    for (const name of [...COORDINATED, "kirigami-flap.fkld", "akde-hex.fkld"]) {
-      const { model } = buildScene(load(name))!.scene;
+    for (const fold of [...[...COORDINATED, "kirigami-flap.fkld"].map(load), unreachable()]) {
+      const { model } = buildScene(fold)!.scene;
       // 0.8-1.7x measured. Through the root triangle's corners it was 7.2x on church and 8.3x on
       // puffin, and got worse the finer the mesh, because that one triangle shrinks while the model
       // does not: distances to anchors that huddle together barely move when a panel swings sideways.
@@ -259,9 +263,9 @@ describe("the closure gate", () => {
       expect(model.foldDrive).toBe("kinematic");
       expect(model.foldClosure!).toBeLessThan(1e-4); // 0.000% measured on all four
     }
-    // A form no fold reaches: akde-hex wants 34% strain on its own bars. It misses by 88.7%, so the
-    // 0.2% tolerance is not a close call in either direction — it is 400x clear of the nets that pass.
-    const { model } = buildScene(load("akde-hex.fkld"))!.scene;
+    // A form no fold reaches: the old akde-hex wants 34% strain on its own bars. It misses by 88.7%, so
+    // the 0.2% tolerance is not a close call in either direction — it is 400x clear of the nets that pass.
+    const { model } = buildScene(unreachable())!.scene;
     expect(model.foldDrive).toBe("chord");
     expect(model.foldClosure!).toBeGreaterThan(0.5);
   });

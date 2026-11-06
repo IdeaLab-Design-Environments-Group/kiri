@@ -229,20 +229,20 @@ describe("the fold is drawn, not skipped", () => {
  * AKDE examples the same change landed on a different settled pose, 4% to 44% of a span off.
  */
 describe("following the slider", () => {
+  /** A bundled example by name, or a test fixture by its `fixtures/` path. */
   const example = async (name: string) => {
     const { readFileSync } = await import("node:fs");
     const { fileURLToPath } = await import("node:url");
     const { buildScene } = await import("../../../src/sim/scene.js");
-    const fold = JSON.parse(
-      readFileSync(fileURLToPath(new URL(`../../../public/examples/${name}.fkld`, import.meta.url)), "utf8"),
-    );
+    const path = name.startsWith("fixtures/") ? `./${name}.fkld` : `../../../public/examples/${name}.fkld`;
+    const fold = JSON.parse(readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8"));
     const { model, solver } = buildScene(fold)!.scene;
     return { model, runner: new FoldRunner(model, solver) };
   };
 
   it("lets a kinematic guide travel at a wider cap than a chord guide", async () => {
     const kinematic = await example("house");
-    const chord = await example("akde-hex");
+    const chord = await example("fixtures/akde-hex-legacy"); // the old akde-hex, which no fold reaches
     expect(kinematic.model.foldDrive).toBe("kinematic");
     expect(chord.model.foldDrive).toBe("chord");
     expect(kinematic.runner.rampMotion).toBeGreaterThan(chord.runner.rampMotion);

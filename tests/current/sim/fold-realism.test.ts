@@ -37,8 +37,14 @@ import type { FoldScene } from "../../../src/sim/build.js";
 import type { Vec3 } from "../../../src/pipeline/types.js";
 import type { FoldFile } from "../../../src/model/fold-file.js";
 
+/** A bundled example by file name, or a test fixture by its `fixtures/` path. */
 const load = (name: string): FoldFile =>
-  JSON.parse(readFileSync(fileURLToPath(new URL(`../../../public/examples/${name}`, import.meta.url)), "utf8"));
+  JSON.parse(
+    readFileSync(
+      fileURLToPath(new URL(name.startsWith("fixtures/") ? `./${name}` : `../../../public/examples/${name}`, import.meta.url)),
+      "utf8",
+    ),
+  );
 
 /**
  * Presets whose declared folded form their own flat net can actually be folded into — every bar
@@ -60,8 +66,14 @@ const REACHABLE = [
  * was regenerated, issue #14). No fold can get there, so these are held only to staying finite and to not stretching
  * further than their own goal already asks — the failure is in the file, and the point of the test
  * is that the simulator reports it rather than imposing the shape anyway.
+ *
+ * `fixtures/akde-hex-legacy.fkld` is the akde-hex preset as it shipped before issue #67: a real
+ * export whose goal is not isometric, kept so this case stays covered once no bundled example is.
  */
-const UNREACHABLE = REFERENCE_ONLY_EXAMPLES; // the same list marks them reference only on load
+const UNREACHABLE = [
+  ...REFERENCE_ONLY_EXAMPLES, // the same list marks them reference only on load
+  "fixtures/akde-hex-legacy.fkld",
+];
 
 const GUIDED = [...REACHABLE, ...UNREACHABLE];
 
