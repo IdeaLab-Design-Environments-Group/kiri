@@ -2040,8 +2040,7 @@ export class ElectronicsModal {
 
   /** How close (flat mm) a click must land to a hinge to drop an LED there. */
   private pickRadius(): number {
-    const diag = Math.hypot(this.bounds.maxX - this.bounds.minX, this.bounds.maxY - this.bounds.minY);
-    return Math.max(2, diag * 0.06);
+    return Math.max(2, this.diag() * 0.06); // `diag()` floors at 1, well under the floor of 2 here
   }
 
   /**
