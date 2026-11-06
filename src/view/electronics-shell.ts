@@ -28,6 +28,7 @@ export function shellMarkup(): string {
               <span class="el-group">
                 <span class="el-group-label">Place</span>
                 <span class="el-seg">
+                  <button type="button" class="el-tool" data-tool="led" title="place an LED — tap near a fold, or anywhere on a tile when Seat is on a tile">LED</button>
                   <button type="button" class="el-tool" data-tool="battery" title="place the battery — click a tile">battery</button>
                   <button type="button" class="el-tool" data-tool="wire" title="draw copper by hand — tap to lay a vertex, tap the last one (or Enter) to finish, Backspace to take one back, X+tap to drop one, Delete to remove the selected wire">wire</button>
                 </span>
@@ -49,8 +50,8 @@ export function shellMarkup(): string {
               <span class="el-group el-place-modes">
                 <span class="el-group-label">Seat</span>
                 <span class="el-seg">
-                  <button type="button" class="el-place" data-place="gap" title="across a fold: the component bridges the hinge between two tiles, a pad on each side">across a fold</button>
-                  <button type="button" class="el-place" data-place="free" title="on a tile: the component stands where you put it, and its pads are wired by nets or by hand-drawn copper">on a tile</button>
+                  <button type="button" class="el-place" data-place="gap" title="across a fold: a tap near a fold puts the LED or part across the hinge, a pad on each tile. A tap away from every fold places nothing">across a fold</button>
+                  <button type="button" class="el-place" data-place="free" title="on a tile: a tap anywhere on a tile puts the LED or part there. Its pads are wired by nets or by hand-drawn copper">on a tile</button>
                 </span>
               </span>
             </div>
@@ -110,6 +111,7 @@ export function shellMarkup(): string {
             </aside>
             <div class="el-canvas-wrap">
               <div class="el-route-hint" role="status" hidden>Not routed yet — press Route</div>
+              <div class="el-empty-hint" role="status"></div>
               <svg class="el-svg" xmlns="${SVG_NS}" aria-label="electronics flat-pattern canvas"></svg>
             </div>
             <aside class="el-tools" aria-label="view and output">

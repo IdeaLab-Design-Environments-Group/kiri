@@ -103,6 +103,7 @@ import { footprintById } from "../model/library.js";
 import { mountingHint, mountingOf } from "../model/part-mounting.js";
 import { withSocket } from "../model/socket-seat.js";
 import { socketAction } from "./socket-action.js";
+import { syncFirstStep } from "./placement-guide.js";
 import {
   BLOCKED,
   BLOCKED_SHOWN,
@@ -2913,6 +2914,7 @@ export class ElectronicsModal {
     const selPart = this.partSelection();
     const sel = this.selected;
     syncRouteHint(this.routeBtn, ledCount(this.circuit), this.stale);
+    syncFirstStep(this.overlay.querySelector<HTMLElement>(".el-empty-hint"), this.circuit, this.placeMode);
     syncWireDelete(this.overlay.querySelector(".el-wire-sect"), this.wire.selected());
     syncWireWidth(this.overlay.querySelector(".el-wire-sect"), this.wire.selectedWidthMm(), this.tapeMm());
     this.statusEl.textContent = statusLine({
