@@ -28,7 +28,7 @@ export function shellMarkup(): string {
               <span class="el-group">
                 <span class="el-group-label">Place</span>
                 <span class="el-seg">
-                  <button type="button" class="el-tool" data-tool="led" title="place an LED — tap near a fold, or anywhere on a tile when Seat is on a tile">LED</button>
+                  <button type="button" class="el-tool" data-tool="led" title="place an LED — tap near a fold, or anywhere on a tile when Parts go is on a tile">LED</button>
                   <button type="button" class="el-tool" data-tool="battery" title="place the battery — click a tile">battery</button>
                   <button type="button" class="el-tool" data-tool="wire" title="draw copper by hand — tap to lay a vertex, tap the last one (or Enter) to finish, Backspace to take one back, X+tap to drop one, Delete to remove the selected wire">wire</button>
                 </span>
@@ -48,26 +48,29 @@ export function shellMarkup(): string {
                 </span>
               </span>
               <span class="el-group el-place-modes">
-                <span class="el-group-label">Seat</span>
-                <span class="el-seg">
-                  <button type="button" class="el-place" data-place="gap" title="across a fold: a tap near a fold puts the LED or part across the hinge, a pad on each tile. A tap away from every fold places nothing">across a fold</button>
-                  <button type="button" class="el-place" data-place="free" title="on a tile: a tap anywhere on a tile puts the LED or part there. Its pads are wired by nets or by hand-drawn copper">on a tile</button>
+                <span class="el-group-label" id="el-lbl-seat">Parts go</span>
+                <span class="el-hint" id="el-desc-seat" hidden>Where the next LED or part is put. Across a fold: a tap near a fold puts it across the hinge, a pad on each tile. On a tile: a tap anywhere on a tile puts it there, wired by nets or hand-drawn copper.</span>
+                <span class="el-seg" role="group" aria-labelledby="el-lbl-seat">
+                  <button type="button" class="el-place" data-place="gap" id="el-seat-gap" aria-labelledby="el-lbl-seat el-seat-gap" aria-describedby="el-desc-seat" title="across a fold: a tap near a fold puts the LED or part across the hinge, a pad on each tile. A tap away from every fold places nothing">across a fold</button>
+                  <button type="button" class="el-place" data-place="free" id="el-seat-free" aria-labelledby="el-lbl-seat el-seat-free" aria-describedby="el-desc-seat" title="on a tile: a tap anywhere on a tile puts the LED or part there. Its pads are wired by nets or by hand-drawn copper">on a tile</button>
                 </span>
               </span>
             </div>
             <div class="el-toolbar-row">
               <span class="el-group el-build-modes">
-                <span class="el-group-label">Build</span>
-                <span class="el-seg">
-                  <button type="button" class="el-build" data-material="vinyl" title="vinyl / paper: one continuous sheet, scored at the creases. Nothing is cut away, so the copper may run anywhere and a crease is priced by its assignment">vinyl</button>
-                  <button type="button" class="el-build" data-material="printed" title="3D-printed: rigid tiles with a bare hinge gap between them. The gaps are what an LED bridges, and their measured width is what the crease strain is computed from">3D-printed</button>
+                <span class="el-group-label" id="el-lbl-build">Sheet</span>
+                <span class="el-hint" id="el-desc-build" hidden>What the pattern is made of. Vinyl or paper is one sheet scored at the creases, so copper may run anywhere. 3D-printed tiles have a bare hinge gap between them, which an LED bridges.</span>
+                <span class="el-seg" role="group" aria-labelledby="el-lbl-build">
+                  <button type="button" class="el-build" data-material="vinyl" id="el-build-vinyl" aria-labelledby="el-lbl-build el-build-vinyl" aria-describedby="el-desc-build" title="vinyl / paper: one continuous sheet, scored at the creases. Nothing is cut away, so the copper may run anywhere and a crease is priced by its assignment">vinyl / paper</button>
+                  <button type="button" class="el-build" data-material="printed" id="el-build-printed" aria-labelledby="el-lbl-build el-build-printed" aria-describedby="el-desc-build" title="3D-printed: rigid tiles with a bare hinge gap between them. The gaps are what an LED bridges, and their measured width is what the crease strain is computed from">3D-printed tiles</button>
                 </span>
               </span>
               <span class="el-group el-face-modes">
-                <span class="el-group-label">Side</span>
-                <span class="el-seg">
-                  <button type="button" class="el-face" data-side="inside" title="edit the inside face's copper — its own circuit, independent of the outside">inside</button>
-                  <button type="button" class="el-face" data-side="outside" title="edit the outside face's copper — its own circuit, independent of the inside">outside</button>
+                <span class="el-group-label" id="el-lbl-side">Copper on</span>
+                <span class="el-hint" id="el-desc-side" hidden>Which face of the sheet you are laying copper on. Each face is its own circuit with its own parts, nets and wires.</span>
+                <span class="el-seg" role="group" aria-labelledby="el-lbl-side">
+                  <button type="button" class="el-face" data-side="inside" id="el-side-inside" aria-labelledby="el-lbl-side el-side-inside" aria-describedby="el-desc-side" title="edit the inside face's copper — its own circuit, independent of the outside">inside face</button>
+                  <button type="button" class="el-face" data-side="outside" id="el-side-outside" aria-labelledby="el-lbl-side el-side-outside" aria-describedby="el-desc-side" title="edit the outside face's copper — its own circuit, independent of the inside">outside face</button>
                 </span>
               </span>
               <span class="el-group el-group-end">
@@ -125,10 +128,11 @@ export function shellMarkup(): string {
                 <button type="button" class="el-route-clear" title="remove the planned copper only. Parts, nets and hand-drawn wires stay">clear routes</button>
               </div>
               <div class="el-side-sect el-view-modes">
-                <div class="el-side-head"><span class="el-side-title">View</span></div>
-                <span class="el-seg">
-                  <button type="button" class="el-view" data-view="strips" title="show the copper as separate strips">strips</button>
-                  <button type="button" class="el-view" data-view="carrier" title="show the copper as one carrier frame holding every trace in place">carrier</button>
+                <div class="el-side-head"><span class="el-side-title" id="el-lbl-view">Show copper as</span></div>
+                <span class="el-hint" id="el-desc-view" hidden>How the copper is drawn here. Strips: every run as its own piece. Carrier frame: one frame holding every run in place on thin tabs.</span>
+                <span class="el-seg" role="group" aria-labelledby="el-lbl-view">
+                  <button type="button" class="el-view" data-view="strips" id="el-view-strips" aria-labelledby="el-lbl-view el-view-strips" aria-describedby="el-desc-view" title="show the copper as separate strips">strips</button>
+                  <button type="button" class="el-view" data-view="carrier" id="el-view-carrier" aria-labelledby="el-lbl-view el-view-carrier" aria-describedby="el-desc-view" title="show the copper as one carrier frame holding every trace in place">carrier frame</button>
                 </span>
                 <span class="el-seg">
                   <button type="button" class="el-zoom-out" title="zoom out" aria-label="zoom out">−</button>

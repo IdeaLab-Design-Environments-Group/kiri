@@ -83,7 +83,7 @@ describe("view/electronics-modal > first step (#57)", () => {
     expect(hint.textContent).toContain("Tap near a fold to place an LED");
     expect(hint.textContent).toContain("battery");
     // The control that decides where an LED can go is named where the rule is stated.
-    expect(hint.textContent).toContain("Seat");
+    expect(hint.textContent).toContain("Parts go");
 
     tapFlat(modal, modal.gaps[0].point);
     expect(modal.circuit.leds).toHaveLength(1);

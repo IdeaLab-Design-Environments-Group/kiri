@@ -99,3 +99,38 @@ describe("#64 the status line never changes the canvas height", () => {
     expect(status.title).toBe(status.textContent);
   });
 });
+
+/** The element in the page carrying this id (the mock DOM lays the markup out flat). */
+function byId(modal: any, id: string | undefined): any {
+  return id ? modal.overlay.children.find((c: any) => c.attributes.id === id) : undefined;
+}
+
+describe("#64 the toolbar's labels make sense without hovering", () => {
+  const GROUPS = [
+    { cls: "el-place", label: "Parts go", buttons: ["across a fold", "on a tile"] },
+    { cls: "el-build", label: "Sheet", buttons: ["vinyl / paper", "3D-printed tiles"] },
+    { cls: "el-face", label: "Copper on", buttons: ["inside face", "outside face"] },
+    { cls: "el-view", label: "Show copper as", buttons: ["strips", "carrier frame"] },
+  ];
+
+  it.each(GROUPS)("names the $label group in words, on the control itself", ({ cls, label, buttons }) => {
+    const modal = openOn(grid(1));
+    const btns = modal.overlay.querySelectorAll(`.${cls}`);
+    expect(btns.map((b: any) => b.textContent)).toEqual(buttons);
+    for (const b of btns) {
+      // Labelled by the visible caption and its own text, and described by a sentence a screen reader
+      // reads out without anyone hovering for the tooltip.
+      const by = (b.attributes["aria-labelledby"] ?? "").split(" ");
+      expect(byId(modal, by[0])?.textContent).toBe(label);
+      const desc = byId(modal, b.attributes["aria-describedby"]);
+      expect(desc, `${b.textContent} has no description`).toBeDefined();
+      expect(desc.textContent.length).toBeGreaterThan(30);
+    }
+  });
+
+  it("drops the old one-word captions", () => {
+    const modal = openOn(grid(1));
+    const captions = modal.overlay.querySelectorAll(".el-group-label").map((l: any) => l.textContent);
+    for (const old of ["Seat", "Build", "Side"]) expect(captions).not.toContain(old);
+  });
+});

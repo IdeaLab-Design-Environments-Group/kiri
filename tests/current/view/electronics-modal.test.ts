@@ -510,7 +510,7 @@ describe("view/electronics-modal", () => {
       const { modal } = openOn(grid2x2());
       const html = modal.overlay.innerHTML as string;
       const inSegment = (at: number): boolean => {
-        const opened = html.lastIndexOf('<span class="el-seg">', at);
+        const opened = html.lastIndexOf('<span class="el-seg"', at);
         const closed = html.lastIndexOf("</span>", at);
         return opened !== -1 && opened > closed;
       };
