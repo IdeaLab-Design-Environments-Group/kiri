@@ -479,6 +479,28 @@ describe("model/copper-svg-export", () => {
       expect(out.crossingTabs).toBeLessThanOrEqual(out.counts.tabs);
     });
 
+    it("counts a tab that can only reach a wall over a component", () => {
+      // The fallback over a part is taken only when every candidate passes one, and it has to be counted:
+      // the view warns on `componentTabs`. The counter once never fired because the fallback was always
+      // recorded as clear of parts. A run ringed by pads a tape apart has no path out that misses one.
+      const { fold } = load("house.fkld");
+      const run = { net: "pwr", pts: [{ x: 6.9, y: 7 }, { x: 7.1, y: 7 }] };
+      const ring: Vec2[] = Array.from({ length: 40 }, (_, k) => ({
+        x: 7 + 0.6 * Math.cos((k / 40) * 2 * Math.PI), y: 7 + 0.6 * Math.sin((k / 40) * 2 * Math.PI),
+      }));
+      const tapeW = 0.1;
+      const free = buildCopperCarrierExport(fold, [run], tapeW);
+      expect(free.componentTabs).toBe(0);
+      const out = buildCopperCarrierExport(fold, [run], tapeW, "x", ring);
+      expect(out.counts.tabs).toBe(1);
+      expect(out.componentTabs).toBe(1);
+      expect(out.padTabs).toBe(0); // the anchor itself is clear; only the way out is not
+      const { T, scale } = sheetFrame(fold);
+      const path = out.tabPaths[0]!;
+      const over = ring.map(T).some((q) => path.slice(1).some((_, i) => ptSeg(q, path[i]!, path[i + 1]!) < tapeW * scale));
+      expect(over).toBe(true);
+    });
+
     it("holds a run fused to its own net through that net, where every tab out would cross the other", () => {
       // akde-hex's shape: PWR rings a GND spur on every side but one corner, and the spur's GND trunk leaves
       // through that corner on a diagonal no tab can follow. The spur is copper of a piece with the trunk, so
