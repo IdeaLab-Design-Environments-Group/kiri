@@ -1089,6 +1089,11 @@ body.is-electronics .app-legend {
   box-shadow: var(--shadow);
 }
 .el-empty-hint[hidden] { display: none; }
+/* The fold a tap would place on, lit under the pointer (#58): the hinge in the accent, and a ghost of the
+   LED's two pads across it. Never a target itself — the tap belongs to the canvas under it. */
+.el-fold-hover { pointer-events: none; }
+.el-fold-hover-hinge { stroke: var(--accent); stroke-width: 4px; stroke-linecap: round; opacity: 0.75; }
+.el-fold-hover-pad { stroke: var(--accent-strong); stroke-width: 10px; stroke-linecap: round; opacity: 0.6; }
 @keyframes el-route-pulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(227, 192, 122, 0.8); }
   50% { box-shadow: 0 0 0 5px rgba(227, 192, 122, 0); }

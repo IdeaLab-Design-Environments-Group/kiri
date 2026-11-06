@@ -36,7 +36,6 @@ import {
   gapForLed,
   gapGraph,
   ledOf,
-  nearestGap,
   pointInFace,
   tilePolys,
   type Net,
@@ -103,7 +102,7 @@ import { footprintById } from "../model/library.js";
 import { mountingHint, mountingOf } from "../model/part-mounting.js";
 import { withSocket } from "../model/socket-seat.js";
 import { socketAction } from "./socket-action.js";
-import { syncFirstStep } from "./placement-guide.js";
+import { foldHover, foldInReach, missedFold, syncFirstStep } from "./placement-guide.js";
 import {
   BLOCKED,
   BLOCKED_SHOWN,
@@ -675,6 +674,7 @@ export class ElectronicsModal {
     this.svg.addEventListener("pointermove", (e) => this.onPointerMove(e));
     this.svg.addEventListener("pointerup", (e) => this.onPointerUp(e));
     this.svg.addEventListener("pointercancel", () => (this.pan = null));
+    this.svg.addEventListener("pointerleave", () => this.paintFoldHover(null));
     this.svg.addEventListener("wheel", (e) => this.onWheel(e), { passive: false });
     // `X` is a held modifier of the wire tool, so its release matters as much as its press.
     document.addEventListener("keyup", (e) => {
@@ -1325,9 +1325,9 @@ export class ElectronicsModal {
       // hinge gives it, which is the one thing about a fold-crossing part the author should not have to
       // work out by hand.
       if (this.placeMode === "gap") {
-        const hit = nearestGap(this.gaps, flat);
-        if (!hit || hit.dist > this.pickRadius()) return;
-        const [p, q] = hit.gap.ends;
+        const gap = foldInReach(this.gaps, flat, this.pickRadius());
+        if (!gap) return void (this.statusEl.textContent = missedFold("the part"));
+        const [p, q] = gap.ends;
         // Perpendicular to the hinge: the part crosses it rather than lying along it, which would put both
         // pads on the same tile and bridge nothing.
         const rot = ((Math.atan2(q.x - p.x, -(q.y - p.y)) * 180) / Math.PI + 360) % 360;
@@ -1394,14 +1394,15 @@ export class ElectronicsModal {
       this.select({ kind: "part", index: placed.length });
     } else {
       // LEDs straddle a gap: snap the click to the nearest hinge between two tiles.
-      const hit = nearestGap(this.gaps, flat);
-      if (!hit || hit.dist > this.pickRadius()) {
+      const gap = foldInReach(this.gaps, flat, this.pickRadius());
+      if (!gap) {
         this.select(null); // a tap on bare cloth clears the selection
         this.renderSidebar();
         this.render();
+        this.statusEl.textContent = missedFold("an LED"); // after render(), which rewrites the line (#58)
         return;
       }
-      const seat = ledOf(hit.gap.faceA, hit.gap.faceB);
+      const seat = ledOf(gap.faceA, gap.faceB);
       const led = this.newLed(seat.a, seat.b);
       const at = this.circuit.leds.findIndex((l) => l.a === led.a && l.b === led.b);
       if (at >= 0) {
@@ -2398,7 +2399,7 @@ export class ElectronicsModal {
       }
       return;
     }
-    if (!this.pan) return;
+    if (!this.pan) return this.paintFoldHover(e);
     const ctm = this.svg.getScreenCTM();
     if (!ctm) return;
     const dxPix = e.clientX - this.pan.x;
@@ -2410,6 +2411,13 @@ export class ElectronicsModal {
     this.pan.moved += Math.abs(dxPix) + Math.abs(dyPix);
     this.pan.x = e.clientX;
     this.pan.y = e.clientY;
+  }
+
+  /** Light the fold a tap would seat on, or nothing when none is in reach (#58); never over a wire preview. */
+  private paintFoldHover(e: PointerEvent | null): void {
+    if (this.tool === "wire") return;
+    const at = e && this.placeMode === "gap" && (this.tool === "led" || this.activePart()) ? this.clientToFlat(e) : null;
+    this.liveLayer().innerHTML = at ? foldHover(this.gaps, at, this.pickRadius(), (p) => this.tp(p)) : "";
   }
 
   private onPointerUp(e: PointerEvent): void {

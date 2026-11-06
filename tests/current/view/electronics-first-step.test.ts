@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { ElectronicsModal } from "../../../src/view/electronics-modal.js";
 import type { FoldFile } from "../../../src/model/fold-file.js";
+import { foldHover, foldInReach } from "../../../src/view/placement-guide.js";
 import { installDom } from "./mock-dom.js";
 
 /**
@@ -120,5 +121,81 @@ describe("view/electronics-modal > first step (#57)", () => {
     tapFlat(modal, modal.gaps[0].point);
     expect(modal.circuit.leds, "the LED button armed something that placed no LED").toHaveLength(1);
     expect(modal.circuit.battery).toBeFalsy();
+  });
+});
+
+describe("view/electronics-modal > a tap away from a fold (#58)", () => {
+  afterEach(() => {
+    delete (globalThis as any).document;
+    delete (globalThis as any).window;
+    delete (globalThis as any).location;
+  });
+
+  /** The middle of tile 0, which on the big grid is out of every fold's reach. */
+  const MID = { x: 50, y: 50 };
+
+  it("lights the fold a tap would place on, and nothing when none is in reach", () => {
+    const modal = openOn(grid(100));
+    const gap = modal.gaps[0];
+    hoverFlat(modal, { x: gap.point.x + 1, y: gap.point.y + 1 });
+    expect(modal.liveLayer().innerHTML).toContain("el-fold-hover");
+
+    hoverFlat(modal, MID);
+    expect(modal.liveLayer().innerHTML).not.toContain("el-fold-hover");
+  });
+
+  it("lights nothing while a tool that does not seat on a fold is armed", () => {
+    const modal = openOn(grid(100));
+    toolBtn(modal, "battery").click();
+    hoverFlat(modal, modal.gaps[0].point);
+    expect(modal.liveLayer().innerHTML).not.toContain("el-fold-hover");
+
+    toolBtn(modal, "led").click();
+    seatBtn(modal, "free").click();
+    hoverFlat(modal, modal.gaps[0].point);
+    expect(modal.liveLayer().innerHTML).not.toContain("el-fold-hover");
+  });
+
+  it("says why a tap out of reach placed nothing, and points at Seat", () => {
+    const modal = openOn(grid(100));
+    tapFlat(modal, MID);
+    expect(modal.circuit.leds).toHaveLength(0);
+    expect(status(modal)).toContain("Tap closer to a fold to place an LED");
+    expect(status(modal)).toContain("on a tile");
+  });
+
+  it("does not change what a tap places: still nothing on a tile, still an LED on a fold", () => {
+    const modal = openOn(grid(100));
+    tapFlat(modal, MID);
+    expect(modal.circuit.parts ?? []).toHaveLength(0);
+    tapFlat(modal, modal.gaps[0].point);
+    expect(modal.circuit.leds).toHaveLength(1);
+    expect(status(modal)).not.toContain("Tap closer");
+  });
+
+  it("lights exactly the folds a tap would seat on, out to the edge of reach", () => {
+    // The highlight and the tap read one rule, so "lit" and "would place" agree point for point.
+    const modal = openOn(grid(100));
+    const gap = modal.gaps[0];
+    const reach = modal.pickRadius();
+    const dir = gap.ends[0].x === gap.ends[1].x ? { x: 1, y: 0 } : { x: 0, y: 1 }; // across the hinge
+    const at = (d: number) => ({ x: gap.point.x + dir.x * d, y: gap.point.y + dir.y * d });
+    for (const [d, lit] of [[reach * 0.99, true], [reach * 1.01, false]] as const) {
+      expect(foldInReach(modal.gaps, at(d), reach) !== null, `at ${d}`).toBe(lit);
+      expect(foldHover(modal.gaps, at(d), reach, (p) => p) !== "", `at ${d}`).toBe(lit);
+    }
+    expect(foldInReach([], gap.point, reach), "no folds at all").toBeNull();
+    tapFlat(modal, at(reach * 1.01));
+    expect(modal.circuit.leds).toHaveLength(0);
+    tapFlat(modal, at(reach * 0.99));
+    expect(modal.circuit.leds).toHaveLength(1);
+  });
+
+  it("takes the highlight down when the pointer leaves the canvas", () => {
+    const modal = openOn(grid(100));
+    hoverFlat(modal, modal.gaps[0].point);
+    expect(modal.liveLayer().innerHTML).toContain("el-fold-hover");
+    modal.svg.dispatch("pointerleave", {});
+    expect(modal.liveLayer().innerHTML).toBe("");
   });
 });
