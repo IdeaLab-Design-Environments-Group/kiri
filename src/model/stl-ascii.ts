@@ -38,6 +38,17 @@ export function boxFrame(out: string[], c: V3, x: V3, y: V3, hx: number, hy: num
   quad(out, b00, b10, t10, t00); // −y
 }
 
+/**
+ * The triangles of an ASCII STL as flat `x,y,z` corner triples, three corners per triangle — what the Export
+ * dialog's 3D preview draws, so the picture is the file that downloads. Normals are not read: a renderer takes
+ * them from the winding, as the writers above do. A trailing facet with fewer than three corners is dropped.
+ */
+export function readStlTriangles(text: string): Float32Array {
+  const nums: number[] = [];
+  for (const m of text.matchAll(/vertex\s+(\S+)\s+(\S+)\s+(\S+)/g)) nums.push(Number(m[1]), Number(m[2]), Number(m[3]));
+  return new Float32Array(nums.slice(0, nums.length - (nums.length % 9)));
+}
+
 function normal(a: V3, b: V3, c: V3): V3 {
   const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
   const vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
