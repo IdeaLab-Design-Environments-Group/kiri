@@ -83,6 +83,25 @@ export class PartPicker {
       });
     }
     this.search.addEventListener("click", () => (this.menuClickGuard = true));
+    // The search box is the combobox and the menu its list (#64): Down goes into the list, Escape puts it
+    // away. The document's own shortcuts ignore a key typed into a box, so these have to be here.
+    this.search.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        this.setOpen(true);
+        this.firstRow()?.focus?.();
+      } else if (e.key === "Escape" && this.menuOpen) {
+        this.setOpen(false);
+      }
+    });
+  }
+
+  /** The first thing in the open list a key can land on: a part row, or a shelf when every shelf is shut. */
+  private firstRow(): HTMLElement | undefined {
+    const shown = (el: HTMLElement): boolean => (el.getClientRects?.().length ?? 1) > 0;
+    const rows = Array.from(this.menu.querySelectorAll<HTMLElement>(".el-part-row"));
+    return rows.find((r) => r.tagName.toUpperCase() === "BUTTON" && shown(r))
+      ?? Array.from(this.menu.querySelectorAll<HTMLElement>(".el-part-shelf-head")).find(shown);
   }
 
   /** Whether the library menu is out. */
@@ -281,9 +300,12 @@ export class PartPicker {
     this.fill();
   }
 
+  /** "Pick a part…" opens the same list the search box does, and hands the keyboard to the search box, so
+   *  browsing and typing are one control with two ways in rather than two controls (#64). */
   private toggle(): void {
     this.menuClickGuard = true;
     this.setOpen(!this.menuOpen);
+    if (this.menuOpen) this.search.focus?.();
   }
 
   /** Show or hide the menu, keeping the trigger's own state in step with it. */
@@ -291,6 +313,7 @@ export class PartPicker {
     this.menuOpen = open;
     this.menu.hidden = !open;
     this.trigger.setAttribute("aria-expanded", open ? "true" : "false");
+    this.search.setAttribute("aria-expanded", open ? "true" : "false");
     this.trigger.classList.toggle("is-open", open);
     if (open) this.fill();
   }

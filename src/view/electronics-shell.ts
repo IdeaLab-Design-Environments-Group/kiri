@@ -37,10 +37,10 @@ export function shellMarkup(): string {
                 <label class="el-group-label el-part-label" for="el-part">part</label>
                 <span class="el-part-picker">
                   <span class="el-part-fields">
-                    <input type="search" id="el-part-search" class="el-part-search" placeholder="search by name or package" aria-label="search the component library" autocomplete="off">
+                    <input type="search" id="el-part-search" class="el-part-search" placeholder="search by name or package" aria-label="search the component library" autocomplete="off" role="combobox" aria-controls="el-part-menu" aria-expanded="false" aria-autocomplete="list">
                     <span class="el-part-menu-wrap">
-                      <button type="button" class="el-part-trigger" aria-haspopup="listbox" aria-expanded="false" title="pick a library part, then click either rail to place it. The copper is broken there, so the tape does not short the part out"></button>
-                      <div class="el-part-menu" role="listbox" aria-label="component library" hidden></div>
+                      <button type="button" class="el-part-trigger" aria-haspopup="listbox" aria-controls="el-part-menu" aria-expanded="false" title="browse the library by shelf, or type in the search box beside it: both open this one list. Pick a part, then tap the sheet to place it"></button>
+                      <div class="el-part-menu" id="el-part-menu" role="listbox" aria-label="component library" hidden></div>
                       <select id="el-part" class="el-part" aria-hidden="true" tabindex="-1" title="pick a library part, then click either rail to place it. The copper is broken there, so the tape does not short the part out"></select>
                     </span>
                   </span>

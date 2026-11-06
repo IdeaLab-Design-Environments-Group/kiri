@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ElectronicsModal } from "../../../src/view/electronics-modal.js";
 import type { FoldFile } from "../../../src/model/fold-file.js";
-import { installDom } from "./mock-dom.js";
+import { MockElement, installDom } from "./mock-dom.js";
 
 /**
  * The small UI and accessibility leftovers from the UX review (issue #64), driven through the page.
@@ -97,6 +97,55 @@ describe("#64 the status line never changes the canvas height", () => {
     click(modal, ".el-route");
     expect(status.textContent.length).toBeGreaterThan(40);
     expect(status.title).toBe(status.textContent);
+  });
+});
+
+describe("#64 one way to find a part: the search box and the list are one combobox", () => {
+  let focused: any = null;
+  const realFocus = (MockElement.prototype as any).focus;
+  beforeEach(() => {
+    focused = null;
+    (MockElement.prototype as any).focus = function (this: any) { focused = this; };
+  });
+  afterEach(() => {
+    (MockElement.prototype as any).focus = realFocus;
+  });
+
+  it("makes the search box the combobox that owns the parts list", () => {
+    const modal = openOn(grid(1));
+    const search = q(modal, ".el-part-search");
+    const menu = q(modal, ".el-part-menu");
+    expect(search.getAttribute("role")).toBe("combobox");
+    expect(search.getAttribute("aria-controls")).toBe(menu.getAttribute("id"));
+    expect(search.getAttribute("aria-expanded")).toBe("false");
+    search.value = "cap";
+    search.dispatch("input", {});
+    expect(menu.hidden).toBe(false);
+    expect(search.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("opens the same list from Pick a part, with the cursor in the search box", () => {
+    const modal = openOn(grid(1));
+    q(modal, ".el-part-trigger").dispatch("click", {});
+    expect(q(modal, ".el-part-menu").hidden).toBe(false);
+    expect(focused, "Pick a part did not hand the keyboard to the search box").toBe(q(modal, ".el-part-search"));
+    expect(q(modal, ".el-part-search").getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("goes down into the list with the arrow key and arms a part from it, socket action included", () => {
+    const modal = openOn(grid(1));
+    const search = q(modal, ".el-part-search");
+    search.value = "LED";
+    search.dispatch("input", {});
+    search.dispatch("keydown", { key: "ArrowDown", preventDefault() {} });
+    expect(focused?.className).toBe("el-part-row");
+    focused.dispatch("click", {});
+    expect(modal.tool).toBe(focused.dataset.id);
+    expect(q(modal, ".el-part-menu").hidden).toBe(true);
+    // #36's "+ socket" is still on the rows of a part that needs one.
+    search.value = "XIAO";
+    search.dispatch("input", {});
+    expect(modal.overlay.querySelectorAll(".el-part-with-socket").length).toBeGreaterThan(0);
   });
 });
 
