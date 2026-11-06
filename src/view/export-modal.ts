@@ -2,6 +2,7 @@ import type { SvgExportPayload } from "../model/fkld-svg-export.js";
 import { DEFAULT_PRINT_SIZE, type StlExport } from "../model/stl-export.js";
 import { enterFocusScope } from "./dialog-focus.js";
 import { downloadBlob } from "./dom.js";
+import { TilePreviewSection, type TilePreviewLoader } from "./tile-preview.js";
 
 /** Returns the export payload for the current pattern when the modal opens, or null if none. */
 export type ExportProvider = () => SvgExportPayload | null;
@@ -44,6 +45,8 @@ export class ExportModal {
   private baseStatus = "";
   private payload: SvgExportPayload | null = null;
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The 3D picture of the tiles, rebuilt as the thickness and size boxes change. */
+  private readonly tiles: TilePreviewSection;
 
   constructor() {
     this.trigger = document.createElement("button");
@@ -57,7 +60,7 @@ export class ExportModal {
     this.overlay.className = "sim-overlay";
     this.overlay.hidden = true;
     this.overlay.innerHTML = `
-      <div class="sim-modal" role="dialog" aria-modal="true" aria-label="export pattern and mesh">
+      <div class="sim-modal export-modal" role="dialog" aria-modal="true" aria-label="export pattern and mesh">
         <header class="sim-modal-header">
           <span class="sim-modal-title">Export — SVG (cut + score) · STL (3D-printed tiles)</span>
           <button type="button" class="sim-modal-close" aria-label="close">×</button>
@@ -68,6 +71,10 @@ export class ExportModal {
             <figure><figcaption>Score</figcaption><div class="export-preview" data-k="score"></div></figure>
             <figure><figcaption>Both</figcaption><div class="export-preview" data-k="both"></div></figure>
           </div>
+          <details class="export-tiles-preview" open>
+            <summary>3D tiles preview</summary>
+            <div class="export-tiles-view" aria-label="3D preview of the tiles; drag to turn it"></div>
+          </details>
         </div>
         <footer class="sim-modal-footer export-footer">
           <span class="sim-status" role="status"></span>
@@ -105,6 +112,11 @@ export class ExportModal {
     this.stlHeightInput = this.overlay.querySelector(".export-stl-height")!;
     for (const box of [this.stlSizeInput, this.stlHeightInput]) box.addEventListener("input", () => this.setNotice(""));
     this.stlHeightUnit = this.overlay.querySelector(".export-stl-unit")!;
+    const tilesSection: HTMLDetailsElement = this.overlay.querySelector(".export-tiles-preview")!;
+    tilesSection.open = true; // expanded by default: the picture is what tells you the thickness is right
+    this.tiles = new TilePreviewSection(tilesSection, this.overlay.querySelector(".export-tiles-view")!, () =>
+      this.stlProvider?.(this.positiveOrNull(this.stlHeightInput), null, this.positiveOrNull(this.stlSizeInput)) ?? null);
+    for (const box of [this.stlSizeInput, this.stlHeightInput]) box.addEventListener("input", () => this.tiles.schedule());
 
     this.zipBtn.addEventListener("click", () => this.downloadZip());
     this.stlBtn.addEventListener("click", () => this.downloadStl());
@@ -127,6 +139,11 @@ export class ExportModal {
 
   setStlProvider(provider: StlProvider): void {
     this.stlProvider = provider;
+  }
+
+  /** Where the 3D tile preview's viewer comes from. Without one the dialog shows no 3D preview. */
+  setTilePreview(loader: TilePreviewLoader): void {
+    this.tiles.setLoader(loader);
   }
 
   /**
@@ -166,6 +183,7 @@ export class ExportModal {
     this.overlay.hidden = false;
     this.leaveFocus ??= enterFocusScope(this.overlay, this.trigger, { trap: true });
     this.writePreviews();
+    this.tiles.open(stlDefault);
   }
 
   /**
@@ -217,6 +235,7 @@ export class ExportModal {
 
   close(): void {
     this.overlay.hidden = true;
+    this.tiles.close();
     this.leaveFocus?.();
     this.leaveFocus = null;
   }
@@ -236,6 +255,12 @@ export class ExportModal {
     const stl = this.stlProvider?.(height, null, size) ?? null;
     if (!stl) return;
     downloadBlob(stl.filename, new Blob([stl.text], { type: "model/stl" }));
+  }
+
+  /** The number in `input` if it is above zero, else null (the builder's default), with nothing said or put back. */
+  private positiveOrNull(input: HTMLInputElement): number | null {
+    const raw = parseFloat(input.value);
+    return Number.isFinite(raw) && raw > 0 ? raw : null;
   }
 
   /**

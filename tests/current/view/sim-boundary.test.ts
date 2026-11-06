@@ -14,8 +14,11 @@ import { describe, expect, it } from "vitest";
  */
 const SRC = new URL("../../../src/", import.meta.url).pathname;
 
-/** Files allowed to import three.js: the 3D view itself and the GPU solver behind it. */
-const THREE_D = ["view/sim-canvas.ts", "sim/gpu/"];
+/**
+ * Files allowed to import three.js: the 3D view itself, the GPU solver behind it, and the Export dialog's
+ * 3D tile preview — each fetched on demand, never by a static import.
+ */
+const THREE_D = ["view/sim-canvas.ts", "view/stl-preview.ts", "sim/gpu/"];
 
 function sources(dir = SRC, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
@@ -56,6 +59,16 @@ describe("view/sim boundary", () => {
     expect(modal).toContain("import type { SimView }");
     // Fetched with a dynamic import — the form does not matter, only that it is not a static one.
     expect(modal).toMatch(/[^.\w]import\(\s*(\/\*[^*]*\*\/\s*)?[`"']\.\/sim-canvas/);
+  });
+
+  it("fetches the Export dialog's 3D tile preview only on demand", () => {
+    const statics = sources()
+      .filter((f) => f !== "view/stl-preview.ts")
+      .filter((f) => importsOf(f).some((i) => i.includes("stl-preview")));
+    expect(statics, `these modules import the tile preview eagerly: ${statics.join(", ")}`).toEqual([]);
+    expect(readFileSync(SRC + "main.ts", "utf8")).toMatch(/[^.\w]import\(\s*[`"']\.\/view\/stl-preview/);
+    // The dialog and its preview lifecycle hold only the interface.
+    expect(importsOf("view/tile-preview.ts")).toEqual([]);
   });
 
   it("keeps the boundary itself free of 3D dependencies", () => {

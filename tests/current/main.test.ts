@@ -63,6 +63,7 @@ vi.mock("../../src/view/export-modal.js", () => ({
     mountTrigger = vi.fn((container: { id: string }) => state.viewCalls.push("export -> " + container.id));
     setProvider = vi.fn();
     setEnabled = vi.fn();
+    setTilePreview = vi.fn();
   },
 }));
 

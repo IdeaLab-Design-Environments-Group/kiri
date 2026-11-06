@@ -43,6 +43,8 @@ installResizableLayout(app, convert.element, viewer.element);
 
 const simModal = new SimModal();
 const exportModal = new ExportModal();
+// The 3D tile preview carries three.js, so it is fetched the first time the dialog wants to draw, not at startup.
+exportModal.setTilePreview(() => import("./view/stl-preview.js").then((m) => (mount: HTMLElement) => new m.StlPreview(mount)));
 const patternEditor = new PatternEditorModal();
 const electronics = new ElectronicsModal();
 const examples = new ExamplesPage();

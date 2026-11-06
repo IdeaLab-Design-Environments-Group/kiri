@@ -237,4 +237,175 @@ describe("view/export-modal", () => {
       vi.useRealTimers();
     }
   });
+
+  describe("3D preview of the tiles", () => {
+    /** A preview viewer that records what it was asked to draw, standing in for the WebGL one. */
+    function fakeViewer() {
+      const shown: string[] = [];
+      const mounts: MockElement[] = [];
+      let disposed = 0;
+      let release: () => void = () => {};
+      let gate: Promise<void> | null = null;
+      const factory = (mount: HTMLElement) => {
+        mounts.push(mount as unknown as MockElement);
+        return { show: (text: string) => { shown.push(text); }, dispose: () => { disposed++; } };
+      };
+      return {
+        shown,
+        mounts,
+        disposed: () => disposed,
+        /** Hold the viewer's chunk back until `release` is called. */
+        hold() { gate = new Promise<void>((r) => { release = r; }); },
+        release: () => release(),
+        loader: async () => { if (gate) await gate; return factory; },
+      };
+    }
+
+    function setup(opts: { collapsed?: boolean; hold?: boolean } = {}) {
+      vi.useFakeTimers();
+      const { document } = installDom();
+      const modal = new ExportModal();
+      const viewer = fakeViewer();
+      if (opts.hold) viewer.hold();
+      const calls: Array<[number | null, number | null, number | null]> = [];
+      modal.setStlProvider((h, d, s) => {
+        calls.push([h, d, s]);
+        return { filename: "t.stl", text: `solid h=${h ?? "default"} s=${s}`, height: 1.6, unit: "mm", maxSubdiv: 0 };
+      });
+      modal.setProvider(() => null);
+      modal.setTilePreview(viewer.loader);
+      const overlay = document.body.children[0]!;
+      const section = overlay.querySelector(".export-tiles-preview")! as MockElement & { open: boolean };
+      if (opts.collapsed) section.open = false;
+      const type = (box: MockElement, value: string) => { box.value = value; box.dispatch("input"); };
+      return {
+        modal, viewer, calls, overlay, section, type,
+        height: overlay.querySelector(".export-stl-height")!,
+        size: overlay.querySelector(".export-stl-size")!,
+        toggle(open: boolean) { section.open = open; section.dispatch("toggle"); },
+      };
+    }
+
+    afterEach(() => { vi.useRealTimers(); });
+
+    it("draws the tiles when the dialog opens, from the build that prefills the boxes", async () => {
+      const t = setup();
+      t.modal.open();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(t.section.open).toBe(true);
+      expect(t.viewer.mounts).toEqual([t.overlay.querySelector(".export-tiles-view")]);
+      expect(t.viewer.shown).toEqual(["solid h=default s=130"]);
+      expect(t.calls).toHaveLength(1); // no second STL build just for the picture
+    });
+
+    it("rebuilds once, after the debounce, when the thickness or longest side change", async () => {
+      const t = setup();
+      t.modal.open();
+      await vi.advanceTimersByTimeAsync(0);
+      t.type(t.height, "2.5");
+      t.type(t.size, "90");
+      t.type(t.height, "3");
+      await vi.advanceTimersByTimeAsync(100);
+      expect(t.calls).toHaveLength(1); // still typing: nothing built yet
+      await vi.advanceTimersByTimeAsync(400);
+      expect(t.calls).toHaveLength(2);
+      expect(t.calls[1]).toEqual([3, null, 90]);
+      expect(t.viewer.shown.at(-1)).toBe("solid h=3 s=90");
+      expect(t.viewer.mounts).toHaveLength(1); // the same viewer is redrawn, not a new one per edit
+    });
+
+    it("keeps an empty or zero box on the builder's default while previewing, without a notice", async () => {
+      const t = setup();
+      t.modal.open();
+      await vi.advanceTimersByTimeAsync(0);
+      const status = t.overlay.querySelector(".sim-status")!.textContent;
+      t.type(t.height, "0");
+      await vi.advanceTimersByTimeAsync(500);
+      expect(t.calls.at(-1)).toEqual([null, null, 130]);
+      expect(t.height.value).toBe("0"); // the box is only corrected on download, not mid-typing
+      expect(t.overlay.querySelector(".sim-status")!.textContent).toBe(status);
+    });
+
+    it("builds nothing while the section is collapsed, and builds when it is opened", async () => {
+      const t = setup({ collapsed: true });
+      t.modal.open();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(t.viewer.mounts).toHaveLength(0);
+      t.type(t.height, "2");
+      await vi.advanceTimersByTimeAsync(500);
+      expect(t.calls).toHaveLength(1); // only the probe that prefills the boxes
+
+      t.toggle(true);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(t.calls).toHaveLength(2);
+      expect(t.viewer.shown).toEqual(["solid h=2 s=130"]);
+
+      t.toggle(false);
+      expect(t.viewer.disposed()).toBe(1);
+      t.type(t.height, "4");
+      await vi.advanceTimersByTimeAsync(500);
+      expect(t.calls).toHaveLength(2);
+    });
+
+    it("drops a pending rebuild and frees the viewer when the dialog closes", async () => {
+      const t = setup();
+      t.modal.open();
+      await vi.advanceTimersByTimeAsync(0);
+      t.type(t.height, "2");
+      t.modal.close();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(t.calls).toHaveLength(1);
+      expect(t.viewer.disposed()).toBe(1);
+      expect(t.viewer.shown).toEqual(["solid h=default s=130"]);
+    });
+
+    it("never makes a viewer whose chunk arrives after the dialog closed", async () => {
+      const t = setup({ hold: true });
+      t.modal.open();
+      t.modal.close();
+      t.viewer.release();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(t.viewer.mounts).toHaveLength(0);
+      expect(t.viewer.shown).toHaveLength(0);
+    });
+
+    it("draws only the newest build when one lands while the viewer is still loading", async () => {
+      const t = setup({ hold: true });
+      t.modal.open();
+      t.type(t.height, "2.2");
+      await vi.advanceTimersByTimeAsync(500);
+      expect(t.calls).toHaveLength(2);
+      t.viewer.release();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(t.viewer.shown).toEqual(["solid h=2.2 s=130"]);
+    });
+
+    it("makes a fresh viewer each time the dialog is opened again", async () => {
+      const t = setup();
+      t.modal.open();
+      await vi.advanceTimersByTimeAsync(0);
+      t.modal.close();
+      t.modal.open();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(t.viewer.mounts).toHaveLength(2);
+      expect(t.viewer.disposed()).toBe(1);
+    });
+
+    it("says so in the section when the viewer cannot start", async () => {
+      const t = setup();
+      t.modal.setTilePreview(async () => () => { throw new Error("no WebGL"); });
+      t.modal.open();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(t.overlay.querySelector(".export-tiles-view")!.textContent).toContain("no WebGL");
+    });
+
+    it("shows no viewer for a pattern with no tiles", async () => {
+      const t = setup();
+      t.modal.setStlProvider(() => null);
+      t.modal.open();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(t.viewer.mounts).toHaveLength(0);
+      expect(t.section.hidden).toBe(true);
+    });
+  });
 });
