@@ -488,6 +488,31 @@ describe("view/electronics-presenters > statusLine", () => {
     expect(status({ circuit, routedPartCount: 3 })).toMatch(/^3 LEDs · no battery/);
   });
 
+  it("says when a free LED part is on no net, and stops once each pad has one", () => {
+    // A library LED lands unwired by design (see the modal's tests), so the page says what it waits for
+    // rather than leaving it dark without a word.
+    const circuit = bare({
+      parts: [{ component: "LED_1206", x: 0, y: 0, free: true }, { component: "LED_1206", x: 1, y: 0, free: true }],
+      nets: rails(),
+    });
+    expect(status({ circuit, routedPartCount: 2 }))
+      .toContain("· 2 free LED parts are on no net yet — select one and set its pads to PWR and GND");
+    const [a, b] = terminals(PART_BY_ID.get("LED_1206")!.footprint).map(([name]) => name);
+    const half = {
+      ...circuit,
+      terminals: [{ part: 0, pad: a!, net: PWR_NET_ID }, { part: 0, pad: b!, net: GND_NET_ID }],
+    };
+    expect(status({ circuit: half, routedPartCount: 2 })).toContain("· 1 free LED part is on no net yet");
+    // One pad on a net is half-wired, not unwired: the netlist faults speak for that case.
+    const one = { ...circuit, terminals: [{ part: 1, pad: a!, net: PWR_NET_ID }] };
+    expect(status({ circuit: one, routedPartCount: 2 })).toContain("· 1 free LED part is on no net yet");
+    const both = {
+      ...half,
+      terminals: [...half.terminals, { part: 1, pad: a!, net: PWR_NET_ID }, { part: 1, pad: b!, net: GND_NET_ID }],
+    };
+    expect(status({ circuit: both, routedPartCount: 2 })).not.toContain("on no net");
+  });
+
 
   it("asks for a battery only once there is an LED to power", () => {
     expect(status({ circuit: bare({ leds: [{ a: 0, b: 1 }] }) })).toBe(

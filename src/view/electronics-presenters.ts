@@ -473,6 +473,14 @@ export function statusLine(input: StatusInput): string {
     ? `${n} LED${n === 1 ? "" : "s"} · ${batt}`
     : circuit.battery ? "no LEDs yet · battery set" : "no LEDs or battery yet";
   if (!circuit.battery && n > 0) msg += " · add a battery";
+  // A free-standing LED part lands on no net — wiring it is the author's decision, not a default — and an
+  // LED with neither pad on a net lights nothing and said nothing about it (#57).
+  const onNet = new Set((circuit.terminals ?? []).map((t) => t.part));
+  const dark = (circuit.parts ?? []).filter((p, i) => p.free && /^LED/.test(p.component) && !onNet.has(i)).length;
+  if (dark > 0) {
+    msg += ` · ${dark} free LED part${dark === 1 ? " is" : "s are"} on no net yet — select one and set its pads` +
+      " to PWR and GND";
+  }
   // Its pads shrink to fit a small tile, but only so far; past that they hang off it.
   if (circuit.battery && routed.batteryOverhang) {
     msg += " · the battery's pads hang off its tile — move it to a bigger one";
