@@ -1864,7 +1864,7 @@ describe("view/electronics-modal", () => {
       const { modal } = openOn(grid2x2());
       await modal.libraryReady;
       modal.overlay.querySelector(".el-part-trigger").dispatch("click", {});
-      expect(modal.menuOpen).toBe(true);
+      expect(modal.picker.open).toBe(true);
 
       const capacitors = shelves(modal).find((sh) => sh.label.startsWith("capacitors"))!;
       openShelf(modal, capacitors.label);
@@ -1873,7 +1873,7 @@ describe("view/electronics-modal", () => {
       row.dispatch("click", {});
 
       expect(modal.tool, "the clicked row did not arm its part").toBe("C_1206");
-      expect(modal.menuOpen, "choosing a part left the menu up").toBe(false);
+      expect(modal.picker.open, "choosing a part left the menu up").toBe(false);
       // The trigger says what is armed, so the shut menu still answers "which part am I placing?".
       expect(modal.overlay.querySelector(".el-part-trigger").textContent).toContain("C_1206");
     });
@@ -1920,7 +1920,7 @@ describe("view/electronics-modal", () => {
       search(modal, "xiao");
       withSocketAction(modal, "SeeedStudio_XIAO_RP2040").dispatch("click", {});
       expect(modal.tool).toBe("SeeedStudio_XIAO_RP2040");
-      expect(modal.menuOpen, "choosing put the menu away").toBe(false);
+      expect(modal.picker.open, "choosing put the menu away").toBe(false);
       const base = edits.length;
       tapFlat(modal, { x: 1.2, y: 1.2 });
 
@@ -1976,7 +1976,7 @@ describe("view/electronics-modal", () => {
       await modal.libraryReady;
       search(modal, "capacitor");
 
-      expect(modal.menuOpen, "typing did not bring the list out").toBe(true);
+      expect(modal.picker.open, "typing did not bring the list out").toBe(true);
       const found = shelves(modal);
       expect(found.length).toBeGreaterThan(0);
       for (const sh of found) expect(sh.open, `${sh.label} stayed shut while searching`).toBe(true);
@@ -1992,10 +1992,10 @@ describe("view/electronics-modal", () => {
       const { modal } = openOn(grid2x2());
       await modal.libraryReady;
       modal.overlay.querySelector(".el-part-trigger").dispatch("click", {});
-      expect(modal.menuOpen).toBe(true);
+      expect(modal.picker.open).toBe(true);
 
       (globalThis as any).document.dispatch("keydown", { key: "Escape" });
-      expect(modal.menuOpen, "Escape left the menu up").toBe(false);
+      expect(modal.picker.open, "Escape left the menu up").toBe(false);
       expect(modal.overlay.hidden, "Escape threw the whole editor away with the menu").toBe(false);
 
       (globalThis as any).document.dispatch("keydown", { key: "Escape" });

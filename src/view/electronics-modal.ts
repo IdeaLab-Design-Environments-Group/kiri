@@ -87,7 +87,6 @@ import { printScale } from "../model/print-scale.js";
 import { DEFAULT_SHEET, type SheetSpec } from "../model/fold-strain.js";
 import { placement } from "../model/parts.js";
 import { type Footprint, terminals } from "../model/footprint.js";
-import type { Component } from "../model/footprint.js";
 import type { SimMaterial } from "../sim/index.js";
 import {
   batteryParts, carrierFrameParts, centreOf, closedPath, fmt, inRing, isZero,
@@ -99,25 +98,10 @@ import {
   type ElectronicsDesignAdapter,
 } from "../model/electronics-design.js";
 import { footprintById } from "../model/library.js";
-import { mountingHint, mountingOf } from "../model/part-mounting.js";
 import { withSocket } from "../model/socket-seat.js";
-import { socketAction } from "./socket-action.js";
+import { PartPicker } from "./part-picker.js";
 import { foldHover, foldInReach, missedFold, syncFirstStep } from "./placement-guide.js";
-import {
-  BLOCKED,
-  BLOCKED_SHOWN,
-  DEFAULT_LED,
-  GROUP_OF,
-  OFFERED,
-  PART_BY_ID,
-  PART_GROUPS,
-  ledPart,
-  ledPitch,
-  loadRestOfLibrary,
-  matches,
-  paletteCount,
-  partLabel,
-} from "./electronics-palette.js";
+import { DEFAULT_LED, PART_BY_ID, ledPart, ledPitch, loadRestOfLibrary } from "./electronics-palette.js";
 export { UNSHELVED, shelfFor } from "./electronics-palette.js";
 import {
   type ExportRequest,
@@ -362,24 +346,8 @@ export class ElectronicsModal {
   private readonly mirrorButtons = new Map<keyof Mirror, HTMLButtonElement>();
   private readonly sideButtons = new Map<Side, HTMLButtonElement>();
   private readonly buildButtons = new Map<SimMaterial, HTMLButtonElement>();
-  /** The library picker — one control for the whole library, so a part added to it costs no toolbar room. */
-  private readonly partSelect: HTMLSelectElement;
-  /** Narrows the picker. At this many footprints the list is longer than the screen and the names are things
-   *  like `Switch_Slide_RightAngle_CnK_AYZ0102AGRLC_7.2x3mm`; typing is the only way in. */
-  private readonly partSearch: HTMLInputElement;
-  /** Says how much of the library the picker is showing, and how much of it can never be shown. */
-  private readonly partCount: HTMLElement;
-  /** The button that opens the library menu, showing what is armed. */
-  private readonly partTrigger: HTMLButtonElement;
-  /** The menu itself: shelves that open one at a time under the trigger. */
-  private readonly partMenu: HTMLElement;
-  /** Which shelves the author has opened. Closed is the default — see {@link fillMenu}. */
-  private readonly openShelves = new Set<string>();
-  private menuOpen = false;
-  /** Set by a click inside the menu, read and cleared by the document-level close. The mock DOM in the
-   *  tests has no event bubbling, and `stopPropagation` on a real click would be a lie either way: the
-   *  menu is not trying to swallow the click, only to say it was its own. */
-  private menuClickGuard = false;
+  /** The search box, the "Pick a part…" menu and the select behind them — see `part-picker.ts`. */
+  private readonly picker: PartPicker;
   /** The nets sidebar: what is declared, and the pads of whatever part is selected. */
   private readonly netList: HTMLElement;
   private readonly netNew: HTMLInputElement;
@@ -552,11 +520,6 @@ export class ElectronicsModal {
     // through it, so a tool that arrived after the first render would be a null check in the draw path.
     this.wire = new WireTool(this.wireHost());
     this.statusEl = this.overlay.querySelector(".el-status")!;
-    this.partSelect = this.overlay.querySelector(".el-part")!;
-    this.partSearch = this.overlay.querySelector(".el-part-search")!;
-    this.partCount = this.overlay.querySelector(".el-part-count")!;
-    this.partTrigger = this.overlay.querySelector(".el-part-trigger")!;
-    this.partMenu = this.overlay.querySelector(".el-part-menu")!;
     this.netList = this.overlay.querySelector(".el-net-list")!;
     this.netNew = this.overlay.querySelector(".el-net-new")!;
     this.netTally = this.overlay.querySelector(".el-side-tally")!;
@@ -575,32 +538,12 @@ export class ElectronicsModal {
       // other "add one of these" field in the world works.
       if (e.key === "Enter") this.addNet();
     });
-    this.partTrigger.addEventListener("click", () => this.toggleMenu());
-    // A click anywhere else puts the menu away. The guard above is what tells "anywhere else" from a
-    // click on the menu's own shelves and rows.
-    document.addEventListener("click", () => {
-      if (this.menuClickGuard) this.menuClickGuard = false;
-      else if (this.menuOpen) this.setMenuOpen(false);
+    this.picker = new PartPicker(this.overlay, {
+      armed: () => PART_BY_ID.get(this.tool),
+      withSocket: () => this.withSocketArmed,
+      // Arming clears the pairing, so the socket is set after the part is armed.
+      arm: (id, socket) => { this.selectTool(id); this.withSocketArmed = socket; },
     });
-    this.fillPalette();
-    // The browser would default a select to its first option; say so explicitly, so `value` names a real
-    // part before anyone has touched it and the two agree from the start.
-    this.partSelect.value = OFFERED[0]?.id ?? "";
-    // Picking a part IS choosing the tool — there is no separate "place a part" button to arm first. A
-    // plain click re-arms it too, so coming back from the LED tool is one gesture rather than two.
-    this.partSelect.addEventListener("change", () => this.armPicked());
-    this.partSelect.addEventListener("click", () => this.armPicked());
-    // Typing narrows the list; it never arms anything. Re-arming on every keystroke would change what the
-    // next click on the canvas places while the user is still reading the names.
-    for (const ev of ["input", "search"]) {
-      this.partSearch.addEventListener(ev, () => {
-        // Typing is a way into the list, so the list comes out to meet it: the menu opens on the first
-        // keystroke and the shelves that match open with it (see {@link fillMenu}).
-        this.fillPalette();
-        if (this.partSearch.value.trim()) this.setMenuOpen(true);
-      });
-    }
-    this.partSearch.addEventListener("click", () => (this.menuClickGuard = true));
 
     for (const btn of this.overlay.querySelectorAll<HTMLButtonElement>(".el-tool")) {
       const tool = btn.dataset.tool as Tool;
@@ -692,7 +635,7 @@ export class ElectronicsModal {
         // Escape puts the parts menu away and stops there. It used to leave the editor, which was right
         // for a dialog and wrong for a page: a page is not dismissible, and Escape wiping out the view
         // you navigated to is the sort of thing that loses work. Back is the way out.
-        if (this.menuOpen) this.setMenuOpen(false);
+        if (this.picker.open) this.picker.setOpen(false);
         return;
       }
       if (e.key === "r" || e.key === "R") {
@@ -738,7 +681,7 @@ export class ElectronicsModal {
     // The rest of the library is not in the main bundle. Ask for it now rather than at start-up, and
     // redraw the picker when it lands, so a search can turn up the parts that cannot be placed and say
     // why. Held so a caller — a test, mostly — can wait for the library to be whole.
-    this.libraryReady = loadRestOfLibrary().then(() => this.fillPalette());
+    this.libraryReady = loadRestOfLibrary().then(() => this.picker.fill());
     // Ask the controller for a fresh plan now that we're showing. `"none"`: putting the page up is not an
     // edit, and under Manual an edit is what marks the copper out of date — an editor that greeted the
     // author with "copper is out of date" before they had touched anything would be crying wolf.
@@ -977,7 +920,7 @@ export class ElectronicsModal {
 
   private selectTool(tool: Tool): void {
     // Arming anything is the end of browsing the library, whichever control did it.
-    if (this.menuOpen) this.setMenuOpen(false);
+    if (this.picker.open) this.picker.setOpen(false);
     this.tool = tool;
     this.withSocketArmed = false;
     // Arming is also an intent to PLACE, so the part picked up on the sheet stops swallowing the next tap.
@@ -990,190 +933,6 @@ export class ElectronicsModal {
     this.syncButtons();
   }
 
-  /**
-   * Arm whatever the picker is showing — but only if it is a part that can actually be placed.
-   *
-   * The picker also carries rows for parts the rail cannot pass through, so that searching for a USB
-   * socket finds it and says why it is not on offer. Those rows are disabled and carry no value, and a
-   * browser that lets one through anyway must not leave the canvas armed with a tool that places
-   * nothing.
-   */
-  private armPicked(): void {
-    const id = this.partSelect.value;
-    if (PART_BY_ID.has(id)) this.selectTool(id);
-  }
-
-  /**
-   * Rebuild the picker from the search box.
-   *
-   * Two things have to be true at once. The list has to be short enough to read — hence the search, and
-   * hence the shelves, which turn forty-odd names into eight groups of five. And a part the rail cannot
-   * pass through has to be *findable*, not absent: hunting for a connector and getting an empty list
-   * reads as a broken app, so a search that turns one up lists it, greyed out, under the reason. They
-   * are only listed while searching; every one of them at once would put the wall straight back.
-   *
-   * The armed part is always in the list even when the search excludes it, so narrowing the view never
-   * silently disagrees with what the next click will place.
-   */
-  private fillPalette(): void {
-    const terms = this.partSearch.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
-    const armed = PART_BY_ID.get(this.tool);
-    const shown = OFFERED.filter((c) => c === armed || matches(c, terms));
-    const blocked = terms.length ? BLOCKED.filter((b) => matches(b.component, terms)) : [];
-
-    this.partSelect.innerHTML = "";
-    for (const { label } of PART_GROUPS) {
-      const on = shown.filter((c) => GROUP_OF.get(c.id) === label);
-      if (on.length === 0) continue;
-      const group = this.addGroup(label);
-      for (const c of on) {
-        const opt = document.createElement("option");
-        opt.value = c.id;
-        opt.textContent = partLabel(c);
-        group.appendChild(opt);
-      }
-    }
-    if (shown.length === 0) this.addGroup("No part matches").disabled = true;
-    if (blocked.length > 0) {
-      const group = this.addGroup("In the library, but not in series on a rail");
-      group.disabled = true;
-      for (const b of blocked.slice(0, BLOCKED_SHOWN)) {
-        const opt = document.createElement("option");
-        opt.disabled = true;
-        opt.textContent = `${b.component.id} — ${b.why}`;
-        group.appendChild(opt);
-      }
-      if (blocked.length > BLOCKED_SHOWN) {
-        const more = document.createElement("option");
-        more.disabled = true;
-        more.textContent = `…and ${blocked.length - BLOCKED_SHOWN} more`;
-        group.appendChild(more);
-      }
-    }
-    // A rebuilt select forgets its selection, and the armed part is always present, so say it again.
-    if (armed) this.partSelect.value = armed.id;
-    this.fillMenu(shown, blocked, terms.length > 0, armed);
-    this.partCount.textContent = paletteCount(terms.length > 0, shown.length, blocked.length);
-  }
-
-  /**
-   * Build the library menu: a shelf per group, each one closed until it is asked for.
-   *
-   * A native `<select>` cannot do this. It opens as one flat scroll — every offered part at once, with
-   * the group headings as unclickable dividers — so the list you have to read to find a capacitor is the
-   * whole library every time. Here a shelf is a button: shut, it is one line saying how many parts are
-   * behind it; open, it is those parts and nothing else's.
-   *
-   * The `<select>` stays in the DOM beside it, hidden, and is still what holds the value. It is the model
-   * this menu writes to, so `change` fires exactly as it always did, the keyboard has something real to
-   * land on, and nothing downstream of the picker had to learn that the menu exists.
-   *
-   * Which shelves are open:
-   *   - searching, every shelf with a hit — typing is a request to see the matches, not to go hunting
-   *     for them behind eight more clicks;
-   *   - otherwise, the ones the author opened, plus the one holding the armed part, so opening the menu
-   *     always shows you where you are.
-   */
-  private fillMenu(
-    shown: Component[], blocked: { component: Component; why: string }[], searching: boolean,
-    armed: Component | undefined,
-  ): void {
-    this.partMenu.innerHTML = "";
-    this.partTrigger.textContent = armed ? partLabel(armed) + (this.withSocketArmed ? " + socket" : "") : "Pick a part…";
-    this.partTrigger.classList.toggle("is-empty", !armed);
-
-    for (const { label } of PART_GROUPS) {
-      const on = shown.filter((c) => GROUP_OF.get(c.id) === label);
-      if (on.length === 0) continue;
-      const holdsArmed = armed !== undefined && on.includes(armed);
-      const open = searching || this.openShelves.has(label) || holdsArmed;
-      const body = this.addShelf(label, on.length, open);
-      for (const c of on) {
-        const row = document.createElement("button");
-        row.type = "button";
-        row.className = "el-part-row";
-        row.dataset.id = c.id;
-        row.textContent = partLabel(c);
-        // Issue #36: which header or socket the part needs, or that it needs none.
-        const mount = row.appendChild(document.createElement("span"));
-        mount.className = "el-part-mount";
-        mount.textContent = mountingHint(mountingOf(c.id));
-        row.setAttribute("role", "option");
-        const isArmed = c === armed;
-        row.setAttribute("aria-selected", isArmed ? "true" : "false");
-        row.classList.toggle("is-armed", isArmed);
-        row.addEventListener("click", () => this.chooseFromMenu(c.id));
-        body.appendChild(row);
-        // Arming clears the pairing, so "+ socket" sets it after arming the part.
-        const pair = socketAction(c.id, (id) => { this.chooseFromMenu(id); this.withSocketArmed = true; this.fillPalette(); });
-        if (pair) body.appendChild(pair);
-      }
-    }
-    if (shown.length === 0) this.addShelf("No part matches", 0, false, true);
-    if (blocked.length > 0) {
-      // Open on sight: it exists only because a search turned up something the rail cannot pass through,
-      // and shut behind a click it would read as "no such part".
-      const body = this.addShelf("In the library, but with no terminal to wire", blocked.length, true, true);
-      for (const b of blocked.slice(0, BLOCKED_SHOWN)) {
-        body.appendChild(this.deadRow(`${b.component.id} — ${b.why}`));
-      }
-      if (blocked.length > BLOCKED_SHOWN) {
-        body.appendChild(this.deadRow(`…and ${blocked.length - BLOCKED_SHOWN} more`));
-      }
-    }
-  }
-
-  /** One shelf: its heading button and the (possibly hidden) box its parts hang in, which is returned. */
-  private addShelf(label: string, count: number, open: boolean, dead = false): HTMLElement {
-    const shelf = document.createElement("div");
-    shelf.className = "el-part-shelf";
-    const head = document.createElement("button");
-    head.type = "button";
-    head.className = "el-part-shelf-head";
-    head.textContent = label;
-    head.setAttribute("aria-expanded", open ? "true" : "false");
-    head.classList.toggle("is-open", open);
-    head.disabled = dead;
-    if (count > 0) {
-      const tally = document.createElement("span");
-      tally.className = "el-part-shelf-count";
-      tally.textContent = String(count);
-      head.appendChild(tally);
-    }
-    if (!dead) head.addEventListener("click", () => this.toggleShelf(label));
-    const body = document.createElement("div");
-    body.className = "el-part-shelf-body";
-    body.hidden = !open;
-    shelf.appendChild(head);
-    shelf.appendChild(body);
-    this.partMenu.appendChild(shelf);
-    return body;
-  }
-
-  /** A row that names a part the picker cannot arm — the reason it cannot, spelled out. */
-  private deadRow(text: string): HTMLElement {
-    const row = document.createElement("div");
-    row.className = "el-part-row is-dead";
-    row.textContent = text;
-    return row;
-  }
-
-  /** Open a shut shelf, or shut an open one. The menu stays up: shelving is browsing, not choosing. */
-  private toggleShelf(label: string): void {
-    this.menuClickGuard = true;
-    if (this.openShelves.has(label)) this.openShelves.delete(label);
-    else this.openShelves.add(label);
-    this.fillPalette();
-  }
-
-  /** Arm the part on a menu row, and put the menu away — that one WAS the choice. */
-  private chooseFromMenu(id: string): void {
-    this.menuClickGuard = true;
-    this.partSelect.value = id;
-    this.armPicked();
-    this.setMenuOpen(false);
-    this.fillPalette();
-  }
 
   /** Put down a library part, with its socket if that is what was armed, and select it. One edit. */
   private dropPart(part: PlacedPart): void {
@@ -1181,20 +940,6 @@ export class ElectronicsModal {
     const at = (this.circuit.parts ?? []).length;
     this.runCommand(appendPlacedParts(parts));
     this.select({ kind: "part", index: at + parts.length - 1 });
-  }
-
-  private toggleMenu(): void {
-    this.menuClickGuard = true;
-    this.setMenuOpen(!this.menuOpen);
-  }
-
-  /** Show or hide the menu, keeping the trigger's own state in step with it. */
-  private setMenuOpen(open: boolean): void {
-    this.menuOpen = open;
-    this.partMenu.hidden = !open;
-    this.partTrigger.setAttribute("aria-expanded", open ? "true" : "false");
-    this.partTrigger.classList.toggle("is-open", open);
-    if (open) this.fillPalette();
   }
 
   /**
@@ -1212,14 +957,6 @@ export class ElectronicsModal {
    */
   private newLed(a: number, b: number): Led {
     return { a, b };
-  }
-
-  /** One shelf in the picker, appended and returned so its parts can be hung on it. */
-  private addGroup(label: string): HTMLOptGroupElement {
-    const group = document.createElement("optgroup");
-    group.setAttribute("label", label);
-    this.partSelect.appendChild(group);
-    return group;
   }
 
   /** The library part the current tool places, or null when the tool is not a part tool. */
@@ -1244,9 +981,7 @@ export class ElectronicsModal {
     for (const [t, btn] of this.toolButtons) btn.classList.toggle("is-active", t === this.tool);
     // The picker is the palette's active control whenever a part tool is armed, and it shows which part.
     const part = this.activePart();
-    this.partSelect.classList.toggle("is-active", part !== null);
-    this.partTrigger.classList.toggle("is-active", part !== null);
-    if (part) this.partSelect.value = part.id;
+    this.picker.sync(part);
     for (const [m, btn] of this.viewButtons) btn.classList.toggle("is-active", m === this.viewMode);
     for (const [on, btn] of this.autoButtons) {
       btn.classList.toggle("is-active", on === this.autoRoute);
@@ -2358,7 +2093,7 @@ export class ElectronicsModal {
     // copper was committed, which is exactly when it is no longer useful.
     if (this.wire.onPointerDown(e)) return this.renderStatus();
     // A click on the canvas is a placement, and it puts the library away first.
-    if (this.menuOpen) this.setMenuOpen(false);
+    if (this.picker.open) this.picker.setOpen(false);
     if (e.button !== 0) return;
     // Grabbing a free part moves it, and is checked BEFORE the pan is armed for the same reason the wire
     // tool is: once `this.pan` is set the gesture is a pan, and a part under the cursor would never get a
