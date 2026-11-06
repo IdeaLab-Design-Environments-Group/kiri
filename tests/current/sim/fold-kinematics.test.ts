@@ -87,6 +87,14 @@ describe("the panel tree", () => {
     expect(model.foldDrive).toBe("kinematic");
     expect(model.foldClosure).toBeLessThan(1e-4);
   });
+
+  it("takes akde-hex, regenerated with an isometric goal", () => {
+    // Its old goal stretched bars by 34% and the tree fold missed it by 88.7% (the fixture above, #67).
+    const { model } = buildScene(load("akde-hex.fkld"))!.scene;
+    expect(buildCreaseTree(model).loops.length).toBe(1);
+    expect(model.foldDrive).toBe("kinematic");
+    expect(model.foldClosure).toBeLessThan(1e-4);
+  });
 });
 
 describe("the kinematic pose is the fold", () => {

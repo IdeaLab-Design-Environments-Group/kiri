@@ -12,7 +12,11 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { buildScene } from "../../src/sim/scene.js";
-import { maxTensileStrain, meanTensileStrain, REFERENCE_ONLY_EXAMPLES } from "../../src/sim/strain.js";
+import { maxTensileStrain, meanTensileStrain } from "../../src/sim/strain.js";
+import { pyramidGoal, VALLEY_FOLD } from "../../src/sim/build.js";
+import { buildFoldNet } from "../../src/sim/foldnet.js";
+import { computeState } from "@kirigami/model/geometry.js";
+import { foldNetToFkld } from "@kirigami/model/fkld-bridge.js";
 import type { FoldFile } from "../../src/model/fold-file.js";
 
 function loadExample(name: string): FoldFile {
@@ -69,19 +73,87 @@ describe("kirigamizer app sim path (src/sim via scene.buildScene)", () => {
     expect(maxTensileStrain(model)).toBeLessThan(0.12);
   });
 
-  // akde-hex stays REFERENCE-ONLY (issue #14): its declared foldedForm goal is not an isometry of its
-  // own flat net, so no fold can reach it and the tensile bound above cannot hold for it: measured
-  // goal strain is mean 0.054 / max 0.336. A goal regenerated from `pyramidGoal` is isometric, but the
-  // hex does not settle to it reliably, so the file is kept. This pins the known gap: when a
-  // regenerated file passes mean < 0.05 and max < 0.12 this fails, and the preset should move to
-  // REACHABLE in fold-realism.test.ts and get the same checks as the pyramid. Dropping it from
-  // REFERENCE_ONLY_EXAMPLES (src/sim/strain.ts) also removes the reference-only note from the load status.
-  it("hex goal pose is not isometric (reference-only, known gap)", () => {
-    expect(REFERENCE_ONLY_EXAMPLES).toEqual(["akde-hex.fkld"]);
-    for (const name of REFERENCE_ONLY_EXAMPLES) {
-      const { model } = buildScene(loadExample(name))!.scene;
-      model.position.set(model.goal);
-      expect(maxTensileStrain(model)).toBeGreaterThan(0.12);
+  // akde-hex was reference-only until it was regenerated (issue #67): its old goal stretched its worst
+  // bar by 34%. Regenerated from `pyramidGoal` its goal is isometric, but with a 1 mm sheet the apex hole
+  // (major cut) was smaller than the sim's contact thickness and the fold settled at max 2.1. The preset
+  // is now cut for a 3.5 mm sheet, whose major cut is 3.5x larger, and it folds within the pyramid's bounds.
+  it("folds the AKDE hex guided, within the pyramid's strain bounds", { timeout: 30000 }, () => {
+    const built = buildScene(loadExample("akde-hex.fkld"))!;
+    expect(built.mode).toBe("guided");
+    const { model, solver } = built.scene;
+    const flat = model.position.slice();
+    model.position.set(model.goal);
+    expect(maxTensileStrain(model)).toBeLessThan(1e-4);
+    model.position.set(flat);
+    solver.solve(16000, 1);
+    expect(meanTensileStrain(model)).toBeLessThan(0.05);
+    expect(maxTensileStrain(model)).toBeLessThan(0.12);
+  });
+
+  // One good fold could be luck: with a 1 mm sheet the hex passed at some swing angles and failed at
+  // others (max strain from 0.017 to 2.1). So the hex is rebuilt from its own file's parameters and
+  // folded with the sheet thickness, the valley fold (which sets the rim swing φ) and the start pose all
+  // nudged; every combination has to land within the same bounds.
+  describe("the AKDE hex folds within bounds near its parameters, not at one lucky point", () => {
+    const shipped = loadExample("akde-hex.fkld") as FoldFile & {
+      "fkld:meta_architecture": { materialThickness: number; sourcePyramid: { edgeCount: number; edgeLength: number; apexHeight: number } };
+    };
+    const arch = shipped["fkld:meta_architecture"];
+    const hexFkld = (T: number, valleyFold: number): FoldFile => {
+      const { edgeCount, edgeLength, apexHeight } = arch.sourcePyramid;
+      const state = computeState({ edgeCount, edgeLength, totalCurvature: apexHeight, materialThickness: T });
+      const net = buildFoldNet(state);
+      const inv = 1 / net.meta.scale;
+      const fkld = foldNetToFkld(net, state) as unknown as FoldFile & Record<string, unknown>;
+      fkld.file_frames = [
+        {
+          frame_classes: ["foldedForm"],
+          frame_attributes: ["3D"],
+          frame_inherit: true,
+          frame_parent: 0,
+          vertices_coords: pyramidGoal(net, valleyFold).map((p) => [p.x * inv, p.y * inv, p.z * inv]),
+        },
+      ] as FoldFile["file_frames"];
+      fkld["fkld:vertices_driven"] = net.vertices.map(() => 1);
+      fkld.frame_title = shipped.frame_title;
+      return fkld;
+    };
+    const settle = (fold: FoldFile, jitter = 0, seed = 1): { mean: number; max: number } => {
+      const { model, solver } = buildScene(fold)!.scene;
+      let s = seed;
+      for (let i = 0; i < model.position.length; i++) {
+        s = (s * 16807) % 2147483647;
+        model.position[i] += jitter * (s / 2147483647 - 0.5);
+      }
+      solver.solve(16000, 1);
+      return { mean: meanTensileStrain(model), max: maxTensileStrain(model) };
+    };
+
+    it("is the generator's output for those parameters", () => {
+      const regenerated = hexFkld(arch.materialThickness, VALLEY_FOLD);
+      const goalOf = (f: FoldFile) => (f as unknown as { file_frames: { vertices_coords: number[][] }[] }).file_frames[0].vertices_coords;
+      const want = goalOf(regenerated);
+      const got = goalOf(shipped);
+      expect(got.length).toBe(want.length);
+      for (let i = 0; i < want.length; i++) for (let d = 0; d < 3; d++) expect(got[i][d]).toBeCloseTo(want[i][d], 6);
+    });
+
+    const T0 = arch.materialThickness;
+    for (const T of [T0 - 0.5, T0, T0 + 0.5]) {
+      for (const valleyFold of [VALLEY_FOLD - 0.2, VALLEY_FOLD, VALLEY_FOLD + 0.2]) {
+        it(`T=${T} mm, valley fold ${valleyFold.toFixed(1)} rad`, { timeout: 30000 }, () => {
+          const { mean, max } = settle(hexFkld(T, valleyFold));
+          expect(mean).toBeLessThan(0.05);
+          expect(max).toBeLessThan(0.12);
+        });
+      }
+    }
+    for (const seed of [1, 2, 3]) {
+      it(`start pose jittered by 1% of the span (seed ${seed})`, { timeout: 30000 }, () => {
+        const { mean, max } = settle(shipped, 0.01, seed);
+        expect(mean).toBeLessThan(0.05);
+        expect(max).toBeLessThan(0.12);
+      });
     }
   });
 

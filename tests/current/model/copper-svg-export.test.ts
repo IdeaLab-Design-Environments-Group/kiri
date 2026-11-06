@@ -1327,7 +1327,7 @@ describe("model/copper-svg-export", () => {
       "house.fkld": 60,
       "church.fkld": 62,
       "puffin.fkld": 88,
-      "akde-hex.fkld": 182,
+      "akde-hex.fkld": 185, // 2026-11-06: hex re-exported (T=3.5 mm, issue #67), a new model; was 182 on the old one
       "akde-square-pyramid.fkld": 82,
       "akde-decagon-pyramid.fkld": 218,
     };

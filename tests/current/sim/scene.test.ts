@@ -36,8 +36,8 @@ describe("sim/scene", () => {
     expect(pyramidInputsFromFold(loadExample("akde-hex.fkld"))).toEqual({
       edgeCount: 6,
       edgeLength: 100,
-      totalCurvature: 100.00000000000001,
-      materialThickness: 1,
+      totalCurvature: 100,
+      materialThickness: 3.5,
     });
   });
 

@@ -79,27 +79,30 @@ export function setupGuidedFold(model: BarHingeModel, net: FoldNet): void {
  */
 export const VALLEY_FOLD = 2;
 
-/** The isometric folded position of every FoldNet node (see {@link setupGuidedFold}). */
-export function pyramidGoal(net: FoldNet): Vec3[] {
+/**
+ * The isometric folded position of every FoldNet node (see {@link setupGuidedFold}), with every
+ * molecule's valley folded to `valleyFold` rad.
+ */
+export function pyramidGoal(net: FoldNet, valleyFold = VALLEY_FOLD): Vec3[] {
   // The valley fold falls as φ grows, from π where the rim corners leave their faces; scan for the
-  // first φ that folds it to VALLEY_FOLD or less, then bisect back to the crossing.
+  // first φ that folds it to `valleyFold` or less, then bisect back to the crossing.
   const STEP = 0.01;
   let lo = -1;
   let hi = -1;
   for (let phi = STEP; phi < Math.PI / 2; phi += STEP) {
     const placed = placePyramid(net, phi);
     if (!placed) continue;
-    if (placed.valleyFold > VALLEY_FOLD) lo = phi;
+    if (placed.valleyFold > valleyFold) lo = phi;
     else if (lo >= 0) {
       hi = phi;
       break;
     }
   }
-  if (hi < 0) throw new Error(`pyramidGoal: no rim swing folds the valleys to ${VALLEY_FOLD}`);
+  if (hi < 0) throw new Error(`pyramidGoal: no rim swing folds the valleys to ${valleyFold}`);
   for (let i = 0; i < 50; i++) {
     const mid = 0.5 * (lo + hi);
     const placed = placePyramid(net, mid);
-    if (placed && placed.valleyFold > VALLEY_FOLD) lo = mid;
+    if (placed && placed.valleyFold > valleyFold) lo = mid;
     else hi = mid;
   }
   return placePyramid(net, hi)!.goal;
