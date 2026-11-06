@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ElectronicsModal } from "../../../src/view/electronics-modal.js";
+import { shellMarkup } from "../../../src/view/electronics-shell.js";
 import type { FoldFile } from "../../../src/model/fold-file.js";
 import { MockElement, installDom } from "./mock-dom.js";
 
@@ -254,6 +255,24 @@ describe("#64 every small control is a 24 px target (WCAG 2.5.8)", () => {
     // Text inputs are as wide as the column; it is their height that was short.
     if (!/name|pad-net/.test(selector)) expect(w, `${selector} width`).toBeGreaterThanOrEqual(24);
     expect(h, `${selector} height`).toBeGreaterThanOrEqual(24);
+  });
+});
+
+describe("#64 nothing reachable by Tab or a screen reader is nameless or 2 px wide", () => {
+  it("takes the value-holding part select out of the page instead of shrinking it to 2x2 px", () => {
+    const select = shellMarkup().match(/<select[^>]*class="el-part"[^>]*>/)?.[0] ?? "";
+    expect(select).toMatch(/\shidden(\s|>)/);
+    expect(rule(".el-part")).toMatch(/display:\s*none/);
+    // The caption names the control a person actually uses: the search box.
+    expect(shellMarkup()).toMatch(/<label[^>]*for="el-part-search"/);
+  });
+
+  it("names the FKLD viewer's scrolling details panel, which Chrome makes a Tab stop", () => {
+    const viewer = readFileSync("public/viewer/index.html", "utf8");
+    const aside = viewer.match(/<aside id="sidebar"[^>]*>/)?.[0] ?? "";
+    expect(aside).toMatch(/aria-label="[^"]+"/);
+    expect(aside).toMatch(/role="region"/);
+    expect(aside).toMatch(/tabindex="0"/);
   });
 });
 

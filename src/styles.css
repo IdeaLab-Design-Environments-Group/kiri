@@ -1154,13 +1154,9 @@ body.is-electronics .app-legend {
    menu. Opened, it was one flat scroll of 43 rows with the group names as unclickable dividers, which is
    the whole library every time you want a capacitor. It stays in the DOM, out of sight and out of the tab
    order, with the button and the shelves below drawn over it. */
-.el-part {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-  pointer-events: none;
-}
+/* The select only holds the value the menu writes; nobody uses it. Out of the page entirely, not shrunk
+   to 1 px: shrunk, it was still a 2x2 px control a screen reader found and could not use (#64). */
+.el-part { display: none; }
 .el-part-menu-wrap {
   position: relative;
   display: inline-flex;

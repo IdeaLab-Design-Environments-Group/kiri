@@ -312,7 +312,8 @@
   <main>
     <div class="canvas-wrap" id="canvas-wrap"><svg id="canvas"></svg></div>
     <div id="pane-resizer"><button id="sidebar-collapse" type="button" title="Hide sidebar">›</button></div>
-    <aside id="sidebar"></aside>
+    <!-- A scroller with nothing focusable in it is a Tab stop in Chrome anyway, so it is named. -->
+    <aside id="sidebar" role="region" aria-label="Pattern details" tabindex="0"></aside>
   </main>
 
   <script>
