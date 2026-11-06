@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { SimCameraFollow } from "./sim-camera-follow";
+import { foldFrame } from "./sim-camera-fit.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { BarHingeModel, FoldDrive, FoldNet, FoldScene, FoldSolver, SimMaterial } from "../sim/index.js";
 import { applyPrintedClosure, FoldRunner, FOLD_REACHED_EPS, meanTensileStrain } from "../sim/index.js";
@@ -323,35 +324,23 @@ export class SimCanvas implements SimView {
     // span open while the sim's own tests, which run without collision, reported them shut.
     this.cpu.enableCollision();
 
-    // Frame the camera to the model's ACTUAL bounding box — the union of the flat rest and the
-    // folded goal, so nothing crops as the fold slider scrubs — rather than a fixed radius. The
+    // Frame the camera to the model's ACTUAL bounding box rather than a fixed radius: the folded goal
+    // of a guided fold, since Simulate opens by folding it (see `sim-camera-fit`), else the sheet. The
     // importer normalizes every model to a bounding-SPHERE of radius 1, so a high-aspect relief (a
     // tall, narrow relief especially) occupies only a thin slice of a fixed sphere and renders as
     // a sliver. Fitting to the box makes any aspect fill the view. Tightening near/far to the box
-    // also keeps the ~250:1 depth ratio that stops coincident folded faces z-fighting.
-    const mdl = scene.model;
-    const anyDrivenNode = ((): boolean => { for (let i = 0; i < mdl.driven.length; i++) if (mdl.driven[i]) return true; return false; })();
-    let loX = Infinity, loY = Infinity, loZ = Infinity, hiX = -Infinity, hiY = -Infinity, hiZ = -Infinity;
-    const swallow = (a: Float32Array): void => {
-      for (let i = 0; i < mdl.numNodes; i++) {
-        const x = a[3 * i], y = a[3 * i + 1], z = a[3 * i + 2];
-        if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
-        if (x < loX) loX = x; if (x > hiX) hiX = x;
-        if (y < loY) loY = y; if (y > hiY) hiY = y;
-        if (z < loZ) loZ = z; if (z > hiZ) hiZ = z;
-      }
-    };
-    swallow(mdl.position);
-    if (anyDrivenNode) swallow(mdl.goal); // guided: also bound the folded relief it eases into
-    const cx = (loX + hiX) / 2, cy = (loY + hiY) / 2, cz = (loZ + hiZ) / 2;
+    // also keeps the ~250:1 depth ratio that stops coincident folded faces z-fighting; near/far and
+    // the settle threshold use the sheet-and-goal extent, so the flat sheet is not clipped either.
+    const { centre, span, reachSpan } = foldFrame(scene.model);
+    const { x: cx, y: cy, z: cz } = centre;
     // Fit the LARGEST box dimension to the frame. (Old code framed the radius-1 bounding sphere —
     // span≈2 — at reach 2.4, i.e. reach ≈ span·1.2; reuse that density so the proven framing is
     // unchanged for square models while narrow signs now fill the view too.)
-    const span = Math.max(hiX - loX, hiY - loY, hiZ - loZ, 1e-3);
     const reach = span * 1.2;
-    this.settleEps = reach * SETTLE_REL;
-    this.camera.near = Math.max(0.02, reach * 0.04);
-    this.camera.far = reach * 12;
+    const depthReach = reachSpan * 1.2;
+    this.settleEps = depthReach * SETTLE_REL;
+    this.camera.near = Math.max(0.02, depthReach * 0.04);
+    this.camera.far = depthReach * 12;
     this.camera.position.set(cx + reach, cy - reach, cz + reach * 0.85);
     this.camera.updateProjectionMatrix();
     this.controls.target.set(cx, cy, cz);

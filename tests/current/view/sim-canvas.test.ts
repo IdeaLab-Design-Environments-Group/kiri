@@ -361,6 +361,26 @@ describe("view/sim-canvas", () => {
     expect(seen.at(-1)).toBe(false); // and it says so when it lets go
   });
 
+  /** A softly guided scene, so it is taken to a goal. */
+  function guidedScene() {
+    const scene = makeScene({ pinned: false });
+    scene.model.softDriven = true;
+    scene.model.guideWeight = 1;
+    return scene;
+  }
+
+  it("aims the camera at the folded goal of a guided fold", async () => {
+    const { SimCanvas } = await import("../../../src/view/sim-canvas.js");
+    const canvas = new SimCanvas(makeContainer()) as any;
+    const scene = guidedScene();
+    scene.model.numNodes = 3;
+    scene.model.rest = scene.model.position.slice();
+    scene.model.driven = new Uint8Array([1, 1, 1]);
+    scene.model.goal = new Float32Array([20, 0, 0, 21, 0, 0, 20, 1, 1]);
+    canvas.setScene(scene);
+    expect(canvas.controls.target.set).toHaveBeenLastCalledWith(20.5, 0.5, 0.5);
+  });
+
   it("stops the fold and reports it when the solver throws", async () => {
     // A frame that threw used to escape `loop` before it asked for the next frame, so the viewer
     // froze with nothing on screen to say why.
