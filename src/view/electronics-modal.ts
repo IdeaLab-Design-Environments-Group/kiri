@@ -1380,11 +1380,8 @@ export class ElectronicsModal {
       // An LED asked for on a tile is an ordinary free part carrying an LED footprint. It gets no `Led`
       // entry, so the router does not bridge it across a hinge and does not decide which leg is PWR — which
       // side is positive stops being a routing outcome and becomes something the author holds.
-      //
-      // Holding it does not mean having to state it. The two pads land on PWR and GND, the LED's own way
-      // round, and the author changes either from the pads panel — a default, not a decision taken from
-      // them. Landing unwired meant every LED placed on a tile needed two manual assignments before it
-      // could light, which is a chore rather than a choice.
+      // It lands on no net, like every placed part (see the note below `assignPad`), and the status line
+      // says so until its pads are on one.
       const id = DEFAULT_LED.id;
       if (pointInFace(this.faces, flat) < 0) {
         this.select(null);
