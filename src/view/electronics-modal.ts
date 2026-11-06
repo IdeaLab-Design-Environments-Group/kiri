@@ -1061,7 +1061,7 @@ export class ElectronicsModal {
       // work out by hand.
       if (this.placeMode === "gap") {
         const gap = foldInReach(this.gaps, flat, this.pickRadius());
-        if (!gap) return void (this.statusEl.textContent = missedFold("the part"));
+        if (!gap) return this.say(missedFold("the part"));
         const [p, q] = gap.ends;
         // Perpendicular to the hinge: the part crosses it rather than lying along it, which would put both
         // pads on the same tile and bridge nothing.
@@ -1134,7 +1134,7 @@ export class ElectronicsModal {
         this.select(null); // a tap on bare cloth clears the selection
         this.renderSidebar();
         this.render();
-        this.statusEl.textContent = missedFold("an LED"); // after render(), which rewrites the line (#58)
+        this.say(missedFold("an LED")); // after render(), which rewrites the line (#58)
         return;
       }
       const seat = ledOf(gap.faceA, gap.faceB);
@@ -1649,7 +1649,7 @@ export class ElectronicsModal {
     const name = this.netNew.value.trim();
     if (!name) return;
     if (this.nameTaken(name, null)) {
-      this.statusEl.textContent = `There is already a net called ${name} — names have to be unique`;
+      this.say(`There is already a net called ${name} — names have to be unique`);
       return;
     }
     this.runCommand(addNetCommand(this.mintNet(name)));
@@ -1663,9 +1663,9 @@ export class ElectronicsModal {
     const was = this.nets().find((n) => n.id === id);
     if (!was) return;
     if (!name || this.nameTaken(name, id)) {
-      this.statusEl.textContent = !name
+      this.say(!name
         ? "A net needs a name"
-        : `There is already a net called ${name} — names have to be unique`;
+        : `There is already a net called ${name} — names have to be unique`);
       this.renderNets(); // put the box back to the name that actually holds
       return;
     }
@@ -1693,9 +1693,9 @@ export class ElectronicsModal {
     // After the emit, not before: `render()` rewrites the status line from the circuit, so a message set
     // first is overwritten by the redraw it triggers.
     if (net) {
-      this.statusEl.textContent = on > 0
+      this.say(on > 0
         ? `Deleted net ${net.name} and unwired ${on} pad${on === 1 ? "" : "s"}`
-        : `Deleted net ${net.name}`;
+        : `Deleted net ${net.name}`);
     }
   }
 
@@ -1803,7 +1803,7 @@ export class ElectronicsModal {
       // the side this feature exists to export — one edited while the author was looking at the other.
       if (this.stale && !this.forceReplan()) {
         // The re-plan failed, so the plan in hand is the stale one: say so and make no file from it.
-        this.statusEl.textContent += " — export cancelled";
+        this.say(this.statusEl.textContent + " — export cancelled");
         return undefined;
       }
       return fn();
@@ -1846,7 +1846,7 @@ export class ElectronicsModal {
     }
     const led = sel ? this.circuit.leds[sel.index] : undefined;
     if (!led || !sel) {
-      this.statusEl.textContent = "select a component first, then press R to turn it round";
+      this.say("select a component first, then press R to turn it round");
       return;
     }
     // R cycles: the router's choice -> turned round -> back to the router's choice.
@@ -1873,7 +1873,7 @@ export class ElectronicsModal {
     const { items } = this.listFor(sel.kind);
     const item = items[sel.index];
     if (!item) {
-      this.statusEl.textContent = "select a component first, then press R to turn it round";
+      this.say("select a component first, then press R to turn it round");
       return;
     }
     this.runCommand(cyclePartFlip(sel as CommandPartSelection, this.plannedPartFlip(sel)));
@@ -2205,7 +2205,7 @@ export class ElectronicsModal {
       // Keep the last plan on screen (still marked stale) and say why, rather than letting the click die silently.
       console.error(err);
       this.stale = true;
-      this.statusEl.textContent = `routing failed: ${err instanceof Error ? err.message : String(err)}`;
+      this.say(`routing failed: ${err instanceof Error ? err.message : String(err)}`);
       return false;
     }
   }
@@ -2241,7 +2241,7 @@ export class ElectronicsModal {
       return;
     }
     this.routeBtn.disabled = true;
-    this.statusEl.textContent = "routing…";
+    this.say("routing…");
     requestAnimationFrame(() => requestAnimationFrame(() => {
       try {
         this.routeNow();
@@ -2267,7 +2267,7 @@ export class ElectronicsModal {
     this.draw();
     this.renderNets();
     this.renderStatus();
-    if (!ok) this.statusEl.textContent = failure; // renderStatus would paint over the reason
+    if (!ok) this.say(failure ?? ""); // renderStatus would paint over the reason
   }
 
   private render(): void {
@@ -2611,7 +2611,7 @@ export class ElectronicsModal {
   private saveExport(out: ExportResult): void {
     const saved = !!out.filename && out.svg !== undefined;
     if (saved) downloadBlob(out.filename!, new Blob([out.svg!], { type: "image/svg+xml" }));
-    this.statusEl.textContent = out.message;
+    this.say(out.message);
     syncExportNote(this.overlay, saved ? "" : out.message); // a refusal is also written under the buttons
   }
 
@@ -2649,6 +2649,13 @@ export class ElectronicsModal {
    * tool, which holds the faults for a wire that is still under the hand and is not on the circuit at
    * all, and the amber on the Route button.
    */
+  /** Write the status line, with the whole of it in the title: the line is cut to one line, so a long one
+   *  ends in an ellipsis rather than growing a second line that takes height from the canvas (#64). */
+  private say(text: string): void {
+    this.statusEl.textContent = text;
+    this.statusEl.title = text;
+  }
+
   private renderStatus(): void {
     const selPart = this.partSelection();
     const sel = this.selected;
@@ -2656,7 +2663,7 @@ export class ElectronicsModal {
     syncFirstStep(this.overlay.querySelector<HTMLElement>(".el-empty-hint"), this.circuit, this.placeMode);
     syncWireDelete(this.overlay.querySelector(".el-wire-sect"), this.wire.selected());
     syncWireWidth(this.overlay.querySelector(".el-wire-sect"), this.wire.selectedWidthMm(), this.tapeMm());
-    this.statusEl.textContent = statusLine({
+    this.say(statusLine({
       circuit: this.circuit,
       routed: this.routed,
       routedPartCount: this.routedParts().length,
@@ -2673,7 +2680,7 @@ export class ElectronicsModal {
           ? this.listFor(selPart.kind).items[selPart.index]
           : this.circuit.leds[sel.index]
         : undefined,
-    });
+    }));
   }
 }
 

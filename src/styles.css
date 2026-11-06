@@ -1951,9 +1951,11 @@ body.is-electronics .app-legend {
   pointer-events: none;
 }
 /* One quiet bottom row: a compact swatch legend on the left, the live status on the right. */
+/* The status is one line however long it gets: wrapping took its second line from the canvas, which
+   shrank under the pattern once a route was made (#64). The full sentence is in its title. */
 .el-footer-row {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: space-between;
   gap: 0.4rem 1rem;
@@ -1968,9 +1970,19 @@ body.is-electronics .app-legend {
   gap: 0 0.85rem;
 }
 .el-footer-row .el-status {
-  flex: 0 1 auto;
+  flex: 1 1 0;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
   font-size: 0.78rem;
   color: var(--muted, #667085);
+}
+/* Narrow screens: the legend takes the row and the status gets a line of its own, still one line. */
+@media (max-width: 760px) {
+  .el-footer-row { flex-wrap: wrap; }
+  .el-footer-row .el-status { flex-basis: 100%; text-align: left; }
 }
 .el-key-led { color: #d24545; }
 .el-key-pwr { color: #ff0000; }
