@@ -101,6 +101,7 @@ import { footprintById } from "../model/library.js";
 import { withSocket } from "../model/socket-seat.js";
 import { PartPicker } from "./part-picker.js";
 import { withoutLed, withoutPart } from "./stale-copper.js";
+import { CanvasCursor, describeSpot } from "./canvas-cursor.js";
 import { foldHover, foldInReach, missedFold, syncFirstStep } from "./placement-guide.js";
 import { DEFAULT_LED, PART_BY_ID, ledPart, ledPitch, loadRestOfLibrary } from "./electronics-palette.js";
 export { UNSHELVED, shelfFor } from "./electronics-palette.js";
@@ -323,6 +324,8 @@ export class ElectronicsModal {
   /** Copper the author draws themselves. Armed by the `wire` tool; inert — every handler returns false —
    *  whenever it is not, which is what lets the guards at the head of the pointer handlers be one line. */
   private readonly wire: WireTool;
+  /** The keyboard's pointer on the canvas (#64): arrows move it, Enter or Space taps where it is. */
+  private readonly cursor: CanvasCursor;
   private readonly viewButtons = new Map<ViewMode, HTMLButtonElement>();
   /** The two halves of the Route segment, keyed by what they set {@link autoRoute} to. */
   private readonly autoButtons = new Map<boolean, HTMLButtonElement>();
@@ -520,6 +523,7 @@ export class ElectronicsModal {
     // Built as soon as there is a canvas to hand it, and never later: `draw()` repaints the live layer
     // through it, so a tool that arrived after the first render would be a null check in the draw path.
     this.wire = new WireTool(this.wireHost());
+    this.cursor = new CanvasCursor(this.cursorHost());
     this.statusEl = this.overlay.querySelector(".el-status")!;
     this.netList = this.overlay.querySelector(".el-net-list")!;
     this.netNew = this.overlay.querySelector(".el-net-new")!;
@@ -620,6 +624,8 @@ export class ElectronicsModal {
     this.svg.addEventListener("pointercancel", () => (this.pan = null));
     this.svg.addEventListener("pointerleave", () => this.paintFoldHover(null));
     this.svg.addEventListener("wheel", (e) => this.onWheel(e), { passive: false });
+    this.svg.addEventListener("focus", () => this.cursor.show());
+    this.svg.addEventListener("blur", () => this.cursor.hide());
     // `X` is a held modifier of the wire tool, so its release matters as much as its press.
     document.addEventListener("keyup", (e) => {
       if (!this.overlay.hidden && !isTyping(e.target)) this.wire.onKey(e);
@@ -632,11 +638,19 @@ export class ElectronicsModal {
       // worse: it deleted the selected part while you were clearing a name.
       if (isTyping(e.target)) return;
       if (this.wire.onKey(e)) return this.renderStatus();
+      // The arrows, Enter and Space are the cursor's while the canvas has focus (#64).
+      if (e.target === this.svg && this.cursor.onKey(e)) return;
       if (e.key === "Escape") {
         // Escape puts the parts menu away and stops there. It used to leave the editor, which was right
         // for a dialog and wrong for a page: a page is not dismissible, and Escape wiping out the view
         // you navigated to is the sort of thing that loses work. Back is the way out.
         if (this.picker.open) this.picker.setOpen(false);
+        // On the canvas it puts a selection down, which is what tapping away from it does (#64).
+        else if (e.target === this.svg && this.selected) {
+          this.select(null);
+          this.renderSidebar();
+          this.render();
+        }
         return;
       }
       if (e.key === "r" || e.key === "R") {
@@ -1022,7 +1036,11 @@ export class ElectronicsModal {
 
   private onCanvasClick(e: MouseEvent): void {
     const flat = this.clientToFlat(e);
-    if (!flat) return;
+    if (flat) this.placeAt(flat);
+  }
+
+  /** A tap at a pattern point, from the pointer or the keyboard cursor. */
+  private placeAt(flat: Vec2): void {
     // A tap on a part already placed picks that part up, whatever tool is armed — the same gesture as
     // tapping an LED, and for the same reason: deleting on the gesture that selects leaves no way to pick
     // one up in order to turn it round. Delete takes it off. It comes before placing, so the target a part
@@ -1285,6 +1303,45 @@ export class ElectronicsModal {
       live: () => this.liveLayer(),
       routed: () => this.routed,
     };
+  }
+
+  /** Everything the keyboard cursor needs of this editor (#64), in world coordinates like the canvas. */
+  private cursorHost(): ConstructorParameters<typeof CanvasCursor>[0] {
+    return {
+      view: () => this.view,
+      home: () => {
+        const b = this.bounds;
+        return this.tp({ x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 });
+      },
+      tap: (w) => {
+        const flat = this.worldToFlat(w);
+        if (this.wire.tapAt(flat)) return this.renderStatus();
+        if (this.picker.open) this.picker.setOpen(false);
+        this.placeAt(flat);
+      },
+      describe: (w) => {
+        const flat = this.worldToFlat(w);
+        const gap = foldInReach(this.gaps, flat, this.pickRadius());
+        const led = gap ? this.circuit.leds.findIndex((l) => l.a === ledOf(gap.faceA, gap.faceB).a
+          && l.b === ledOf(gap.faceA, gap.faceB).b) : -1;
+        const part = this.partAt(flat);
+        const tool = this.activePart()?.id ?? this.tool;
+        return describeSpot({
+          tool, mode: this.placeMode, onFold: !!gap, onTile: pointInFace(this.faces, flat) >= 0,
+          onPart: part ? `part ${part.index + 1}` : led >= 0 && this.tool === "led" ? `LED ${led + 1}` : null,
+        });
+      },
+      marks: (w) => this.placeMode === "gap" && (this.tool === "led" || this.activePart())
+        ? foldHover(this.gaps, this.worldToFlat(w), this.pickRadius(), (p) => this.tp(p)) : "",
+      layer: () => this.svg.querySelector(".el-cursor") as { innerHTML: string } | null,
+      say: (text) => { const el = this.overlay.querySelector(".el-cursor-say"); if (el) el.textContent = text; },
+    };
+  }
+
+  /** Where the keyboard cursor is, in pattern units, or null while the canvas does not have focus. */
+  private cursorFlat(): Vec2 | null {
+    const w = this.cursor.where();
+    return w ? this.worldToFlat(w) : null;
   }
 
   /** The pattern a wire's ends resolve against — the same faces, gaps and tape width the router plans on. */
@@ -2024,7 +2081,11 @@ export class ElectronicsModal {
   /** Pointer client coords → flat mm (accounts for the live viewBox, so pan/zoom-safe). */
   private clientToFlat(e: MouseEvent): Vec2 | null {
     const w = this.clientToWorld(e);
-    if (!w) return null;
+    return w ? this.worldToFlat(w) : null;
+  }
+
+  /** World (viewBox) coords → flat mm: the inverse of {@link tp}. */
+  private worldToFlat(w: Vec2): Vec2 {
     // Undo the mirror first — reflection is its own inverse, so the same call takes it back off — then undo
     // the shift and flip. Without this a click would land on the unmirrored twin of the tile under the cursor.
     const sheet = this.sheet();
@@ -2405,9 +2466,10 @@ export class ElectronicsModal {
     // or a zoom, exactly as it always was. The live half is the wire tool's alone — one wire's worth of
     // nodes, rewritten on every pointer move — because a full re-plan is most of a second and a drag that
     // re-planned would be a drag that stutters. The tool commits on pointer *up*, once.
-    this.svg.innerHTML = `<g class="el-static">${parts.join("")}</g><g class="el-live"></g>`;
+    this.svg.innerHTML = `<g class="el-static">${parts.join("")}</g><g class="el-live"></g><g class="el-cursor"></g>`;
     // The live layer was just thrown away with the rest of the canvas, so put it back.
     this.wire.paint();
+    this.cursor.paint();
     this.renderStatus();
   }
 

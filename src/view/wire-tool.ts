@@ -322,6 +322,11 @@ export class WireTool {
   // ---- gestures ------------------------------------------------------------
 
   /** A tap that stayed put: finish, select, or lay a vertex down. */
+  /** A tap at a pattern point that came from the keyboard cursor rather than a pointer (#64): the same tap. */
+  tapAt(flat: Vec2): boolean {
+    return this.active ? this.tap(flat) : false;
+  }
+
   private tap(flat: Vec2): boolean {
     if (this.draft.length) {
       const last = resolveVertex(this.draft[this.draft.length - 1]!, this.host.context());

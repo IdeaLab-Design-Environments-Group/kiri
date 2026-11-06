@@ -116,7 +116,9 @@ export function shellMarkup(): string {
             <div class="el-canvas-wrap">
               <div class="el-route-hint" role="status" hidden>Not routed yet — press Route</div>
               <div class="el-empty-hint" role="status"></div>
-              <svg class="el-svg" xmlns="${SVG_NS}" aria-label="electronics flat-pattern canvas"></svg>
+              <p class="el-hint" id="el-canvas-help" hidden>Arrow keys move the cursor over the pattern, Shift for bigger steps. Enter or Space does what a tap there would: places what is armed, picks up a part, or lays a wire point. Enter finishes a wire. Escape puts a selection down; R turns it and Delete removes it.</p>
+              <div class="el-cursor-say" role="status" aria-live="polite"></div>
+              <svg class="el-svg" xmlns="${SVG_NS}" tabindex="0" role="application" aria-label="electronics flat-pattern canvas" aria-describedby="el-canvas-help"></svg>
             </div>
             <aside class="el-tools" aria-label="view and output">
               <div class="el-side-sect el-route-modes">
