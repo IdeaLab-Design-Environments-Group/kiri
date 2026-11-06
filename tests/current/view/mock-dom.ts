@@ -186,9 +186,10 @@ export class MockElement {
     if (selector.startsWith(".")) {
       return childByClass(this, selector.slice(1)) ?? null;
     }
-    const dataMatch = /^\[data-k="([^"]+)"\]$/.exec(selector);
+    const dataMatch = /^\[data-([a-z0-9-]+)="([^"]+)"\]$/.exec(selector);
     if (dataMatch) {
-      return childByData(this, "k", dataMatch[1]) ?? null;
+      const key = dataMatch[1]!.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
+      return childByData(this, key, dataMatch[2]!) ?? null;
     }
     return childrenByTag(this, selector)[0] ?? null;
   }

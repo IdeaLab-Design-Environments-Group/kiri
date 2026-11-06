@@ -185,6 +185,9 @@ export class PatternEditorModal {
     document.addEventListener("keydown", (e) => {
       if (this.overlay.hidden) return;
       if (e.key === "Escape") return this.close();
+      // Not while typing: the brush keys are digits, and so is everything typed into cols, rows and mm.
+      // Typing 10 into cols picked the eraser (found in a browser, #64).
+      if (isTyping(e.target)) return;
       const spec = TOOLS.find((t) => t.key === e.key);
       if (spec) this.selectTool(spec.tool);
     });
@@ -214,7 +217,11 @@ export class PatternEditorModal {
     this.rebuild();
     this.setStatus("Pick a brush, then click or drag edges. Try a preset to start.");
     this.overlay.hidden = false;
-    this.leaveFocus ??= enterFocusScope(this.overlay, this.trigger, { trap: true });
+    // Focus goes back to what opened the dialog. That is its trigger when the trigger is on the page, and
+    // otherwise whatever had focus: nothing mounts the trigger today, and handing focus back to a button
+    // that is not in the document dropped it on the page body (found in a browser, #64).
+    const opener = this.trigger.isConnected ? this.trigger : (document.activeElement as HTMLElement | null);
+    this.leaveFocus ??= enterFocusScope(this.overlay, opener, { trap: true });
   }
 
   close(): void {
@@ -359,6 +366,12 @@ export class PatternEditorModal {
 
 function canonical(a: number, b: number): string {
   return a < b ? `${a}:${b}` : `${b}:${a}`;
+}
+
+/** Whether a key landed in something being typed into. Read off the tag: the test DOM has no `matches()`. */
+function isTyping(target: unknown): boolean {
+  const tag = ((target as { tagName?: string } | null)?.tagName ?? "").toUpperCase();
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
 }
 
 function clampInt(raw: string, fallback: number, lo: number, hi: number): number {
