@@ -149,6 +149,53 @@ describe("#64 one way to find a part: the search box and the list are one combob
   });
 });
 
+describe("#64 deleting a part takes its stale copper with it", () => {
+  /** Two LEDs on hinges and a battery, routed under Manual. */
+  function routedTwo(): { modal: any; pads: { pwr: any; gnd: any }[] } {
+    const modal = openOn(grid(1));
+    modal.selectTool("led");
+    tapFlat(modal, modal.gaps[0].point);
+    tapFlat(modal, modal.gaps[2].point);
+    click(modal, ".el-tool", (b) => b.dataset.tool === "battery");
+    tapFlat(modal, { x: 1.5, y: 1.5 });
+    click(modal, ".el-route");
+    expect(modal.circuit.leds).toHaveLength(2);
+    expect(modal.routed.traces.length, "the fixture planned no copper").toBeGreaterThan(0);
+    modal.selectTool("led"); // so a tap on an LED picks it up
+    return { modal, pads: modal.routed.pads.map((p: any) => ({ pwr: { ...p.pwr }, gnd: { ...p.gnd } })) };
+  }
+  const mid = (p: { pwr: any; gnd: any }): { x: number; y: number } =>
+    ({ x: (p.pwr.x + p.gnd.x) / 2, y: (p.pwr.y + p.gnd.y) / 2 });
+  const near = (p: any, q: any, r: number): boolean => Math.hypot(p.x - q.x, p.y - q.y) <= r;
+
+  it("drops the copper that ran to a deleted LED at once, without waiting for Route", () => {
+    const { modal, pads } = routedTwo();
+    const reach = modal.tapeW() / 2;
+    const ranThere = (): number => modal.routed.traces.filter((t: any) =>
+      t.pts.some((p: any) => near(p, pads[0]!.pwr, reach) || near(p, pads[0]!.gnd, reach))).length;
+    expect(ranThere(), "no copper ran to the LED in the first place").toBeGreaterThan(0);
+
+    tapFlat(modal, mid(pads[0]!)); // pick the first LED up
+    expect(modal.selected).toEqual({ kind: "led", index: 0 });
+    (globalThis as any).document.dispatch("keydown", { key: "Delete" });
+
+    expect(modal.circuit.leds).toHaveLength(1);
+    expect(ranThere(), "faded copper still leads to the deleted LED").toBe(0);
+    // Still stale: what is left is the old plan minus the LED, not a new plan.
+    expect(q(modal, ".el-route").classList.contains("is-stale")).toBe(true);
+  });
+
+  it("keeps the LED after it on its own pads, not its deleted neighbour's", () => {
+    const { modal, pads } = routedTwo();
+    tapFlat(modal, mid(pads[0]!));
+    expect(modal.selected).toEqual({ kind: "led", index: 0 });
+    (globalThis as any).document.dispatch("keydown", { key: "Delete" });
+    expect(modal.routed.pads).toHaveLength(1);
+    expect(modal.routed.pads[0].pwr).toEqual(pads[1]!.pwr);
+    expect(modal.routed.pads[0].gnd).toEqual(pads[1]!.gnd);
+  });
+});
+
 /** The element in the page carrying this id (the mock DOM lays the markup out flat). */
 function byId(modal: any, id: string | undefined): any {
   return id ? modal.overlay.children.find((c: any) => c.attributes.id === id) : undefined;

@@ -100,6 +100,7 @@ import {
 import { footprintById } from "../model/library.js";
 import { withSocket } from "../model/socket-seat.js";
 import { PartPicker } from "./part-picker.js";
+import { withoutLed, withoutPart } from "./stale-copper.js";
 import { foldHover, foldInReach, missedFold, syncFirstStep } from "./placement-guide.js";
 import { DEFAULT_LED, PART_BY_ID, ledPart, ledPitch, loadRestOfLibrary } from "./electronics-palette.js";
 export { UNSHELVED, shelfFor } from "./electronics-palette.js";
@@ -1901,13 +1902,16 @@ export class ElectronicsModal {
     const sel = this.selected;
     if (!sel) return;
     const part = this.partSelection();
+    // The plan on screen loses the part too, at once: stale copper must not run to something deleted (#64).
     if (!part) {
       if (!this.circuit.leds[sel.index]) return;
       this.runCommand(removeLed(sel.index));
+      this.routed = withoutLed(this.routed, sel.index, this.tapeW() / 2);
     } else {
       const { items } = this.listFor(part.kind);
       if (!items[sel.index]) return;
       this.runCommand(removeSelectedPart(part as CommandPartSelection));
+      this.routed = withoutPart(this.routed, part.kind, sel.index);
     }
     this.select(null);
     this.emit();
