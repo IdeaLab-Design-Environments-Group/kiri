@@ -18,6 +18,35 @@ const PAD_CLEAR = 1.0;
 /** What a wall already carrying a tab adds to the cost of reaching it, in tape widths. */
 const CROWD_TOLL = 6;
 
+/**
+ * How finely the carrier holds its traces: for each detail level, how much of a run's outline earns it
+ * another tab (`everyMm`, millimetres of perimeter) and the most grips any one run gets (`max`).
+ *
+ * One grip per run leaves a long trace free to swing about it, and a corner can lift off the mat before it is
+ * pressed down. Each further grip costs a tape width of extra cut and a snip by hand, and is a place the copper
+ * stays joined to the waste. Which side of that trade is right depends on the tape and the hand doing the
+ * snipping, so it is the user's choice. Level 3 is the old fixed setting: on the bundled circuits it is the
+ * long runs that gain a second tab, not every run.
+ */
+export const TAB_DETAIL_LEVELS: readonly { everyMm: number; max: number }[] = [
+  { everyMm: Infinity, max: 1 },
+  { everyMm: 100, max: 2 },
+  { everyMm: 60, max: 2 },
+  { everyMm: 40, max: 3 },
+  { everyMm: 25, max: 4 },
+];
+
+/** The detail level the carrier is built at unless told otherwise, 1-based. */
+export const DEFAULT_TAB_DETAIL = 3;
+
+/** How many tabs a run with this outline length asks for at a detail level (1-based, clamped to the table). */
+export function tabsWanted(perimeterMm: number, detail: number = DEFAULT_TAB_DETAIL): number {
+  const level = Number.isFinite(detail) ? Math.round(detail) : DEFAULT_TAB_DETAIL;
+  const i = Math.max(0, Math.min(TAB_DETAIL_LEVELS.length - 1, level - 1));
+  const { everyMm, max } = TAB_DETAIL_LEVELS[i]!;
+  return Math.max(1, Math.min(max, 1 + Math.floor(perimeterMm / everyMm)));
+}
+
 const sub = (a: Vec2, b: Vec2): Vec2 => ({ x: a.x - b.x, y: a.y - b.y });
 const len = (a: Vec2): number => Math.hypot(a.x, a.y);
 

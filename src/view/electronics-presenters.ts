@@ -623,6 +623,21 @@ export function syncExportNote(root: Element | null | undefined, text: string): 
   note.hidden = text === "";
 }
 
+/** The carrier tab slider's reading for each detail level, 1-based: what a cutter gets, not a number. */
+export const TAB_DETAIL_NAMES = ["one per run", "few", "normal", "many", "most"] as const;
+
+/** What the tab slider reads at a level — the name of the nearest level the slider can take. */
+export function tabDetailName(level: number): string {
+  const i = Math.max(0, Math.min(TAB_DETAIL_NAMES.length - 1, Math.round(level) - 1));
+  return TAB_DETAIL_NAMES[Number.isFinite(i) ? i : 2]!;
+}
+
+/** Write the tab slider's reading beside it. */
+export function syncTabDetail(root: Element | null | undefined, level: number): void {
+  const out = root?.querySelector?.(".el-tab-detail-value") as { textContent: string | null } | null | undefined;
+  if (out) out.textContent = tabDetailName(level);
+}
+
 /** The Wire group's elements, each of which may be missing. */
 export interface WireSection {
   group: { hidden: boolean } | null;

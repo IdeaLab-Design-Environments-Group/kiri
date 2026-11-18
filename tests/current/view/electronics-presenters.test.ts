@@ -10,6 +10,8 @@ import {
   partsTally,
   statusLine,
   strandedOn,
+  tabDetailName,
+  TAB_DETAIL_NAMES,
 } from "../../../src/view/electronics-presenters.js";
 import type { Circuit } from "../../../src/model/electronics.js";
 import { EMPTY_ROUTE, type RoutedCircuit } from "../../../src/model/electronics-routing.js";
@@ -668,5 +670,19 @@ describe("view/electronics-presenters > statusLine", () => {
       "no LEDs or battery yet · 1 terminal could not be reached without crossing another net" +
         " · copper is out of date — press Route",
     );
+  });
+});
+
+describe("tabDetailName", () => {
+  it("names each slider level, lowest first", () => {
+    expect(tabDetailName(1)).toBe("one per run");
+    expect(tabDetailName(3)).toBe("normal");
+    expect(tabDetailName(5)).toBe(TAB_DETAIL_NAMES.at(-1));
+  });
+
+  it("clamps outside the slider and reads garbage as normal", () => {
+    expect(tabDetailName(0)).toBe("one per run");
+    expect(tabDetailName(9)).toBe("most");
+    expect(tabDetailName(Number.NaN)).toBe("normal");
   });
 });

@@ -79,6 +79,8 @@ export interface CopperExportInput {
 
 export interface CarrierExportInput extends CopperExportInput {
   keepOff?: Vec2[];
+  /** How many tabs hold each run, as a detail level — see `TAB_DETAIL_LEVELS`. */
+  tabDetail?: number;
 }
 
 export const defaultElectronicsDesign: ElectronicsDesignAdapter = {
@@ -89,6 +91,8 @@ export const defaultElectronicsDesign: ElectronicsDesignAdapter = {
   patternDiag,
   strips: ({ fold, traces, tapeW, baseName, pads, mirror, sheetMm, resistors, switches, parts }) =>
     buildCopperSvgExport(fold, traces, tapeW, baseName, pads, mirror, sheetMm, resistors, switches, parts),
-  carrier: ({ fold, traces, tapeW, baseName, keepOff, mirror, sheetMm, pads, resistors, switches, parts }) =>
-    buildCopperCarrierExport(fold, traces, tapeW, baseName, keepOff, mirror, sheetMm, pads, resistors, switches, parts),
+  carrier: ({ fold, traces, tapeW, baseName, keepOff, mirror, sheetMm, pads, resistors, switches, parts, tabDetail }) =>
+    buildCopperCarrierExport(
+      fold, traces, tapeW, baseName, keepOff, mirror, sheetMm, pads, resistors, switches, parts, tabDetail,
+    ),
 };

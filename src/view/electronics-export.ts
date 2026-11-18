@@ -32,6 +32,8 @@ export interface ExportRequest {
   switches?: { a: Vec2; b: Vec2; flip?: boolean }[];
   parts?: PlacedPartMark[];
   keepOff?: Vec2[];
+  /** How many tabs hold each carrier run, as a detail level. Unused by the strips file. */
+  tabDetail?: number;
 }
 
 /**
@@ -101,7 +103,7 @@ export function carrierExport(req: ExportRequest): ExportResult {
   const out = req.design.carrier({
     fold: req.fold, traces: req.traces, tapeW: req.tapeW, baseName: `kiri-${req.side}`,
     keepOff: req.keepOff, mirror: req.mirror, sheetMm: req.sheetMm, pads: req.pads,
-    resistors: req.resistors, switches: req.switches, parts: req.parts,
+    resistors: req.resistors, switches: req.switches, parts: req.parts, tabDetail: req.tabDetail,
   });
   const { traces, tabs } = out.counts;
   let message =

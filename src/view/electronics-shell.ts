@@ -154,6 +154,10 @@ export function shellMarkup(): string {
                   <button type="button" class="el-export-carrier" data-side="inside" aria-label="download the inside carrier frame (SVG)" title="download the inside's carrier frame: align it, stick the traces down, snip the tabs">SVG</button>
                   <button type="button" class="el-export-carrier" data-side="outside" aria-label="download the outside carrier frame (SVG)" title="download the outside's carrier frame: align it, stick the traces down, snip the tabs">SVG</button>
                 </div>
+                <label class="el-tab-detail-control" title="how many tabs hold each run in the carrier frame. More tabs keep long runs from lifting, but each one is another snip by hand. Shown on the canvas in carrier view">
+                  <span class="el-sub-label">carrier tabs: <output class="el-tab-detail-value">normal</output></span>
+                  <input type="range" class="el-tab-detail" min="1" max="5" step="1" value="3" aria-label="carrier tab detail" />
+                </label>
                 <p class="el-export-note" role="status" hidden></p>
                 <span class="el-sub-label">mirror the cut</span>
                 <span class="el-seg">

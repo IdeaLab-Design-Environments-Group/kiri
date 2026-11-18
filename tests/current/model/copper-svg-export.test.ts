@@ -3,11 +3,14 @@ import { describe, expect, it } from "vitest";
 import {
   buildCopperCarrierExport,
   buildCopperSvgExport,
+  DEFAULT_TAB_DETAIL,
   mirrorPoint,
   openAround,
   outlineStrip,
   sheetFrame,
   stripOutline,
+  TAB_DETAIL_LEVELS,
+  tabsWanted,
 } from "../../../src/model/copper-svg-export.js";
 import { buildFkldSvgExport } from "../../../src/model/fkld-svg-export.js";
 import { COMPONENTS } from "../../../src/model/footprints.generated.js";
@@ -244,6 +247,51 @@ describe("model/copper-svg-export", () => {
         // No loop the size of a strip: one that matched would be that strip, cut out on its own.
         expect(loops.some((l) => Math.abs(area(l) - own) < own * 0.02)).toBe(false);
       }
+    });
+
+    describe("tab detail", () => {
+      it("asks for one tab per run at the lowest level, however long the run", () => {
+        expect(tabsWanted(10, 1)).toBe(1);
+        expect(tabsWanted(10_000, 1)).toBe(1);
+      });
+
+      it("keeps the old fixed rule at the default level", () => {
+        expect(DEFAULT_TAB_DETAIL).toBe(3);
+        expect(tabsWanted(59.9)).toBe(1);
+        expect(tabsWanted(60)).toBe(2);
+        expect(tabsWanted(500)).toBe(2);
+      });
+
+      it("never asks for fewer tabs at a higher level, and caps each level", () => {
+        for (const p of [0, 20, 45, 80, 130, 400]) {
+          for (let lvl = 2; lvl <= TAB_DETAIL_LEVELS.length; lvl++) {
+            expect(tabsWanted(p, lvl)).toBeGreaterThanOrEqual(tabsWanted(p, lvl - 1));
+          }
+        }
+        expect(tabsWanted(10_000, 5)).toBe(TAB_DETAIL_LEVELS[4]!.max);
+        expect(tabsWanted(0, 5)).toBe(1);
+      });
+
+      it("clamps a level outside the slider, and reads garbage as the default", () => {
+        expect(tabsWanted(10_000, 0)).toBe(tabsWanted(10_000, 1));
+        expect(tabsWanted(10_000, 99)).toBe(tabsWanted(10_000, TAB_DETAIL_LEVELS.length));
+        expect(tabsWanted(10_000, Number.NaN)).toBe(tabsWanted(10_000, DEFAULT_TAB_DETAIL));
+      });
+
+      it("puts more tabs on the sheet as the level rises, and one per run at the bottom", () => {
+        const { fold, traces, tapeW, pads } = planned("church.fkld");
+        const at = (lvl: number) =>
+          buildCopperCarrierExport(fold, traces, tapeW, "k", [], undefined, undefined, pads, [], [], [], lvl);
+        const low = at(1), mid = at(3), high = at(5);
+        expect(low.counts.tabs).toBe(low.counts.traces);
+        expect(mid.counts.tabs).toBeGreaterThan(low.counts.tabs);
+        expect(high.counts.tabs).toBeGreaterThan(mid.counts.tabs);
+        // More tabs must not cost the one-piece guarantee.
+        for (const out of [low, mid, high]) {
+          expect(out.unclosedCuts).toBe(0);
+          expect(out.tabPaths).toHaveLength(out.counts.tabs);
+        }
+      });
     });
 
     it("emits the carrier as filled shapes, not as line art", () => {

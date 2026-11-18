@@ -1428,6 +1428,8 @@ body.is-electronics .app-legend {
 .el-export-col { text-align: center; }
 .el-export-row { padding-right: 0.2rem; }
 .el-sub-label { margin-top: 0.25rem; }
+.el-tab-detail-control { display: flex; flex-direction: column; gap: 0.1rem; margin-top: 0.35rem; }
+.el-tab-detail-control input { width: 100%; }
 /* Why an export gave no file: under the buttons you pressed, not only in the line at the foot of the page. */
 .el-export-note {
   margin: 0.2rem 0 0;

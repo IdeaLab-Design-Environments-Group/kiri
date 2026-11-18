@@ -70,6 +70,7 @@ import {
   type Mirror,
   buildCopperCarrierExport,
   buildCopperSvgExport,
+  DEFAULT_TAB_DETAIL,
   frameMirrored,
   type PlacedPartMark,
   type ResistorShape,
@@ -122,7 +123,7 @@ import {
   netTally,
   netlistTrouble,
   ledCount, partsTally, railsReady,
-  statusLine, syncExportNote, syncRouteHint, syncWireSection, syncWireWidth,
+  statusLine, syncExportNote, syncRouteHint, syncTabDetail, syncWireSection, syncWireWidth,
 } from "./electronics-presenters.js";
 // Re-exported so the presenters can be reached through the modal that renders them, the same way the
 // palette's own catalog is — a caller that has the modal should not need to know which file the rows
@@ -385,6 +386,8 @@ export class ElectronicsModal {
   private viewMode: ViewMode = "strips";
   /** Which way the cut is flipped — off by default, so the file matches the design unless asked otherwise. */
   private mirror: Mirror = { x: false, y: false };
+  /** How many tabs hold each carrier run, as a detail level from the Export panel's slider. */
+  private tabDetail = DEFAULT_TAB_DETAIL;
   /** The sheet a scale-less pattern is cut at, from the export menu's print size. Held here because both
    *  the routing and every dimension drawn are derived from it. */
   private sheetMm: number | undefined;
@@ -602,6 +605,10 @@ export class ElectronicsModal {
       btn.addEventListener("click", () => this.toggleMirror(axis));
       this.mirrorButtons.set(axis, btn);
     }
+    const tabSlider = this.overlay.querySelector<HTMLInputElement>(".el-tab-detail")!;
+    tabSlider.value = String(this.tabDetail);
+    syncTabDetail(this.overlay, this.tabDetail);
+    tabSlider.addEventListener("input", () => this.setTabDetail(Number(tabSlider.value)));
     for (const btn of this.overlay.querySelectorAll<HTMLButtonElement>(".el-build")) {
       const m: SimMaterial = btn.dataset.material === "printed" ? "printed" : "vinyl";
       btn.addEventListener("click", () => this.selectMaterial(m, "user"));
@@ -911,6 +918,13 @@ export class ElectronicsModal {
   private toggleMirror(axis: keyof Mirror): void {
     this.mirror = { ...this.mirror, [axis]: !this.mirror[axis] };
     this.syncButtons();
+    this.render();
+  }
+
+  /** Set how finely the carrier holds its traces. The preview is the export, so it is redrawn to match. */
+  private setTabDetail(level: number): void {
+    this.tabDetail = level;
+    syncTabDetail(this.overlay, level);
     this.render();
   }
 
@@ -2634,6 +2648,7 @@ export class ElectronicsModal {
       fold: this.fold, traces: this.allTraces(), tapeW: this.tapeW(), baseName: "kiri",
       keepOff: this.keepOff(), mirror: this.mirror, sheetMm: this.sheetMm, pads: this.routed.pads,
       resistors: this.routed.resistors, switches: this.routed.switches, parts: this.routedParts(),
+      tabDetail: this.tabDetail,
     });
     return carrierFrameParts(out.frame, out.tabPaths, this.tapeW() * this.scale());
   }
@@ -2670,6 +2685,7 @@ export class ElectronicsModal {
       design: this.design, fold: this.fold, traces: this.allTraces(), tapeW: this.tapeW(), side,
       mirror: this.mirror, sheetMm: this.sheetMm, pads: this.routed.pads, resistors: this.routed.resistors,
       switches: this.routed.switches, parts: this.routedParts(), keepOff: this.keepOff(),
+      tabDetail: this.tabDetail,
     };
   }
 

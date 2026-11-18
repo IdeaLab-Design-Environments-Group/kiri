@@ -33,23 +33,14 @@ import { R_1206, SW_SPDT } from "./footprints.generated.js";
 import { footprintById } from "./library.js";
 import { designators, partSvg } from "./part-render.js";
 import {
-  type Side, type Win, SIDES, alongSide, densify, onWindow, openAtMany, pickTab, sideSpans, stripsMeet,
+  type Side, type Win, SIDES, DEFAULT_TAB_DETAIL, alongSide, densify, onWindow, openAtMany, pickTab, sideSpans,
+  stripsMeet, tabsWanted,
 } from "./carrier-tabs.js";
-export { type Win, openAround, openAtMany } from "./carrier-tabs.js";
+export {
+  type Win, DEFAULT_TAB_DETAIL, TAB_DETAIL_LEVELS, openAround, openAtMany, tabsWanted,
+} from "./carrier-tabs.js";
 
 const MARGIN = 8; // mm — must match the FKLD SVG export or the layers import misaligned
-
-/**
- * How much of a run's outline earns it another tab, in millimetres of perimeter.
- *
- * One grip per run leaves a long trace free to swing about it, and a corner can lift off the mat before it is
- * pressed down. A second costs a tape width of extra cut and a second snip by hand, which is why this is
- * generous rather than tight: on the bundled circuits it is the long runs that gain one, not every run.
- */
-const TAB_EVERY_MM = 60;
-
-/** However long a run is, this many grips at most: each is a place the copper stays joined to the waste. */
-const MAX_TABS_PER_RUN = 2;
 
 /** Width of the carrier frame's border, outside the pattern window. */
 const FRAME_BUFFER = 5;
@@ -1173,6 +1164,8 @@ export function buildCopperCarrierExport(
   switches: { a: Vec2; b: Vec2; flip?: boolean }[] = [],
   /** Where each library part bridges a break, by component id — drawn, never cut. */
   parts: PlacedPartMark[] = [],
+  /** How many tabs hold each run: a level of {@link TAB_DETAIL_LEVELS}, 1 = one per run. */
+  tabDetail: number = DEFAULT_TAB_DETAIL,
 ): CopperCarrierExport {
   const { w, h, window: win, T, scale } = sheetFrame(fold, mirror, sheetMm);
   // Everything below works in sheet millimetres, so the tape width has to be converted out of the pattern's
@@ -1249,7 +1242,7 @@ export function buildCopperCarrierExport(
       const a = ring[i]!, b = ring[(i + 1) % ring.length]!;
       perimeter += Math.hypot(b.x - a.x, b.y - a.y);
     }
-    const want = Math.max(1, Math.min(MAX_TABS_PER_RUN, 1 + Math.floor(perimeter / TAB_EVERY_MM)));
+    const want = tabsWanted(perimeter, tabDetail);
 
     // Each further tab is asked for with the ones already placed added to what it must keep clear of, so it
     // lands somewhere else along the run rather than beside its neighbour.
