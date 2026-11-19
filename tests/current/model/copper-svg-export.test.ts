@@ -4,6 +4,7 @@ import {
   buildCopperCarrierExport,
   buildCopperSvgExport,
   DEFAULT_TAB_DETAIL,
+  longAxisWalls,
   mirrorPoint,
   openAround,
   outlineStrip,
@@ -12,6 +13,7 @@ import {
   TAB_DETAIL_LEVELS,
   tabsWanted,
 } from "../../../src/model/copper-svg-export.js";
+import { piecesOf } from "../../../src/model/carrier-tabs.js";
 import { buildFkldSvgExport } from "../../../src/model/fkld-svg-export.js";
 import { COMPONENTS } from "../../../src/model/footprints.generated.js";
 import { padAt, padNamed, padSize } from "../../../src/model/footprint.js";
@@ -464,21 +466,62 @@ describe("model/copper-svg-export", () => {
       }
     });
 
-    it("uses more than one wall when the runs are spread out", { timeout: 30000 }, () => {
-      // All tabs diving for the same edge means long runs across the window and more chance of crossing
-      // something; spreading them keeps each one short.
-      const { fold, traces, tapeW, keepOff } = planned("akde-decagon-pyramid.fkld", 12);
-      const out = buildCopperCarrierExport(fold, traces, tapeW, "x", keepOff);
-      const { window: win } = out.frame;
-      const walls = new Set<string>();
-      for (const path of out.tabPaths) {
-        const e = path[path.length - 1]!;
-        if (Math.abs(e.x - win.x0) < 1e-6) walls.add("left");
-        else if (Math.abs(e.x - win.x1) < 1e-6) walls.add("right");
-        else if (Math.abs(e.y - win.y0) < 1e-6) walls.add("top");
-        else if (Math.abs(e.y - win.y1) < 1e-6) walls.add("bottom");
+    it("runs every tab straight along the sheet's long axis to a short wall", { timeout: 30000 }, () => {
+      for (const name of ["akde-decagon-pyramid.fkld", "church.fkld", "house.fkld"]) {
+        const { fold, traces, tapeW, keepOff } = planned(name, 12);
+        const out = buildCopperCarrierExport(fold, traces, tapeW, "x", keepOff);
+        const { window: win } = out.frame;
+        const wide = win.x1 - win.x0 >= win.y1 - win.y0;
+        expect(longAxisWalls(win)).toEqual(wide ? ["left", "right"] : ["top", "bottom"]);
+        expect(out.tabPaths.length).toBeGreaterThan(0);
+        const walls = new Set<string>();
+        for (const path of out.tabPaths) {
+          expect(path, `${name}: a bent tab`).toHaveLength(2);
+          const [a, e] = [path[0]!, path[1]!];
+          if (wide) {
+            expect(Math.abs(a.y - e.y)).toBeLessThan(1e-9);
+            expect(Math.min(Math.abs(e.x - win.x0), Math.abs(e.x - win.x1))).toBeLessThan(1e-6);
+            walls.add(Math.abs(e.x - win.x0) < 1e-6 ? "left" : "right");
+          } else {
+            expect(Math.abs(a.x - e.x)).toBeLessThan(1e-9);
+            expect(Math.min(Math.abs(e.y - win.y0), Math.abs(e.y - win.y1))).toBeLessThan(1e-6);
+            walls.add(Math.abs(e.y - win.y0) < 1e-6 ? "top" : "bottom");
+          }
+        }
+        // Spread over both short walls, not stacked on one.
+        if (name === "akde-decagon-pyramid.fkld") expect(walls.size).toBe(2);
       }
-      expect(walls.size).toBeGreaterThanOrEqual(3);
+    });
+
+    it("tabs only the outermost runs of a fused piece, not one boxed in by its own net", () => {
+      // A comb of one net: a backbone along the bottom and three teeth. The middle tooth has the outer teeth
+      // between it and both short walls, so it is held through the backbone.
+      const { fold } = load("house.fkld");
+      const tapeW = 0.1;
+      const v = (x: number) => ({ net: "pwr", pts: [{ x, y: 5.6 }, { x, y: 8 }] });
+      const traces = [{ net: "pwr", pts: [{ x: 5.8, y: 5.6 }, { x: 8.2, y: 5.6 }] }, v(5.8), v(7), v(8.2)];
+      const out = buildCopperCarrierExport(fold, traces, tapeW, "k", [], undefined, undefined, [], [], [], [], 1);
+      const { T, scale } = sheetFrame(fold);
+      const tape = tapeW * scale;
+      const near = (x: number, from: number) =>
+        out.tabPaths.filter((p) => ptSeg(p[0]!, T({ x, y: from }), T({ x, y: 8 })) < tape);
+      // Clear of the backbone, which the middle tooth joins.
+      expect(near(7, 6.3)).toHaveLength(0);
+      expect(near(5.8, 5.6).length).toBeGreaterThan(0);
+      expect(near(8.2, 5.6).length).toBeGreaterThan(0);
+      expect(out.crossingTabs).toBe(0);
+      expect(out.unclosedCuts).toBe(0);
+    });
+
+    it("still tabs a free-standing run that has no clear line out, and says so", () => {
+      // GND between two PWR runs: nothing it is fused to can hold it, so it gets a tab across one of them.
+      const { fold } = load("house.fkld");
+      const v = (x: number, net: string) => ({ net, pts: [{ x, y: 5.5 }, { x, y: 8.2 }] });
+      const out = buildCopperCarrierExport(
+        fold, [v(6, "pwr"), v(7, "gnd"), v(8, "pwr")], 0.1, "k", [], undefined, undefined, [], [], [], [], 1,
+      );
+      expect(out.counts.tabs).toBe(3);
+      expect(out.crossingTabs).toBe(1);
     });
 
     it("keeps two tabs from landing exactly a tape apart, where their sides cut one line twice", () => {
@@ -1362,7 +1405,11 @@ describe("model/copper-svg-export", () => {
           const d = Math.min(...rings.filter((r) => r.net !== own.net).map((r) => toRing(path, r.ring)));
           if (d < tape / 2) crossing.push(`tab ${i} at ${(d / tape).toFixed(2)} tape`);
         });
-        expect(crossing, `${name} at ${n} LEDs: tabs over the other net`).toEqual([]);
+        // Puffin at 6 LEDs boxes its GND inside PWR along the long axis, so its one tab has to cross.
+        // Any crossing must be one the exporter reports.
+        const allowed = name === "puffin" && n === 6 ? 1 : 0;
+        expect(crossing.length, `${name} at ${n} LEDs: tabs over the other net`).toBeLessThanOrEqual(allowed);
+        expect(crossing.length, `${name} at ${n} LEDs: unreported crossing`).toBeLessThanOrEqual(out.crossingTabs);
       }
     }
   });
@@ -1371,13 +1418,14 @@ describe("model/copper-svg-export", () => {
     // A tab is a strip of copper over the waste, stuck down nowhere until it reaches the frame. Turning a
     // corner or skipping a crowded wall makes it longer, and nothing else bounds how long; these are the
     // longest measured on 2026-11-05, in millimetres, rounded up. Shrink only.
+    // 2026-11-19: tabs go only to the short walls; house, church and the decagon remeasured.
     const budget: Record<string, number> = {
-      "house.fkld": 60,
-      "church.fkld": 62,
+      "house.fkld": 105,
+      "church.fkld": 69,
       "puffin.fkld": 88,
       "akde-hex.fkld": 185, // 2026-11-06: hex re-exported (T=3.5 mm, issue #67), a new model; was 182 on the old one
       "akde-square-pyramid.fkld": 82,
-      "akde-decagon-pyramid.fkld": 218,
+      "akde-decagon-pyramid.fkld": 254,
     };
     for (const [name, want] of Object.entries(budget)) {
       const { fold, traces, tapeW, keepOff, pads } = planned(name, 12);
@@ -1388,7 +1436,7 @@ describe("model/copper-svg-export", () => {
     }
   });
 
-  it("spreads its tabs over the walls instead of stacking them on one", () => {
+  it("keeps its tabs off one another, on the two short walls only", () => {
     // Sorted on distance alone every tab dives for whichever wall is nearest, and they pile up: 45 of 99
     // tabs across the bundled circuits ran within a tape width of another, and puffin sent all six to the
     // top. Two tabs on one another are stuck down together, and snipping one cuts the other.
@@ -1423,7 +1471,7 @@ describe("model/copper-svg-export", () => {
       }
       expect(touching, `${name}: tabs lying on one another`).toBe(0);
 
-      // And they use more than one wall — on a circuit this size, at least three of the four.
+      // And only the two short walls.
       const wall = (p: Vec2): string => {
         const d: [string, number][] = [
           ["L", Math.abs(p.x - win.x0)], ["R", Math.abs(p.x - win.x1)],
@@ -1432,9 +1480,24 @@ describe("model/copper-svg-export", () => {
         return d.sort((a, b) => a[1] - b[1])[0]![0];
       };
       const used = new Set(out.tabPaths.map((t) => wall(t[t.length - 1]!)));
-      expect(used.size, `${name}: walls used`).toBeGreaterThanOrEqual(3);
+      const short = win.x1 - win.x0 >= win.y1 - win.y0 ? ["L", "R"] : ["T", "B"];
+      expect([...used].every((w) => short.includes(w)), `${name}: walls used`).toBe(true);
     }
   }, { timeout: 30000 });
+
+  describe("piecesOf", () => {
+    it("groups runs joined through a neighbour, and leaves a lone run on its own", () => {
+      const links = new Set(["0,2", "2,3"]);
+      const p = piecesOf(5, (i, j) => links.has(`${Math.min(i, j)},${Math.max(i, j)}`));
+      expect(p[0]).toBe(p[2]);
+      expect(p[0]).toBe(p[3]);
+      expect(new Set(p).size).toBe(3);
+    });
+
+    it("returns nothing for no runs", () => {
+      expect(piecesOf(0, () => true)).toEqual([]);
+    });
+  });
 
   describe("openAround", () => {
     /** A 12x12 square ring, densified so its vertices are a unit apart — as the carrier's rings are. */

@@ -54,6 +54,11 @@ export type Side = "left" | "right" | "top" | "bottom";
 export const SIDES: Side[] = ["left", "right", "top", "bottom"];
 export type Win = { x0: number; y0: number; x1: number; y1: number };
 
+/** The two short walls of the window: a tab to one of them runs along the sheet's long axis. */
+export function longAxisWalls(win: Win): Side[] {
+  return win.x1 - win.x0 >= win.y1 - win.y0 ? ["left", "right"] : ["top", "bottom"];
+}
+
 /** Insert points along each edge so anchors are available between the corners, at roughly `step` spacing. */
 export function densify(ring: Vec2[], step: number): Vec2[] {
   if (ring.length < 2 || step <= 0) return ring;
@@ -104,6 +109,8 @@ export function pickTab(
   noGrip: Vec2[] = [],
   /** The other runs of this run's own net, which an anchor is kept out of where it can be. */
   mates: Vec2[][] = [],
+  /** Which walls a tab may reach, and whether it may turn a corner on the way. */
+  route: { walls?: Side[]; bend?: boolean } = {},
 ): {
   index: number;
   side: Side;
@@ -119,7 +126,8 @@ export function pickTab(
     avoid.some((q) => Math.hypot(p.x - q.x, p.y - q.y) < tapeW * PAD_CLEAR);
   const onPart = (p: Vec2): boolean => noGrip.some((q) => Math.hypot(p.x - q.x, p.y - q.y) < tapeW * PAD_CLEAR);
   // Nine offsets is as good as twenty-four: measured identical, so the extra reach buys nothing.
-  const SIDE_STEPS = [0, 1.5, -1.5, 3, -3, 5, -5, 8, -8];
+  const SIDE_STEPS = route.bend === false ? [0] : [0, 1.5, -1.5, 3, -3, 5, -5, 8, -8];
+  const walls = route.walls ?? SIDES;
   const candidates: { index: number; side: Side; step: number; reach: number }[] = [];
   /** Every anchor, wall and sideways step, leaving out the anchors `skip` rules out. */
   const gather = (skip: (p: Vec2) => boolean): void => ring.forEach((p, i) => {
@@ -129,7 +137,7 @@ export function pickTab(
       ["top", p.y - win.y0], ["bottom", win.y1 - p.y],
     ];
     for (const [side, d] of dist) {
-      if (d < 0) continue; // already outside that wall
+      if (d < 0 || !walls.includes(side)) continue; // already outside that wall, or not one we may use
       for (const step of SIDE_STEPS) {
         candidates.push({ index: i, side, step, reach: d + Math.abs(step) * tapeW });
       }
@@ -239,6 +247,20 @@ export function pickTab(
         clear: false, onComponent: forcedOntoComponent, overComponent: fallback.over, onTab: false,
       }
     : null;
+}
+
+/** For each of `n` runs, the root of the piece it belongs to, where `joined(i, j)` says two are one copper. */
+export function piecesOf(n: number, joined: (i: number, j: number) => boolean): number[] {
+  const up = Array.from({ length: n }, (_, i) => i);
+  const root = (i: number): number => (up[i] === i ? i : (up[i] = root(up[i]!)));
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) if (joined(i, j)) up[root(i)] = root(j);
+  return up.map((_, i) => root(i));
+}
+
+/** How poor a tab is: 0 clean, then on a part or a tab, over a part, across a trace, 4 none at all. */
+export function tabBadness(c: ReturnType<typeof pickTab>): number {
+  if (!c) return 4;
+  return !c.clear ? 3 : c.overComponent ? 2 : c.onComponent || c.onTab ? 1 : 0;
 }
 
 /** Whether two runs' strips overlap: some stretch of one centreline within a tape width of the other. */

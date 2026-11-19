@@ -33,11 +33,11 @@ import { R_1206, SW_SPDT } from "./footprints.generated.js";
 import { footprintById } from "./library.js";
 import { designators, partSvg } from "./part-render.js";
 import {
-  type Side, type Win, SIDES, DEFAULT_TAB_DETAIL, alongSide, densify, onWindow, openAtMany, pickTab, sideSpans,
-  stripsMeet, tabsWanted,
+  type Side, type Win, SIDES, DEFAULT_TAB_DETAIL, alongSide, densify, longAxisWalls, onWindow, openAtMany, pickTab,
+  piecesOf, sideSpans, stripsMeet, tabBadness, tabsWanted,
 } from "./carrier-tabs.js";
 export {
-  type Win, DEFAULT_TAB_DETAIL, TAB_DETAIL_LEVELS, openAround, openAtMany, tabsWanted,
+  type Win, DEFAULT_TAB_DETAIL, TAB_DETAIL_LEVELS, longAxisWalls, openAround, openAtMany, tabsWanted,
 } from "./carrier-tabs.js";
 
 const MARGIN = 8; // mm — must match the FKLD SVG export or the layers import misaligned
@@ -1188,10 +1188,9 @@ export function buildCopperCarrierExport(
   // Each trace: its outline, opened where its tab attaches, plus the tab's two sides.
   //
   // A tab is the width of the tape itself, and it must not lie across another trace: it would be stuck down on
-  // top of it, shorting the two, and snipping it would cut into the trace underneath. So every candidate anchor
-  // is tried -- each vertex of the run against each of the four walls, nearest first -- and the first tab that
-  // reaches its wall without touching another run is the one used. Tabs therefore end up spread over all four
-  // walls rather than all diving for the closest edge.
+  // top of it, shorting the two, and snipping it would cut into the trace underneath. Tabs run straight along
+  // the sheet's long axis to one of its two short walls; each anchor is tried nearest first, and the first tab
+  // that reaches its wall without touching another run is the one used.
   // Densified, so a tab can leave from anywhere along an outline rather than only at its corners. With thick
   // tape and a crowded window, corners alone leave most runs with no clear line out to a wall.
   const rings = runs.map((t) => ({
@@ -1218,6 +1217,7 @@ export function buildCopperCarrierExport(
   /** Every tab placed so far, so the next one can keep off them and off their walls. */
   const chosen: { side: Side; path: Vec2[] }[] = [];
   const quads: Vec2[][] = [];
+  const walls = longAxisWalls(win);
   /** Each tab as built, held back until every quad exists — whether a tab is redundant depends on the rest. */
   /** Held per RING, not per tab: a ring with two tabs is two arcs, and they are the ring's, not either
    *  tab's. Emitting an opened ring per tab would cut most of the boundary twice over. */
@@ -1225,15 +1225,12 @@ export function buildCopperCarrierExport(
     ring: Vec2[];
     tabs: { index: number; quad: Vec2[]; s1: Vec2[]; s2: Vec2[]; side: Side; q1: Vec2; q2: Vec2 }[];
   }[] = [];
-  /** Tab one run. With `spare`, a run fused to its own net is passed over (false) rather than tabbed poorly. */
+  /** Tab one run. With `spare`, a run is passed over (false) unless it has a clean tab out to a wall. */
   function place(ri: number, spare: boolean): boolean {
     const { net, ring } = rings[ri]!;
     if (ring.length < 3) return true;
-    // Only the *other* net's runs are obstacles. Runs of the same net meet at junctions by design and may
-    // overlap freely -- one net, one potential -- so treating them as obstacles left every candidate blocked,
-    // which is why neither more anchors nor bent tabs changed anything.
-    const others = rings.filter((r, i) => i !== ri && r.net !== net).map((r) => r.ring);
-    const mates = rings.filter((r, i) => i !== ri && r.net === net).map((r) => r.ring);
+    // Every run it is not fused to is in the way. Runs it overlaps are the same copper, so a tab may cross them.
+    const { others, mates } = obstacles(ri);
     // How many supports this run earns. A long run held at one point still swings about it and can lift a
     // corner off the mat; a second grip costs a tab's width of extra cut and stops that. Kept modest --
     // every tab is a place the copper stays joined to the waste and has to be snipped by hand.
@@ -1249,10 +1246,10 @@ export function buildCopperCarrierExport(
     const picks: { index: number; side: Side; path: Vec2[] }[] = [];
     const taken = [...avoid];
     for (let t = 0; t < want; t++) {
-      const choice = pickTab(ring, others, win, tape, taken, chosen, partEnds, mates);
+      const choice = pickTab(ring, others, win, tape, taken, chosen, partEnds, mates, { walls, bend: false });
       if (!choice) break;
       const poor = !choice.clear || choice.onComponent || choice.overComponent || choice.onTab;
-      if (t === 0 && poor && spare && rings.some((_, j) => fused(ri, j))) return false;
+      if (t === 0 && poor && spare) return false;
       // The first grip is taken as it comes — a run has to be held even where the only spot is a poor one.
       // An extra is a convenience, so it is only worth having if it is clean: taking a compromised one would
       // trade a support nobody asked for against a tab that cuts into a part.
@@ -1276,26 +1273,35 @@ export function buildCopperCarrierExport(
     tabs += mine.length;
     return true;
   }
-  /** Two runs of one net whose strips overlap: one piece of copper. */
-  const fused = (i: number, j: number): boolean =>
-    i !== j && rings[i]!.net === rings[j]!.net && stripsMeet(rings[i]!.pts, rings[j]!.pts, tape);
-  // A run that can only be tabbed across the other net or over a part may not need a tab of its own: fused to
-  // a run of its net that is held, it is held through that. On akde-hex the PWR rail rings GND's spurs, and
-  // every line out from them crossed it. Such a run is cut whole, and the clip below merges its outline into
-  // the copper it is fused to. Only a run that nothing held is fused to is tabbed as best it can be.
-  const spared = rings.map((_, ri) => ri).filter((ri) => !place(ri, true));
-  const holding = new Set(held.map((h) => h.ring));
-  for (let grew = true; grew; ) {
-    grew = false;
-    for (const ri of spared) {
-      const { ring } = rings[ri]!;
-      if (holding.has(ring) || !rings.some((r, j) => holding.has(r.ring) && fused(ri, j))) continue;
-      held.push({ ring, tabs: [] });
-      holding.add(ring);
-      grew = true;
-    }
+  /** Every run a tab from `ri` must keep clear of, and the other runs of its net. */
+  function obstacles(ri: number): { others: Vec2[][]; mates: Vec2[][] } {
+    const net = rings[ri]!.net;
+    // Runs it is fused to are the same copper, so a tab may cross them.
+    return {
+      others: rings.filter((_, i) => i !== ri && !fused(ri, i)).map((r) => r.ring),
+      mates: rings.filter((r, i) => i !== ri && r.net === net).map((r) => r.ring),
+    };
   }
-  for (const ri of spared) if (!holding.has(rings[ri]!.ring)) place(ri, false);
+  /** Two runs of one net whose strips overlap: one piece of copper. */
+  function fused(i: number, j: number): boolean {
+    return i !== j && rings[i]!.net === rings[j]!.net && stripsMeet(rings[i]!.pts, rings[j]!.pts, tape);
+  }
+  const piece = piecesOf(rings.length, fused);
+  // Only a free-standing run, or one with a clean straight line out to a short wall, gets tabs. The rest
+  // are held through the piece they are fused to; a piece with no such run is tabbed on its cleanest.
+  const isolated = (ri: number): boolean => !rings.some((_, j) => fused(ri, j));
+  const tabbed = new Set<number>();
+  rings.forEach((_, ri) => place(ri, !isolated(ri)) && tabbed.add(piece[ri]!));
+  const badness = (ri: number): number => rings[ri]!.ring.length < 3 ? 4 : tabBadness(pickTab(
+    rings[ri]!.ring, obstacles(ri).others, win, tape, avoid, chosen, partEnds, obstacles(ri).mates, { walls, bend: false },
+  ));
+  for (const p of new Set(piece)) {
+    if (tabbed.has(p)) continue;
+    const members = piece.map((q, j) => (q === p ? j : -1)).filter((j) => j >= 0);
+    place(members.map((j) => ({ j, bad: badness(j) })).sort((a, b) => a.bad - b.bad || a.j - b.j)[0]!.j, false);
+  }
+  const holding = new Set(held.map((h) => h.ring));
+  for (const { ring } of rings) if (ring.length >= 3 && !holding.has(ring)) held.push({ ring, tabs: [] });
 
   /** The sides of one tab, landed on its opening and run out to the wall. */
   function buildTab(
