@@ -800,6 +800,7 @@ body {
 .pe-tool-B { border-left-color: #1d1c19; }
 .pe-tool-C { border-left-color: #1a9e4b; }
 .pe-tool-F { border-left-color: #c8c5b8; }
+.pe-tool-G { border-left-color: #9b3fc0; }
 .pe-tool-E { border-left-color: #bbb; }
 .pe-tool:hover { background: #f2f5fb; }
 .pe-tool.is-active {
@@ -862,6 +863,7 @@ body {
 .pe-line.pe-B { stroke: #1d1c19; stroke-width: 3; }
 .pe-line.pe-C { stroke: #1a9e4b; stroke-width: 3; }
 .pe-line.pe-F { stroke: #c8c5b8; stroke-width: 1.6; }
+.pe-line.pe-G { stroke: #9b3fc0; stroke-width: 2.2; stroke-dasharray: 1 3; stroke-linecap: round; }
 .pe-legend {
   margin: 0;
   font-size: 0.8rem;
@@ -886,6 +888,7 @@ body {
 .pe-key-B::before { border-top-color: #1d1c19; }
 .pe-key-C::before { border-top-color: #1a9e4b; }
 .pe-key-F::before { border-top-color: #c8c5b8; }
+.pe-key-G::before { border-top-color: #9b3fc0; border-top-style: dotted; }
 .pe-download {
   font: inherit;
   padding: 0.35rem 0.7rem;
@@ -1814,6 +1817,9 @@ body.is-electronics .app-legend {
 .el-crease-m { stroke: #c8553d; }
 .el-crease-v { stroke: #3f7d9e; }
 .el-crease-f { stroke: #9aa0aa; stroke-dasharray: 4 3; }
+/* Guides to align parts against. Never cut or scored, and never in the way of a tap. */
+.el-guide { fill: none; stroke: #9b3fc0; stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
+.el-guide-centre { stroke-opacity: 0.55; stroke-dasharray: 8 4 2 4; }
 /* The carrier frame: one piece of copper, its window the unfolded pattern, holding the traces on thin tabs. */
 .el-carrier { fill: #c9863f; fill-opacity: 0.3; stroke: #a8702f; stroke-width: 0.6; vector-effect: non-scaling-stroke; }
 .el-carrier-tab { stroke: #a8702f; stroke-opacity: 0.85; stroke-linecap: butt; }

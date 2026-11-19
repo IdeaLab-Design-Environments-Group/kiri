@@ -33,6 +33,7 @@ function assertManifold(draft: FoldDraft): void {
   // Parallel arrays stay aligned.
   expect(draft.edges_assignment).toHaveLength(draft.edges_vertices.length);
   expect(draft.cutType).toHaveLength(draft.edges_vertices.length);
+  expect(draft.guide).toHaveLength(draft.edges_vertices.length);
 
   const emitted = new Set(draft.edges_vertices.map(([a, b]) => ek(a, b)));
   expect(emitted.size).toBe(draft.edges_vertices.length); // no duplicate edges
@@ -104,6 +105,31 @@ describe("pattern-grid: gridToFold", () => {
       else expect(d.cutType[i]).toBeNull();
     }
     assertManifold(d);
+  });
+
+  it("a painted guide is a flat F edge flagged as a guide", () => {
+    const g = new PatternGrid(2, 2, 10);
+    const a = g.vid(1, 0), b = g.vid(1, 1);
+    g.set(a, b, "G");
+    g.set(g.vid(0, 0), g.vid(1, 1), "G"); // "/" diagonal
+    const d = gridToFold(g);
+    expect(d.guide).toHaveLength(d.edges_vertices.length);
+    const idx = d.edges_vertices.findIndex(([x, y]) => ek(x, y) === ek(a, b));
+    expect(d.edges_assignment[idx]).toBe("F");
+    expect(d.guide[idx]).toBe(true);
+    expect(d.guide.filter(Boolean)).toHaveLength(2);
+    for (let i = 0; i < d.guide.length; i++) if (d.guide[i]) expect(d.edges_assignment[i]).toBe("F");
+    assertManifold(d);
+  });
+
+  it("a guide painted on the rim stays a plain border", () => {
+    const g = new PatternGrid(2, 2, 10);
+    const a = g.vid(0, 0), b = g.vid(1, 0);
+    g.set(a, b, "G");
+    const d = gridToFold(g);
+    const idx = d.edges_vertices.findIndex(([x, y]) => ek(x, y) === ek(a, b));
+    expect(d.edges_assignment[idx]).toBe("B");
+    expect(d.guide.some(Boolean)).toBe(false);
   });
 
   it("presets stay manifold and produce real creases", () => {

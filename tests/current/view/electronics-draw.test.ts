@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { FlatFace, GapEdge, TilePoly, Vec2 } from "../../../src/model/electronics.js";
-import { batteryParts, ratsnestParts, selectionRing, substrateParts } from "../../../src/view/electronics-draw.js";
+import { batteryParts, guideParts, ratsnestParts, selectionRing, substrateParts } from "../../../src/view/electronics-draw.js";
 
 const id = (p: Vec2): Vec2 => p;
 
@@ -86,5 +86,24 @@ describe("view/electronics-draw", () => {
     // inside the part rather than around it.
     const tiny = selectionRing({ x: 0, y: 0 }, { x: 1.5, y: 0 }, "el-led-selected");
     expect(Number(/r="([\d.]+)"/.exec(tiny)![1])).toBeCloseTo(1.7, 6);
+  });
+
+  describe("guideParts", () => {
+    it("draws centre lines and drawn guides as separate, transformed paths", () => {
+      const twice = (p: Vec2): Vec2 => ({ x: p.x * 2, y: p.y * 2 });
+      const out = guideParts(
+        [[{ x: 0, y: 0 }, { x: 1, y: 1 }]],
+        [[{ x: 1, y: 0 }, { x: 1, y: 1 }]],
+        twice,
+      );
+      expect(out).toEqual([
+        '<path d="M 2 0 L 2 2" class="el-guide el-guide-centre" />',
+        '<path d="M 0 0 L 2 2" class="el-guide el-guide-drawn" />',
+      ]);
+    });
+
+    it("draws nothing when there are no guides", () => {
+      expect(guideParts([], [], id)).toEqual([]);
+    });
   });
 });

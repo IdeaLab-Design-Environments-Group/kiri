@@ -24,6 +24,9 @@
 /** FOLD edge assignment letters this editor produces (subset of the FOLD spec). */
 export type CreaseAssignment = "M" | "V" | "B" | "C" | "F";
 
+/** What can be painted on an edge: a crease, or "G", a guide that is neither cut nor scored. */
+export type GridMark = CreaseAssignment | "G";
+
 /** Lattice-edge geometry kind: horizontal/vertical side, main "\" or anti "/" diagonal. */
 export type EdgeKind = "h" | "v" | "d" | "a";
 
@@ -42,6 +45,8 @@ export interface FoldDraft {
   faces_vertices: number[][];
   /** Parallel to edges: "seam" for cut (C) edges, null otherwise (FKLD cut subtype). */
   cutType: (string | null)[];
+  /** Parallel to edges: true for a guide. A guide is emitted as a flat "F" edge. */
+  guide: boolean[];
   counts: Record<CreaseAssignment, number>;
 }
 
@@ -57,7 +62,7 @@ export class PatternGrid {
   cols: number;
   rows: number;
   cellMm: number;
-  private readonly assign = new Map<string, CreaseAssignment>();
+  private readonly assign = new Map<string, GridMark>();
 
   constructor(cols = 6, rows = 6, cellMm = 10) {
     this.cols = clampDim(cols);
@@ -80,7 +85,7 @@ export class PatternGrid {
     return a < b ? `${a}:${b}` : `${b}:${a}`;
   }
 
-  get(a: number, b: number): CreaseAssignment | undefined {
+  get(a: number, b: number): GridMark | undefined {
     return this.assign.get(this.key(a, b));
   }
 
@@ -89,7 +94,7 @@ export class PatternGrid {
   }
 
   /** Set (or, with `null`, clear) the assignment of the edge between two lattice vertices. */
-  set(a: number, b: number, asg: CreaseAssignment | null): void {
+  set(a: number, b: number, asg: GridMark | null): void {
     const k = this.key(a, b);
     if (asg == null) this.assign.delete(k);
     else this.assign.set(k, asg);
@@ -161,14 +166,18 @@ export function gridToFold(grid: PatternGrid): FoldDraft {
   const edges_vertices: [number, number][] = [];
   const edges_assignment: CreaseAssignment[] = [];
   const cutType: (string | null)[] = [];
+  const guide: boolean[] = [];
   const seen = new Set<string>();
-  const addEdge = (a: number, b: number, asg: CreaseAssignment): void => {
+  const addEdge = (a: number, b: number, mark: GridMark, onRim = false): void => {
     const k = a < b ? `${a}:${b}` : `${b}:${a}`;
     if (seen.has(k)) return;
     seen.add(k);
+    // A guide on the rim is still the rim.
+    const asg: CreaseAssignment = mark === "G" ? (onRim ? "B" : "F") : mark;
     edges_vertices.push([a, b]);
     edges_assignment.push(asg);
     cutType.push(asg === "C" ? "seam" : null);
+    guide.push(mark === "G" && !onRim);
   };
 
   // Pass 1 — axis-aligned sides (enumerated once, so shared edges dedupe).
@@ -176,13 +185,15 @@ export function gridToFold(grid: PatternGrid): FoldDraft {
     for (let i = 0; i < cols; i++) {
       const a = vid(i, j);
       const b = vid(i + 1, j);
-      addEdge(a, b, grid.get(a, b) ?? (j === 0 || j === rows ? "B" : "F"));
+      const rim = j === 0 || j === rows;
+      addEdge(a, b, grid.get(a, b) ?? (rim ? "B" : "F"), rim);
     }
   for (let i = 0; i <= cols; i++)
     for (let j = 0; j < rows; j++) {
       const a = vid(i, j);
       const b = vid(i, j + 1);
-      addEdge(a, b, grid.get(a, b) ?? (i === 0 || i === cols ? "B" : "F"));
+      const rim = i === 0 || i === cols;
+      addEdge(a, b, grid.get(a, b) ?? (rim ? "B" : "F"), rim);
     }
 
   // Pass 2 — diagonals + triangulation, per cell.
@@ -216,7 +227,7 @@ export function gridToFold(grid: PatternGrid): FoldDraft {
   const counts: Record<CreaseAssignment, number> = { M: 0, V: 0, B: 0, C: 0, F: 0 };
   for (const a of edges_assignment) counts[a]++;
 
-  return { vertices_coords, edges_vertices, edges_assignment, faces_vertices, cutType, counts };
+  return { vertices_coords, edges_vertices, edges_assignment, faces_vertices, cutType, guide, counts };
 }
 
 // ---- presets (foldable demos that also exercise both build paths) ----------

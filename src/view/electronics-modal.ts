@@ -42,6 +42,7 @@ import {
   type PlacedPart,
   type Terminal,
 } from "../model/electronics.js";
+import { centreLines, guideSegments, type Segment } from "../model/guide-lines.js";
 import {
   type CircuitCommand,
   type PartSelection as CommandPartSelection,
@@ -91,7 +92,7 @@ import { type Footprint, terminals } from "../model/footprint.js";
 import type { SimMaterial } from "../sim/index.js";
 import {
   batteryParts, carrierFrameParts, centreOf, closedPath, fmt, inRing, isZero,
-  ratsnestParts, selectionRing, substrateParts,
+  guideParts, ratsnestParts, selectionRing, substrateParts,
 } from "./electronics-draw.js";
 import { R_1206, SW_SPDT } from "../model/library.js";
 import {
@@ -437,6 +438,7 @@ export class ElectronicsModal {
   private faces: FlatFace[] = [];
   private tiles: TilePoly[] = [];
   private gaps: GapEdge[] = [];
+  private guides: Segment[] = [];
   private points: Vec2[] = [];
   private bounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
   /** The two circuits, one per side. Every other method reads/writes {@link circuit}, {@link routed} and
@@ -817,6 +819,7 @@ export class ElectronicsModal {
     this.faces = fold ? flatFaces(fold) : [];
     this.tiles = fold ? tilePolys(fold, this.faces, gap) : [];
     this.gaps = fold ? gapGraph(fold, this.faces, gap).gaps : [];
+    this.guides = fold ? guideSegments(fold) : [];
     this.points = fold ? flatPoints(fold) : [];
   }
 
@@ -2364,6 +2367,7 @@ export class ElectronicsModal {
     const parts: string[] = substrateParts(
       this.material, this.faces, this.tiles, this.gaps, (p) => this.tp(p),
     );
+    parts.push(...guideParts(this.guides, centreLines(this.faces.map((f) => f.poly)), (p) => this.tp(p)));
     // In carrier view, the frame and its tabs — the single piece of copper the traces arrive on.
     if (this.viewMode === "carrier" && this.allTraces().length) {
       parts.push(...this.carrierParts());

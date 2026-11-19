@@ -14,6 +14,7 @@ import type { FoldFile } from "../model/fold-file.js";
 // General mesh→pattern pipeline (M1–M5).
 import { kirigamizeText } from "../pipeline/kirigamize.js";
 // Secondary "draw a crease pattern" path: a painted lattice → triangulated FOLD draft.
+import { GUIDE_KEY } from "../model/guide-lines.js";
 import { gridToFold, type FoldDraft, type PatternGrid } from "../model/pattern-grid.js";
 import { KEYS, serializeFkld } from "@dayangac/fkld";
 
@@ -72,13 +73,15 @@ export function fkldFromPatternGrid(grid: PatternGrid): PatternOutcome {
   const stem = `pattern-${grid.cols}x${grid.rows}`;
   const fkld = patternDraftToFkld(draft, grid, stem);
   const { M, V, B, C, F } = draft.counts;
+  const guides = draft.guide.filter(Boolean).length;
   return {
     fkld,
     name: `${stem}.fkld`,
     ok: true,
     summary:
       `Pattern editor → ${grid.cols}×${grid.rows} grid: ${M} mountain, ${V} valley, ` +
-      `${C} cut, ${B} boundary, ${F} facet edges over ${draft.faces_vertices.length} faces. ` +
+      `${C} cut, ${B} boundary, ${F} facet edges over ${draft.faces_vertices.length} faces` +
+      `${guides ? `, ${guides} of them guides` : ""}. ` +
       `Open 3D Sim to fold it.`,
   };
 }
@@ -113,6 +116,7 @@ function patternDraftToFkld(
   if (foldAngleDeg && foldAngleDeg.some((a) => a != null)) out.edges_foldAngle = foldAngleDeg;
   // Only emit the cut-subtype array when there are cuts to describe.
   if (draft.cutType.some((c) => c != null)) out[KEYS.edges.cutType] = draft.cutType;
+  if (draft.guide.some(Boolean)) out[GUIDE_KEY] = draft.guide;
   out[KEYS.meta.architecture] = {
     scaleMeters: 0.001,
     materialThickness: 0.3,

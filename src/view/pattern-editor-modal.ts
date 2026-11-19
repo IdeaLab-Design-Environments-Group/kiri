@@ -16,12 +16,12 @@ import {
   presetCutWindow,
   presetWaterbomb,
   type CandidateEdge,
-  type CreaseAssignment,
+  type GridMark,
 } from "../model/pattern-grid.js";
 import { enterFocusScope } from "./dialog-focus.js";
 
-/** The active brush: a crease assignment, or the eraser. */
-type Tool = CreaseAssignment | "E";
+/** The active brush: a crease assignment, a guide, or the eraser. */
+type Tool = GridMark | "E";
 
 interface ToolSpec {
   tool: Tool;
@@ -35,6 +35,7 @@ const TOOLS: ToolSpec[] = [
   { tool: "B", label: "border", key: "3" },
   { tool: "C", label: "cut", key: "4" },
   { tool: "F", label: "facet", key: "5" },
+  { tool: "G", label: "guide", key: "6" },
   { tool: "E", label: "erase", key: "0" },
 ];
 
@@ -126,6 +127,7 @@ export class PatternEditorModal {
             <span class="pe-key pe-key-B">—— border</span>
             <span class="pe-key pe-key-C">—— cut</span>
             <span class="pe-key pe-key-F">—— facet</span>
+            <span class="pe-key pe-key-G">—— guide (not cut, shown in Electronics)</span>
             &nbsp;· click or drag edges to paint · unpainted perimeter auto-borders
           </p>
         </div>
@@ -355,7 +357,7 @@ export class PatternEditorModal {
   private reportCounts(): void {
     const c = countAssignments(this.grid);
     this.setStatus(
-      `${c.M} mountain · ${c.V} valley · ${c.C} cut · ${c.B} border · ${c.F} facet painted.`,
+      `${c.M} mountain · ${c.V} valley · ${c.C} cut · ${c.B} border · ${c.F} facet · ${c.G} guide painted.`,
     );
   }
 
@@ -381,8 +383,8 @@ function clampInt(raw: string, fallback: number, lo: number, hi: number): number
 }
 
 /** Tally painted (user-set) assignments for the live status line. */
-function countAssignments(grid: PatternGrid): Record<CreaseAssignment, number> {
-  const out: Record<CreaseAssignment, number> = { M: 0, V: 0, B: 0, C: 0, F: 0 };
+function countAssignments(grid: PatternGrid): Record<GridMark, number> {
+  const out: Record<GridMark, number> = { M: 0, V: 0, B: 0, C: 0, F: 0, G: 0 };
   for (const c of grid.candidates()) {
     const asg = grid.get(c.a, c.b);
     if (asg) out[asg]++;

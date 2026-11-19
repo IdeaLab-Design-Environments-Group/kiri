@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { kirigamizeMesh } from "../../../src/services/pattern-service.js";
+import { buildFkldSvgExport } from "../../../src/model/fkld-svg-export.js";
+import { GUIDE_KEY, guideSegments } from "../../../src/model/guide-lines.js";
+import { PatternGrid } from "../../../src/model/pattern-grid.js";
+import { fkldFromPatternGrid, kirigamizeMesh } from "../../../src/services/pattern-service.js";
 
 // A tiny valid OBJ tetrahedron — enough for the full M1–M5 pipeline.
 const TETRA_OBJ = [
@@ -44,5 +47,31 @@ describe("services/pattern-service", () => {
 
   it("kirigamizeMesh throws (PipelineError) on garbage input", () => {
     expect(() => kirigamizeMesh("not a mesh", "obj", "junk.obj")).toThrowError(/import|no vertices/i);
+  });
+
+  it("fkldFromPatternGrid carries painted guides, and leaves the key out when there are none", () => {
+    const g = new PatternGrid(3, 3, 10);
+    expect(fkldFromPatternGrid(g).fkld[GUIDE_KEY]).toBeUndefined();
+    g.set(g.vid(1, 0), g.vid(1, 1), "G");
+    g.set(g.vid(1, 1), g.vid(1, 2), "G");
+    const out = fkldFromPatternGrid(g);
+    const flags = out.fkld[GUIDE_KEY] as boolean[];
+    expect(flags).toHaveLength(out.fkld.edges_vertices!.length);
+    expect(guideSegments(out.fkld)).toEqual([
+      [{ x: 10, y: 0 }, { x: 10, y: 10 }],
+      [{ x: 10, y: 10 }, { x: 10, y: 20 }],
+    ]);
+    expect(out.summary).toContain("2 of them guides");
+  });
+
+  it("keeps guides out of the cut and score files", () => {
+    const plain = new PatternGrid(3, 3, 10);
+    plain.set(plain.vid(1, 0), plain.vid(1, 1), "M");
+    const guided = new PatternGrid(3, 3, 10);
+    guided.set(guided.vid(1, 0), guided.vid(1, 1), "M");
+    for (let j = 0; j < 3; j++) guided.set(guided.vid(2, j), guided.vid(2, j + 1), "G");
+    const a = buildFkldSvgExport(fkldFromPatternGrid(plain).fkld, "k")!;
+    const b = buildFkldSvgExport(fkldFromPatternGrid(guided).fkld, "k")!;
+    expect(b.files.map((f) => f.svg)).toEqual(a.files.map((f) => f.svg));
   });
 });

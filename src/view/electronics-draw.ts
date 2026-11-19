@@ -1,6 +1,6 @@
 /**
- * **View helper** — the electronics canvas's pure layers: the sheet the copper is laid on, the carrier
- * frame, the ratsnest, the battery's terminals and the selection ring.
+ * **View helper** — the electronics canvas's pure layers: the sheet the copper is laid on, its guide lines,
+ * the carrier frame, the ratsnest, the battery's terminals and the selection ring.
  *
  * Split out of `electronics-modal.ts` because every one of them is the same shape of thing — data in, SVG
  * paths out, no state read and none written — and because the sheet in particular is the one layer that
@@ -19,6 +19,7 @@
  * point into the `d` of a path.
  */
 import type { FlatFace, GapEdge, TilePoly, Vec2 } from "../model/electronics.js";
+import type { Segment } from "../model/guide-lines.js";
 import type { SimMaterial } from "../sim/index.js";
 import { sceneSvg, type SceneItem } from "./pcb-scene.js";
 
@@ -85,6 +86,13 @@ export function substrateParts(
     out.push(`<path d="M ${ptStr(tp(e0))} L ${ptStr(tp(e1))}" class="el-crease ${kind}" />`);
   }
   return out;
+}
+
+/** Lines to align parts against: the author's guides and the pattern's centre lines. Never cut. */
+export function guideParts(guides: Segment[], centre: Segment[], tp: (p: Vec2) => Vec2): string[] {
+  const line = ([a, b]: Segment, cls: string): string =>
+    `<path d="M ${ptStr(tp(a))} L ${ptStr(tp(b))}" class="el-guide ${cls}" />`;
+  return [...centre.map((s) => line(s, "el-guide-centre")), ...guides.map((s) => line(s, "el-guide-drawn"))];
 }
 
 /** The carrier frame and its tabs — one piece of copper with every trace held inside it. */
