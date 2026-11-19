@@ -90,6 +90,13 @@
       transition: background 0.13s;
     }
     .toolbar input[type=file]::file-selector-button:hover { background: #efe9da; }
+    /* Rotate: the degrees box and the picked edge it can line up */
+    .toolbar #rot-deg {
+      font: inherit; font-size: 12px; width: 4.2em; padding: 3px 6px;
+      border: 1px solid var(--border); border-radius: 7px;
+    }
+    .toolbar button:disabled { opacity: 0.45; cursor: default; }
+    svg .edge.picked { stroke: #1f6feb; stroke-width: 5; stroke-opacity: 0.7; pointer-events: none; }
     /* Zoom +/−/Fit read as compact buttons */
     .toolbar #zoom-in, .toolbar #zoom-out, .toolbar #zoom-fit {
       min-width: 30px; padding: 4px 8px; text-align: center; font-weight: 600;
@@ -294,6 +301,16 @@
       <button id="zoom-in"  title="Zoom in (+ or =)">+</button>
       <button id="zoom-out" title="Zoom out (- or _)">−</button>
       <button id="zoom-fit" title="Fit to view (0)">Fit</button>
+    </div>
+    <div class="group" id="rotate-group" hidden>
+      <span class="lbl">Rotate:</span>
+      <button id="rot-ccw" title="Turn the sheet 90° anticlockwise">↺ 90°</button>
+      <button id="rot-cw" title="Turn the sheet 90° clockwise">↻ 90°</button>
+      <input id="rot-deg" type="number" step="any" value="15" aria-label="Degrees to turn, anticlockwise"
+        title="Degrees to turn, anticlockwise (negative for clockwise)">
+      <button id="rot-apply" title="Turn the sheet by the degrees in the box">Rotate</button>
+      <button id="align-x" disabled title="Click an edge first, then turn the sheet so that edge runs along x">Edge ∥ X</button>
+      <button id="align-y" disabled title="Click an edge first, then turn the sheet so that edge runs along y">Edge ∥ Y</button>
     </div>
     <div class="group">
       <span class="lbl">Example:</span>
@@ -566,6 +583,15 @@
         svg.appendChild(line);
       }
     }
+    // The edge picked for Edge ∥ X / Y, over the others.
+    const picked = pickedEdge != null ? model.es[pickedEdge] : null;
+    if (picked && picked.v1 && picked.v2) {
+      const line = document.createElementNS(NS, 'line');
+      line.setAttribute('x1', picked.v1.p[0]); line.setAttribute('y1', picked.v1.p[1]);
+      line.setAttribute('x2', picked.v2.p[0]); line.setAttribute('y2', picked.v2.p[1]);
+      line.setAttribute('class', 'edge picked');
+      svg.appendChild(line);
+    }
     // Molecule labels (optional).
     drawn.Molecules = 0;
     if (layers.Molecules.on) {
@@ -809,6 +835,7 @@
   // ---- file loading ---------------------------------------------------------
   function loadObject(file, sourceName) {
     currentFile = file;
+    setPickedEdge(null);
     // Default preview is the FLAT 2D cut/fold pattern for ALL models. When the kirigamizer attached a
     // folded-form goal, offer a toggle to view the folded 3D shape too (the button label is the action).
     const hasFolded = !!foldedCoords(file);
@@ -1070,6 +1097,66 @@
     if (e.key === '-' || e.key === '_') { zoom(1.25);     e.preventDefault(); }
     if (e.key === '0')                  { fitToView();    e.preventDefault(); }
   });
+
+  // ---- turning the sheet ----------------------------------------------------
+  // The host turns the model, so the circuit laid on it turns with it, and sends the turned model back.
+  // Shown only when embedded: on its own there is no host to ask.
+  let pickedEdge = null;
+  const embedded = !!(window.parent && window.parent !== window);
+  function askHost(msg) {
+    if (embedded) window.parent.postMessage(msg, window.location.origin);
+  }
+  function setPickedEdge(i) {
+    pickedEdge = i;
+    for (const id of ['align-x', 'align-y']) {
+      const b = document.getElementById(id);
+      if (b) b.disabled = i == null;
+    }
+  }
+  /** The edge drawn nearest a client point, within a few pixels, or null. */
+  function edgeAt(clientX, clientY) {
+    if (!currentFile) return null;
+    const rect = wrap.getBoundingClientRect();
+    const half = Math.min(rect.width, rect.height) / 2;
+    const toPx = (p) => [rect.left + rect.width / 2 + p[0] * half, rect.top + rect.height / 2 + p[1] * half];
+    const model = buildModel(currentFile);
+    let best = null, bestD = 6;
+    for (const e of model.es) {
+      if (!e.v1 || !e.v2) continue;
+      const a = toPx(project(e.v1.cs)), b = toPx(project(e.v2.cs));
+      const dx = b[0] - a[0], dy = b[1] - a[1];
+      const l2 = dx * dx + dy * dy;
+      const t = l2 ? Math.max(0, Math.min(1, ((clientX - a[0]) * dx + (clientY - a[1]) * dy) / l2)) : 0;
+      const d = Math.hypot(clientX - a[0] - t * dx, clientY - a[1] - t * dy);
+      if (d < bestD) { bestD = d; best = e.i; }
+    }
+    return best;
+  }
+  (function installRotate() {
+    const group = document.getElementById('rotate-group');
+    if (!group || !embedded) return;
+    group.hidden = false;
+    const deg = document.getElementById('rot-deg');
+    document.getElementById('rot-ccw').addEventListener('click', () => askHost({ type: 'kirigamizer:rotate', degrees: 90 }));
+    document.getElementById('rot-cw').addEventListener('click', () => askHost({ type: 'kirigamizer:rotate', degrees: -90 }));
+    document.getElementById('rot-apply').addEventListener('click', () => {
+      const d = Number(deg.value);
+      if (Number.isFinite(d) && d % 360 !== 0) askHost({ type: 'kirigamizer:rotate', degrees: d });
+    });
+    for (const axis of ['x', 'y']) {
+      document.getElementById(`align-${axis}`).addEventListener('click', () => {
+        if (pickedEdge != null) askHost({ type: 'kirigamizer:align-edge', edge: pickedEdge, axis });
+      });
+    }
+    // A click that did not drag picks the nearest edge; one away from every edge clears the pick.
+    let downAt = null;
+    wrap.addEventListener('mousedown', (e) => { downAt = [e.clientX, e.clientY]; });
+    wrap.addEventListener('click', (e) => {
+      if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4) return;
+      setPickedEdge(edgeAt(e.clientX, e.clientY));
+      render();
+    });
+  })();
 
   // ---- the bundled sample --------------------------------------------------
   // This was a <select> that only ever held one entry, pointing at the same house.fkld the shell's own

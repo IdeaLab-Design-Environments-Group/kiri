@@ -22,6 +22,7 @@ import { resolveSvgExport } from "../services/svg-export-service.js";
 import { resolveStlExport } from "../services/stl-export-service.js";
 import { DEFAULT_PRINT_SIZE } from "../model/stl-export.js";
 import { type Circuit } from "../model/electronics.js";
+import { edgeAlignAngle, patternCentre, rotateCircuit, rotateFold } from "../model/pattern-rotate.js";
 import { resolveElectronicsTarget, type ElectronicsPlanningAdapter, createElectronicsPlanning } from "../services/electronics-service.js";
 import type { AnchoredMesh } from "../model/trace-anchor.js";
 import type { ConvertPanel, CutAndFoldState } from "../view/convert-panel.js";
@@ -95,6 +96,15 @@ export class AppController {
       this.store.update({ viewerShown: { object, name }, circuits: same ? circuits : NO_CIRCUITS });
     });
 
+    // The viewer's Rotate controls: the sheet turns, and the circuit on it turns with it.
+    this.viewer.onRotate((degrees) => this.rotatePattern(degrees));
+    this.viewer.onAlignEdge((edge, axis) => {
+      const { model, viewerShown } = this.store.getState();
+      const target = resolveElectronicsTarget(model, viewerShown);
+      const degrees = target ? edgeAlignAngle(target.object, edge, axis) : null;
+      if (degrees != null) this.rotatePattern(degrees);
+    });
+
     // View intents → controller handlers.
     this.convert.onFileChosen((file) => this.loadFromFile(file));
     this.convert.onCutAndFold(() => void this.kirigamize());
@@ -156,6 +166,27 @@ export class AppController {
     // …and the material, so the editor draws and routes the build the sim folds.
     this.electronics.setMaterial(state.simMaterial);
     this.sim.setTraces(this.tracesForSim(simObject));
+  }
+
+  /** Turn the shown pattern in its plane by `degrees` anticlockwise, keeping both circuits on it. */
+  rotatePattern(degrees: number): void {
+    const { model, viewerShown, circuits } = this.store.getState();
+    const target = resolveElectronicsTarget(model, viewerShown);
+    if (!target || !Number.isFinite(degrees) || degrees % 360 === 0) return;
+    const centre = patternCentre(target.object);
+    const turned = rotateFold(target.object, degrees, centre);
+    const move = (c: Circuit): Circuit => rotateCircuit(c, centre, degrees);
+    // The editor first, so the render below finds it already on the turned pattern and does not reset it.
+    this.electronics.carryPattern(turned, move);
+    this.store.update({
+      model: model?.kind === "fold" && model.object === target.object ? { ...model, object: turned } : model,
+      viewerShown: { object: turned, name: target.name },
+      circuits: {
+        inside: circuits.inside && move(circuits.inside),
+        outside: circuits.outside && move(circuits.outside),
+      },
+    });
+    this.viewer.show(turned, target.name);
   }
 
   /** Store one side's authored circuit, leaving the other side's alone, and make it the side shown. */

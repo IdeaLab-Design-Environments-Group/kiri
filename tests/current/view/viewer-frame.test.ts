@@ -79,4 +79,36 @@ describe("view/viewer-frame", () => {
     send({ type: "kirigamizer:viewer-ready" }, { source: {} });
     expect(postMessage).not.toHaveBeenCalled();
   });
+
+  it("reports the echo of a pushed model as the very object pushed, not the viewer's copy", () => {
+    const { frame, send } = setup();
+    send({ type: "kirigamizer:viewer-ready" });
+    const seen: unknown[] = [];
+    frame.onLoaded((o) => seen.push(o));
+    const pushed = { vertices_coords: [[0, 0]] };
+    frame.show(pushed, "a.fkld");
+    send({ type: "kirigamizer:viewer-loaded", fkld: { vertices_coords: [[0, 0]] }, name: "a.fkld" });
+    expect(seen[1]).toBe(pushed);
+    // A model the viewer loads by itself afterwards is its own.
+    const own = { vertices_coords: [[1, 1]] };
+    send({ type: "kirigamizer:viewer-loaded", fkld: own, name: "b.fkld" });
+    expect(seen[2]).toBe(own);
+  });
+
+  it("forwards rotate and align-edge requests, and drops malformed ones", () => {
+    const { frame, send } = setup();
+    const turns: number[] = [];
+    const aligns: [number, string][] = [];
+    frame.onRotate((d) => turns.push(d));
+    frame.onAlignEdge((e, a) => aligns.push([e, a]));
+    send({ type: "kirigamizer:rotate", degrees: -15 });
+    send({ type: "kirigamizer:rotate", degrees: "15" });
+    send({ type: "kirigamizer:rotate", degrees: Number.NaN });
+    send({ type: "kirigamizer:align-edge", edge: 3, axis: "y" });
+    send({ type: "kirigamizer:align-edge", edge: 1.5, axis: "x" });
+    send({ type: "kirigamizer:align-edge", edge: 2, axis: "z" });
+    send({ type: "kirigamizer:rotate", degrees: 90 }, { origin: "http://evil.example" });
+    expect(turns).toEqual([-15]);
+    expect(aligns).toEqual([[3, "y"]]);
+  });
 });

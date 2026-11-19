@@ -743,6 +743,29 @@ export class ElectronicsModal {
     this.editHandler = handler;
   }
 
+  /** Swap in a moved copy of the current pattern, carrying both sides' circuits across with `move`. */
+  carryPattern(fold: FoldFile, move: (c: Circuit) => Circuit): void {
+    this.fold = fold;
+    this.rebuildGeometry();
+    this.insideCircuit = move(this.insideCircuit);
+    this.outsideCircuit = move(this.outsideCircuit);
+    // The old plans are on the old coordinates: plan both sides again, whatever the routing mode.
+    const openSide = this.side;
+    for (const s of ["inside", "outside"] as const) {
+      this.side = s;
+      this.forceReplan();
+    }
+    this.side = openSide;
+    this.select(null);
+    this.computeBounds();
+    this.fitView();
+    this.syncButtons();
+    if (!this.overlay.hidden) {
+      this.renderNets();
+      this.render();
+    }
+  }
+
   /** Provide the current flat pattern to lay electronics on (clears the circuit if it changed). */
   setPattern(fold: FoldFile | null): void {
     if (fold === this.fold) return;

@@ -38,6 +38,7 @@ class StubEl {
   className = "";
   checked = false;
   hidden = false;
+  disabled = false;
   type = "";
 
   constructor(readonly tag: string) {}
@@ -79,7 +80,7 @@ interface ViewerApi {
 }
 
 /** Evaluate the page's own inline script against the stub, and hand back what a test can drive. */
-function loadViewer(): ViewerApi {
+function loadViewer(parent?: { postMessage: (msg: unknown, origin: string) => void }): ViewerApi {
   const html = readFileSync(VIEWER, "utf8");
   const open = html.indexOf("<script>") + "<script>".length;
   const script = html.slice(open, html.indexOf("</script>", open));
@@ -105,7 +106,7 @@ function loadViewer(): ViewerApi {
     requestAnimationFrame: () => 0,
   };
   window.__el = (id: string) => document.getElementById(id);
-  window.parent = window;   // "not in an iframe", so the postMessage handshake stays out of the way
+  window.parent = parent ?? window;   // by default "not in an iframe", so the postMessage handshake stays out of the way
 
   const api = new Function(
     "document", "window", "FileReader", "requestAnimationFrame", "localStorage",
@@ -360,5 +361,76 @@ describe("view/fkld-viewer", () => {
 
   it("has no viewer Import file input", () => {
     expect(readFileSync(VIEWER, "utf8")).not.toContain('id="file-input"');
+  });
+
+  describe("turning the sheet", () => {
+    const square = {
+      vertices_coords: [[0, 0], [4, 0], [4, 2], [0, 2]],
+      edges_vertices: [[0, 1], [1, 2], [2, 3], [3, 0]],
+      edges_assignment: ["B", "B", "B", "B"],
+      faces_vertices: [[0, 1, 2, 3]],
+    };
+    const embedded = () => {
+      const sent: unknown[] = [];
+      const viewer = loadViewer({ postMessage: (m) => sent.push(m) });
+      viewer.loadObject(square, "sq");
+      const el = (id: string) => (viewer.win.__el as (id: string) => StubEl)(id);
+      const asks = () => sent.filter((m) => (m as { type: string }).type !== "kirigamizer:viewer-loaded"
+        && (m as { type: string }).type !== "kirigamizer:viewer-ready");
+      const tap = (x: number, y: number) => {
+        const wrap = el("canvas-wrap");
+        for (const fn of wrap.handlers.mousedown ?? []) fn({ clientX: x, clientY: y, button: 0 });
+        for (const fn of wrap.handlers.click ?? []) fn({ clientX: x, clientY: y });
+      };
+      return { viewer, el, asks, tap };
+    };
+
+    it("offers no rotate controls when it is not inside the app", () => {
+      const viewer = loadViewer();
+      const el = (id: string) => (viewer.win.__el as (id: string) => StubEl)(id);
+      expect(el("rot-ccw").handlers.click ?? []).toHaveLength(0);
+    });
+
+    it("asks the app to turn the sheet by a quarter either way, or by the degrees in the box", () => {
+      const { el, asks } = embedded();
+      expect(el("rotate-group").hidden).toBe(false);
+      el("rot-ccw").fire("click");
+      el("rot-cw").fire("click");
+      el("rot-deg").value = "12.5";
+      el("rot-apply").fire("click");
+      el("rot-deg").value = "abc";
+      el("rot-apply").fire("click");
+      el("rot-deg").value = "720";
+      el("rot-apply").fire("click");
+      expect(asks()).toEqual([
+        { type: "kirigamizer:rotate", degrees: 90 },
+        { type: "kirigamizer:rotate", degrees: -90 },
+        { type: "kirigamizer:rotate", degrees: 12.5 },
+      ]);
+    });
+
+    it("picks the edge under a click and asks to lay it along x or y", () => {
+      const { el, asks, tap } = embedded();
+      expect(el("align-x").disabled).toBe(true);
+      // The canvas is 900 x 600 with the square framed in its middle: the right side is at about x = 705.
+      tap(705, 300);
+      expect(el("align-x").disabled).toBe(false);
+      el("align-x").fire("click");
+      el("align-y").fire("click");
+      expect(asks()).toEqual([
+        { type: "kirigamizer:align-edge", edge: 1, axis: "x" },
+        { type: "kirigamizer:align-edge", edge: 1, axis: "y" },
+      ]);
+    });
+
+    it("clears the pick on a click away from every edge, and on a new model", () => {
+      const { viewer, el, tap } = embedded();
+      tap(705, 300);
+      tap(450, 300);
+      expect(el("align-x").disabled).toBe(true);
+      tap(705, 300);
+      viewer.loadObject(square, "sq");
+      expect(el("align-x").disabled).toBe(true);
+    });
   });
 });

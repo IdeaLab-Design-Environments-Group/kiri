@@ -5,7 +5,7 @@ import { canSimulate } from "../../../src/sim/scene.js";
 import type { FoldFile, LoadedModel } from "../../../src/model/fold-file.js";
 import { PatternGrid, presetWaterbomb } from "../../../src/model/pattern-grid.js";
 import { readFileSync } from "node:fs";
-import { flatFaces, gapGraph, ledOf } from "../../../src/model/electronics.js";
+import { flatFaces, gapGraph, ledOf, type Circuit } from "../../../src/model/electronics.js";
 import { TILE_INSET_FRAC } from "../../../src/model/tile-subdiv.js";
 import {
   PLANNING_ROUTES,
@@ -91,6 +91,15 @@ class ViewerFrameMock {
   loadedHandler: ((object: FoldFile, name: string) => void) | null = null;
   onLoaded(handler: (object: FoldFile, name: string) => void): void {
     this.loadedHandler = handler;
+  }
+
+  rotateHandler: ((degrees: number) => void) | null = null;
+  onRotate(handler: (degrees: number) => void): void {
+    this.rotateHandler = handler;
+  }
+  alignHandler: ((edge: number, axis: "x" | "y") => void) | null = null;
+  onAlignEdge(handler: (edge: number, axis: "x" | "y") => void): void {
+    this.alignHandler = handler;
   }
 
   /** Simulate the viewer loading a model on its own (file picker / dropdown / drag-drop). */
@@ -216,6 +225,10 @@ class ElectronicsModalMock {
   }
   setPattern(fold: unknown): void {
     this.patternCalls.push(fold);
+  }
+  carryCalls: { fold: unknown; move: (c: Circuit) => Circuit }[] = [];
+  carryPattern(fold: unknown, move: (c: Circuit) => Circuit): void {
+    this.carryCalls.push({ fold, move });
   }
   setTileGap(gap: number): void {
     this.gapCalls.push(gap);
@@ -907,5 +920,64 @@ describe("controller/app-controller", () => {
     const atDefault = JSON.stringify(sim.traces);
     sim.gapListener?.(0.45); // widest gap: the tiles shrink hard, and the part must not shrink with them
     expect(JSON.stringify(sim.traces)).toBe(atDefault);
+  });
+
+  describe("turning the pattern", () => {
+    const square = (): FoldFile => ({
+      vertices_coords: [[0, 0], [4, 0], [4, 2], [0, 2]],
+      edges_vertices: [[0, 1], [1, 2], [2, 3], [3, 0]],
+      faces_vertices: [[0, 1, 2, 3]],
+    });
+    const near = (a: number[], b: number[]) => a.forEach((v, i) => expect(v).toBeCloseTo(b[i]!, 9));
+
+    it("turns the shown pattern and the circuit on it, and keeps the circuit through the viewer's echo", () => {
+      const { store, viewer, electronics } = setup();
+      const fold = square();
+      store.update({ model: { kind: "fold", name: "sq.fkld", object: fold }, viewerShown: { object: fold, name: "sq.fkld" } });
+      const circuit: Circuit = { leds: [{ a: 0, b: 0 }], battery: null, parts: [{ component: "R", x: 4, y: 1, rot: 0 }] };
+      store.update({ circuits: { inside: circuit, outside: null } });
+
+      viewer.rotateHandler!(90);
+
+      const { viewerShown, model, circuits } = store.getState();
+      const turned = viewerShown!.object;
+      expect(turned).not.toBe(fold);
+      // About the centre (2, 1): the corner (0, 0) goes to (3, -1).
+      near(turned.vertices_coords![0]!, [3, -1]);
+      expect(model).toEqual({ kind: "fold", name: "sq.fkld", object: turned });
+      expect(viewer.showCalls.at(-1)).toEqual({ object: turned, name: "sq.fkld" });
+      expect(electronics.carryCalls.at(-1)!.fold).toBe(turned);
+      const part = circuits.inside!.parts![0]!;
+      near([part.x, part.y, part.rot!], [2, 3, 90]);
+      expect(circuits.inside!.leds).toEqual(circuit.leds);
+      expect(circuits.outside).toBeNull();
+      // The original file is left as it was.
+      expect(fold.vertices_coords![0]).toEqual([0, 0]);
+
+      viewer.loadedHandler!(turned, "sq.fkld");
+      expect(store.getState().circuits.inside).toBe(circuits.inside);
+    });
+
+    it("lays a picked edge along the asked axis", () => {
+      const { store, viewer } = setup();
+      const fold = square();
+      store.update({ viewerShown: { object: fold, name: "sq.fkld" } });
+      viewer.alignHandler!(1, "x"); // the right side, which runs along y
+      const turned = store.getState().viewerShown!.object;
+      const [a, b] = turned.edges_vertices![1]!.map((v) => turned.vertices_coords![v]!);
+      expect(a![1]).toBeCloseTo(b![1]!, 9);
+    });
+
+    it("does nothing with no pattern shown, a whole turn, or an edge that is not there", () => {
+      const { store, viewer, electronics } = setup();
+      viewer.rotateHandler!(90);
+      expect(electronics.carryCalls).toHaveLength(0);
+      const fold = square();
+      store.update({ viewerShown: { object: fold, name: "sq.fkld" } });
+      viewer.rotateHandler!(360);
+      viewer.alignHandler!(99, "y");
+      expect(store.getState().viewerShown!.object).toBe(fold);
+      expect(electronics.carryCalls).toHaveLength(0);
+    });
   });
 });
